@@ -6,8 +6,13 @@ from sigil.safeisa.model import Program
 
 class SafeISAEmulator:
     def __init__(self) -> None:
-        self.regs = {f"r{i}": 0 for i in range(16)}
+        self.regs: dict[str, int] = {}
         self.trace: list[dict] = []
+        self._reset_state()
+
+    def _reset_state(self) -> None:
+        self.regs = {f"r{i}": 0 for i in range(16)}
+        self.trace = []
 
     def _val(self, x):
         if isinstance(x, int):
@@ -17,7 +22,7 @@ class SafeISAEmulator:
         return 0
 
     def run(self, program: Program) -> list[dict]:
-        self.trace = []
+        self._reset_state()
         pc = 0
         while pc < len(program.instructions):
             ins = program.instructions[pc]

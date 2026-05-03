@@ -26,3 +26,15 @@ def test_run_resets_trace_between_programs():
 
     second_trace = emu.run(second)
     assert second_trace == []
+
+
+def test_run_resets_registers_between_programs():
+    emu = SafeISAEmulator()
+    first = Program([Instruction("LI", "r1", 99), Instruction("RET")])
+    second = Program([Instruction("RET")])
+
+    emu.run(first)
+    assert emu.regs["r1"] == 99
+
+    emu.run(second)
+    assert emu.regs["r1"] == 0
