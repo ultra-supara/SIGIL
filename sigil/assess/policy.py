@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from sigil.assess.verdict import Verdict
+
+
+@dataclass
+class Policy:
+    name: str
+    allowed_capabilities: set[str]
+    forbidden_capabilities: set[str]
+    verdict_rules: dict[str, str]
+
+
+@dataclass
+class PolicyViolation:
+    rule: str
+    capability: str
+    evidence_address: str | None = None
+
+
+def _parse_simple_yaml(path: str) -> dict:
+    data: dict = {"allowed": {"capabilities": []}, "forbidden": {"capabilities": []}, "verdict_rules": {}}
+    section = None
+    subsection = None
+    with open(path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip()
+            if not line or line.lstrip().startswith("#"):
+                continue
+            if not line.startswith(" ") and line.endswith(":"):
+                section = line[:-1]
+                subsection = None
+                continue
+            if line.startswith("  ") and line.strip().endswith(":"):
+                subsection = line.strip()[:-1]
+                continue
+            if line.startswith("name:"):
+                data["name"] = line.split(":", 1)[1].strip()
+            elif line.startswith("version:"):
+                data["version"] = line.split(":", 1)[1].strip()
+            elif line.startswith("entry:"):
+                data["entry"] = line.split(":", 1)[1].strip()
+            elif line.strip().startswith("- ") and section in {"allowed", "forbidden"} and subsection == "capabilities":
+                data[section]["capabilities"].append(line.strip()[2:])
+            elif section == "verdict_rules" and ":" in line:
+                k, v = line.strip().split(":", 1)
+                data["verdict_rules"][k.strip()] = v.strip()
+    return data
+
+
+def load_policy(path: str) -> Policy:
+    data = _parse_simple_yaml(path)
+    if "name" not in data:
+        raise ValueError("Policy missing required field: name")
+    return Policy(
+        name=data["name"],
+        allowed_capabilities=set(data.get("allowed", {}).get("capabilities", [])),
+        forbidden_capabilities=set(data.get("forbidden", {}).get("capabilities", [])),
+        verdict_rules=data.get("verdict_rules", {}),
+    )
+
+
+def evaluate_policy(policy: Policy, capabilities: list[str]) -> tuple[Verdict, list[PolicyViolation]]:
+    violations: list[PolicyViolation] = []
+    verdict = Verdict.PASS
+    for cap in capabilities:
+        if cap in policy.forbidden_capabilities:
+            violations.append(PolicyViolation(rule=f"forbidden.capabilities.{cap}", capability=cap))
+            verdict = Verdict.FAIL if policy.verdict_rules.get("forbidden_capability", "FAIL") == "FAIL" else verdict
+        elif cap == "unsupported_instruction" and verdict != Verdict.FAIL:
+            verdict = Verdict.WARN if policy.verdict_rules.get("unsupported_instruction", "WARN") == "WARN" else verdict
+    return verdict, violations
