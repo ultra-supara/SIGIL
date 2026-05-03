@@ -17,8 +17,13 @@ class SafeISAEmulator:
     def _val(self, x):
         if isinstance(x, int):
             return x
-        if isinstance(x, str) and x.startswith("r"):
-            return self.regs[x]
+        if isinstance(x, str):
+            token = x.strip()
+            if token in self.regs:
+                return self.regs[token]
+            if token.lstrip("-").isdigit():
+                return int(token)
+            return self.regs.get(token, 0)
         return 0
 
     def run(self, program: Program) -> list[dict]:

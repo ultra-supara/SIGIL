@@ -38,3 +38,15 @@ def test_run_resets_registers_between_programs():
 
     emu.run(second)
     assert emu.regs["r1"] == 0
+
+
+def test_accepts_lifted_string_immediates_and_register_tokens():
+    prog = Program([
+        Instruction("MOV", "r1", "5"),
+        Instruction("MOV", "eax", "r1"),
+        Instruction("ADD", "r0", "eax", "3"),
+        Instruction("RET"),
+    ])
+    emu = SafeISAEmulator()
+    emu.run(prog)
+    assert emu.regs["r0"] == 8
