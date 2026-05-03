@@ -19,17 +19,26 @@ def _extract_call_relocations(elf, section_index: int, func_addr: int, func_size
             continue
         if sec["sh_info"] != section_index:
             continue
-        symtab = elf.get_section(sec["sh_link"])
+        rel_symtab = elf.get_section(sec["sh_link"])
         for rel in sec.iter_relocations():
             offset = int(rel["r_offset"])
             if offset < func_addr or offset >= func_addr + func_size:
                 continue
-            symbol = symtab.get_symbol(rel["r_info_sym"])
+            symbol = rel_symtab.get_symbol(rel["r_info_sym"])
             if symbol and symbol.name:
-                # Relocations for x86 call generally reference immediate at +1.
-                call_site = offset - 1
-                call_symbols[call_site] = symbol.name
+                call_symbols[offset - 1] = symbol.name
     return call_symbols
+
+
+def _find_symbol(elf, entry: str):
+    for symtab_name in (".symtab", ".dynsym"):
+        symtab = elf.get_section_by_name(symtab_name)
+        if symtab is None:
+            continue
+        symbol = next((s for s in symtab.iter_symbols() if s.name == entry), None)
+        if symbol is not None:
+            return symbol
+    return None
 
 
 def load_function(path: str, entry: str, max_bytes: int = 512) -> LoadedFunction:
@@ -40,13 +49,9 @@ def load_function(path: str, entry: str, max_bytes: int = 512) -> LoadedFunction
 
     with open(path, "rb") as f:
         elf = ELFFile(f)
-        symtab = elf.get_section_by_name(".symtab")
-        if symtab is None:
-            raise ValueError("ELF missing .symtab")
-
-        symbol = next((s for s in symtab.iter_symbols() if s.name == entry), None)
+        symbol = _find_symbol(elf, entry)
         if symbol is None:
-            raise ValueError(f"entry symbol not found: {entry}")
+            raise ValueError(f"entry symbol not found in .symtab/.dynsym: {entry}")
 
         sec_idx = int(symbol["st_shndx"])
         sec = elf.get_section(sec_idx)

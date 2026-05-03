@@ -42,16 +42,19 @@ def cmd_lift(args: argparse.Namespace) -> int:
 def cmd_assess(args: argparse.Namespace) -> int:
     policy = load_policy(args.policy)
     _, _, ir, _ = _analyze(args.binary, args.entry)
-    caps = ["arithmetic"]
+    caps: list[str] = []
     ext_calls = []
     unsupported = []
-    cap_evidence: dict[str, list[dict]] = {"arithmetic": []}
+    cap_evidence: dict[str, list[dict]] = {}
     violations: list[PolicyViolation] = []
 
     for block in ir.blocks:
         for op in block.ops:
             addr = hex(op.source_address or 0)
-            if op.op == "ExternalCall":
+            if op.op in {"Add", "Sub", "Mul", "And", "Or", "Xor"}:
+                caps.append("arithmetic")
+                cap_evidence.setdefault("arithmetic", []).append({"address": addr, "instruction": op.text})
+            elif op.op == "ExternalCall":
                 symbol = (op.symbol or "unknown").split()[0]
                 cap = capability_for_symbol(symbol)
                 if cap:
