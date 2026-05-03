@@ -17,6 +17,7 @@ class SafeISAEmulator:
         return 0
 
     def run(self, program: Program) -> list[dict]:
+        self.trace = []
         pc = 0
         while pc < len(program.instructions):
             ins = program.instructions[pc]

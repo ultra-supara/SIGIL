@@ -14,3 +14,15 @@ def test_call_stub_blocked():
     emu = SafeISAEmulator()
     trace = emu.run(prog)
     assert trace and trace[0]["event"] == "CALL_STUB" and trace[0]["blocked"] is True
+
+
+def test_run_resets_trace_between_programs():
+    emu = SafeISAEmulator()
+    first = Program([Instruction("CALL_STUB", "connect"), Instruction("RET")])
+    second = Program([Instruction("RET")])
+
+    first_trace = emu.run(first)
+    assert len(first_trace) == 1
+
+    second_trace = emu.run(second)
+    assert second_trace == []
