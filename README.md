@@ -2,14 +2,36 @@
 
 SIGIL is a **defensive, local-first binary assessment tool** for AI-native binaries. It performs deterministic analysis and never lets an LLM decide security verdicts.
 
-## Quickstart (uv)
+## Quickstart (macOS M3)
+
+### 1) One-command bootstrap
 
 ```bash
+./scripts/setup_macos_m3.sh
+```
+
+This installs:
+- `uv` (env/dependency manager)
+- Homebrew LLVM/Clang toolchain
+
+Then creates `.venv` and installs dependencies with `uv sync --dev`.
+
+### 2) Verify
+
+```bash
+source .venv/bin/activate
+uv run pytest -q
+uv run python -m sigil.cli --help
+```
+
+## Manual setup (if you prefer)
+
+```bash
+brew install uv llvm
+export PATH="$(brew --prefix llvm)/bin:$PATH"
 uv venv
 source .venv/bin/activate
 uv sync --dev
-uv run pytest
-uv run python -m sigil.cli --help
 ```
 
 ## Milestone status
