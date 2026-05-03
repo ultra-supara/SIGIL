@@ -21,7 +21,10 @@ def lift_instructions(name: str, instructions: list[DecodedInstruction], call_sy
         elif ins.mnemonic in ARITH and len(ops) == 2:
             block.ops.append(IROp(op=ARITH[ins.mnemonic], dst=ops[0], src=ops[0], src2=ops[1], source_address=ins.address, text=text))
         elif ins.mnemonic == "imul" and len(ops) >= 2:
-            block.ops.append(IROp(op="Mul", dst=ops[0], src=ops[0], src2=ops[1], source_address=ins.address, text=text))
+            if len(ops) >= 3:
+                block.ops.append(IROp(op="Mul", dst=ops[0], src=ops[1], src2=ops[2], source_address=ins.address, text=text))
+            else:
+                block.ops.append(IROp(op="Mul", dst=ops[0], src=ops[0], src2=ops[1], source_address=ins.address, text=text))
         elif ins.mnemonic == "call":
             sym = call_symbols.get(ins.address) or (ops[0] if ops else "unknown")
             block.ops.append(IROp(op="ExternalCall", symbol=sym, source_address=ins.address, text=text))

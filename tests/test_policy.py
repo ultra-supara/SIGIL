@@ -16,6 +16,17 @@ def test_policy_fail_for_network():
     assert violations
 
 
+def test_policy_warn_for_network_when_configured():
+    p = Policy(
+        name="forbidden-warn",
+        allowed_capabilities={"network"},
+        forbidden_capabilities={"network"},
+        verdict_rules={"forbidden_capability": "WARN"},
+    )
+    verdict, _ = evaluate_policy(p, ["network"])
+    assert verdict == Verdict.WARN
+
+
 def test_policy_fail_for_unsupported_when_configured():
     p = Policy(
         name="unsupported-fail",

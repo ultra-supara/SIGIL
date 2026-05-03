@@ -41,6 +41,21 @@ def _find_symbol(elf, entry: str):
     return None
 
 
+def _truncate_until_ret_instruction(code: bytes, base_addr: int) -> bytes:
+    try:
+        from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+    except ModuleNotFoundError:
+        return code
+
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    end = None
+    for ins in md.disasm(code, base_addr):
+        if ins.mnemonic == "ret":
+            end = (ins.address - base_addr) + ins.size
+            break
+    return code[:end] if end is not None else code
+
+
 def load_function(path: str, entry: str, max_bytes: int = 512) -> LoadedFunction:
     try:
         from elftools.elf.elffile import ELFFile
@@ -65,9 +80,7 @@ def load_function(path: str, entry: str, max_bytes: int = 512) -> LoadedFunction
 
         code = sec_data[offset : offset + size] if size > 0 else sec_data[offset : min(offset + max_bytes, len(sec_data))]
         if size == 0:
-            ret_idx = code.find(b"\xc3")
-            if ret_idx != -1:
-                code = code[: ret_idx + 1]
+            code = _truncate_until_ret_instruction(code, int(symbol["st_value"]))
 
         func_addr = int(symbol["st_value"])
         call_symbols = _extract_call_relocations(elf, sec_idx, func_addr, len(code))

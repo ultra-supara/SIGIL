@@ -84,8 +84,11 @@ def evaluate_policy(policy: Policy, capabilities: list[str]) -> tuple[Verdict, l
     for cap in uniq_caps:
         if cap in policy.forbidden_capabilities:
             violations.append(PolicyViolation(rule=f"forbidden.capabilities.{cap}", capability=cap))
-            if policy.verdict_rules.get("forbidden_capability", "FAIL") == "FAIL":
+            forbidden_rule = policy.verdict_rules.get("forbidden_capability", "FAIL")
+            if forbidden_rule == "FAIL":
                 verdict = Verdict.FAIL
+            elif forbidden_rule == "WARN" and verdict != Verdict.FAIL:
+                verdict = Verdict.WARN
 
         if policy.allowed_capabilities and cap not in policy.allowed_capabilities:
             violations.append(PolicyViolation(rule=f"allowed.capabilities.{cap}", capability=cap))
