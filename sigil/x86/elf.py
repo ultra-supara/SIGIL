@@ -54,7 +54,11 @@ def load_function(path: str, entry: str, max_bytes: int = 512) -> LoadedFunction
             raise ValueError(f"entry symbol not found in .symtab/.dynsym: {entry}")
 
         sec_idx = int(symbol["st_shndx"])
+        if sec_idx <= 0:
+            raise ValueError(f"entry symbol is not in a loadable section: {entry}")
         sec = elf.get_section(sec_idx)
+        if sec is None or sec["sh_type"] == "SHT_NOBITS":
+            raise ValueError(f"entry symbol section is unavailable: {entry}")
         sec_data = sec.data()
         offset = int(symbol["st_value"] - sec["sh_addr"])
         size = int(symbol["st_size"])

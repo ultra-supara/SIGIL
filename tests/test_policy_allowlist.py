@@ -12,3 +12,15 @@ def test_allowlist_enforced_for_unlisted_capability():
     verdict, violations = evaluate_policy(p, ["network"])
     assert verdict == Verdict.FAIL
     assert any(v.rule == "allowed.capabilities.network" for v in violations)
+
+
+def test_allowlist_can_warn_via_verdict_rules():
+    p = Policy(
+        name="allowlist-warn",
+        allowed_capabilities={"arithmetic"},
+        forbidden_capabilities=set(),
+        verdict_rules={"allowlist_violation": "WARN"},
+    )
+    verdict, violations = evaluate_policy(p, ["network"])
+    assert verdict == Verdict.WARN
+    assert any(v.rule == "allowed.capabilities.network" for v in violations)
