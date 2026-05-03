@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sigil.assess.verdict import Verdict
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - exercised only in minimal/offline envs
+    yaml = None
 
 
 @dataclass
@@ -50,8 +56,16 @@ def _parse_simple_yaml(path: str) -> dict:
     return data
 
 
+def _load_yaml(path: str) -> dict[str, Any]:
+    if yaml is not None:
+        with open(path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f)
+        return loaded or {}
+    return _parse_simple_yaml(path)
+
+
 def load_policy(path: str) -> Policy:
-    data = _parse_simple_yaml(path)
+    data = _load_yaml(path)
     if "name" not in data:
         raise ValueError("Policy missing required field: name")
     return Policy(
