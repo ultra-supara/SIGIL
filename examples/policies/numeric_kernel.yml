@@ -1,0 +1,19 @@
+name: numeric_kernel_policy
+version: 1
+entry: kernel
+allowed:
+  capabilities:
+    - arithmetic
+    - stack_memory
+forbidden:
+  capabilities:
+    - network
+    - file_read
+    - file_write
+    - process_spawn
+    - dynamic_loading
+    - environment_access
+    - anti_debug
+verdict_rules:
+  forbidden_capability: FAIL
+  unsupported_instruction: WARN
