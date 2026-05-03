@@ -35,6 +35,8 @@ def _extract_call_relocations(elf, section_index: int, func_addr: int, code: byt
     for sec in elf.iter_sections():
         if sec["sh_type"] not in ("SHT_RELA", "SHT_REL"):
             continue
+        if int(sec["sh_info"]) != section_index:
+            continue
         rel_symtab = elf.get_section(sec["sh_link"])
         if rel_symtab is None:
             continue

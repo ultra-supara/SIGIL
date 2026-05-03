@@ -4,6 +4,7 @@ from sigil.ir.model import BasicBlock, Function, IROp
 from sigil.x86.decoder import DecodedInstruction
 
 ARITH = {"add": "Add", "sub": "Sub", "and": "And", "or": "Or", "xor": "Xor"}
+IGNORED = {"push", "pop", "nop", "leave"}
 
 
 def _split_ops(op_str: str) -> list[str]:
@@ -49,6 +50,8 @@ def lift_instructions(
             block.ops.append(IROp(op="ExternalCall", symbol=sym, source_address=ins.address, text=text))
         elif ins.mnemonic == "ret":
             block.ops.append(IROp(op="Return", source_address=ins.address, text=text))
+        elif ins.mnemonic in IGNORED:
+            continue
         else:
             block.ops.append(IROp(op="Unsupported", source_address=ins.address, text=text))
     return Function(name=name, blocks=[block])

@@ -21,3 +21,13 @@ def test_lifter_imul_three_operand_uses_rhs_operands():
     assert op.dst == "eax"
     assert op.src == "ecx"
     assert op.src2 == "4"
+
+
+def test_lifter_ignores_common_prologue_ops():
+    ins = [
+        DecodedInstruction(address=0x1000, mnemonic="push", op_str="rbp", raw_bytes=b""),
+        DecodedInstruction(address=0x1001, mnemonic="pop", op_str="rbp", raw_bytes=b""),
+        DecodedInstruction(address=0x1002, mnemonic="ret", op_str="", raw_bytes=b""),
+    ]
+    fn = lift_instructions("kernel", ins)
+    assert [op.op for op in fn.blocks[0].ops] == ["Return"]
