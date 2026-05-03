@@ -8,6 +8,12 @@ def test_lifter_uses_resolved_call_symbol():
     assert fn.blocks[0].ops[0].symbol == "connect"
 
 
+def test_lifter_resolves_numeric_call_target_symbol():
+    ins = [DecodedInstruction(address=0x1000, mnemonic="call", op_str="0x401050", raw_bytes=b"")]
+    fn = lift_instructions("kernel", ins, target_symbols={0x401050: "connect"})
+    assert fn.blocks[0].ops[0].symbol == "connect"
+
+
 def test_lifter_imul_three_operand_uses_rhs_operands():
     ins = [DecodedInstruction(address=0x1000, mnemonic="imul", op_str="eax, ecx, 4", raw_bytes=b"")]
     fn = lift_instructions("kernel", ins)

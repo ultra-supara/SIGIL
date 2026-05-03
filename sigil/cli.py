@@ -16,7 +16,7 @@ from sigil.x86.lifter import lift_instructions
 def _analyze(binary: str, entry: str):
     loaded = load_function(binary, entry)
     decoded = decode_x86_64(loaded.code, loaded.address)
-    ir = lift_instructions(entry, decoded, loaded.call_symbols)
+    ir = lift_instructions(entry, decoded, loaded.call_symbols, loaded.target_symbols)
     safeisa = emit_safeisa(ir)
     return loaded, decoded, ir, safeisa
 

@@ -10,23 +10,60 @@ class LoadedFunction:
     size: int
     code: bytes
     call_symbols: dict[int, str] = field(default_factory=dict)
+    target_symbols: dict[int, str] = field(default_factory=dict)
 
 
-def _extract_call_relocations(elf, section_index: int, func_addr: int, func_size: int) -> dict[int, str]:
+def _extract_target_symbols(elf) -> dict[int, str]:
+    out: dict[int, str] = {}
+    for symtab_name in (".symtab", ".dynsym"):
+        symtab = elf.get_section_by_name(symtab_name)
+        if symtab is None:
+            continue
+        for sym in symtab.iter_symbols():
+            name = sym.name
+            val = int(sym["st_value"])
+            if not name or val == 0:
+                continue
+            out[val] = name.split("@", 1)[0]
+    return out
+
+
+def _extract_call_relocations(elf, section_index: int, func_addr: int, code: bytes) -> dict[int, str]:
     call_symbols: dict[int, str] = {}
+    reloc_entries: list[tuple[int, str]] = []
+
     for sec in elf.iter_sections():
         if sec["sh_type"] not in ("SHT_RELA", "SHT_REL"):
             continue
-        if sec["sh_info"] != section_index:
-            continue
         rel_symtab = elf.get_section(sec["sh_link"])
+        if rel_symtab is None:
+            continue
         for rel in sec.iter_relocations():
-            offset = int(rel["r_offset"])
-            if offset < func_addr or offset >= func_addr + func_size:
-                continue
-            symbol = rel_symtab.get_symbol(rel["r_info_sym"])
-            if symbol and symbol.name:
-                call_symbols[offset - 1] = symbol.name
+            sym = rel_symtab.get_symbol(rel["r_info_sym"])
+            if sym and sym.name:
+                reloc_entries.append((int(rel["r_offset"]), sym.name.split("@", 1)[0]))
+
+    if not reloc_entries:
+        return call_symbols
+
+    try:
+        from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+    except ModuleNotFoundError:
+        return call_symbols
+
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    section = elf.get_section(section_index)
+    section_addr = int(section["sh_addr"])
+
+    for ins in md.disasm(code, func_addr):
+        if not ins.mnemonic.startswith("call"):
+            continue
+        ins_sec_start = (ins.address - func_addr) + (func_addr - section_addr)
+        ins_sec_end = ins_sec_start + ins.size
+        for rel_off, rel_name in reloc_entries:
+            if ins_sec_start <= rel_off < ins_sec_end:
+                call_symbols[ins.address] = rel_name
+                break
     return call_symbols
 
 
@@ -83,5 +120,13 @@ def load_function(path: str, entry: str, max_bytes: int = 512) -> LoadedFunction
             code = _truncate_until_ret_instruction(code, int(symbol["st_value"]))
 
         func_addr = int(symbol["st_value"])
-        call_symbols = _extract_call_relocations(elf, sec_idx, func_addr, len(code))
-        return LoadedFunction(entry=entry, address=func_addr, size=len(code), code=code, call_symbols=call_symbols)
+        call_symbols = _extract_call_relocations(elf, sec_idx, func_addr, code)
+        target_symbols = _extract_target_symbols(elf)
+        return LoadedFunction(
+            entry=entry,
+            address=func_addr,
+            size=len(code),
+            code=code,
+            call_symbols=call_symbols,
+            target_symbols=target_symbols,
+        )

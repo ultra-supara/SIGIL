@@ -10,8 +10,26 @@ def _split_ops(op_str: str) -> list[str]:
     return [p.strip() for p in op_str.split(",") if p.strip()]
 
 
-def lift_instructions(name: str, instructions: list[DecodedInstruction], call_symbols: dict[int, str] | None = None) -> Function:
+def _resolve_call_symbol(raw: str, target_symbols: dict[int, str]) -> str:
+    token = raw.strip()
+    if token.startswith("0x"):
+        try:
+            addr = int(token, 16)
+            if addr in target_symbols:
+                return target_symbols[addr]
+        except ValueError:
+            return token
+    return token
+
+
+def lift_instructions(
+    name: str,
+    instructions: list[DecodedInstruction],
+    call_symbols: dict[int, str] | None = None,
+    target_symbols: dict[int, str] | None = None,
+) -> Function:
     call_symbols = call_symbols or {}
+    target_symbols = target_symbols or {}
     block = BasicBlock(name="entry")
     for ins in instructions:
         ops = _split_ops(ins.op_str)
@@ -26,7 +44,8 @@ def lift_instructions(name: str, instructions: list[DecodedInstruction], call_sy
             else:
                 block.ops.append(IROp(op="Mul", dst=ops[0], src=ops[0], src2=ops[1], source_address=ins.address, text=text))
         elif ins.mnemonic == "call":
-            sym = call_symbols.get(ins.address) or (ops[0] if ops else "unknown")
+            raw = ops[0] if ops else "unknown"
+            sym = call_symbols.get(ins.address) or _resolve_call_symbol(raw, target_symbols)
             block.ops.append(IROp(op="ExternalCall", symbol=sym, source_address=ins.address, text=text))
         elif ins.mnemonic == "ret":
             block.ops.append(IROp(op="Return", source_address=ins.address, text=text))
