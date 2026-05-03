@@ -11,16 +11,13 @@ from sigil.assess.report import render_report
 
 def cmd_assess(args: argparse.Namespace) -> int:
     policy = load_policy(args.policy)
-    caps = []
+    caps = ["arithmetic"]
     ext_calls = []
-    name = Path(args.binary).name.lower()
-    if "suspicious" in name:
-        cap = capability_for_symbol("connect")
+    for symbol in args.external_call:
+        cap = capability_for_symbol(symbol)
         if cap:
             caps.append(cap)
-            ext_calls.append({"symbol": "connect", "capability": cap, "address": "unknown"})
-    else:
-        caps.append("arithmetic")
+        ext_calls.append({"symbol": symbol, "capability": cap, "address": "unknown"})
 
     verdict, violations = evaluate_policy(policy, caps)
     evidence = Evidence(
@@ -56,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--policy", required=True)
     a.add_argument("--out")
     a.add_argument("--emit-evidence")
+    a.add_argument("--external-call", action="append", default=[], help="Record an external call symbol for deterministic capability evaluation")
     a.set_defaults(func=cmd_assess)
 
     for cmd in ["lift", "trace", "policy-from-source", "explain"]:
