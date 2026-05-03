@@ -44,6 +44,7 @@ Implemented so far:
 - ELF function loading and Capstone-based decoding (narrow scope)
 - x86 lifting for a minimal integer subset into SIGIL IR
 - SafeISA emission from lifted IR
+- Evidence model and markdown report writer
 - CLI `lift`/`assess` integration through the deterministic analysis path
 
 Current limitations:
