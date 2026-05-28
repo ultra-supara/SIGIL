@@ -12,15 +12,17 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 brew update
-brew install uv llvm
+brew install llvm
 
 LLVM_PREFIX="$(brew --prefix llvm)"
 export PATH="$LLVM_PREFIX/bin:$PATH"
 
-uv venv
-source .venv/bin/activate
-uv sync --dev
+if ! command -v rustup >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  source "$HOME/.cargo/env"
+fi
+
+cargo test
 
 echo "Setup complete."
-echo "Run: source .venv/bin/activate"
-echo "Then: uv run pytest -q"
+echo "Run: cargo run -p sigil-cli -- --help"
