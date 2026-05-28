@@ -6,6 +6,14 @@ SIGIL is a **defensive, local-first security inspection tool** for AI runtimes, 
 
 SIGIL also includes a guarded ISA lifting path for native binary capability analysis. That lower-level path is the foundation for inspecting runtime binaries and connecting model-store evidence with the execution surface that serves the model.
 
+## Website and docs
+
+- Public overview page: [site/index.html](site/index.html)
+- Detailed overview: [docs/sigil-overview.md](docs/sigil-overview.md)
+- Ollama inspection: [docs/ollama-inspection.md](docs/ollama-inspection.md)
+- AI-BOM and comparison direction: [docs/ai-bom-and-comparison.md](docs/ai-bom-and-comparison.md)
+- Architecture and safety model: [docs/architecture-and-safety.md](docs/architecture-and-safety.md)
+
 ## Direction
 
 SIGIL is designed to grow from single-runtime inspection into local AI environment comparison:

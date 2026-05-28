@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SIGIL - Semantic Inspection for Guarded Intelligence Layers</title>
+    <meta
+      name="description"
+      content="SIGIL is a local-first security inspection tool for AI runtimes, model stores, and native execution surfaces."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="SIGIL home">
+        <span class="brand-mark">S</span>
+        <span>SIGIL</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="#scope">Scope</a>
+        <a href="#ollama">Ollama</a>
+        <a href="#docs">Docs</a>
+        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="definition">Semantic Inspection for Guarded Intelligence Layers</p>
+          <h1>Local-first inspection for AI runtimes and model stores.</h1>
+          <p class="lead">
+            SIGIL inventories local LLM deployments, verifies model artifacts,
+            checks runtime exposure, and connects native binary capability
+            evidence to deterministic PASS/WARN/FAIL decisions.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="../docs/sigil-overview.md">Read the overview</a>
+            <a class="button secondary" href="https://github.com/ultra-supara/SIGIL">View source</a>
+          </div>
+          <dl class="proof-strip" aria-label="SIGIL properties">
+            <div>
+              <dt>Runtime</dt>
+              <dd>Ollama first</dd>
+            </div>
+            <div>
+              <dt>Evidence</dt>
+              <dd>AI-BOM JSON and Markdown</dd>
+            </div>
+            <div>
+              <dt>Verdicts</dt>
+              <dd>Deterministic policy</dd>
+            </div>
+          </dl>
+        </div>
+        <div class="hero-visual">
+          <img
+            src="./assets/sigil-layers.png"
+            alt="Abstract inspection layers connecting a local workstation to model, runtime, binary, and policy evidence."
+          />
+        </div>
+      </section>
+
+      <section id="scope" class="section">
+        <div class="section-heading">
+          <h2>What SIGIL inspects today</h2>
+          <p>
+            The current implementation is intentionally narrow, but the pieces
+            are already connected around local AI runtime safety.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h3>Ollama model stores</h3>
+            <p>
+              Walks Ollama manifests and blobs, records model names, file
+              digests, sizes, and missing or invalid artifact references.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Runtime exposure</h3>
+            <p>
+              Probes configured Ollama API endpoints and flags public-bind or
+              non-local network hosts as findings.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>Native execution surfaces</h3>
+            <p>
+              Loads x86_64 objects, lifts a small instruction subset into IR,
+              and maps external symbols such as network and process calls to
+              capabilities.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>AI-BOM reports</h3>
+            <p>
+              Emits machine-readable evidence JSON and a Markdown AI-BOM for
+              local runtime and model-store inspection results.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="ollama" class="section split">
+        <div>
+          <h2>Gemma 4 on Ollama: verified path</h2>
+          <p>
+            SIGIL was exercised against a real local Ollama installation with
+            <code>gemma4:e2b</code> on May 29, 2026. The run verified the model
+            store, checked a localhost Ollama API endpoint, hashed model blobs,
+            and produced both evidence JSON and an AI-BOM report.
+          </p>
+          <ul class="check-list">
+            <li>Ollama version: <code>0.24.0</code></li>
+            <li>Model: <code>gemma4:e2b</code></li>
+            <li>Runtime status: <code>reachable</code></li>
+            <li>API exposure: <code>localhost</code></li>
+            <li>Verdict: <code>PASS</code></li>
+          </ul>
+        </div>
+        <div class="command-panel" aria-label="Ollama commands">
+          <pre><code>ollama pull gemma4:e2b
+
+cargo run -p sigil-cli -- runtime inspect ollama \
+  --model gemma4:e2b \
+  --out out/gemma4-ollama.evidence.json
+
+cargo run -p sigil-cli -- aibom generate \
+  --runtime ollama \
+  --model gemma4:e2b \
+  --out out/gemma4-aibom.md</code></pre>
+        </div>
+      </section>
+
+      <section class="section comparison">
+        <div class="section-heading">
+          <h2>Why this is different from a model catalog</h2>
+          <p>
+            SIGIL treats a local LLM deployment as an environment: model
+            artifacts, runtime exposure, native binaries, and policy all matter.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Inspection axis</th>
+                <th>SIGIL direction</th>
+                <th>Current status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Model artifact identity</td>
+                <td>Manifest and blob digest verification</td>
+                <td>Implemented for Ollama</td>
+              </tr>
+              <tr>
+                <td>Runtime exposure</td>
+                <td>API endpoint and bind-risk classification</td>
+                <td>Initial Ollama host checks</td>
+              </tr>
+              <tr>
+                <td>Native capability evidence</td>
+                <td>External calls and guarded ISA lifting</td>
+                <td>Initial x86_64 path</td>
+              </tr>
+              <tr>
+                <td>Environment comparison</td>
+                <td>Baseline drift and multi-runtime comparison</td>
+                <td>Planned</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="docs" class="section docs-section">
+        <div class="section-heading">
+          <h2>Detailed documentation</h2>
+          <p>
+            The public page is the short front door. The detailed model,
+            architecture, and roadmap are kept in docs.
+          </p>
+        </div>
+        <div class="doc-links">
+          <a href="../docs/sigil-overview.md">
+            <span>Overview</span>
+            Product position, current scope, and design principles.
+          </a>
+          <a href="../docs/ollama-inspection.md">
+            <span>Ollama Inspection</span>
+            Gemma 4 test path, evidence fields, and findings.
+          </a>
+          <a href="../docs/ai-bom-and-comparison.md">
+            <span>AI-BOM and Comparison</span>
+            Report model and future baseline comparison direction.
+          </a>
+          <a href="../docs/architecture-and-safety.md">
+            <span>Architecture and Safety</span>
+            Rust crates, SafeISA, policy, and analysis-only boundaries.
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>SIGIL is local-first and analysis-only.</span>
+      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
+    </footer>
+  </body>
+</html>
