@@ -13,6 +13,28 @@ def test_cli_help():
     assert "assess" in r.stdout
 
 
+def test_assess_external_call_drives_verdict():
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sigil.cli",
+            "assess",
+            "examples/binaries/clean_kernel.o",
+            "--entry",
+            "kernel",
+            "--policy",
+            "examples/policies/numeric_kernel.yml",
+            "--external-call",
+            "connect",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0
+    assert "SIGIL Verdict: FAIL" in r.stdout
+
+
 @pytest.mark.skipif(shutil.which("clang") is None, reason="clang not available")
 @pytest.mark.skipif(importlib.util.find_spec("capstone") is None, reason="capstone not installed")
 @pytest.mark.skipif(importlib.util.find_spec("elftools") is None, reason="pyelftools not installed")

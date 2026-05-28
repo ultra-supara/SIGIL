@@ -41,30 +41,38 @@ def cmd_lift(args: argparse.Namespace) -> int:
 
 def cmd_assess(args: argparse.Namespace) -> int:
     policy = load_policy(args.policy)
-    _, _, ir, _ = _analyze(args.binary, args.entry)
     caps: list[str] = []
     ext_calls = []
     unsupported = []
     cap_evidence: dict[str, list[dict]] = {}
     violations: list[PolicyViolation] = []
 
-    for block in ir.blocks:
-        for op in block.ops:
-            addr = hex(op.source_address or 0)
-            if op.op in {"Add", "Sub", "Mul", "And", "Or", "Xor"}:
-                caps.append("arithmetic")
-                cap_evidence.setdefault("arithmetic", []).append({"address": addr, "instruction": op.text})
-            elif op.op == "ExternalCall":
-                symbol = (op.symbol or "unknown").split()[0]
-                cap = capability_for_symbol(symbol)
-                if cap:
-                    caps.append(cap)
-                    cap_evidence.setdefault(cap, []).append({"address": addr, "instruction": op.text, "symbol": symbol})
-                ext_calls.append({"symbol": symbol, "capability": cap, "address": addr})
-            elif op.op == "Unsupported":
-                caps.append("unsupported_instruction")
-                unsupported.append({"address": addr, "instruction": op.text})
-                violations.append(PolicyViolation(rule="unsupported_instruction", capability="unsupported_instruction", evidence_address=addr))
+    if args.external_call:
+        caps.append("arithmetic")
+        for symbol in args.external_call:
+            cap = capability_for_symbol(symbol)
+            if cap:
+                caps.append(cap)
+            ext_calls.append({"symbol": symbol, "capability": cap, "address": "unknown"})
+    else:
+        _, _, ir, _ = _analyze(args.binary, args.entry)
+        for block in ir.blocks:
+            for op in block.ops:
+                addr = hex(op.source_address or 0)
+                if op.op in {"Add", "Sub", "Mul", "And", "Or", "Xor"}:
+                    caps.append("arithmetic")
+                    cap_evidence.setdefault("arithmetic", []).append({"address": addr, "instruction": op.text})
+                elif op.op == "ExternalCall":
+                    symbol = (op.symbol or "unknown").split()[0]
+                    cap = capability_for_symbol(symbol)
+                    if cap:
+                        caps.append(cap)
+                        cap_evidence.setdefault(cap, []).append({"address": addr, "instruction": op.text, "symbol": symbol})
+                    ext_calls.append({"symbol": symbol, "capability": cap, "address": addr})
+                elif op.op == "Unsupported":
+                    caps.append("unsupported_instruction")
+                    unsupported.append({"address": addr, "instruction": op.text})
+                    violations.append(PolicyViolation(rule="unsupported_instruction", capability="unsupported_instruction", evidence_address=addr))
 
     verdict, policy_violations = evaluate_policy(policy, caps)
     policy_violations.extend(violations)
@@ -108,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--policy", required=True)
     a.add_argument("--out")
     a.add_argument("--emit-evidence")
+    a.add_argument("--external-call", action="append", default=[], help="Record an external call symbol for deterministic capability evaluation")
     a.set_defaults(func=cmd_assess)
 
     for cmd in ["trace", "policy-from-source", "explain"]:
