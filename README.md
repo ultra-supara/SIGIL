@@ -90,7 +90,3 @@ Use `--models-dir` to inspect a non-default Ollama model store. Use `--host` to 
 - External calls become `CALL_STUB` events and syscalls become `SYSCALL_STUB` events.
 - Network, file, process, dynamic-loading, and environment capabilities are logged as evidence when detected; they are not performed by SIGIL.
 - LLM use remains optional and must never determine security verdicts. Deterministic analyzers and policy evaluation own PASS/WARN/FAIL decisions.
-
-## Legacy Python
-
-The original Python MVP is retained under `legacy/python/` as a parity oracle during the Rust rewrite. Core SIGIL usage no longer requires a Python runtime.
