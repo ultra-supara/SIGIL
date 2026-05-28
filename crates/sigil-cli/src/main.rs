@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use sigil_core::assess::{
     capability_for_symbol, evaluate_policy, load_policy, PolicyViolation, Verdict,
 };
@@ -10,6 +10,7 @@ use sigil_core::evidence::{
     CapabilityEvidence, Evidence, EvidenceItem, ExternalCall, UnsupportedInstruction,
 };
 use sigil_core::ir::Function;
+use sigil_core::ollama::{inspect_ollama, render_ai_bom, OllamaInspectOptions};
 use sigil_core::report::render_report;
 use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
 use sigil_core::x86::{decode_x86_64, lift_instructions, load_function};
@@ -49,6 +50,62 @@ enum Command {
     Trace,
     PolicyFromSource,
     Explain,
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
+    },
+    Aibom {
+        #[command(subcommand)]
+        command: AiBomCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeCommand {
+    Inspect {
+        #[command(subcommand)]
+        target: RuntimeInspectTarget,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeInspectTarget {
+    Ollama(OllamaArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum AiBomCommand {
+    Generate(AiBomGenerateArgs),
+}
+
+#[derive(Debug, Parser)]
+struct OllamaArgs {
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long, default_value = "http://127.0.0.1:11434")]
+    host: String,
+    #[arg(long)]
+    models_dir: Option<PathBuf>,
+    #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
+    probe_api: bool,
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct AiBomGenerateArgs {
+    #[arg(long)]
+    runtime: String,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long, default_value = "http://127.0.0.1:11434")]
+    host: String,
+    #[arg(long)]
+    models_dir: Option<PathBuf>,
+    #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
+    probe_api: bool,
+    #[arg(long)]
+    out: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -71,6 +128,8 @@ fn main() -> Result<()> {
         Command::Trace => placeholder("trace"),
         Command::PolicyFromSource => placeholder("policy-from-source"),
         Command::Explain => placeholder("explain"),
+        Command::Runtime { command } => cmd_runtime(command),
+        Command::Aibom { command } => cmd_aibom(command),
     }
 }
 
@@ -141,6 +200,66 @@ fn assess_external_calls(
 
 fn verdict_text(verdict: Verdict) -> &'static str {
     verdict.as_str()
+}
+
+fn cmd_runtime(command: RuntimeCommand) -> Result<()> {
+    match command {
+        RuntimeCommand::Inspect { target } => match target {
+            RuntimeInspectTarget::Ollama(args) => {
+                let out = args.out.clone();
+                let report = inspect_ollama(ollama_options(args))?;
+                if let Some(path) = out {
+                    ensure_parent_dir(&path)?;
+                    std::fs::write(path, report.to_json()?)?;
+                }
+                println!("SIGIL Runtime Verdict: {}", report.verdict);
+                Ok(())
+            }
+        },
+    }
+}
+
+fn cmd_aibom(command: AiBomCommand) -> Result<()> {
+    match command {
+        AiBomCommand::Generate(args) => {
+            if args.runtime != "ollama" {
+                anyhow::bail!("unsupported AI-BOM runtime: {}", args.runtime);
+            }
+            let options = OllamaInspectOptions {
+                model: args.model,
+                models_dir: args
+                    .models_dir
+                    .unwrap_or_else(OllamaInspectOptions::default_models_dir),
+                host: args.host,
+                probe_api: args.probe_api,
+            };
+            let report = inspect_ollama(options)?;
+            ensure_parent_dir(&args.out)?;
+            std::fs::write(&args.out, render_ai_bom(&report))?;
+            println!("SIGIL AI-BOM: {}", args.out.display());
+            Ok(())
+        }
+    }
+}
+
+fn ollama_options(args: OllamaArgs) -> OllamaInspectOptions {
+    OllamaInspectOptions {
+        model: args.model,
+        models_dir: args
+            .models_dir
+            .unwrap_or_else(OllamaInspectOptions::default_models_dir),
+        host: args.host,
+        probe_api: args.probe_api,
+    }
+}
+
+fn ensure_parent_dir(path: &std::path::Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
 }
 
 fn cmd_lift(

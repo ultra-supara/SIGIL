@@ -2,7 +2,7 @@
 
 SIGIL is a **defensive, local-first security assessment tool** for local LLM deployments and AI-native binaries. Its deterministic analyzers inspect deployment artifacts, native code, and runtime exposure without delegating security verdicts to an LLM.
 
-The current Rust implementation keeps the x86 → IR → SafeISA work as SIGIL's **binary-analysis foundation**. Future local-LLM deployment assessment modules are documented in [ROADMAP.md](ROADMAP.md), but are intentionally not implemented yet.
+The current Rust implementation keeps the x86 → IR → SafeISA work as SIGIL's **binary-analysis foundation** and adds a first local-LLM deployment assessment path for Ollama model stores.
 
 ## Current scope
 
@@ -15,10 +15,11 @@ Implemented so far:
 - x86 lifting for a minimal integer subset into SIGIL IR
 - SafeISA emission from lifted IR
 - Rust CLI `lift`/`assess` integration through the deterministic analysis path
+- Ollama model-store inventory, API exposure probing, blob digest verification, and AI-BOM report generation
 
 Current limitations:
 - x86 support is intentionally narrow and is not a full decompiler
-- Local LLM deployment modules are planned but not implemented yet
+- Local LLM deployment support currently targets Ollama first
 - `trace`, `policy-from-source`, and `explain` are still placeholders
 - Some integration paths require local tooling (`clang`)
 
@@ -62,6 +63,25 @@ cargo run -p sigil-cli -- --help
 Expected behavior:
 - `clean_kernel.o` returns `SIGIL Verdict: PASS` under the numeric policy.
 - `suspicious_kernel.o` returns `SIGIL Verdict: FAIL` or `WARN` when an unexpected external capability is detected.
+
+## Gemma 4 / Ollama inspection
+
+SIGIL can inventory an Ollama model store and produce an AI-BOM-style report for local Gemma 4 deployments.
+
+```bash
+ollama pull gemma4:e2b
+
+cargo run -p sigil-cli -- runtime inspect ollama \
+  --model gemma4:e2b \
+  --out out/gemma4-ollama.evidence.json
+
+cargo run -p sigil-cli -- aibom generate \
+  --runtime ollama \
+  --model gemma4:e2b \
+  --out out/gemma4-aibom.md
+```
+
+Use `--models-dir` to inspect a non-default Ollama model store. Use `--host` to evaluate a specific Ollama API endpoint; `0.0.0.0` / public bind-style hosts are reported as WARN.
 
 ## Safety model
 
