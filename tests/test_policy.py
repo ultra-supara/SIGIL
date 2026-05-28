@@ -1,4 +1,4 @@
-from sigil.assess.policy import evaluate_policy, load_policy
+from sigil.assess.policy import Policy, evaluate_policy, load_policy
 from sigil.assess.verdict import Verdict
 
 
@@ -14,3 +14,25 @@ def test_policy_fail_for_network():
     verdict, violations = evaluate_policy(p, ["network"])
     assert verdict == Verdict.FAIL
     assert violations
+
+
+def test_policy_warn_for_network_when_configured():
+    p = Policy(
+        name="forbidden-warn",
+        allowed_capabilities={"network"},
+        forbidden_capabilities={"network"},
+        verdict_rules={"forbidden_capability": "WARN"},
+    )
+    verdict, _ = evaluate_policy(p, ["network"])
+    assert verdict == Verdict.WARN
+
+
+def test_policy_fail_for_unsupported_when_configured():
+    p = Policy(
+        name="unsupported-fail",
+        allowed_capabilities={"unsupported_instruction"},
+        forbidden_capabilities=set(),
+        verdict_rules={"unsupported_instruction": "FAIL"},
+    )
+    verdict, _ = evaluate_policy(p, ["unsupported_instruction"])
+    assert verdict == Verdict.FAIL
