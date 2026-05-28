@@ -30,6 +30,28 @@ fn compile_fixture_for_target(source: &str, output: &Path, target: &str) -> bool
     status.success()
 }
 
+fn compile_shared_fixture(source: &str, output: &Path) -> bool {
+    let Some(clang) = which("clang") else {
+        return false;
+    };
+    let status = Command::new(clang)
+        .current_dir(workspace_root())
+        .args([
+            "-target",
+            x86_64_target(),
+            "-O0",
+            "-fPIC",
+            "-shared",
+            "-Wl,--strip-all",
+            source,
+            "-o",
+        ])
+        .arg(output)
+        .status()
+        .expect("clang should run");
+    status.success()
+}
+
 fn x86_64_target() -> &'static str {
     if cfg!(target_os = "macos") {
         "x86_64-apple-macos"
@@ -90,4 +112,17 @@ fn rejects_non_x86_64_object_before_decoding() {
 
     let err = load_function(&object, "kernel").unwrap_err();
     assert!(matches!(err, X86Error::UnsupportedArchitecture(_)));
+}
+
+#[test]
+fn loads_entry_from_dynamic_symbol_table_when_regular_symbols_are_stripped() {
+    let tmp = TempDir::new().unwrap();
+    let object = tmp.path().join("libclean.so");
+    if !compile_shared_fixture("examples/src/clean_kernel.c", &object) {
+        return;
+    }
+
+    let function = load_function(&object, "kernel").unwrap();
+    assert_eq!(function.entry, "kernel");
+    assert!(!function.code.is_empty());
 }

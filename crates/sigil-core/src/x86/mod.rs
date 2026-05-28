@@ -4,7 +4,9 @@ use std::ops::Range;
 use std::path::Path;
 
 use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
-use object::{Architecture, Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex};
+use object::{
+    Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex,
+};
 
 use crate::ir::{BasicBlock, Function, IROp};
 
@@ -107,7 +109,8 @@ pub fn load_function_with_max_bytes(
     }
     let symbol = file
         .symbols()
-        .find(|symbol| symbol.name().ok() == Some(entry))
+        .chain(file.dynamic_symbols())
+        .find(|symbol| symbol_matches_entry(&file, symbol.name().ok(), entry))
         .ok_or_else(|| X86Error::MissingSymbol(entry.to_string()))?;
     let section_index = symbol
         .section_index()
@@ -172,8 +175,9 @@ fn truncate_until_ret_instruction(code: &[u8], base_address: u64) -> Vec<u8> {
 
 fn extract_target_symbols(file: &object::File<'_>) -> BTreeMap<u64, String> {
     file.symbols()
+        .chain(file.dynamic_symbols())
         .filter_map(|symbol| {
-            let name = symbol.name().ok()?.split('@').next()?.to_string();
+            let name = normalize_symbol_name(file, symbol.name().ok()?);
             let address = symbol.address();
             if name.is_empty() || address == 0 {
                 None
@@ -201,7 +205,7 @@ fn extract_call_relocations(
                 return None;
             };
             let symbol = file.symbol_by_index(symbol_index).ok()?;
-            let name = symbol.name().ok()?.split('@').next()?.to_string();
+            let name = normalize_symbol_name(file, symbol.name().ok()?);
             Some((offset, name))
         })
         .collect();
@@ -233,6 +237,22 @@ fn function_contains(function_address: u64, instruction_address: u64) -> bool {
 
 fn range_contains(range: &Range<u64>, value: u64) -> bool {
     range.start <= value && value < range.end
+}
+
+fn symbol_matches_entry(file: &object::File<'_>, symbol_name: Option<&str>, entry: &str) -> bool {
+    let Some(symbol_name) = symbol_name else {
+        return false;
+    };
+    symbol_name == entry || normalize_symbol_name(file, symbol_name) == entry
+}
+
+fn normalize_symbol_name(file: &object::File<'_>, symbol_name: &str) -> String {
+    let name = symbol_name.split('@').next().unwrap_or(symbol_name);
+    if file.format() == BinaryFormat::MachO {
+        name.strip_prefix('_').unwrap_or(name).to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 pub fn lift_instructions(
