@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
-use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex};
+use object::{Architecture, Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex};
 
 use crate::ir::{BasicBlock, Function, IROp};
 
@@ -40,6 +40,8 @@ pub enum X86Error {
         #[source]
         source: object::Error,
     },
+    #[error("unsupported object architecture for x86_64 analysis: {0}")]
+    UnsupportedArchitecture(String),
     #[error("entry symbol not found in object: {0}")]
     MissingSymbol(String),
     #[error("entry symbol section is unavailable: {0}")]
@@ -97,6 +99,12 @@ pub fn load_function_with_max_bytes(
         path: path_display,
         source,
     })?;
+    if file.architecture() != Architecture::X86_64 {
+        return Err(X86Error::UnsupportedArchitecture(format!(
+            "{:?}",
+            file.architecture()
+        )));
+    }
     let symbol = file
         .symbols()
         .find(|symbol| symbol.name().ok() == Some(entry))

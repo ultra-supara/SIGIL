@@ -26,11 +26,19 @@ fn compile_fixture(source: &str, output: &std::path::Path) -> bool {
     };
     let status = StdCommand::new(clang)
         .current_dir(workspace_root())
-        .args(["-O0", "-c", source, "-o"])
+        .args(["-target", x86_64_target(), "-O0", "-c", source, "-o"])
         .arg(output)
         .status()
         .expect("clang should run");
     status.success()
+}
+
+fn x86_64_target() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "x86_64-apple-macos"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    }
 }
 
 #[test]

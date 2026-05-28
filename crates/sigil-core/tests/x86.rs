@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sigil_core::x86::{decode_x86_64, lift_instructions, load_function};
+use sigil_core::x86::{decode_x86_64, lift_instructions, load_function, X86Error};
 use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {
@@ -14,16 +14,28 @@ fn workspace_root() -> PathBuf {
 }
 
 fn compile_fixture(source: &str, output: &Path) -> bool {
+    compile_fixture_for_target(source, output, x86_64_target())
+}
+
+fn compile_fixture_for_target(source: &str, output: &Path, target: &str) -> bool {
     let Some(clang) = which("clang") else {
         return false;
     };
     let status = Command::new(clang)
         .current_dir(workspace_root())
-        .args(["-O0", "-c", source, "-o"])
+        .args(["-target", target, "-O0", "-c", source, "-o"])
         .arg(output)
         .status()
         .expect("clang should run");
     status.success()
+}
+
+fn x86_64_target() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "x86_64-apple-macos"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    }
 }
 
 fn which(binary: &str) -> Option<String> {
@@ -61,4 +73,21 @@ fn loads_compiled_function_and_resolves_call_relocation() {
         .call_symbols
         .values()
         .any(|symbol| symbol == "connect"));
+}
+
+#[test]
+fn rejects_non_x86_64_object_before_decoding() {
+    let tmp = TempDir::new().unwrap();
+    let object = tmp.path().join("clean-arm64.o");
+    let target = if cfg!(target_os = "macos") {
+        "arm64-apple-macos"
+    } else {
+        "aarch64-unknown-linux-gnu"
+    };
+    if !compile_fixture_for_target("examples/src/clean_kernel.c", &object, target) {
+        return;
+    }
+
+    let err = load_function(&object, "kernel").unwrap_err();
+    assert!(matches!(err, X86Error::UnsupportedArchitecture(_)));
 }
