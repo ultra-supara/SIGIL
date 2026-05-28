@@ -159,6 +159,37 @@ fn flags_manifest_blob_digest_mismatch_as_fail() {
 }
 
 #[test]
+fn rejects_manifest_digest_with_path_separators_before_blob_lookup() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_dir = tmp
+        .path()
+        .join("models/manifests/registry.ollama.ai/library/gemma4");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
+    let digest = "sha256:foo/../../secret";
+    fs::write(
+        manifest_dir.join("e2b"),
+        format!(r#"{{"schemaVersion":2,"config":{{"digest":"{digest}"}},"layers":[]}}"#),
+    )
+    .unwrap();
+
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+    })
+    .unwrap();
+
+    assert_eq!(report.verdict, "WARN");
+    assert!(report.models[0].files.is_empty());
+    assert!(report
+        .findings
+        .iter()
+        .any(|finding| finding.id == "ollama.invalid_blob_digest"));
+}
+
+#[test]
 fn renders_ai_bom_with_model_runtime_and_files() {
     let tmp = fake_store();
     let report = inspect_ollama(OllamaInspectOptions {

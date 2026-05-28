@@ -15,7 +15,10 @@ fn fixture(path: &str) -> PathBuf {
 #[test]
 fn maps_symbols_to_capabilities() {
     assert_eq!(capability_for_symbol("connect"), Some("network"));
+    assert_eq!(capability_for_symbol("getaddrinfo"), Some("network"));
     assert_eq!(capability_for_symbol("openat"), Some("file_read"));
+    assert_eq!(capability_for_symbol("rename"), Some("file_write"));
+    assert_eq!(capability_for_symbol("unlink"), Some("file_write"));
     assert_eq!(capability_for_symbol("dlopen"), Some("dynamic_loading"));
     assert_eq!(capability_for_symbol("getenv"), Some("environment_access"));
     assert_eq!(capability_for_symbol("unknown_symbol"), None);

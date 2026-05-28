@@ -367,6 +367,16 @@ fn push_model_file_or_finding(
     files: &mut Vec<ModelFile>,
     findings: &mut Vec<RuntimeFinding>,
 ) -> Result<(), OllamaError> {
+    if !is_valid_ollama_digest(digest) {
+        findings.push(RuntimeFinding {
+            id: "ollama.invalid_blob_digest".to_string(),
+            severity: "WARN".to_string(),
+            message: "Ollama manifest references an invalid blob digest".to_string(),
+            evidence: format!("{} digest={digest}", manifest_path.display()),
+        });
+        return Ok(());
+    }
+
     match model_file_for_digest(models_dir, digest, kind)? {
         Some(file) => {
             if let Some(expected) = digest.strip_prefix("sha256:") {
@@ -453,6 +463,13 @@ fn model_file_for_digest(
         sha256,
         kind: kind.to_string(),
     }))
+}
+
+fn is_valid_ollama_digest(digest: &str) -> bool {
+    let Some(value) = digest.strip_prefix("sha256:") else {
+        return false;
+    };
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

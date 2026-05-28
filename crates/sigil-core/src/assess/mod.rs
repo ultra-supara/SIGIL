@@ -223,9 +223,11 @@ where
 pub fn capability_for_symbol(symbol: &str) -> Option<&'static str> {
     let name = symbol.split('@').next().unwrap_or(symbol);
     match name {
-        "connect" | "send" | "sendto" | "recv" | "recvfrom" | "socket" => Some("network"),
+        "connect" | "getaddrinfo" | "send" | "sendto" | "recv" | "recvfrom" | "socket" => {
+            Some("network")
+        }
         "open" | "openat" | "fopen" | "read" | "pread" => Some("file_read"),
-        "write" | "pwrite" | "fwrite" | "creat" => Some("file_write"),
+        "write" | "pwrite" | "fwrite" | "creat" | "rename" | "unlink" => Some("file_write"),
         "execve" | "fork" | "posix_spawn" | "system" => Some("process_spawn"),
         "dlopen" | "dlsym" => Some("dynamic_loading"),
         "getenv" | "setenv" | "putenv" => Some("environment_access"),
