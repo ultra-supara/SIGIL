@@ -7,12 +7,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::runtime::{classify_runtime_exposure, RuntimeExposureReport, RuntimeListeners};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OllamaInspectOptions {
     pub model: Option<String>,
     pub models_dir: PathBuf,
     pub host: String,
     pub probe_api: bool,
+    pub runtime_listeners: RuntimeListeners,
 }
 
 impl OllamaInspectOptions {
@@ -96,6 +99,7 @@ pub struct OllamaReport {
     pub models_dir: PathBuf,
     pub host: String,
     pub api: ApiExposure,
+    pub runtime_exposure: RuntimeExposureReport,
     pub runtime_status: RuntimeStatus,
     pub version: Option<String>,
     pub models: Vec<OllamaModel>,
@@ -227,6 +231,11 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
         });
     }
 
+    let ollama_port = resolve_ollama_port(&options.host);
+    let runtime_exposure =
+        classify_runtime_exposure(&options.runtime_listeners.snapshot(), ollama_port);
+    push_runtime_exposure_finding(&runtime_exposure, ollama_port, &mut findings);
+
     let mut version = None;
     let runtime_status = if options.probe_api {
         match probe_ollama_version(&options.host) {
@@ -272,6 +281,7 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
         models_dir: options.models_dir,
         host: options.host,
         api,
+        runtime_exposure,
         runtime_status,
         version,
         models,
@@ -485,6 +495,67 @@ fn classify_host(host: &str) -> ApiExposure {
     } else {
         ApiExposure::Network
     }
+}
+
+fn resolve_ollama_port(host: &str) -> u16 {
+    if let Some((_, port)) = parse_http_host(host) {
+        return port;
+    }
+    if let Ok(env_host) = std::env::var("OLLAMA_HOST") {
+        if let Some((_, port)) = parse_http_host(&env_host) {
+            return port;
+        }
+    }
+    11434
+}
+
+fn push_runtime_exposure_finding(
+    exposure: &RuntimeExposureReport,
+    port: u16,
+    findings: &mut Vec<RuntimeFinding>,
+) {
+    use crate::runtime::RuntimeExposure;
+
+    let (id, message) = match exposure.class {
+        RuntimeExposure::Lan => (
+            "ollama.runtime_lan_exposure",
+            "Ollama is bound to a LAN-reachable address",
+        ),
+        RuntimeExposure::PublicBind => (
+            "ollama.runtime_public_bind",
+            "Ollama is bound to a public/wildcard address",
+        ),
+        RuntimeExposure::DockerPublished => (
+            "ollama.runtime_docker_published",
+            "Ollama appears published through a Docker port mapping",
+        ),
+        RuntimeExposure::Proxy => (
+            "ollama.runtime_proxy",
+            "Ollama port appears fronted by a reverse proxy",
+        ),
+        RuntimeExposure::Localhost | RuntimeExposure::Unknown => return,
+    };
+
+    let observed = if exposure.observed.is_empty() {
+        format!("port={port}")
+    } else {
+        exposure
+            .observed
+            .iter()
+            .map(|bind| match &bind.process {
+                Some(process) => format!("{}:{} ({process})", bind.addr, bind.port),
+                None => format!("{}:{}", bind.addr, bind.port),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    findings.push(RuntimeFinding {
+        id: id.to_string(),
+        severity: "WARN".to_string(),
+        message: message.to_string(),
+        evidence: observed,
+    });
 }
 
 fn host_name_for_classification(host: &str) -> String {
