@@ -1,3 +1,4 @@
+pub mod aibom;
 pub mod assess;
 pub mod evidence;
 pub mod ir;
