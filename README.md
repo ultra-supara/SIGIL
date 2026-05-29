@@ -115,7 +115,7 @@ Top-level keys (all required): `schema_version`, `tool` (`name`, `version`), `ru
 
 - `runtime`: `name`, `host`, `api_exposure`, `status`, `exposure` (`class`, `source`, `observed[]`), and optional `models_dir` / `version`.
 - `models[]`: `name`, `files[]` (`digest`, `path`, `size`, `sha256`, `kind`), and optional `manifest_path`.
-- `findings[]`: `id`, `category` (`runtime` | `model` | `binary`), `severity` (`WARN` | `FAIL`), `message`, `evidence`.
+- `findings[]`: `id`, `category` (`runtime` | `model` | `binary`; `binary` is reserved for future native-binary findings and not yet produced), `severity` (`WARN` | `FAIL`), `message`, `evidence`.
 - `verdict`: `PASS` | `WARN` | `FAIL`.
 
 Enum values are stable: `api_exposure` ∈ {`not_probed`, `localhost`, `network`, `public_bind`, `unavailable`}, `status` ∈ {`not_probed`, `reachable`, `unreachable`}, `exposure.class` ∈ {`localhost`, `lan`, `public_bind`, `docker_published`, `proxy`, `unknown`}. Optional fields are omitted when absent. Markdown output is derived from this JSON model.
