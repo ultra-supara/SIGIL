@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::assess::Verdict;
-use crate::ollama::{ApiExposure, RuntimeStatus};
+use crate::ollama::{ApiExposure, OllamaReport, RuntimeStatus};
 use crate::runtime::RuntimeExposure;
 
 /// Stable AI-BOM schema version. Bump minor for additive changes, major for
@@ -106,6 +106,74 @@ impl Severity {
 impl AiBom {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
+    }
+}
+
+impl From<&OllamaReport> for AiBom {
+    fn from(report: &OllamaReport) -> Self {
+        let observed = report
+            .runtime_exposure
+            .observed
+            .iter()
+            .map(|bind| BindEntry {
+                addr: bind.addr.clone(),
+                port: bind.port,
+                process: bind.process.clone(),
+            })
+            .collect();
+        let models = report
+            .models
+            .iter()
+            .map(|model| ModelEntry {
+                name: model.name.clone(),
+                manifest_path: Some(model.manifest_path.display().to_string()),
+                files: model
+                    .files
+                    .iter()
+                    .map(|file| FileEntry {
+                        digest: file.digest.clone(),
+                        path: file.path.display().to_string(),
+                        size: file.size,
+                        sha256: file.sha256.clone(),
+                        kind: file.kind.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let findings = report
+            .findings
+            .iter()
+            .map(|finding| Finding {
+                id: finding.id.clone(),
+                category: finding_category(&finding.id),
+                severity: severity_from_str(&finding.severity),
+                message: finding.message.clone(),
+                evidence: finding.evidence.clone(),
+            })
+            .collect();
+        AiBom {
+            schema_version: SCHEMA_VERSION.to_string(),
+            tool: ToolInfo {
+                name: "sigil".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+            runtime: RuntimeInfo {
+                name: report.runtime.clone(),
+                host: report.host.clone(),
+                models_dir: Some(report.models_dir.display().to_string()),
+                api_exposure: report.api.clone(),
+                status: report.runtime_status.clone(),
+                version: report.version.clone(),
+                exposure: ExposureInfo {
+                    class: report.runtime_exposure.class,
+                    source: report.runtime_exposure.source.clone(),
+                    observed,
+                },
+            },
+            models,
+            findings,
+            verdict: verdict_from_str(&report.verdict),
+        }
     }
 }
 
