@@ -83,8 +83,8 @@ enum AiBomCommand {
 struct OllamaArgs {
     #[arg(long)]
     model: Option<String>,
-    #[arg(long, default_value = "http://127.0.0.1:11434")]
-    host: String,
+    #[arg(long)]
+    host: Option<String>,
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
@@ -101,8 +101,8 @@ struct AiBomGenerateArgs {
     runtime: String,
     #[arg(long)]
     model: Option<String>,
-    #[arg(long, default_value = "http://127.0.0.1:11434")]
-    host: String,
+    #[arg(long)]
+    host: Option<String>,
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
@@ -235,7 +235,7 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
                 models_dir: args
                     .models_dir
                     .unwrap_or_else(OllamaInspectOptions::default_models_dir),
-                host: args.host,
+                host: resolve_host(args.host),
                 probe_api: args.probe_api,
                 runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
             };
@@ -256,13 +256,24 @@ fn resolve_runtime_listeners(inspect_runtime: bool) -> RuntimeListeners {
     }
 }
 
+// Resolution order: explicit --host -> OLLAMA_HOST env -> loopback default.
+// The flag has no clap default so an omitted --host can defer to OLLAMA_HOST.
+fn resolve_host(flag: Option<String>) -> String {
+    flag.or_else(|| {
+        std::env::var("OLLAMA_HOST")
+            .ok()
+            .filter(|value| !value.is_empty())
+    })
+    .unwrap_or_else(|| "http://127.0.0.1:11434".to_string())
+}
+
 fn ollama_options(args: OllamaArgs) -> OllamaInspectOptions {
     OllamaInspectOptions {
         model: args.model,
         models_dir: args
             .models_dir
             .unwrap_or_else(OllamaInspectOptions::default_models_dir),
-        host: args.host,
+        host: resolve_host(args.host),
         probe_api: args.probe_api,
         runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
     }

@@ -511,15 +511,7 @@ fn classify_host(host: &str) -> ApiExposure {
 }
 
 fn resolve_ollama_port(host: &str) -> u16 {
-    if let Some((_, port)) = parse_http_host(host) {
-        return port;
-    }
-    if let Ok(env_host) = std::env::var("OLLAMA_HOST") {
-        if let Some((_, port)) = parse_http_host(&env_host) {
-            return port;
-        }
-    }
-    11434
+    parse_http_host(host).map(|(_, port)| port).unwrap_or(11434)
 }
 
 fn push_runtime_exposure_finding(

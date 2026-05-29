@@ -91,6 +91,7 @@ fn aibom_generate_ollama_writes_markdown() {
         out.to_str().unwrap(),
     ])
     .current_dir(workspace_root())
+    .env_remove("OLLAMA_HOST")
     .assert()
     .success()
     .stdout(contains("SIGIL AI-BOM:"));
@@ -100,4 +101,34 @@ fn aibom_generate_ollama_writes_markdown() {
     assert!(markdown.contains("gemma4:e2b"));
     assert!(markdown.contains("- API exposure: `not_probed`"));
     assert!(markdown.contains("- Runtime exposure: `unknown`"));
+}
+
+#[test]
+fn runtime_inspect_ollama_honors_ollama_host_env_when_host_flag_omitted() {
+    let tmp = fake_store();
+    let out = tmp.path().join("ollama.evidence.json");
+
+    let mut cmd = Command::cargo_bin("sigil").unwrap();
+    cmd.args([
+        "runtime",
+        "inspect",
+        "ollama",
+        "--model",
+        "gemma4:e2b",
+        "--models-dir",
+        tmp.path().join("models").to_str().unwrap(),
+        "--no-probe-api",
+        "--no-inspect-runtime",
+        "--out",
+        out.to_str().unwrap(),
+    ])
+    .current_dir(workspace_root())
+    .env("OLLAMA_HOST", "0.0.0.0:11434")
+    .assert()
+    .success()
+    .stdout(contains("SIGIL Runtime Verdict: WARN"));
+
+    let json = fs::read_to_string(out).unwrap();
+    assert!(json.contains("\"api\": \"public_bind\""));
+    assert!(json.contains("\"ollama.public_bind\""));
 }
