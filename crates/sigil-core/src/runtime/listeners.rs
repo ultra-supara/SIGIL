@@ -152,6 +152,7 @@ fn parse_v6_hex(hex: &str) -> Option<IpAddr> {
     Some(IpAddr::V6(Ipv6Addr::from(bytes)))
 }
 
+#[derive(Debug)]
 enum AddrClass {
     Loopback,
     Wildcard,
@@ -191,6 +192,8 @@ fn classify_addr(addr: &IpAddr) -> AddrClass {
 }
 
 fn exposure_for(addr: &IpAddr, process: Option<&str>) -> RuntimeExposure {
+    // Process name takes precedence over bind address: a known proxy or docker-proxy
+    // process indicates intentional forwarding regardless of the local bind IP.
     if let Some(name) = process {
         if name == "docker-proxy" {
             return RuntimeExposure::DockerPublished;
@@ -416,5 +419,41 @@ mod tests {
         let report = classify_runtime_exposure(&snap, 11434);
         assert_eq!(report.class, RuntimeExposure::PublicBind);
         assert_eq!(report.observed.len(), 2);
+    }
+
+    #[test]
+    fn classifies_ipv6_loopback_as_localhost() {
+        let snap = snapshot_with("::1", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::Localhost
+        );
+    }
+
+    #[test]
+    fn classifies_ipv6_wildcard_as_public_bind() {
+        let snap = snapshot_with("::", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::PublicBind
+        );
+    }
+
+    #[test]
+    fn classifies_ipv6_ula_as_lan() {
+        let snap = snapshot_with("fd00::1", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::Lan
+        );
+    }
+
+    #[test]
+    fn classifies_ipv6_link_local_as_lan() {
+        let snap = snapshot_with("fe80::1", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::Lan
+        );
     }
 }
