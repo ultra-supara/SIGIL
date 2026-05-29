@@ -54,6 +54,7 @@ fn runtime_inspect_ollama_writes_evidence_json() {
         "--host",
         "http://127.0.0.1:11434",
         "--no-probe-api",
+        "--no-inspect-runtime",
         "--out",
         out.to_str().unwrap(),
     ])
@@ -65,6 +66,8 @@ fn runtime_inspect_ollama_writes_evidence_json() {
     let json = fs::read_to_string(out).unwrap();
     assert!(json.contains("\"model\": \"gemma4:e2b\""));
     assert!(json.contains("\"api\": \"not_probed\""));
+    assert!(json.contains("\"runtime_exposure\""));
+    assert!(json.contains("\"class\": \"unknown\""));
 }
 
 #[test]
@@ -83,6 +86,7 @@ fn aibom_generate_ollama_writes_markdown() {
         "--models-dir",
         tmp.path().join("models").to_str().unwrap(),
         "--no-probe-api",
+        "--no-inspect-runtime",
         "--out",
         out.to_str().unwrap(),
     ])
@@ -95,4 +99,5 @@ fn aibom_generate_ollama_writes_markdown() {
     assert!(markdown.contains("# SIGIL AI-BOM"));
     assert!(markdown.contains("gemma4:e2b"));
     assert!(markdown.contains("- API exposure: `not_probed`"));
+    assert!(markdown.contains("- Runtime exposure: `unknown`"));
 }

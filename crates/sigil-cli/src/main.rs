@@ -11,6 +11,7 @@ use sigil_core::evidence::{
 };
 use sigil_core::ir::Function;
 use sigil_core::ollama::{inspect_ollama, render_ai_bom, OllamaInspectOptions};
+use sigil_core::runtime::RuntimeListeners;
 use sigil_core::report::render_report;
 use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
 use sigil_core::x86::{decode_x86_64, lift_instructions, load_function};
@@ -88,6 +89,8 @@ struct OllamaArgs {
     models_dir: Option<PathBuf>,
     #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
     probe_api: bool,
+    #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
+    inspect_runtime: bool,
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -104,6 +107,8 @@ struct AiBomGenerateArgs {
     models_dir: Option<PathBuf>,
     #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
     probe_api: bool,
+    #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
+    inspect_runtime: bool,
     #[arg(long)]
     out: PathBuf,
 }
@@ -232,6 +237,7 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
                     .unwrap_or_else(OllamaInspectOptions::default_models_dir),
                 host: args.host,
                 probe_api: args.probe_api,
+                runtime_listeners: runtime_listeners(args.inspect_runtime),
             };
             let report = inspect_ollama(options)?;
             ensure_parent_dir(&args.out)?;
@@ -239,6 +245,14 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
             println!("SIGIL AI-BOM: {}", args.out.display());
             Ok(())
         }
+    }
+}
+
+fn runtime_listeners(inspect_runtime: bool) -> RuntimeListeners {
+    if inspect_runtime {
+        RuntimeListeners::Inspect
+    } else {
+        RuntimeListeners::Disabled
     }
 }
 
@@ -250,6 +264,7 @@ fn ollama_options(args: OllamaArgs) -> OllamaInspectOptions {
             .unwrap_or_else(OllamaInspectOptions::default_models_dir),
         host: args.host,
         probe_api: args.probe_api,
+        runtime_listeners: runtime_listeners(args.inspect_runtime),
     }
 }
 
