@@ -297,11 +297,24 @@ pub fn render_ai_bom(report: &OllamaReport) -> String {
         format!("- Runtime: `{}`", report.runtime),
         format!("- Host: `{}`", report.host),
         format!("- API exposure: `{}`", report.api.as_str()),
+        format!(
+            "- Runtime exposure: `{}`",
+            report.runtime_exposure.class.as_str()
+        ),
         format!("- Runtime status: `{}`", report.runtime_status.as_str()),
         format!("- Verdict: `{}`", report.verdict),
     ];
     if let Some(version) = &report.version {
         lines.push(format!("- Version: `{version}`"));
+    }
+    for bind in &report.runtime_exposure.observed {
+        match &bind.process {
+            Some(process) => lines.push(format!(
+                "- Runtime bind: `{}:{}` process=`{process}`",
+                bind.addr, bind.port
+            )),
+            None => lines.push(format!("- Runtime bind: `{}:{}`", bind.addr, bind.port)),
+        }
     }
     lines.push(String::new());
     lines.push("## Models".to_string());

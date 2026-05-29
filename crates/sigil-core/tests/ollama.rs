@@ -301,3 +301,36 @@ fn runtime_lan_listener_warns() {
         .iter()
         .any(|finding| finding.id == "ollama.runtime_lan_exposure"));
 }
+
+#[test]
+fn ai_bom_includes_runtime_exposure_and_binds() {
+    let tmp = fake_store();
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: fixed_listener("0.0.0.0", 11434),
+    })
+    .unwrap();
+
+    let bom = render_ai_bom(&report);
+    assert!(bom.contains("- Runtime exposure: `public_bind`"));
+    assert!(bom.contains("0.0.0.0:11434"));
+}
+
+#[test]
+fn ai_bom_runtime_exposure_unknown_when_disabled() {
+    let tmp = fake_store();
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    let bom = render_ai_bom(&report);
+    assert!(bom.contains("- Runtime exposure: `unknown`"));
+}
