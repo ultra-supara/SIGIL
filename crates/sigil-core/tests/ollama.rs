@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::ollama::{
-    inspect_ollama, render_ai_bom, ApiExposure, ModelFile, OllamaInspectOptions, RuntimeStatus,
+    inspect_ollama, ApiExposure, ModelFile, OllamaInspectOptions, RuntimeStatus,
 };
 use sigil_core::runtime::{
     BindEvidence, Listener, ListenerSnapshot, RuntimeExposure, RuntimeListeners,
@@ -226,7 +227,7 @@ fn renders_ai_bom_with_model_runtime_and_files() {
     })
     .unwrap();
 
-    let bom = render_ai_bom(&report);
+    let bom = render_ai_bom(&AiBom::from(&report));
     assert!(bom.contains("# SIGIL AI-BOM"));
     assert!(bom.contains("gemma4:e2b"));
     assert!(bom.contains("- API exposure: `not_probed`"));
@@ -314,7 +315,7 @@ fn ai_bom_includes_runtime_exposure_and_binds() {
     })
     .unwrap();
 
-    let bom = render_ai_bom(&report);
+    let bom = render_ai_bom(&AiBom::from(&report));
     assert!(bom.contains("- Runtime exposure: `public_bind`"));
     assert!(bom.contains("0.0.0.0:11434"));
 }
@@ -331,6 +332,6 @@ fn ai_bom_runtime_exposure_unknown_when_disabled() {
     })
     .unwrap();
 
-    let bom = render_ai_bom(&report);
+    let bom = render_ai_bom(&AiBom::from(&report));
     assert!(bom.contains("- Runtime exposure: `unknown`"));
 }

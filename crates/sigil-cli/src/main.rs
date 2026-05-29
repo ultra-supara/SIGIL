@@ -10,7 +10,8 @@ use sigil_core::evidence::{
     CapabilityEvidence, Evidence, EvidenceItem, ExternalCall, UnsupportedInstruction,
 };
 use sigil_core::ir::Function;
-use sigil_core::ollama::{inspect_ollama, render_ai_bom, OllamaInspectOptions};
+use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
+use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::report::render_report;
 use sigil_core::runtime::RuntimeListeners;
 use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
@@ -241,7 +242,7 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
             };
             let report = inspect_ollama(options)?;
             ensure_parent_dir(&args.out)?;
-            std::fs::write(&args.out, render_ai_bom(&report))?;
+            std::fs::write(&args.out, render_ai_bom(&AiBom::from(&report)))?;
             println!("SIGIL AI-BOM: {}", args.out.display());
             Ok(())
         }

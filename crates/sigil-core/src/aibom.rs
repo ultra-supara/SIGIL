@@ -180,6 +180,65 @@ impl From<&OllamaReport> for AiBom {
     }
 }
 
+pub fn render_ai_bom(bom: &AiBom) -> String {
+    let mut lines = vec![
+        "# SIGIL AI-BOM".to_string(),
+        String::new(),
+        format!("- Runtime: `{}`", bom.runtime.name),
+        format!("- Host: `{}`", bom.runtime.host),
+        format!("- API exposure: `{}`", bom.runtime.api_exposure.as_str()),
+        format!(
+            "- Runtime exposure: `{}`",
+            bom.runtime.exposure.class.as_str()
+        ),
+        format!("- Runtime status: `{}`", bom.runtime.status.as_str()),
+        format!("- Verdict: `{}`", bom.verdict.as_str()),
+    ];
+    if let Some(version) = &bom.runtime.version {
+        lines.push(format!("- Version: `{version}`"));
+    }
+    for bind in &bom.runtime.exposure.observed {
+        match &bind.process {
+            Some(process) => lines.push(format!(
+                "- Runtime bind: `{}:{}` process=`{process}`",
+                bind.addr, bind.port
+            )),
+            None => lines.push(format!("- Runtime bind: `{}:{}`", bind.addr, bind.port)),
+        }
+    }
+    lines.push(String::new());
+    lines.push("## Models".to_string());
+    if bom.models.is_empty() {
+        lines.push("- No matching Ollama models found.".to_string());
+    }
+    for model in &bom.models {
+        lines.push(format!("- `{}`", model.name));
+        if let Some(manifest) = &model.manifest_path {
+            lines.push(format!("  - Manifest: `{manifest}`"));
+        }
+        for file in &model.files {
+            lines.push(format!(
+                "  - `{}` size={} sha256=`{}` path=`{}`",
+                file.digest, file.size, file.sha256, file.path
+            ));
+        }
+    }
+    if !bom.findings.is_empty() {
+        lines.push(String::new());
+        lines.push("## Findings".to_string());
+        for finding in &bom.findings {
+            lines.push(format!(
+                "- `{}` {}: {} ({})",
+                finding.id,
+                finding.severity.as_str(),
+                finding.message,
+                finding.evidence
+            ));
+        }
+    }
+    lines.join("\n") + "\n"
+}
+
 fn finding_category(id: &str) -> FindingCategory {
     match id {
         "ollama.invalid_blob_digest"
