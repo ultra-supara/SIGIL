@@ -101,9 +101,75 @@ pub struct RuntimeExposureReport {
     pub source: String,
 }
 
-// Placeholder body so the crate compiles; real implementation in Task 4.
 pub fn proc_snapshot() -> ListenerSnapshot {
-    ListenerSnapshot::unavailable("unavailable")
+    let mut listeners = Vec::new();
+    let mut any_file = false;
+    for (path, is_v6) in [("/proc/net/tcp", false), ("/proc/net/tcp6", true)] {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            any_file = true;
+            for line in contents.lines().skip(1) {
+                if let Some(listener) = parse_proc_net_line(line, is_v6) {
+                    listeners.push(listener);
+                }
+            }
+        }
+    }
+    if !any_file {
+        return ListenerSnapshot::unavailable("unavailable");
+    }
+    ListenerSnapshot {
+        processes: inode_process_map(),
+        listeners,
+        available: true,
+        source: "proc".to_string(),
+    }
+}
+
+fn inode_process_map() -> HashMap<u64, ProcessInfo> {
+    let mut map = HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return map;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        let mut comm: Option<String> = None;
+        for fd in fds.flatten() {
+            let Ok(target) = std::fs::read_link(fd.path()) else {
+                continue;
+            };
+            let Some(target) = target.to_str() else {
+                continue;
+            };
+            let Some(inode) = target
+                .strip_prefix("socket:[")
+                .and_then(|rest| rest.strip_suffix(']'))
+                .and_then(|digits| digits.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            if comm.is_none() {
+                comm = std::fs::read_to_string(entry.path().join("comm"))
+                    .ok()
+                    .map(|value| value.trim().to_string());
+            }
+            if let Some(name) = &comm {
+                map.entry(inode).or_insert_with(|| ProcessInfo {
+                    pid,
+                    comm: name.clone(),
+                });
+            }
+        }
+    }
+    map
 }
 
 pub fn parse_proc_net_line(line: &str, is_v6: bool) -> Option<Listener> {
@@ -455,5 +521,18 @@ mod tests {
             classify_runtime_exposure(&snap, 11434).class,
             RuntimeExposure::Lan
         );
+    }
+
+    #[test]
+    fn proc_snapshot_does_not_panic() {
+        // On Linux this reads /proc; on other OSes it returns unavailable.
+        // Either way it must not panic and must return a consistent source.
+        let snap = proc_snapshot();
+        if snap.available {
+            assert_eq!(snap.source, "proc");
+        } else {
+            assert_eq!(snap.source, "unavailable");
+            assert!(snap.listeners.is_empty());
+        }
     }
 }
