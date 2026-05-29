@@ -326,7 +326,10 @@ mod tests {
         assert_eq!(RuntimeExposure::Localhost.as_str(), "localhost");
         assert_eq!(RuntimeExposure::Lan.as_str(), "lan");
         assert_eq!(RuntimeExposure::PublicBind.as_str(), "public_bind");
-        assert_eq!(RuntimeExposure::DockerPublished.as_str(), "docker_published");
+        assert_eq!(
+            RuntimeExposure::DockerPublished.as_str(),
+            "docker_published"
+        );
         assert_eq!(RuntimeExposure::Proxy.as_str(), "proxy");
         assert_eq!(RuntimeExposure::Unknown.as_str(), "unknown");
     }

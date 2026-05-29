@@ -11,8 +11,8 @@ use sigil_core::evidence::{
 };
 use sigil_core::ir::Function;
 use sigil_core::ollama::{inspect_ollama, render_ai_bom, OllamaInspectOptions};
-use sigil_core::runtime::RuntimeListeners;
 use sigil_core::report::render_report;
+use sigil_core::runtime::RuntimeListeners;
 use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
 use sigil_core::x86::{decode_x86_64, lift_instructions, load_function};
 
