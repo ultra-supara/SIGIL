@@ -152,15 +152,97 @@ fn parse_v6_hex(hex: &str) -> Option<IpAddr> {
     Some(IpAddr::V6(Ipv6Addr::from(bytes)))
 }
 
-// Placeholder body so the crate compiles; real implementation in Task 3.
+enum AddrClass {
+    Loopback,
+    Wildcard,
+    Private,
+    Global,
+}
+
+fn classify_addr(addr: &IpAddr) -> AddrClass {
+    match addr {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() {
+                AddrClass::Loopback
+            } else if v4.is_unspecified() {
+                AddrClass::Wildcard
+            } else if v4.is_private() || v4.is_link_local() {
+                AddrClass::Private
+            } else {
+                AddrClass::Global
+            }
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                AddrClass::Loopback
+            } else if v6.is_unspecified() {
+                AddrClass::Wildcard
+            } else {
+                let seg0 = v6.segments()[0];
+                // fc00::/7 (ULA) or fe80::/10 (link-local) -> private
+                if (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80 {
+                    AddrClass::Private
+                } else {
+                    AddrClass::Global
+                }
+            }
+        }
+    }
+}
+
+fn exposure_for(addr: &IpAddr, process: Option<&str>) -> RuntimeExposure {
+    if let Some(name) = process {
+        if name == "docker-proxy" {
+            return RuntimeExposure::DockerPublished;
+        }
+        if matches!(name, "nginx" | "caddy" | "traefik" | "haproxy" | "envoy") {
+            return RuntimeExposure::Proxy;
+        }
+    }
+    match classify_addr(addr) {
+        AddrClass::Loopback => RuntimeExposure::Localhost,
+        AddrClass::Wildcard => RuntimeExposure::PublicBind,
+        AddrClass::Private => RuntimeExposure::Lan,
+        AddrClass::Global => RuntimeExposure::PublicBind,
+    }
+}
+
 pub fn classify_runtime_exposure(
-    _snapshot: &ListenerSnapshot,
-    _ollama_port: u16,
+    snapshot: &ListenerSnapshot,
+    ollama_port: u16,
 ) -> RuntimeExposureReport {
+    if !snapshot.available {
+        return RuntimeExposureReport {
+            class: RuntimeExposure::Unknown,
+            observed: Vec::new(),
+            source: snapshot.source.clone(),
+        };
+    }
+    let mut observed = Vec::new();
+    let mut best: Option<RuntimeExposure> = None;
+    for listener in &snapshot.listeners {
+        if listener.port != ollama_port {
+            continue;
+        }
+        let process = snapshot
+            .processes
+            .get(&listener.inode)
+            .map(|info| info.comm.clone());
+        let class = exposure_for(&listener.addr, process.as_deref());
+        observed.push(BindEvidence {
+            addr: listener.addr.to_string(),
+            port: listener.port,
+            process,
+        });
+        best = Some(match best {
+            Some(current) if current.rank() >= class.rank() => current,
+            _ => class,
+        });
+    }
     RuntimeExposureReport {
-        class: RuntimeExposure::Unknown,
-        observed: Vec::new(),
-        source: "unavailable".to_string(),
+        class: best.unwrap_or(RuntimeExposure::Unknown),
+        observed,
+        source: snapshot.source.clone(),
     }
 }
 
@@ -225,5 +307,114 @@ mod tests {
         let line = "   0: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8919 1 0 100 0 0 10 0";
         let listener = parse_proc_net_line(line, true).unwrap();
         assert_eq!(listener.addr, "::".parse::<IpAddr>().unwrap());
+    }
+
+    fn snapshot_with(addr: &str, port: u16, process: Option<&str>) -> ListenerSnapshot {
+        let inode = 4242;
+        let mut processes = HashMap::new();
+        if let Some(name) = process {
+            processes.insert(
+                inode,
+                ProcessInfo {
+                    pid: 1,
+                    comm: name.to_string(),
+                },
+            );
+        }
+        ListenerSnapshot {
+            listeners: vec![Listener {
+                addr: addr.parse().unwrap(),
+                port,
+                inode,
+            }],
+            processes,
+            available: true,
+            source: "proc".to_string(),
+        }
+    }
+
+    #[test]
+    fn classifies_loopback_as_localhost() {
+        let snap = snapshot_with("127.0.0.1", 11434, None);
+        let report = classify_runtime_exposure(&snap, 11434);
+        assert_eq!(report.class, RuntimeExposure::Localhost);
+        assert_eq!(report.observed.len(), 1);
+        assert_eq!(report.source, "proc");
+    }
+
+    #[test]
+    fn classifies_wildcard_as_public_bind() {
+        let snap = snapshot_with("0.0.0.0", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::PublicBind
+        );
+    }
+
+    #[test]
+    fn classifies_routable_specific_ip_as_public_bind() {
+        let snap = snapshot_with("192.0.2.10", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::PublicBind
+        );
+    }
+
+    #[test]
+    fn classifies_private_range_as_lan() {
+        let snap = snapshot_with("10.0.0.5", 11434, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::Lan
+        );
+    }
+
+    #[test]
+    fn classifies_docker_proxy_process_as_docker_published() {
+        let snap = snapshot_with("0.0.0.0", 11434, Some("docker-proxy"));
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::DockerPublished
+        );
+    }
+
+    #[test]
+    fn classifies_reverse_proxy_process_as_proxy() {
+        let snap = snapshot_with("0.0.0.0", 11434, Some("nginx"));
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::Proxy
+        );
+    }
+
+    #[test]
+    fn unavailable_snapshot_is_unknown() {
+        let snap = ListenerSnapshot::unavailable("disabled");
+        let report = classify_runtime_exposure(&snap, 11434);
+        assert_eq!(report.class, RuntimeExposure::Unknown);
+        assert_eq!(report.source, "disabled");
+        assert!(report.observed.is_empty());
+    }
+
+    #[test]
+    fn no_matching_port_is_unknown() {
+        let snap = snapshot_with("0.0.0.0", 8080, None);
+        assert_eq!(
+            classify_runtime_exposure(&snap, 11434).class,
+            RuntimeExposure::Unknown
+        );
+    }
+
+    #[test]
+    fn picks_most_exposed_when_multiple_listeners() {
+        let mut snap = snapshot_with("127.0.0.1", 11434, None);
+        snap.listeners.push(Listener {
+            addr: "0.0.0.0".parse().unwrap(),
+            port: 11434,
+            inode: 5,
+        });
+        let report = classify_runtime_exposure(&snap, 11434);
+        assert_eq!(report.class, RuntimeExposure::PublicBind);
+        assert_eq!(report.observed.len(), 2);
     }
 }
