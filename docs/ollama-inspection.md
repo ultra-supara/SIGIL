@@ -85,6 +85,37 @@ Current Ollama findings include:
 - `ollama.invalid_blob_digest`
   A manifest references a digest that is not a valid `sha256:<64 hex>` value. This prevents path traversal through malformed digest values.
 
+## Runtime Exposure
+
+Beyond the configured `--host` endpoint check, SIGIL inspects how Ollama is
+actually bound on the local machine. On Linux it parses `/proc/net/tcp` and
+`/proc/net/tcp6` for listening sockets and, best-effort, attributes a process
+name via `/proc/<pid>/fd` and `/proc/<pid>/comm`. No external command is
+spawned.
+
+The Ollama port is resolved from `--host`, then `OLLAMA_HOST`, then the default
+`11434`. The bind on that port is classified as one of:
+
+- `localhost` — loopback only (`127.0.0.0/8`, `::1`). No finding; PASS preserved.
+- `lan` — a private/link-local address (`10/8`, `172.16/12`, `192.168/16`,
+  `169.254/16`, `fc00::/7`, `fe80::/10`). WARN.
+- `public_bind` — a wildcard (`0.0.0.0`, `::`) or globally routable address. WARN.
+- `docker_published` — the listening process is `docker-proxy`. WARN.
+- `proxy` — the listening process is a known reverse proxy
+  (`nginx`, `caddy`, `traefik`, `haproxy`, `envoy`). WARN.
+- `unknown` — listener inspection unavailable or no listener on the port. No
+  finding.
+
+Disable runtime inspection with `--no-inspect-runtime`. On non-Linux platforms
+runtime inspection degrades gracefully to `unknown`.
+
+Runtime findings:
+
+- `ollama.runtime_lan_exposure`
+- `ollama.runtime_public_bind`
+- `ollama.runtime_docker_published`
+- `ollama.runtime_proxy`
+
 ## Security Notes
 
 SIGIL treats the local model store as an artifact to inspect, not as trusted input.

@@ -12,6 +12,7 @@ use sigil_core::evidence::{
 use sigil_core::ir::Function;
 use sigil_core::ollama::{inspect_ollama, render_ai_bom, OllamaInspectOptions};
 use sigil_core::report::render_report;
+use sigil_core::runtime::RuntimeListeners;
 use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
 use sigil_core::x86::{decode_x86_64, lift_instructions, load_function};
 
@@ -82,12 +83,14 @@ enum AiBomCommand {
 struct OllamaArgs {
     #[arg(long)]
     model: Option<String>,
-    #[arg(long, default_value = "http://127.0.0.1:11434")]
-    host: String,
+    #[arg(long)]
+    host: Option<String>,
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
     probe_api: bool,
+    #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
+    inspect_runtime: bool,
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -98,12 +101,14 @@ struct AiBomGenerateArgs {
     runtime: String,
     #[arg(long)]
     model: Option<String>,
-    #[arg(long, default_value = "http://127.0.0.1:11434")]
-    host: String,
+    #[arg(long)]
+    host: Option<String>,
     #[arg(long)]
     models_dir: Option<PathBuf>,
     #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
     probe_api: bool,
+    #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
+    inspect_runtime: bool,
     #[arg(long)]
     out: PathBuf,
 }
@@ -230,8 +235,9 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
                 models_dir: args
                     .models_dir
                     .unwrap_or_else(OllamaInspectOptions::default_models_dir),
-                host: args.host,
+                host: resolve_host(args.host),
                 probe_api: args.probe_api,
+                runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
             };
             let report = inspect_ollama(options)?;
             ensure_parent_dir(&args.out)?;
@@ -242,14 +248,34 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
     }
 }
 
+fn resolve_runtime_listeners(inspect_runtime: bool) -> RuntimeListeners {
+    if inspect_runtime {
+        RuntimeListeners::Inspect
+    } else {
+        RuntimeListeners::Disabled
+    }
+}
+
+// Resolution order: explicit --host -> OLLAMA_HOST env -> loopback default.
+// The flag has no clap default so an omitted --host can defer to OLLAMA_HOST.
+fn resolve_host(flag: Option<String>) -> String {
+    flag.or_else(|| {
+        std::env::var("OLLAMA_HOST")
+            .ok()
+            .filter(|value| !value.is_empty())
+    })
+    .unwrap_or_else(|| "http://127.0.0.1:11434".to_string())
+}
+
 fn ollama_options(args: OllamaArgs) -> OllamaInspectOptions {
     OllamaInspectOptions {
         model: args.model,
         models_dir: args
             .models_dir
             .unwrap_or_else(OllamaInspectOptions::default_models_dir),
-        host: args.host,
+        host: resolve_host(args.host),
         probe_api: args.probe_api,
+        runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
     }
 }
 
