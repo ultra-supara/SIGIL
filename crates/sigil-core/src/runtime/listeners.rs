@@ -161,10 +161,12 @@ fn inode_process_map() -> HashMap<u64, ProcessInfo> {
                     .ok()
                     .map(|value| value.trim().to_string());
             }
-            if let Some(name) = &comm {
+            if let Some(comm_str) = &comm {
+                // Multiple processes may share a socket inode (e.g. prefork workers).
+                // First PID seen wins; this is best-effort attribution.
                 map.entry(inode).or_insert_with(|| ProcessInfo {
                     pid,
-                    comm: name.clone(),
+                    comm: comm_str.clone(),
                 });
             }
         }
