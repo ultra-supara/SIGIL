@@ -318,7 +318,10 @@ mod tests {
 
     #[test]
     fn unknown_finding_id_defaults_to_runtime() {
-        assert_eq!(finding_category("ollama.future_thing"), FindingCategory::Runtime);
+        assert_eq!(
+            finding_category("ollama.future_thing"),
+            FindingCategory::Runtime
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
+use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::assess::{
     capability_for_symbol, evaluate_policy, load_policy, PolicyViolation, Verdict,
 };
@@ -10,7 +11,6 @@ use sigil_core::evidence::{
     CapabilityEvidence, Evidence, EvidenceItem, ExternalCall, UnsupportedInstruction,
 };
 use sigil_core::ir::Function;
-use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
 use sigil_core::report::render_report;
 use sigil_core::runtime::RuntimeListeners;

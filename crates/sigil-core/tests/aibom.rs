@@ -60,7 +60,14 @@ fn aibom_has_stable_top_level_shape() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["findings", "models", "runtime", "schema_version", "tool", "verdict"]
+        [
+            "findings",
+            "models",
+            "runtime",
+            "schema_version",
+            "tool",
+            "verdict"
+        ]
     );
 
     assert_eq!(value["schema_version"], "1.0");
@@ -91,7 +98,11 @@ fn aibom_omits_absent_optional_fields() {
     let bom = bom_for("http://127.0.0.1:11434");
     let value: serde_json::Value = serde_json::from_str(&bom.to_json().unwrap()).unwrap();
     // probe_api = false -> no runtime version is recorded.
-    assert!(value["runtime"].as_object().unwrap().get("version").is_none());
+    assert!(value["runtime"]
+        .as_object()
+        .unwrap()
+        .get("version")
+        .is_none());
 }
 
 #[test]
