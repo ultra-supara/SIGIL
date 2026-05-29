@@ -73,6 +73,9 @@ fn aibom_has_stable_top_level_shape() {
     assert_eq!(value["runtime"]["exposure"]["source"], "disabled");
     assert_eq!(value["verdict"], "PASS");
     assert_eq!(value["models"][0]["name"], "gemma4:e2b");
+    // models_dir / manifest_path are Option in the schema but always present for Ollama.
+    assert!(value["runtime"]["models_dir"].is_string());
+    assert!(value["models"][0]["manifest_path"].is_string());
 
     let files = value["models"][0]["files"].as_array().unwrap();
     let model_file = files

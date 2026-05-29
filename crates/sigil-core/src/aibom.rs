@@ -28,6 +28,7 @@ pub struct ToolInfo {
 pub struct RuntimeInfo {
     pub name: String,
     pub host: String,
+    // None is reserved for future runtimes without an on-disk model store; always Some for Ollama.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models_dir: Option<String>,
     pub api_exposure: ApiExposure,
@@ -55,6 +56,7 @@ pub struct BindEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub name: String,
+    // None is reserved for runtimes without per-model manifests; always Some for Ollama.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_path: Option<String>,
     pub files: Vec<FileEntry>,
@@ -83,6 +85,7 @@ pub struct Finding {
 pub enum FindingCategory {
     Runtime,
     Model,
+    // Reserved for native-binary findings; not produced by the Ollama path yet.
     Binary,
 }
 
