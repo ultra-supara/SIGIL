@@ -209,7 +209,7 @@ pub fn render_ai_bom(bom: &AiBom) -> String {
     lines.push(String::new());
     lines.push("## Models".to_string());
     if bom.models.is_empty() {
-        lines.push("- No matching Ollama models found.".to_string());
+        lines.push("- No matching models found.".to_string());
     }
     for model in &bom.models {
         lines.push(format!("- `{}`", model.name));
