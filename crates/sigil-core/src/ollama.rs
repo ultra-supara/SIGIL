@@ -196,13 +196,7 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
                 &mut findings,
             )?;
         }
-        // Sort by digest first; use kind as a tiebreaker so that "model" layers
-        // survive dedup when the config descriptor shares the same digest.
-        files.sort_by(|left, right| {
-            left.digest
-                .cmp(&right.digest)
-                .then_with(|| kind_rank(&left.kind).cmp(&kind_rank(&right.kind)))
-        });
+        files.sort_by(|left, right| left.digest.cmp(&right.digest));
         files.dedup_by(|left, right| left.digest == right.digest);
         models.push(OllamaModel {
             name,
@@ -492,16 +486,6 @@ fn model_file_for_digest(
         sha256,
         kind: kind.to_string(),
     }))
-}
-
-/// Returns a rank so that meaningful layer kinds sort before metadata kinds.
-/// Lower rank = sorted earlier = survives dedup when digests collide.
-fn kind_rank(kind: &str) -> u8 {
-    match kind {
-        "model" | "weights" => 0,
-        "config" => 2,
-        _ => 1,
-    }
 }
 
 fn is_valid_ollama_digest(digest: &str) -> bool {

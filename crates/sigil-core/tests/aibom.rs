@@ -6,6 +6,11 @@ use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
 use sigil_core::runtime::RuntimeListeners;
 use tempfile::TempDir;
 
+const CONFIG_DIGEST: &str =
+    "sha256:e67d23e7820c49a8051dac2831f38290f5e72f66c8db5079eeb60d82f14894c0";
+const MODEL_DIGEST: &str =
+    "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
 fn fake_store() -> TempDir {
     let tmp = TempDir::new().unwrap();
     let manifest_dir = tmp
@@ -13,12 +18,14 @@ fn fake_store() -> TempDir {
         .join("models/manifests/registry.ollama.ai/library/gemma4");
     fs::create_dir_all(&manifest_dir).unwrap();
     fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
-    let digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
-    write_blob(tmp.path(), digest, b"hello");
+    // Distinct blobs for the config descriptor and the model layer, mirroring a
+    // real Ollama store where every blob has its own sha256.
+    write_blob(tmp.path(), CONFIG_DIGEST, b"cfg");
+    write_blob(tmp.path(), MODEL_DIGEST, b"hello");
     fs::write(
         manifest_dir.join("e2b"),
         format!(
-            r#"{{"schemaVersion":2,"config":{{"digest":"{digest}","mediaType":"application/vnd.ollama.image.config"}},"layers":[{{"digest":"{digest}","mediaType":"application/vnd.ollama.image.model"}}]}}"#
+            r#"{{"schemaVersion":2,"config":{{"digest":"{CONFIG_DIGEST}","mediaType":"application/vnd.ollama.image.config"}},"layers":[{{"digest":"{MODEL_DIGEST}","mediaType":"application/vnd.ollama.image.model"}}]}}"#
         ),
     )
     .unwrap();
@@ -66,8 +73,14 @@ fn aibom_has_stable_top_level_shape() {
     assert_eq!(value["runtime"]["exposure"]["source"], "disabled");
     assert_eq!(value["verdict"], "PASS");
     assert_eq!(value["models"][0]["name"], "gemma4:e2b");
-    assert_eq!(value["models"][0]["files"][0]["kind"], "model");
-    assert!(value["models"][0]["files"][0]["sha256"].is_string());
+
+    let files = value["models"][0]["files"].as_array().unwrap();
+    let model_file = files
+        .iter()
+        .find(|file| file["kind"] == "model")
+        .expect("a model-kind file is present");
+    assert_eq!(model_file["digest"], MODEL_DIGEST);
+    assert!(model_file["sha256"].is_string());
 }
 
 #[test]
