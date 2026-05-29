@@ -109,6 +109,31 @@ impl AiBom {
     }
 }
 
+fn finding_category(id: &str) -> FindingCategory {
+    match id {
+        "ollama.invalid_blob_digest"
+        | "ollama.blob_digest_mismatch"
+        | "ollama.blob_missing"
+        | "ollama.model_not_found" => FindingCategory::Model,
+        _ => FindingCategory::Runtime,
+    }
+}
+
+fn severity_from_str(value: &str) -> Severity {
+    match value {
+        "FAIL" => Severity::Fail,
+        _ => Severity::Warn,
+    }
+}
+
+fn verdict_from_str(value: &str) -> Verdict {
+    match value {
+        "FAIL" => Verdict::Fail,
+        "WARN" => Verdict::Warn,
+        _ => Verdict::Pass,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +158,46 @@ mod tests {
             serde_json::to_string(&FindingCategory::Binary).unwrap(),
             "\"binary\""
         );
+    }
+
+    #[test]
+    fn runtime_finding_ids_map_to_runtime_category() {
+        for id in [
+            "ollama.public_bind",
+            "ollama.network_endpoint",
+            "ollama.runtime_lan_exposure",
+            "ollama.runtime_public_bind",
+            "ollama.runtime_docker_published",
+            "ollama.runtime_proxy",
+        ] {
+            assert_eq!(finding_category(id), FindingCategory::Runtime, "{id}");
+        }
+    }
+
+    #[test]
+    fn model_finding_ids_map_to_model_category() {
+        for id in [
+            "ollama.invalid_blob_digest",
+            "ollama.blob_digest_mismatch",
+            "ollama.blob_missing",
+            "ollama.model_not_found",
+        ] {
+            assert_eq!(finding_category(id), FindingCategory::Model, "{id}");
+        }
+    }
+
+    #[test]
+    fn unknown_finding_id_defaults_to_runtime() {
+        assert_eq!(finding_category("ollama.future_thing"), FindingCategory::Runtime);
+    }
+
+    #[test]
+    fn severity_and_verdict_map_from_strings() {
+        assert_eq!(severity_from_str("FAIL"), Severity::Fail);
+        assert_eq!(severity_from_str("WARN"), Severity::Warn);
+        assert_eq!(severity_from_str("anything"), Severity::Warn);
+        assert_eq!(verdict_from_str("FAIL"), Verdict::Fail);
+        assert_eq!(verdict_from_str("WARN"), Verdict::Warn);
+        assert_eq!(verdict_from_str("PASS"), Verdict::Pass);
     }
 }
