@@ -237,7 +237,7 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
                     .unwrap_or_else(OllamaInspectOptions::default_models_dir),
                 host: args.host,
                 probe_api: args.probe_api,
-                runtime_listeners: runtime_listeners(args.inspect_runtime),
+                runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
             };
             let report = inspect_ollama(options)?;
             ensure_parent_dir(&args.out)?;
@@ -248,7 +248,7 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
     }
 }
 
-fn runtime_listeners(inspect_runtime: bool) -> RuntimeListeners {
+fn resolve_runtime_listeners(inspect_runtime: bool) -> RuntimeListeners {
     if inspect_runtime {
         RuntimeListeners::Inspect
     } else {
@@ -264,7 +264,7 @@ fn ollama_options(args: OllamaArgs) -> OllamaInspectOptions {
             .unwrap_or_else(OllamaInspectOptions::default_models_dir),
         host: args.host,
         probe_api: args.probe_api,
-        runtime_listeners: runtime_listeners(args.inspect_runtime),
+        runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
     }
 }
 
