@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
 use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::ollama::{
     inspect_ollama, ApiExposure, ModelFile, OllamaInspectOptions, RuntimeStatus,
@@ -33,6 +34,39 @@ fn fake_store() -> TempDir {
 
 fn fake_store_no_license() -> TempDir {
     fake_store_with_license(false)
+}
+
+/// Build a fake store whose license layer contains the provided body bytes.
+/// The license blob digest is derived from the content so the inspector's
+/// sha256 check passes — only the SPDX detector behaviour is under test.
+fn fake_store_with_license_body(body: &[u8]) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let manifest_dir = tmp
+        .path()
+        .join("models/manifests/registry.ollama.ai/library/gemma4");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
+    let model_digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    write_blob(tmp.path(), model_digest, b"hello");
+    let license_hash = Sha256::digest(body);
+    let license_digest = format!("sha256:{:x}", license_hash);
+    write_blob(tmp.path(), &license_digest, body);
+    fs::write(
+        manifest_dir.join("e2b"),
+        format!(
+            r#"{{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {{"digest": "{model_digest}", "mediaType": "application/vnd.ollama.image.config"}},
+  "layers": [
+    {{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}},
+    {{"digest":"{license_digest}","mediaType":"application/vnd.ollama.image.license"}}
+  ]
+}}"#
+        ),
+    )
+    .unwrap();
+    tmp
 }
 
 fn fake_store_with_license(include_license: bool) -> TempDir {
@@ -250,10 +284,10 @@ fn renders_ai_bom_with_model_runtime_and_files() {
     .unwrap();
 
     let bom = render_ai_bom(&AiBom::from(&report));
-    assert!(bom.contains("# SIGIL AI-BOM"));
+    assert!(bom.contains("# SIGIL AI-BOM: [PASS]"));
     assert!(bom.contains("gemma4:e2b"));
-    assert!(bom.contains("- API exposure: `not_probed`"));
-    assert!(bom.contains("- Runtime status: `not_probed`"));
+    assert!(bom.contains("| API exposure | `not_probed` |"));
+    assert!(bom.contains("| Status | `not_probed` |"));
     assert!(bom.contains("sha256:2cf24"));
 }
 
@@ -338,7 +372,7 @@ fn ai_bom_includes_runtime_exposure_and_binds() {
     .unwrap();
 
     let bom = render_ai_bom(&AiBom::from(&report));
-    assert!(bom.contains("- Runtime exposure: `public_bind`"));
+    assert!(bom.contains("| Runtime exposure | `public_bind` (source: `proc`) |"));
     assert!(bom.contains("0.0.0.0:11434"));
 }
 
@@ -355,7 +389,7 @@ fn ai_bom_runtime_exposure_unknown_when_disabled() {
     .unwrap();
 
     let bom = render_ai_bom(&AiBom::from(&report));
-    assert!(bom.contains("- Runtime exposure: `unknown`"));
+    assert!(bom.contains("| Runtime exposure | `unknown` (source: `disabled`) |"));
 }
 
 #[test]
@@ -391,6 +425,87 @@ fn license_layer_is_extracted_with_spdx_id() {
         .findings
         .iter()
         .any(|finding| finding.id == "ollama.license_missing"));
+}
+
+#[test]
+fn apache_2_0_license_body_is_detected_as_spdx_id() {
+    // Real-world Ollama license layers ship the full license body (not the
+    // short SPDX token). The first ~256 bytes of the Apache 2.0 license are
+    // enough to identify it deterministically.
+    let body = b"                                 Apache License\n\
+                  \n                           Version 2.0, January 2004\n\
+                  \n                        http://www.apache.org/licenses/\n\
+                  \n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION";
+    let tmp = fake_store_with_license_body(body);
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.verdict, "PASS");
+    let license = report.models[0]
+        .license
+        .as_ref()
+        .expect("license layer should be detected");
+    assert_eq!(license.spdx_id.as_deref(), Some("Apache-2.0"));
+    assert!(license.text_excerpt.contains("Apache License"));
+    assert!(!report
+        .findings
+        .iter()
+        .any(|finding| finding.id == "ollama.blob_digest_mismatch"));
+}
+
+#[test]
+fn full_bsd_3_clause_body_is_not_misidentified_as_bsd_2_clause() {
+    // The shared "Redistribution and use..." preamble lives well inside the
+    // 256-byte excerpt window, but the "Neither the name..." clause that
+    // distinguishes BSD-3-Clause from BSD-2-Clause sits past byte 500. This
+    // regression test ships a realistic full BSD-3-Clause body to ensure the
+    // detection window is large enough to see the discriminator.
+    let body = b"Copyright (c) 2026, The Example Project Contributors\n\
+                 All rights reserved.\n\
+                 \n\
+                 Redistribution and use in source and binary forms, with or without\n\
+                 modification, are permitted provided that the following conditions are met:\n\
+                 \n\
+                 1. Redistributions of source code must retain the above copyright notice,\n\
+                    this list of conditions and the following disclaimer.\n\
+                 \n\
+                 2. Redistributions in binary form must reproduce the above copyright notice,\n\
+                    this list of conditions and the following disclaimer in the documentation\n\
+                    and/or other materials provided with the distribution.\n\
+                 \n\
+                 3. Neither the name of the copyright holder nor the names of its contributors\n\
+                    may be used to endorse or promote products derived from this software\n\
+                    without specific prior written permission.\n\
+                 \n\
+                 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\n\
+                 AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\n\
+                 IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE\n\
+                 ARE DISCLAIMED.";
+    assert!(body.len() > 512);
+    let tmp = fake_store_with_license_body(body);
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    let license = report.models[0]
+        .license
+        .as_ref()
+        .expect("license layer should be detected");
+    assert_eq!(license.spdx_id.as_deref(), Some("BSD-3-Clause"));
+    // The excerpt itself stays bounded so downstream consumers don't suddenly
+    // see kilobyte-long license bodies in the report.
+    assert!(license.text_excerpt.len() <= 256);
 }
 
 #[test]

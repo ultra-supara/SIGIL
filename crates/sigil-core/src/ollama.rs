@@ -11,6 +11,11 @@ use crate::runtime::{classify_runtime_exposure, RuntimeExposureReport, RuntimeLi
 
 const LICENSE_MEDIA_TYPE: &str = "application/vnd.ollama.image.license";
 const LICENSE_EXCERPT_BYTES: usize = 256;
+// SPDX detection has to see clauses that real licenses place well past the
+// excerpt window — BSD-3-Clause's "Neither the name..." clause sits past
+// byte 500, so we read a larger window for detection and only emit the
+// shorter excerpt to the report.
+const LICENSE_DETECT_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OllamaInspectOptions {
@@ -239,13 +244,13 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
             )?;
             if is_license && license.is_none() {
                 if let Some(file) = files.get(before_len) {
-                    let text = read_license_excerpt(&file.path)?;
-                    let spdx_id = detect_spdx_id(&text);
+                    let snapshot = read_license_snapshot(&file.path)?;
+                    let spdx_id = detect_spdx_id(&snapshot.detect_text);
                     license = Some(LicenseInfo {
                         digest: file.digest.clone(),
                         size: file.size,
                         spdx_id,
-                        text_excerpt: text,
+                        text_excerpt: snapshot.excerpt,
                     });
                 }
             }
@@ -651,13 +656,18 @@ fn extract_json_string_field(response: &str, field: &str) -> Option<String> {
     value.get(field)?.as_str().map(str::to_string)
 }
 
-fn read_license_excerpt(path: &Path) -> Result<String, OllamaError> {
+struct LicenseSnapshot {
+    detect_text: String,
+    excerpt: String,
+}
+
+fn read_license_snapshot(path: &Path) -> Result<LicenseSnapshot, OllamaError> {
     let file = File::open(path).map_err(|source| OllamaError::ReadFile {
         path: path.display().to_string(),
         source,
     })?;
     let mut reader = BufReader::new(file);
-    let mut buffer = vec![0_u8; LICENSE_EXCERPT_BYTES];
+    let mut buffer = vec![0_u8; LICENSE_DETECT_BYTES];
     let mut total = 0;
     loop {
         let read = reader
@@ -675,19 +685,28 @@ fn read_license_excerpt(path: &Path) -> Result<String, OllamaError> {
         }
     }
     buffer.truncate(total);
-    Ok(String::from_utf8_lossy(&buffer).trim().to_string())
+    let detect_text = String::from_utf8_lossy(&buffer).into_owned();
+
+    let mut excerpt_end = detect_text.len().min(LICENSE_EXCERPT_BYTES);
+    while excerpt_end > 0 && !detect_text.is_char_boundary(excerpt_end) {
+        excerpt_end -= 1;
+    }
+    let excerpt = detect_text[..excerpt_end].trim().to_string();
+
+    Ok(LicenseSnapshot {
+        detect_text,
+        excerpt,
+    })
 }
 
 fn detect_spdx_id(text: &str) -> Option<String> {
     let trimmed = text.trim();
     let first_line = trimmed.lines().next().unwrap_or(trimmed).trim();
-    if first_line.is_empty() {
-        return None;
-    }
-    // SPDX identifiers are short single-token strings (e.g. "MIT", "Apache-2.0",
-    // "GPL-3.0-only"). Reject anything that looks like prose so we never
-    // falsely claim an SPDX id we did not actually identify.
-    if first_line.len() <= 32
+    // Fast path: the blob is already an SPDX short identifier (e.g. "MIT",
+    // "Apache-2.0", "GPL-3.0-only"). Reject prose so we never claim an SPDX id
+    // we did not actually identify.
+    if !first_line.is_empty()
+        && first_line.len() <= 32
         && !first_line.contains(' ')
         && first_line
             .chars()
@@ -695,5 +714,221 @@ fn detect_spdx_id(text: &str) -> Option<String> {
     {
         return Some(first_line.to_string());
     }
+    detect_spdx_from_body(trimmed)
+}
+
+/// Match well-known license preambles in the first ~256 bytes of a license
+/// blob. Each pattern is required to be unambiguous so we never confuse two
+/// similar licenses. Ordering matters — the most-specific variant must be
+/// checked first (LGPL before GPL, version 3 before version 2).
+fn detect_spdx_from_body(text: &str) -> Option<String> {
+    let condensed = condense_whitespace(text);
+    let lc = condensed.as_str();
+
+    if lc.contains("gnu lesser general public license") {
+        if lc.contains("version 3") {
+            return Some("LGPL-3.0".to_string());
+        }
+        if lc.contains("version 2.1") {
+            return Some("LGPL-2.1".to_string());
+        }
+    }
+    if lc.contains("gnu general public license") {
+        if lc.contains("version 3") {
+            return Some("GPL-3.0".to_string());
+        }
+        if lc.contains("version 2") {
+            return Some("GPL-2.0".to_string());
+        }
+    }
+    if lc.contains("mozilla public license") && lc.contains("version 2.0") {
+        return Some("MPL-2.0".to_string());
+    }
+    if lc.contains("apache license") && lc.contains("version 2.0") {
+        return Some("Apache-2.0".to_string());
+    }
+    if lc.contains("redistribution and use in source and binary forms") {
+        // BSD-4-Clause adds an advertising clause on top of BSD-3-Clause and
+        // also includes the "neither the name" clause, so it must be checked
+        // first or it would be misreported as BSD-3-Clause.
+        if lc.contains("all advertising materials mentioning features or use of this software") {
+            return Some("BSD-4-Clause".to_string());
+        }
+        if lc.contains("neither the name") {
+            return Some("BSD-3-Clause".to_string());
+        }
+        return Some("BSD-2-Clause".to_string());
+    }
+    if lc.starts_with("isc license")
+        || (lc.contains("permission to use, copy, modify")
+            && lc.contains("with or without fee is hereby granted"))
+    {
+        return Some("ISC".to_string());
+    }
+    if lc.starts_with("mit license") || lc.contains("permission is hereby granted, free of charge")
+    {
+        return Some("MIT".to_string());
+    }
     None
+}
+
+fn condense_whitespace(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_spdx_id;
+
+    #[test]
+    fn fast_path_accepts_short_spdx_token() {
+        assert_eq!(detect_spdx_id("MIT"), Some("MIT".to_string()));
+        assert_eq!(detect_spdx_id("Apache-2.0"), Some("Apache-2.0".to_string()));
+        assert_eq!(
+            detect_spdx_id("BSD-3-Clause"),
+            Some("BSD-3-Clause".to_string())
+        );
+    }
+
+    #[test]
+    fn fast_path_rejects_empty_or_prose() {
+        assert_eq!(detect_spdx_id(""), None);
+        assert_eq!(detect_spdx_id("   "), None);
+    }
+
+    #[test]
+    fn detects_apache_2_0_from_body() {
+        let body = "                                 Apache License\n\
+                    \n                           Version 2.0, January 2004\n\
+                    \n                        http://www.apache.org/licenses/\n\
+                    \n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION";
+        assert_eq!(detect_spdx_id(body), Some("Apache-2.0".to_string()));
+    }
+
+    #[test]
+    fn detects_mit_from_permission_clause() {
+        let body = "MIT License\n\
+                    \n\
+                    Copyright (c) 2024 Example\n\
+                    \n\
+                    Permission is hereby granted, free of charge, to any person obtaining a copy\
+                    of this software and associated documentation files (the \"Software\"), ...";
+        assert_eq!(detect_spdx_id(body), Some("MIT".to_string()));
+    }
+
+    #[test]
+    fn detects_mit_from_bare_permission_text() {
+        let body = "Permission is hereby granted, free of charge, to any person obtaining a copy\
+                    of this software and associated documentation files...";
+        assert_eq!(detect_spdx_id(body), Some("MIT".to_string()));
+    }
+
+    #[test]
+    fn detects_mpl_2_0_from_body() {
+        let body = "Mozilla Public License Version 2.0\n\
+                    ==================================\n\
+                    \n1. Definitions";
+        assert_eq!(detect_spdx_id(body), Some("MPL-2.0".to_string()));
+    }
+
+    #[test]
+    fn detects_gpl_3_0_from_body() {
+        let body = "                    GNU GENERAL PUBLIC LICENSE\n\
+                    \n                       Version 3, 29 June 2007\n\
+                    \n Copyright (C) 2007 Free Software Foundation, Inc.";
+        assert_eq!(detect_spdx_id(body), Some("GPL-3.0".to_string()));
+    }
+
+    #[test]
+    fn detects_gpl_2_0_from_body() {
+        let body = "                    GNU GENERAL PUBLIC LICENSE\n\
+                    \n                       Version 2, June 1991\n\
+                    \n Copyright (C) 1989, 1991 Free Software Foundation, Inc.";
+        assert_eq!(detect_spdx_id(body), Some("GPL-2.0".to_string()));
+    }
+
+    #[test]
+    fn detects_lgpl_3_0_from_body() {
+        let body = "                   GNU LESSER GENERAL PUBLIC LICENSE\n\
+                    \n                       Version 3, 29 June 2007\n";
+        assert_eq!(detect_spdx_id(body), Some("LGPL-3.0".to_string()));
+    }
+
+    #[test]
+    fn detects_lgpl_2_1_from_body() {
+        let body = "                  GNU LESSER GENERAL PUBLIC LICENSE\n\
+                    \n                       Version 2.1, February 1999\n";
+        assert_eq!(detect_spdx_id(body), Some("LGPL-2.1".to_string()));
+    }
+
+    #[test]
+    fn detects_bsd_3_clause_from_body() {
+        let body = "Copyright (c) 2024, Example\n\
+                    All rights reserved.\n\
+                    \n\
+                    Redistribution and use in source and binary forms, with or without\
+                    modification, are permitted provided that the following conditions are met:\n\
+                    \n\
+                    1. Redistributions of source code must retain the above copyright notice,\n\
+                    2. Redistributions in binary form must reproduce the above copyright notice,\n\
+                    3. Neither the name of the copyright holder nor the names of its contributors\
+                    may be used to endorse or promote products derived from this software\
+                    without specific prior written permission.";
+        assert_eq!(detect_spdx_id(body), Some("BSD-3-Clause".to_string()));
+    }
+
+    #[test]
+    fn detects_bsd_4_clause_with_advertising_clause() {
+        let body = "Copyright (c) 2024, Example\n\
+                    All rights reserved.\n\
+                    \n\
+                    Redistribution and use in source and binary forms, with or without\
+                    modification, are permitted provided that the following conditions are met:\n\
+                    \n\
+                    1. Redistributions of source code must retain the above copyright notice,\n\
+                    2. Redistributions in binary form must reproduce the above copyright notice,\n\
+                    3. All advertising materials mentioning features or use of this software\
+                    must display the following acknowledgement: This product includes software\
+                    developed by the Example Project.\n\
+                    4. Neither the name of the copyright holder nor the names of its contributors\
+                    may be used to endorse or promote products derived from this software\
+                    without specific prior written permission.";
+        assert_eq!(detect_spdx_id(body), Some("BSD-4-Clause".to_string()));
+    }
+
+    #[test]
+    fn detects_bsd_2_clause_from_body() {
+        let body = "Copyright (c) 2024, Example\n\
+                    All rights reserved.\n\
+                    \n\
+                    Redistribution and use in source and binary forms, with or without\
+                    modification, are permitted provided that the following conditions are met:\n\
+                    \n\
+                    1. Redistributions of source code must retain the above copyright notice,\n\
+                    2. Redistributions in binary form must reproduce the above copyright notice,\n\
+                    \n\
+                    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS";
+        assert_eq!(detect_spdx_id(body), Some("BSD-2-Clause".to_string()));
+    }
+
+    #[test]
+    fn detects_isc_from_body() {
+        let body = "ISC License\n\
+                    \n\
+                    Copyright (c) 2024 Example\n\
+                    \n\
+                    Permission to use, copy, modify, and/or distribute this software for any\
+                    purpose with or without fee is hereby granted.";
+        assert_eq!(detect_spdx_id(body), Some("ISC".to_string()));
+    }
+
+    #[test]
+    fn unknown_license_body_returns_none() {
+        let body = "Some random text that is not a known license preamble.\n\
+                    Just prose without any well-known signature.";
+        assert_eq!(detect_spdx_id(body), None);
+    }
 }
