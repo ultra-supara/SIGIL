@@ -52,9 +52,7 @@ fn fake_store_with_license(include_license: bool) -> TempDir {
             r#"{{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}},{{"digest":"{LICENSE_DIGEST}","mediaType":"application/vnd.ollama.image.license"}}"#
         )
     } else {
-        format!(
-            r#"{{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}}"#
-        )
+        format!(r#"{{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}}"#)
     };
     fs::write(
         manifest_dir.join("e2b"),

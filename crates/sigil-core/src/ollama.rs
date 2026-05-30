@@ -182,14 +182,12 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
     let mut findings = Vec::new();
     let mut models = Vec::new();
     for manifest_path in manifest_paths {
-        let Some((name, mut provenance)) =
-            parse_manifest_path(&options.models_dir, &manifest_path)
+        let Some((name, mut provenance)) = parse_manifest_path(&options.models_dir, &manifest_path)
         else {
             findings.push(RuntimeFinding {
                 id: "ollama.provenance_unknown".to_string(),
                 severity: "WARN".to_string(),
-                message: "Ollama manifest path is too shallow to determine provenance"
-                    .to_string(),
+                message: "Ollama manifest path is too shallow to determine provenance".to_string(),
                 evidence: manifest_path.display().to_string(),
             });
             continue;
