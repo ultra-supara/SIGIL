@@ -86,6 +86,12 @@ Current Ollama findings include:
 - `ollama.invalid_blob_digest`
   A manifest references a digest that is not a valid `sha256:<64 hex>` value. This prevents path traversal through malformed digest values.
 
+- `ollama.license_missing`
+  The manifest has no `application/vnd.ollama.image.license` layer. Always `WARN`, never `FAIL` — license metadata is recommended but not required for the model to function.
+
+- `ollama.provenance_unknown`
+  The manifest path under `<models_dir>/manifests/` is shallower than the expected `<registry>/<namespace>/<model>/<tag>` shape, so the model's source registry cannot be attributed. The model is skipped from `models[]` and emitted as `WARN`.
+
 ## Runtime Exposure
 
 Beyond the configured `--host` endpoint check, SIGIL inspects how Ollama is

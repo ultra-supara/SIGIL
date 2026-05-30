@@ -110,16 +110,46 @@ Both `runtime inspect ollama --out` and `aibom generate --format json` write the
 
 ### AI-BOM JSON contract
 
-The JSON is versioned by `schema_version` (currently `"1.0"`). It is runtime-agnostic: future runtimes populate the same shape.
+The JSON is versioned by `schema_version` (currently `"1.1"`). It is runtime-agnostic: future runtimes populate the same shape.
 
 Top-level keys (all required): `schema_version`, `tool` (`name`, `version`), `runtime`, `models`, `findings`, `verdict`.
 
 - `runtime`: `name`, `host`, `api_exposure`, `status`, `exposure` (`class`, `source`, `observed[]`), and optional `models_dir` / `version`.
-- `models[]`: `name`, `files[]` (`digest`, `path`, `size`, `sha256`, `kind`), and optional `manifest_path`.
+- `models[]`: `name`, `files[]` (`digest`, `path`, `size`, `sha256`, `kind`), `provenance` (required, see below), optional `manifest_path`, and optional `license` (see below).
 - `findings[]`: `id`, `category` (`runtime` | `model` | `binary`; `binary` is reserved for future native-binary findings and not yet produced), `severity` (`WARN` | `FAIL`), `message`, `evidence`.
 - `verdict`: `PASS` | `WARN` | `FAIL`.
 
 Enum values are stable: `api_exposure` ∈ {`not_probed`, `localhost`, `network`, `public_bind`, `unavailable`}, `status` ∈ {`not_probed`, `reachable`, `unreachable`}, `exposure.class` ∈ {`localhost`, `lan`, `public_bind`, `docker_published`, `proxy`, `unknown`}. Optional fields are omitted when absent. Markdown output is derived from this JSON model.
+
+#### License & provenance (schema 1.1)
+
+Each model entry carries provenance parsed from the Ollama manifest path and, when present, license metadata extracted from the `application/vnd.ollama.image.license` layer:
+
+```json
+{
+  "models": [
+    {
+      "name": "gemma4:e2b",
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "gemma4",
+        "tag": "e2b",
+        "config_digest": "sha256:...",
+        "layer_digests": ["sha256:...", "sha256:..."]
+      },
+      "license": {
+        "digest": "sha256:...",
+        "size": 3,
+        "spdx_id": "MIT",
+        "text_excerpt": "MIT"
+      }
+    }
+  ]
+}
+```
+
+When the manifest has no license layer, `license` is omitted and an `ollama.license_missing` `WARN` finding (category `model`) is emitted — never `FAIL`. When the manifest path is too shallow to parse a registry/namespace/model/tag tuple, an `ollama.provenance_unknown` `WARN` is emitted and the model is skipped from `models`.
 
 ## Safety model
 
