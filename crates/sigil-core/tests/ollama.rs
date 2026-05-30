@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
 use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::ollama::{
     inspect_ollama, ApiExposure, ModelFile, OllamaInspectOptions, RuntimeStatus,
@@ -33,6 +34,39 @@ fn fake_store() -> TempDir {
 
 fn fake_store_no_license() -> TempDir {
     fake_store_with_license(false)
+}
+
+/// Build a fake store whose license layer contains the provided body bytes.
+/// The license blob digest is derived from the content so the inspector's
+/// sha256 check passes — only the SPDX detector behaviour is under test.
+fn fake_store_with_license_body(body: &[u8]) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let manifest_dir = tmp
+        .path()
+        .join("models/manifests/registry.ollama.ai/library/gemma4");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
+    let model_digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    write_blob(tmp.path(), model_digest, b"hello");
+    let license_hash = Sha256::digest(body);
+    let license_digest = format!("sha256:{:x}", license_hash);
+    write_blob(tmp.path(), &license_digest, body);
+    fs::write(
+        manifest_dir.join("e2b"),
+        format!(
+            r#"{{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {{"digest": "{model_digest}", "mediaType": "application/vnd.ollama.image.config"}},
+  "layers": [
+    {{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}},
+    {{"digest":"{license_digest}","mediaType":"application/vnd.ollama.image.license"}}
+  ]
+}}"#
+        ),
+    )
+    .unwrap();
+    tmp
 }
 
 fn fake_store_with_license(include_license: bool) -> TempDir {
@@ -391,6 +425,38 @@ fn license_layer_is_extracted_with_spdx_id() {
         .findings
         .iter()
         .any(|finding| finding.id == "ollama.license_missing"));
+}
+
+#[test]
+fn apache_2_0_license_body_is_detected_as_spdx_id() {
+    // Real-world Ollama license layers ship the full license body (not the
+    // short SPDX token). The first ~256 bytes of the Apache 2.0 license are
+    // enough to identify it deterministically.
+    let body = b"                                 Apache License\n\
+                  \n                           Version 2.0, January 2004\n\
+                  \n                        http://www.apache.org/licenses/\n\
+                  \n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION";
+    let tmp = fake_store_with_license_body(body);
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.verdict, "PASS");
+    let license = report.models[0]
+        .license
+        .as_ref()
+        .expect("license layer should be detected");
+    assert_eq!(license.spdx_id.as_deref(), Some("Apache-2.0"));
+    assert!(license.text_excerpt.contains("Apache License"));
+    assert!(!report
+        .findings
+        .iter()
+        .any(|finding| finding.id == "ollama.blob_digest_mismatch"));
 }
 
 #[test]
