@@ -11,6 +11,11 @@ use crate::runtime::{classify_runtime_exposure, RuntimeExposureReport, RuntimeLi
 
 const LICENSE_MEDIA_TYPE: &str = "application/vnd.ollama.image.license";
 const LICENSE_EXCERPT_BYTES: usize = 256;
+// SPDX detection has to see clauses that real licenses place well past the
+// excerpt window — BSD-3-Clause's "Neither the name..." clause sits past
+// byte 500, so we read a larger window for detection and only emit the
+// shorter excerpt to the report.
+const LICENSE_DETECT_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OllamaInspectOptions {
@@ -239,13 +244,13 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
             )?;
             if is_license && license.is_none() {
                 if let Some(file) = files.get(before_len) {
-                    let text = read_license_excerpt(&file.path)?;
-                    let spdx_id = detect_spdx_id(&text);
+                    let snapshot = read_license_snapshot(&file.path)?;
+                    let spdx_id = detect_spdx_id(&snapshot.detect_text);
                     license = Some(LicenseInfo {
                         digest: file.digest.clone(),
                         size: file.size,
                         spdx_id,
-                        text_excerpt: text,
+                        text_excerpt: snapshot.excerpt,
                     });
                 }
             }
@@ -651,13 +656,18 @@ fn extract_json_string_field(response: &str, field: &str) -> Option<String> {
     value.get(field)?.as_str().map(str::to_string)
 }
 
-fn read_license_excerpt(path: &Path) -> Result<String, OllamaError> {
+struct LicenseSnapshot {
+    detect_text: String,
+    excerpt: String,
+}
+
+fn read_license_snapshot(path: &Path) -> Result<LicenseSnapshot, OllamaError> {
     let file = File::open(path).map_err(|source| OllamaError::ReadFile {
         path: path.display().to_string(),
         source,
     })?;
     let mut reader = BufReader::new(file);
-    let mut buffer = vec![0_u8; LICENSE_EXCERPT_BYTES];
+    let mut buffer = vec![0_u8; LICENSE_DETECT_BYTES];
     let mut total = 0;
     loop {
         let read = reader
@@ -675,7 +685,18 @@ fn read_license_excerpt(path: &Path) -> Result<String, OllamaError> {
         }
     }
     buffer.truncate(total);
-    Ok(String::from_utf8_lossy(&buffer).trim().to_string())
+    let detect_text = String::from_utf8_lossy(&buffer).into_owned();
+
+    let mut excerpt_end = detect_text.len().min(LICENSE_EXCERPT_BYTES);
+    while excerpt_end > 0 && !detect_text.is_char_boundary(excerpt_end) {
+        excerpt_end -= 1;
+    }
+    let excerpt = detect_text[..excerpt_end].trim().to_string();
+
+    Ok(LicenseSnapshot {
+        detect_text,
+        excerpt,
+    })
 }
 
 fn detect_spdx_id(text: &str) -> Option<String> {

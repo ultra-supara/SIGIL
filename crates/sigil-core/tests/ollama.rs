@@ -284,10 +284,10 @@ fn renders_ai_bom_with_model_runtime_and_files() {
     .unwrap();
 
     let bom = render_ai_bom(&AiBom::from(&report));
-    assert!(bom.contains("# SIGIL AI-BOM"));
+    assert!(bom.contains("# SIGIL AI-BOM: [PASS]"));
     assert!(bom.contains("gemma4:e2b"));
-    assert!(bom.contains("- API exposure: `not_probed`"));
-    assert!(bom.contains("- Runtime status: `not_probed`"));
+    assert!(bom.contains("| API exposure | `not_probed` |"));
+    assert!(bom.contains("| Status | `not_probed` |"));
     assert!(bom.contains("sha256:2cf24"));
 }
 
@@ -372,7 +372,7 @@ fn ai_bom_includes_runtime_exposure_and_binds() {
     .unwrap();
 
     let bom = render_ai_bom(&AiBom::from(&report));
-    assert!(bom.contains("- Runtime exposure: `public_bind`"));
+    assert!(bom.contains("| Runtime exposure | `public_bind` (source: `proc`) |"));
     assert!(bom.contains("0.0.0.0:11434"));
 }
 
@@ -389,7 +389,7 @@ fn ai_bom_runtime_exposure_unknown_when_disabled() {
     .unwrap();
 
     let bom = render_ai_bom(&AiBom::from(&report));
-    assert!(bom.contains("- Runtime exposure: `unknown`"));
+    assert!(bom.contains("| Runtime exposure | `unknown` (source: `disabled`) |"));
 }
 
 #[test]
@@ -457,6 +457,55 @@ fn apache_2_0_license_body_is_detected_as_spdx_id() {
         .findings
         .iter()
         .any(|finding| finding.id == "ollama.blob_digest_mismatch"));
+}
+
+#[test]
+fn full_bsd_3_clause_body_is_not_misidentified_as_bsd_2_clause() {
+    // The shared "Redistribution and use..." preamble lives well inside the
+    // 256-byte excerpt window, but the "Neither the name..." clause that
+    // distinguishes BSD-3-Clause from BSD-2-Clause sits past byte 500. This
+    // regression test ships a realistic full BSD-3-Clause body to ensure the
+    // detection window is large enough to see the discriminator.
+    let body = b"Copyright (c) 2026, The Example Project Contributors\n\
+                 All rights reserved.\n\
+                 \n\
+                 Redistribution and use in source and binary forms, with or without\n\
+                 modification, are permitted provided that the following conditions are met:\n\
+                 \n\
+                 1. Redistributions of source code must retain the above copyright notice,\n\
+                    this list of conditions and the following disclaimer.\n\
+                 \n\
+                 2. Redistributions in binary form must reproduce the above copyright notice,\n\
+                    this list of conditions and the following disclaimer in the documentation\n\
+                    and/or other materials provided with the distribution.\n\
+                 \n\
+                 3. Neither the name of the copyright holder nor the names of its contributors\n\
+                    may be used to endorse or promote products derived from this software\n\
+                    without specific prior written permission.\n\
+                 \n\
+                 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\n\
+                 AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\n\
+                 IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE\n\
+                 ARE DISCLAIMED.";
+    assert!(body.len() > 512);
+    let tmp = fake_store_with_license_body(body);
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    let license = report.models[0]
+        .license
+        .as_ref()
+        .expect("license layer should be detected");
+    assert_eq!(license.spdx_id.as_deref(), Some("BSD-3-Clause"));
+    // The excerpt itself stays bounded so downstream consumers don't suddenly
+    // see kilobyte-long license bodies in the report.
+    assert!(license.text_excerpt.len() <= 256);
 }
 
 #[test]
