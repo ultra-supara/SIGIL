@@ -100,10 +100,26 @@ cargo run -p sigil-cli -- runtime inspect ollama \
 cargo run -p sigil-cli -- aibom generate \
   --runtime ollama \
   --model gemma4:e2b \
+  --format md \
   --out out/gemma4-aibom.md
 ```
 
 Use `--models-dir` to inspect a non-default Ollama model store. Use `--host` to evaluate a specific Ollama API endpoint; `0.0.0.0` / public bind-style hosts are reported as WARN.
+
+Both `runtime inspect ollama --out` and `aibom generate --format json` write the stable AI-BOM JSON contract. `aibom generate --format md` renders the same model as Markdown.
+
+### AI-BOM JSON contract
+
+The JSON is versioned by `schema_version` (currently `"1.0"`). It is runtime-agnostic: future runtimes populate the same shape.
+
+Top-level keys (all required): `schema_version`, `tool` (`name`, `version`), `runtime`, `models`, `findings`, `verdict`.
+
+- `runtime`: `name`, `host`, `api_exposure`, `status`, `exposure` (`class`, `source`, `observed[]`), and optional `models_dir` / `version`.
+- `models[]`: `name`, `files[]` (`digest`, `path`, `size`, `sha256`, `kind`), and optional `manifest_path`.
+- `findings[]`: `id`, `category` (`runtime` | `model` | `binary`; `binary` is reserved for future native-binary findings and not yet produced), `severity` (`WARN` | `FAIL`), `message`, `evidence`.
+- `verdict`: `PASS` | `WARN` | `FAIL`.
+
+Enum values are stable: `api_exposure` ∈ {`not_probed`, `localhost`, `network`, `public_bind`, `unavailable`}, `status` ∈ {`not_probed`, `reachable`, `unreachable`}, `exposure.class` ∈ {`localhost`, `lan`, `public_bind`, `docker_published`, `proxy`, `unknown`}. Optional fields are omitted when absent. Markdown output is derived from this JSON model.
 
 ## Safety model
 

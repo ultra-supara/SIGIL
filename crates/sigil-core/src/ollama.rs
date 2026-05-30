@@ -290,63 +290,6 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
     })
 }
 
-pub fn render_ai_bom(report: &OllamaReport) -> String {
-    let mut lines = vec![
-        "# SIGIL AI-BOM".to_string(),
-        String::new(),
-        format!("- Runtime: `{}`", report.runtime),
-        format!("- Host: `{}`", report.host),
-        format!("- API exposure: `{}`", report.api.as_str()),
-        format!(
-            "- Runtime exposure: `{}`",
-            report.runtime_exposure.class.as_str()
-        ),
-        format!("- Runtime status: `{}`", report.runtime_status.as_str()),
-        format!("- Verdict: `{}`", report.verdict),
-    ];
-    if let Some(version) = &report.version {
-        lines.push(format!("- Version: `{version}`"));
-    }
-    for bind in &report.runtime_exposure.observed {
-        match &bind.process {
-            Some(process) => lines.push(format!(
-                "- Runtime bind: `{}:{}` process=`{process}`",
-                bind.addr, bind.port
-            )),
-            None => lines.push(format!("- Runtime bind: `{}:{}`", bind.addr, bind.port)),
-        }
-    }
-    lines.push(String::new());
-    lines.push("## Models".to_string());
-    if report.models.is_empty() {
-        lines.push("- No matching Ollama models found.".to_string());
-    }
-    for model in &report.models {
-        lines.push(format!("- `{}`", model.name));
-        lines.push(format!("  - Manifest: `{}`", model.manifest_path.display()));
-        for file in &model.files {
-            lines.push(format!(
-                "  - `{}` size={} sha256=`{}` path=`{}`",
-                file.digest,
-                file.size,
-                file.sha256,
-                file.path.display()
-            ));
-        }
-    }
-    if !report.findings.is_empty() {
-        lines.push(String::new());
-        lines.push("## Findings".to_string());
-        for finding in &report.findings {
-            lines.push(format!(
-                "- `{}` {}: {} ({})",
-                finding.id, finding.severity, finding.message, finding.evidence
-            ));
-        }
-    }
-    lines.join("\n") + "\n"
-}
-
 fn collect_files(root: &Path) -> Result<Vec<PathBuf>, OllamaError> {
     if !root.exists() {
         return Ok(Vec::new());

@@ -7,7 +7,7 @@ SIGIL's AI-BOM output is an evidence record for local AI deployments. It is insp
 SIGIL currently emits:
 
 - JSON evidence from `runtime inspect ollama`
-- Markdown AI-BOM from `aibom generate --runtime ollama`
+- Markdown AI-BOM from `aibom generate --runtime ollama --format md`
 
 The current AI-BOM contains:
 
@@ -78,15 +78,28 @@ Candidate future runtimes:
 - text-generation-inference
 - Other local OpenAI-compatible endpoints
 
-## Schema Direction
+## Schema (implemented)
 
-The current JSON report is useful evidence, but it should become a versioned schema before downstream tools depend on it.
+The AI-BOM JSON is now a stable, versioned contract produced from a
+runtime-agnostic `AiBom` model (`crates/sigil-core/src/aibom.rs`):
 
-Planned schema work:
+- `schema_version` is explicit (currently `"1.0"`).
+- Enum values are stabilized and pinned by tests: `verdict`, `severity`,
+  `category`, `api_exposure`, `status`, and `exposure.class`.
+- Required vs optional fields are defined; optional fields are omitted when
+  absent.
+- Findings carry a `category` (`runtime` | `model` | `binary`) so runtime,
+  model, and (future) binary findings are distinguishable in one flat list.
+- Markdown is rendered from the same `AiBom` model, so JSON and Markdown never
+  diverge.
 
-- Add explicit `schema_version`
-- Stabilize enum values
-- Define required and optional fields
-- Separate runtime findings, model findings, and binary findings
-- Keep Markdown rendering downstream of the stable JSON model
+Both `runtime inspect ollama --out` and `aibom generate --format json` emit this
+contract; `aibom generate --format md` emits the Markdown view.
+
+A future runtime implements its own mapping into `AiBom` and reuses the same
+struct and enum definitions, so downstream consumers and baselines keep working
+without schema changes.
+
+Still planned: a formal JSON Schema document (`*.schema.json`) and AI-BOM
+comparison / baseline drift detection.
 

@@ -16,6 +16,7 @@ cargo run -p sigil-cli -- runtime inspect ollama \
 cargo run -p sigil-cli -- aibom generate \
   --runtime ollama \
   --model gemma4:e2b \
+  --format md \
   --out out/gemma4-aibom.md
 ```
 

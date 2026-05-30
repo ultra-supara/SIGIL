@@ -64,10 +64,12 @@ fn runtime_inspect_ollama_writes_evidence_json() {
     .stdout(contains("SIGIL Runtime Verdict: PASS"));
 
     let json = fs::read_to_string(out).unwrap();
-    assert!(json.contains("\"model\": \"gemma4:e2b\""));
-    assert!(json.contains("\"api\": \"not_probed\""));
-    assert!(json.contains("\"runtime_exposure\""));
+    assert!(json.contains("\"schema_version\": \"1.0\""));
+    assert!(json.contains("\"name\": \"ollama\""));
+    assert!(json.contains("\"api_exposure\": \"not_probed\""));
     assert!(json.contains("\"class\": \"unknown\""));
+    assert!(json.contains("gemma4:e2b"));
+    assert!(json.contains("\"verdict\": \"PASS\""));
 }
 
 #[test]
@@ -81,6 +83,8 @@ fn aibom_generate_ollama_writes_markdown() {
         "generate",
         "--runtime",
         "ollama",
+        "--format",
+        "md",
         "--model",
         "gemma4:e2b",
         "--models-dir",
@@ -129,6 +133,38 @@ fn runtime_inspect_ollama_honors_ollama_host_env_when_host_flag_omitted() {
     .stdout(contains("SIGIL Runtime Verdict: WARN"));
 
     let json = fs::read_to_string(out).unwrap();
-    assert!(json.contains("\"api\": \"public_bind\""));
+    assert!(json.contains("\"api_exposure\": \"public_bind\""));
     assert!(json.contains("\"ollama.public_bind\""));
+}
+
+#[test]
+fn aibom_generate_ollama_writes_json_by_default() {
+    let tmp = fake_store();
+    let out = tmp.path().join("reports").join("aibom.json");
+
+    let mut cmd = Command::cargo_bin("sigil").unwrap();
+    cmd.args([
+        "aibom",
+        "generate",
+        "--runtime",
+        "ollama",
+        "--model",
+        "gemma4:e2b",
+        "--models-dir",
+        tmp.path().join("models").to_str().unwrap(),
+        "--no-probe-api",
+        "--no-inspect-runtime",
+        "--out",
+        out.to_str().unwrap(),
+    ])
+    .current_dir(workspace_root())
+    .env_remove("OLLAMA_HOST")
+    .assert()
+    .success()
+    .stdout(contains("SIGIL AI-BOM:"));
+
+    let json = fs::read_to_string(out).unwrap();
+    assert!(json.contains("\"schema_version\": \"1.0\""));
+    assert!(json.contains("\"api_exposure\": \"not_probed\""));
+    assert!(json.contains("gemma4:e2b"));
 }

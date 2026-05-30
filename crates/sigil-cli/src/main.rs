@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
+use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::assess::{
     capability_for_symbol, evaluate_policy, load_policy, PolicyViolation, Verdict,
 };
@@ -10,7 +11,7 @@ use sigil_core::evidence::{
     CapabilityEvidence, Evidence, EvidenceItem, ExternalCall, UnsupportedInstruction,
 };
 use sigil_core::ir::Function;
-use sigil_core::ollama::{inspect_ollama, render_ai_bom, OllamaInspectOptions};
+use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
 use sigil_core::report::render_report;
 use sigil_core::runtime::RuntimeListeners;
 use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
@@ -95,6 +96,12 @@ struct OllamaArgs {
     out: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum AiBomFormat {
+    Json,
+    Md,
+}
+
 #[derive(Debug, Parser)]
 struct AiBomGenerateArgs {
     #[arg(long)]
@@ -109,6 +116,8 @@ struct AiBomGenerateArgs {
     probe_api: bool,
     #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
     inspect_runtime: bool,
+    #[arg(long, default_value = "json")]
+    format: AiBomFormat,
     #[arg(long)]
     out: PathBuf,
 }
@@ -215,7 +224,7 @@ fn cmd_runtime(command: RuntimeCommand) -> Result<()> {
                 let report = inspect_ollama(ollama_options(args))?;
                 if let Some(path) = out {
                     ensure_parent_dir(&path)?;
-                    std::fs::write(path, report.to_json()?)?;
+                    std::fs::write(path, AiBom::from(&report).to_json()?)?;
                 }
                 println!("SIGIL Runtime Verdict: {}", report.verdict);
                 Ok(())
@@ -230,6 +239,8 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
             if args.runtime != "ollama" {
                 anyhow::bail!("unsupported AI-BOM runtime: {}", args.runtime);
             }
+            let format = args.format;
+            let out = args.out.clone();
             let options = OllamaInspectOptions {
                 model: args.model,
                 models_dir: args
@@ -240,9 +251,14 @@ fn cmd_aibom(command: AiBomCommand) -> Result<()> {
                 runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
             };
             let report = inspect_ollama(options)?;
-            ensure_parent_dir(&args.out)?;
-            std::fs::write(&args.out, render_ai_bom(&report))?;
-            println!("SIGIL AI-BOM: {}", args.out.display());
+            let bom = AiBom::from(&report);
+            let contents = match format {
+                AiBomFormat::Json => bom.to_json()?,
+                AiBomFormat::Md => render_ai_bom(&bom),
+            };
+            ensure_parent_dir(&out)?;
+            std::fs::write(&out, contents)?;
+            println!("SIGIL AI-BOM: {}", out.display());
             Ok(())
         }
     }
