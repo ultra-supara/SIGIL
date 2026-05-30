@@ -19,18 +19,27 @@ fn fake_store() -> TempDir {
         .join("models/manifests/registry.ollama.ai/library/gemma4");
     fs::create_dir_all(&manifest_dir).unwrap();
     fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
-    let digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    let model_digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    // sha256("MIT")
+    let license_digest = "sha256:e5dcffe836b6ec8a58e492419b550e65fb8cbdc308503979e5dacb33ac7ea3b7";
     fs::write(
         tmp.path()
             .join("models/blobs")
-            .join(digest.replace(':', "-")),
+            .join(model_digest.replace(':', "-")),
         b"hello",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path()
+            .join("models/blobs")
+            .join(license_digest.replace(':', "-")),
+        b"MIT",
     )
     .unwrap();
     fs::write(
         manifest_dir.join("e2b"),
         format!(
-            r#"{{"schemaVersion":2,"config":{{"digest":"{digest}"}},"layers":[{{"digest":"{digest}"}}]}}"#
+            r#"{{"schemaVersion":2,"config":{{"digest":"{model_digest}"}},"layers":[{{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}},{{"digest":"{license_digest}","mediaType":"application/vnd.ollama.image.license"}}]}}"#
         ),
     )
     .unwrap();
@@ -64,12 +73,16 @@ fn runtime_inspect_ollama_writes_evidence_json() {
     .stdout(contains("SIGIL Runtime Verdict: PASS"));
 
     let json = fs::read_to_string(out).unwrap();
-    assert!(json.contains("\"schema_version\": \"1.0\""));
+    assert!(json.contains("\"schema_version\": \"1.1\""));
     assert!(json.contains("\"name\": \"ollama\""));
     assert!(json.contains("\"api_exposure\": \"not_probed\""));
     assert!(json.contains("\"class\": \"unknown\""));
     assert!(json.contains("gemma4:e2b"));
     assert!(json.contains("\"verdict\": \"PASS\""));
+    assert!(json.contains("\"registry\": \"registry.ollama.ai\""));
+    assert!(json.contains("\"namespace\": \"library\""));
+    assert!(json.contains("\"tag\": \"e2b\""));
+    assert!(json.contains("\"spdx_id\": \"MIT\""));
 }
 
 #[test]
@@ -105,6 +118,10 @@ fn aibom_generate_ollama_writes_markdown() {
     assert!(markdown.contains("gemma4:e2b"));
     assert!(markdown.contains("- API exposure: `not_probed`"));
     assert!(markdown.contains("- Runtime exposure: `unknown`"));
+    assert!(markdown.contains("- Provenance:"));
+    assert!(markdown.contains("registry=`registry.ollama.ai`"));
+    assert!(markdown.contains("tag=`e2b`"));
+    assert!(markdown.contains("- License: `MIT`"));
 }
 
 #[test]
@@ -164,7 +181,7 @@ fn aibom_generate_ollama_writes_json_by_default() {
     .stdout(contains("SIGIL AI-BOM:"));
 
     let json = fs::read_to_string(out).unwrap();
-    assert!(json.contains("\"schema_version\": \"1.0\""));
+    assert!(json.contains("\"schema_version\": \"1.1\""));
     assert!(json.contains("\"api_exposure\": \"not_probed\""));
     assert!(json.contains("gemma4:e2b"));
 }

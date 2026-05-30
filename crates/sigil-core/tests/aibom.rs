@@ -10,6 +10,9 @@ const CONFIG_DIGEST: &str =
     "sha256:e67d23e7820c49a8051dac2831f38290f5e72f66c8db5079eeb60d82f14894c0";
 const MODEL_DIGEST: &str =
     "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+// sha256("Apache-2.0") — keep aligned with the license blob content below.
+const LICENSE_DIGEST: &str =
+    "sha256:2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608";
 
 fn fake_store() -> TempDir {
     let tmp = TempDir::new().unwrap();
@@ -18,14 +21,15 @@ fn fake_store() -> TempDir {
         .join("models/manifests/registry.ollama.ai/library/gemma4");
     fs::create_dir_all(&manifest_dir).unwrap();
     fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
-    // Distinct blobs for the config descriptor and the model layer, mirroring a
-    // real Ollama store where every blob has its own sha256.
+    // Distinct blobs for the config descriptor, the model layer, and the license
+    // layer — mirroring a real Ollama store where every blob has its own sha256.
     write_blob(tmp.path(), CONFIG_DIGEST, b"cfg");
     write_blob(tmp.path(), MODEL_DIGEST, b"hello");
+    write_blob(tmp.path(), LICENSE_DIGEST, b"Apache-2.0");
     fs::write(
         manifest_dir.join("e2b"),
         format!(
-            r#"{{"schemaVersion":2,"config":{{"digest":"{CONFIG_DIGEST}","mediaType":"application/vnd.ollama.image.config"}},"layers":[{{"digest":"{MODEL_DIGEST}","mediaType":"application/vnd.ollama.image.model"}}]}}"#
+            r#"{{"schemaVersion":2,"config":{{"digest":"{CONFIG_DIGEST}","mediaType":"application/vnd.ollama.image.config"}},"layers":[{{"digest":"{MODEL_DIGEST}","mediaType":"application/vnd.ollama.image.model"}},{{"digest":"{LICENSE_DIGEST}","mediaType":"application/vnd.ollama.image.license"}}]}}"#
         ),
     )
     .unwrap();
@@ -70,7 +74,7 @@ fn aibom_has_stable_top_level_shape() {
         ]
     );
 
-    assert_eq!(value["schema_version"], "1.0");
+    assert_eq!(value["schema_version"], "1.1");
     assert_eq!(value["tool"]["name"], "sigil");
     assert!(value["tool"]["version"].is_string());
     assert_eq!(value["runtime"]["name"], "ollama");
@@ -103,6 +107,27 @@ fn aibom_omits_absent_optional_fields() {
         .unwrap()
         .get("version")
         .is_none());
+}
+
+#[test]
+fn aibom_exposes_license_and_provenance_in_models() {
+    let bom = bom_for("http://127.0.0.1:11434");
+    let value: serde_json::Value = serde_json::from_str(&bom.to_json().unwrap()).unwrap();
+    let model = &value["models"][0];
+    let provenance = &model["provenance"];
+    assert_eq!(provenance["registry"], "registry.ollama.ai");
+    assert_eq!(provenance["namespace"], "library");
+    assert_eq!(provenance["model"], "gemma4");
+    assert_eq!(provenance["tag"], "e2b");
+    assert_eq!(provenance["config_digest"], CONFIG_DIGEST);
+    let layer_digests = provenance["layer_digests"].as_array().unwrap();
+    assert!(layer_digests.iter().any(|digest| digest == MODEL_DIGEST));
+    assert!(layer_digests.iter().any(|digest| digest == LICENSE_DIGEST));
+
+    let license = &model["license"];
+    assert_eq!(license["digest"], LICENSE_DIGEST);
+    assert_eq!(license["spdx_id"], "Apache-2.0");
+    assert_eq!(license["text_excerpt"], "Apache-2.0");
 }
 
 #[test]

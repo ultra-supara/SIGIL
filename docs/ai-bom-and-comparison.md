@@ -83,7 +83,8 @@ Candidate future runtimes:
 The AI-BOM JSON is now a stable, versioned contract produced from a
 runtime-agnostic `AiBom` model (`crates/sigil-core/src/aibom.rs`):
 
-- `schema_version` is explicit (currently `"1.0"`).
+- `schema_version` is explicit (currently `"1.1"` — additive minor bump that
+  introduced per-model `provenance` and optional `license`).
 - Enum values are stabilized and pinned by tests: `verdict`, `severity`,
   `category`, `api_exposure`, `status`, and `exposure.class`.
 - Required vs optional fields are defined; optional fields are omitted when
@@ -92,6 +93,25 @@ runtime-agnostic `AiBom` model (`crates/sigil-core/src/aibom.rs`):
   model, and (future) binary findings are distinguishable in one flat list.
 - Markdown is rendered from the same `AiBom` model, so JSON and Markdown never
   diverge.
+
+### License & provenance (schema 1.1)
+
+Each `models[]` entry carries:
+
+- `provenance` (required): `registry`, `namespace`, `model`, `tag` parsed from
+  the manifest path, plus `config_digest` and `layer_digests` for full digest
+  lineage. Fields are `Option<String>` to leave room for runtimes that cannot
+  populate all of them — Ollama populates all four naming fields when the
+  manifest path has the expected `<registry>/<namespace>/<model>/<tag>` shape.
+- `license` (optional): `digest`, `size`, optional `spdx_id` (single-token
+  best-effort detection from the first line of the license blob), and
+  `text_excerpt` (up to 256 bytes of license text). Omitted when the manifest
+  has no `application/vnd.ollama.image.license` layer.
+
+When `license` is missing, an `ollama.license_missing` `WARN` finding is
+emitted (`category: model`). When the manifest path is too shallow to parse a
+provenance tuple, `ollama.provenance_unknown` `WARN` is emitted and the model
+is skipped from `models[]`. Neither situation produces a hard `FAIL`.
 
 Both `runtime inspect ollama --out` and `aibom generate --format json` emit this
 contract; `aibom generate --format md` emits the Markdown view.
