@@ -23,25 +23,47 @@ fn write_blob(root: &Path, digest: &str, content: &[u8]) -> ModelFile {
     }
 }
 
+// sha256("MIT") — keep in sync with the license blob content below.
+const LICENSE_DIGEST: &str =
+    "sha256:e5dcffe836b6ec8a58e492419b550e65fb8cbdc308503979e5dacb33ac7ea3b7";
+
 fn fake_store() -> TempDir {
+    fake_store_with_license(true)
+}
+
+fn fake_store_no_license() -> TempDir {
+    fake_store_with_license(false)
+}
+
+fn fake_store_with_license(include_license: bool) -> TempDir {
     let tmp = TempDir::new().unwrap();
     let manifest_dir = tmp
         .path()
         .join("models/manifests/registry.ollama.ai/library/gemma4");
     fs::create_dir_all(&manifest_dir).unwrap();
     fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
-    let digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
-    write_blob(tmp.path(), digest, b"hello");
+    let model_digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    write_blob(tmp.path(), model_digest, b"hello");
+    let layers = if include_license {
+        // License blob content "MIT" — detect_spdx_id should accept it as the SPDX id
+        // and prevent the license_missing finding.
+        write_blob(tmp.path(), LICENSE_DIGEST, b"MIT");
+        format!(
+            r#"{{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}},{{"digest":"{LICENSE_DIGEST}","mediaType":"application/vnd.ollama.image.license"}}"#
+        )
+    } else {
+        format!(
+            r#"{{"digest":"{model_digest}","mediaType":"application/vnd.ollama.image.model"}}"#
+        )
+    };
     fs::write(
         manifest_dir.join("e2b"),
         format!(
             r#"{{
   "schemaVersion": 2,
   "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
-  "config": {{"digest": "{digest}", "mediaType": "application/vnd.ollama.image.config"}},
-  "layers": [
-    {{"digest": "{digest}", "mediaType": "application/vnd.ollama.image.model"}}
-  ]
+  "config": {{"digest": "{model_digest}", "mediaType": "application/vnd.ollama.image.config"}},
+  "layers": [{layers}]
 }}"#
         ),
     )
@@ -77,7 +99,9 @@ fn inventories_ollama_model_store_manifest_and_blobs() {
     assert_eq!(report.model.as_deref(), Some("gemma4:e2b"));
     assert_eq!(report.models.len(), 1);
     assert_eq!(report.models[0].name, "gemma4:e2b");
-    assert_eq!(report.models[0].files.len(), 1);
+    // After dedup + digest sort: the model blob (sha2cf24..., 5 bytes) precedes
+    // the license blob (shae5dcffe..., 3 bytes) lexicographically.
+    assert_eq!(report.models[0].files.len(), 2);
     assert_eq!(report.models[0].files[0].size, 5);
     assert_eq!(
         report.models[0].files[0].sha256,
@@ -334,4 +358,102 @@ fn ai_bom_runtime_exposure_unknown_when_disabled() {
 
     let bom = render_ai_bom(&AiBom::from(&report));
     assert!(bom.contains("- Runtime exposure: `unknown`"));
+}
+
+#[test]
+fn license_layer_is_extracted_with_spdx_id() {
+    let tmp = fake_store();
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.verdict, "PASS");
+    let model = &report.models[0];
+    let license = model
+        .license
+        .as_ref()
+        .expect("license layer should be detected");
+    assert_eq!(license.spdx_id.as_deref(), Some("MIT"));
+    assert_eq!(license.text_excerpt, "MIT");
+    assert_eq!(
+        model.provenance.registry.as_deref(),
+        Some("registry.ollama.ai")
+    );
+    assert_eq!(model.provenance.namespace.as_deref(), Some("library"));
+    assert_eq!(model.provenance.model.as_deref(), Some("gemma4"));
+    assert_eq!(model.provenance.tag.as_deref(), Some("e2b"));
+    assert!(!model.provenance.layer_digests.is_empty());
+    assert!(model.provenance.config_digest.is_some());
+    assert!(!report
+        .findings
+        .iter()
+        .any(|finding| finding.id == "ollama.license_missing"));
+}
+
+#[test]
+fn missing_license_layer_emits_warn_not_fail() {
+    let tmp = fake_store_no_license();
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.verdict, "WARN");
+    assert!(report.models[0].license.is_none());
+    let finding = report
+        .findings
+        .iter()
+        .find(|finding| finding.id == "ollama.license_missing")
+        .expect("license_missing finding present");
+    assert_eq!(finding.severity, "WARN");
+}
+
+#[test]
+fn shallow_manifest_path_is_flagged_as_unknown_provenance() {
+    let tmp = TempDir::new().unwrap();
+    // Only two segments below `manifests/` — too shallow for the
+    // registry/namespace/model/tag tuple.
+    let manifest_dir = tmp.path().join("models/manifests/orphaned");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
+    let digest = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    fs::write(
+        tmp.path()
+            .join("models/blobs")
+            .join(digest.replace(':', "-")),
+        b"hello",
+    )
+    .unwrap();
+    fs::write(
+        manifest_dir.join("loose"),
+        format!(r#"{{"schemaVersion":2,"config":{{"digest":"{digest}"}},"layers":[]}}"#),
+    )
+    .unwrap();
+
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: None,
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.verdict, "WARN");
+    assert!(report.models.is_empty());
+    let finding = report
+        .findings
+        .iter()
+        .find(|finding| finding.id == "ollama.provenance_unknown")
+        .expect("provenance_unknown finding present");
+    assert_eq!(finding.severity, "WARN");
 }
