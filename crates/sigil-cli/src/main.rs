@@ -5,7 +5,8 @@ use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
 use sigil_core::aibom::{render_ai_bom, AiBom};
 use sigil_core::assess::{
-    capability_for_symbol, evaluate_policy, load_policy, PolicyViolation, Verdict,
+    capability_for_symbol, evaluate_policy, load_policy, severity_for_rule, PolicyViolation,
+    Verdict,
 };
 use sigil_core::evidence::{
     CapabilityEvidence, Evidence, EvidenceItem, ExternalCall, UnsupportedInstruction,
@@ -372,11 +373,16 @@ fn assess_binary(
                         address: address.clone(),
                         instruction: op.text.clone(),
                     });
-                    extra_violations.push(PolicyViolation::with_address(
-                        "unsupported_instruction",
-                        "unsupported_instruction",
-                        address,
-                    ));
+                    let severity =
+                        severity_for_rule(&policy, "unsupported_instruction", Verdict::Warn);
+                    extra_violations.push(
+                        PolicyViolation::with_address(
+                            "unsupported_instruction",
+                            "unsupported_instruction",
+                            address,
+                        )
+                        .with_severity(severity),
+                    );
                 }
                 _ => {}
             }

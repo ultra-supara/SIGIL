@@ -61,8 +61,14 @@ impl Policy {
 pub struct PolicyViolation {
     pub rule: String,
     pub capability: String,
+    #[serde(default = "default_violation_severity")]
+    pub severity: Verdict,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_address: Option<String>,
+}
+
+fn default_violation_severity() -> Verdict {
+    Verdict::Fail
 }
 
 impl PolicyViolation {
@@ -70,6 +76,7 @@ impl PolicyViolation {
         Self {
             rule: rule.into(),
             capability: capability.into(),
+            severity: Verdict::Fail,
             evidence_address: None,
         }
     }
@@ -82,8 +89,14 @@ impl PolicyViolation {
         Self {
             rule: rule.into(),
             capability: capability.into(),
+            severity: Verdict::Fail,
             evidence_address: Some(evidence_address.into()),
         }
+    }
+
+    pub fn with_severity(mut self, severity: Verdict) -> Self {
+        self.severity = severity;
+        self
     }
 }
 
@@ -151,6 +164,30 @@ pub fn load_policy(path: impl AsRef<Path>) -> Result<Policy, AssessError> {
     })
 }
 
+/// Resolve the severity that a named policy rule should produce, defaulting
+/// when the policy does not configure the rule explicitly.
+pub fn severity_for_rule(policy: &Policy, rule_key: &str, default: Verdict) -> Verdict {
+    match policy
+        .verdict_rules
+        .get(rule_key)
+        .map(String::as_str)
+        .unwrap_or(default.as_str())
+    {
+        "FAIL" => Verdict::Fail,
+        "WARN" => Verdict::Warn,
+        "PASS" => Verdict::Pass,
+        _ => default,
+    }
+}
+
+fn escalate(current: Verdict, candidate: Verdict) -> Verdict {
+    match (current, candidate) {
+        (Verdict::Fail, _) | (_, Verdict::Fail) => Verdict::Fail,
+        (Verdict::Warn, _) | (_, Verdict::Warn) => Verdict::Warn,
+        _ => Verdict::Pass,
+    }
+}
+
 pub fn evaluate_policy<'a, I, S>(policy: &Policy, capabilities: I) -> PolicyResult
 where
     I: IntoIterator<Item = S>,
@@ -165,52 +202,34 @@ where
 
     for capability in unique_capabilities {
         if policy.forbidden_capabilities.contains(&capability) {
-            violations.push(PolicyViolation::new(
-                format!("forbidden.capabilities.{capability}"),
-                capability.clone(),
-            ));
-            match policy
-                .verdict_rules
-                .get("forbidden_capability")
-                .map(String::as_str)
-                .unwrap_or("FAIL")
-            {
-                "FAIL" => verdict = Verdict::Fail,
-                "WARN" if verdict != Verdict::Fail => verdict = Verdict::Warn,
-                _ => {}
-            }
+            let rule_severity = severity_for_rule(policy, "forbidden_capability", Verdict::Fail);
+            violations.push(
+                PolicyViolation::new(
+                    format!("forbidden.capabilities.{capability}"),
+                    capability.clone(),
+                )
+                .with_severity(rule_severity),
+            );
+            verdict = escalate(verdict, rule_severity);
         }
 
         if !policy.allowed_capabilities.is_empty()
             && !policy.allowed_capabilities.contains(&capability)
         {
-            violations.push(PolicyViolation::new(
-                format!("allowed.capabilities.{capability}"),
-                capability.clone(),
-            ));
-            match policy
-                .verdict_rules
-                .get("allowlist_violation")
-                .map(String::as_str)
-                .unwrap_or("FAIL")
-            {
-                "FAIL" => verdict = Verdict::Fail,
-                "WARN" if verdict != Verdict::Fail => verdict = Verdict::Warn,
-                _ => {}
-            }
+            let rule_severity = severity_for_rule(policy, "allowlist_violation", Verdict::Fail);
+            violations.push(
+                PolicyViolation::new(
+                    format!("allowed.capabilities.{capability}"),
+                    capability.clone(),
+                )
+                .with_severity(rule_severity),
+            );
+            verdict = escalate(verdict, rule_severity);
         }
 
-        if capability == "unsupported_instruction" && verdict != Verdict::Fail {
-            match policy
-                .verdict_rules
-                .get("unsupported_instruction")
-                .map(String::as_str)
-                .unwrap_or("WARN")
-            {
-                "FAIL" => verdict = Verdict::Fail,
-                "WARN" => verdict = Verdict::Warn,
-                _ => {}
-            }
+        if capability == "unsupported_instruction" {
+            let rule_severity = severity_for_rule(policy, "unsupported_instruction", Verdict::Warn);
+            verdict = escalate(verdict, rule_severity);
         }
     }
 

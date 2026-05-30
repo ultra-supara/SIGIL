@@ -81,7 +81,7 @@ fn push_violations(lines: &mut Vec<String>, evidence: &Evidence) {
         return;
     }
     for violation in &evidence.policy_violations {
-        let severity = evidence.verdict.as_str();
+        let severity = violation.severity.as_str();
         // Prefer the explicit address recorded on the violation. When absent,
         // fall back to the first external call that resolves the same
         // capability — this surfaces the call site for forbidden-capability
@@ -135,4 +135,38 @@ fn push_safeisa(lines: &mut Vec<String>, evidence: &Evidence, safeisa: Option<&P
     }
     lines.push("```".to_string());
     lines.push(String::new());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assess::{PolicyViolation, Verdict};
+
+    #[test]
+    fn violation_badge_reflects_per_rule_severity_not_aggregate() {
+        let evidence = Evidence {
+            binary: "sample.o".to_string(),
+            entry: "kernel".to_string(),
+            verdict: Verdict::Fail,
+            capabilities: vec![],
+            external_calls: vec![],
+            unsupported_instructions: vec![],
+            policy_violations: vec![
+                PolicyViolation::new("forbidden.capabilities.network", "network")
+                    .with_severity(Verdict::Warn),
+                PolicyViolation::new("allowed.capabilities.network", "network")
+                    .with_severity(Verdict::Fail),
+            ],
+        };
+
+        let rendered = render_report(&evidence, None);
+        assert!(
+            rendered.contains("[WARN] `forbidden.capabilities.network`"),
+            "forbidden_capability badge must reflect rule severity (WARN), not aggregate; got:\n{rendered}",
+        );
+        assert!(
+            rendered.contains("[FAIL] `allowed.capabilities.network`"),
+            "allowlist_violation badge must reflect rule severity (FAIL); got:\n{rendered}",
+        );
+    }
 }

@@ -40,8 +40,37 @@ fn policy_fails_for_forbidden_network() {
     assert_eq!(
         result.violations,
         vec![
-            PolicyViolation::new("forbidden.capabilities.network", "network"),
-            PolicyViolation::new("allowed.capabilities.network", "network"),
+            PolicyViolation::new("forbidden.capabilities.network", "network")
+                .with_severity(Verdict::Fail),
+            PolicyViolation::new("allowed.capabilities.network", "network")
+                .with_severity(Verdict::Fail),
+        ]
+    );
+}
+
+#[test]
+fn policy_records_per_rule_severity_when_mixed() {
+    let policy = Policy::new(
+        "mixed",
+        ["arithmetic"],
+        ["network"],
+        [
+            ("forbidden_capability", "WARN"),
+            ("allowlist_violation", "FAIL"),
+        ],
+    );
+    let result = evaluate_policy(&policy, ["network"]);
+    assert_eq!(result.verdict, Verdict::Fail);
+    let severities: Vec<_> = result
+        .violations
+        .iter()
+        .map(|v| (v.rule.as_str(), v.severity))
+        .collect();
+    assert_eq!(
+        severities,
+        vec![
+            ("forbidden.capabilities.network", Verdict::Warn),
+            ("allowed.capabilities.network", Verdict::Fail),
         ]
     );
 }
