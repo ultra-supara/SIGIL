@@ -206,9 +206,9 @@ fn assess_external_calls(
         std::fs::write(path, evidence.to_json()?)?;
     }
     if let Some(path) = out {
-        std::fs::write(path, render_report(&evidence))?;
+        std::fs::write(path, render_report(&evidence, None))?;
     }
-    println!("SIGIL Verdict: {}", verdict_text(evidence.verdict));
+    println!("SIGIL Verdict: [{}]", verdict_text(evidence.verdict));
     Ok(())
 }
 
@@ -226,7 +226,7 @@ fn cmd_runtime(command: RuntimeCommand) -> Result<()> {
                     ensure_parent_dir(&path)?;
                     std::fs::write(path, AiBom::from(&report).to_json()?)?;
                 }
-                println!("SIGIL Runtime Verdict: {}", report.verdict);
+                println!("SIGIL Runtime Verdict: [{}]", report.verdict);
                 Ok(())
             }
         },
@@ -324,7 +324,7 @@ fn assess_binary(
     emit_evidence: Option<PathBuf>,
 ) -> Result<()> {
     let policy = load_policy(policy_path)?;
-    let (ir, _) = analyze_binary(&binary, &entry)?;
+    let (ir, safeisa) = analyze_binary(&binary, &entry)?;
     let mut capabilities = Vec::new();
     let mut capability_evidence: BTreeMap<String, Vec<EvidenceItem>> = BTreeMap::new();
     let mut external_calls = Vec::new();
@@ -406,9 +406,9 @@ fn assess_binary(
         std::fs::write(path, evidence.to_json()?)?;
     }
     if let Some(path) = out {
-        std::fs::write(path, render_report(&evidence))?;
+        std::fs::write(path, render_report(&evidence, Some(&safeisa)))?;
     }
-    println!("SIGIL Verdict: {}", verdict_text(evidence.verdict));
+    println!("SIGIL Verdict: [{}]", verdict_text(evidence.verdict));
     Ok(())
 }
 

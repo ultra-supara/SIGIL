@@ -234,78 +234,135 @@ impl From<&OllamaReport> for AiBom {
 }
 
 pub fn render_ai_bom(bom: &AiBom) -> String {
-    let mut lines = vec![
-        "# SIGIL AI-BOM".to_string(),
-        String::new(),
-        format!("- Runtime: `{}`", bom.runtime.name),
-        format!("- Host: `{}`", bom.runtime.host),
-        format!("- API exposure: `{}`", bom.runtime.api_exposure.as_str()),
-        format!(
-            "- Runtime exposure: `{}`",
-            bom.runtime.exposure.class.as_str()
-        ),
-        format!("- Runtime status: `{}`", bom.runtime.status.as_str()),
-        format!("- Verdict: `{}`", bom.verdict.as_str()),
-    ];
-    if let Some(version) = &bom.runtime.version {
-        lines.push(format!("- Version: `{version}`"));
-    }
-    for bind in &bom.runtime.exposure.observed {
-        match &bind.process {
-            Some(process) => lines.push(format!(
-                "- Runtime bind: `{}:{}` process=`{process}`",
-                bind.addr, bind.port
-            )),
-            None => lines.push(format!("- Runtime bind: `{}:{}`", bind.addr, bind.port)),
-        }
-    }
+    let mut lines = Vec::new();
+    lines.push(format!("# SIGIL AI-BOM: [{}]", bom.verdict.as_str()));
     lines.push(String::new());
+    lines.push(format!("- Schema: `{}`", bom.schema_version));
+    lines.push(format!("- Tool: `{} {}`", bom.tool.name, bom.tool.version));
+    lines.push(String::new());
+
+    push_runtime_section(&mut lines, bom);
+    push_models_section(&mut lines, bom);
+    push_findings_section(&mut lines, bom);
+
+    lines.join("\n") + "\n"
+}
+
+fn push_runtime_section(lines: &mut Vec<String>, bom: &AiBom) {
+    lines.push("## Runtime".to_string());
+    lines.push("| Property | Value |".to_string());
+    lines.push("|----------|-------|".to_string());
+    lines.push(format!("| Name | `{}` |", bom.runtime.name));
+    lines.push(format!("| Host | `{}` |", bom.runtime.host));
+    if let Some(version) = &bom.runtime.version {
+        lines.push(format!("| Version | `{version}` |"));
+    }
+    if let Some(models_dir) = &bom.runtime.models_dir {
+        lines.push(format!("| Models dir | `{models_dir}` |"));
+    }
+    lines.push(format!(
+        "| API exposure | `{}` |",
+        bom.runtime.api_exposure.as_str()
+    ));
+    lines.push(format!(
+        "| Runtime exposure | `{}` (source: `{}`) |",
+        bom.runtime.exposure.class.as_str(),
+        bom.runtime.exposure.source
+    ));
+    lines.push(format!("| Status | `{}` |", bom.runtime.status.as_str()));
+    lines.push(String::new());
+
+    if !bom.runtime.exposure.observed.is_empty() {
+        lines.push("### Observed binds".to_string());
+        lines.push("| Address | Process |".to_string());
+        lines.push("|---------|---------|".to_string());
+        for bind in &bom.runtime.exposure.observed {
+            let process = bind.process.as_deref().unwrap_or("");
+            let process_cell = if process.is_empty() {
+                String::new()
+            } else {
+                format!("`{process}`")
+            };
+            lines.push(format!(
+                "| `{}:{}` | {} |",
+                bind.addr, bind.port, process_cell
+            ));
+        }
+        lines.push(String::new());
+    }
+}
+
+fn push_models_section(lines: &mut Vec<String>, bom: &AiBom) {
     lines.push("## Models".to_string());
     if bom.models.is_empty() {
-        lines.push("- No matching models found.".to_string());
+        lines.push("_No matching models found._".to_string());
+        lines.push(String::new());
+        return;
     }
     for model in &bom.models {
-        lines.push(format!("- `{}`", model.name));
-        if let Some(manifest) = &model.manifest_path {
-            lines.push(format!("  - Manifest: `{manifest}`"));
-        }
-        lines.push(format!(
-            "  - Provenance: registry=`{}` namespace=`{}` model=`{}` tag=`{}`",
-            model.provenance.registry.as_deref().unwrap_or("unknown"),
-            model.provenance.namespace.as_deref().unwrap_or("-"),
-            model.provenance.model.as_deref().unwrap_or("unknown"),
-            model.provenance.tag.as_deref().unwrap_or("unknown"),
-        ));
+        lines.push(String::new());
+        lines.push(format!("### `{}`", model.name));
         match &model.license {
             Some(license) => lines.push(format!(
-                "  - License: `{}` digest=`{}` size={}",
+                "- **License:** `{}` (digest `{}`, {} B)",
                 license.spdx_id.as_deref().unwrap_or("unknown"),
                 license.digest,
                 license.size,
             )),
-            None => lines.push("  - License: missing".to_string()),
+            None => lines.push("- **License:** _missing_".to_string()),
         }
-        for file in &model.files {
-            lines.push(format!(
-                "  - `{}` size={} sha256=`{}` path=`{}`",
-                file.digest, file.size, file.sha256, file.path
-            ));
+        let provenance = format!(
+            "{} / {} / {} / {}",
+            model.provenance.registry.as_deref().unwrap_or("unknown"),
+            model.provenance.namespace.as_deref().unwrap_or("-"),
+            model.provenance.model.as_deref().unwrap_or("unknown"),
+            model.provenance.tag.as_deref().unwrap_or("unknown"),
+        );
+        lines.push(format!("- **Provenance:** `{provenance}`"));
+        if let Some(manifest) = &model.manifest_path {
+            lines.push(format!("- **Manifest:** `{manifest}`"));
+        }
+        if !model.files.is_empty() {
+            lines.push(String::new());
+            lines.push("| Kind | Size | Digest |".to_string());
+            lines.push("|------|------|--------|".to_string());
+            for file in &model.files {
+                lines.push(format!(
+                    "| {} | {} B | `{}` |",
+                    file.kind, file.size, file.digest
+                ));
+            }
         }
     }
-    if !bom.findings.is_empty() {
-        lines.push(String::new());
-        lines.push("## Findings".to_string());
-        for finding in &bom.findings {
-            lines.push(format!(
-                "- `{}` {}: {} ({})",
-                finding.id,
-                finding.severity.as_str(),
-                finding.message,
-                finding.evidence
-            ));
-        }
+    lines.push(String::new());
+}
+
+fn push_findings_section(lines: &mut Vec<String>, bom: &AiBom) {
+    lines.push("## Findings".to_string());
+    if bom.findings.is_empty() {
+        lines.push("_No findings._".to_string());
+        return;
     }
-    lines.join("\n") + "\n"
+    lines.push("| Severity | Category | ID | Message | Evidence |".to_string());
+    lines.push("|----------|----------|----|---------|----------|".to_string());
+    for finding in &bom.findings {
+        lines.push(format!(
+            "| {} | {} | `{}` | {} | `{}` |",
+            finding.severity.as_str(),
+            finding_category_str(finding.category),
+            finding.id,
+            finding.message,
+            finding.evidence,
+        ));
+    }
+}
+
+fn finding_category_str(category: FindingCategory) -> &'static str {
+    match category {
+        FindingCategory::Runtime => "runtime",
+        FindingCategory::Model => "model",
+        FindingCategory::Binary => "binary",
+    }
 }
 
 fn finding_category(id: &str) -> FindingCategory {

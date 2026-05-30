@@ -66,7 +66,7 @@ fn cli_external_call_drives_fail_verdict() {
     .current_dir(workspace_root())
     .assert()
     .success()
-    .stdout(contains("SIGIL Verdict: FAIL"));
+    .stdout(contains("SIGIL Verdict: [FAIL]"));
 }
 
 #[test]
@@ -122,5 +122,5 @@ fn cli_binary_assess_detects_suspicious_external_call() {
     .current_dir(workspace_root())
     .assert()
     .success()
-    .stdout(contains("SIGIL Verdict: FAIL"));
+    .stdout(contains("SIGIL Verdict: [FAIL]"));
 }

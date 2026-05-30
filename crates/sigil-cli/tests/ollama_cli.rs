@@ -70,7 +70,7 @@ fn runtime_inspect_ollama_writes_evidence_json() {
     .current_dir(workspace_root())
     .assert()
     .success()
-    .stdout(contains("SIGIL Runtime Verdict: PASS"));
+    .stdout(contains("SIGIL Runtime Verdict: [PASS]"));
 
     let json = fs::read_to_string(out).unwrap();
     assert!(json.contains("\"schema_version\": \"1.1\""));
@@ -114,14 +114,13 @@ fn aibom_generate_ollama_writes_markdown() {
     .stdout(contains("SIGIL AI-BOM:"));
 
     let markdown = fs::read_to_string(out).unwrap();
-    assert!(markdown.contains("# SIGIL AI-BOM"));
+    assert!(markdown.contains("# SIGIL AI-BOM: [PASS]"));
     assert!(markdown.contains("gemma4:e2b"));
-    assert!(markdown.contains("- API exposure: `not_probed`"));
-    assert!(markdown.contains("- Runtime exposure: `unknown`"));
-    assert!(markdown.contains("- Provenance:"));
-    assert!(markdown.contains("registry=`registry.ollama.ai`"));
-    assert!(markdown.contains("tag=`e2b`"));
-    assert!(markdown.contains("- License: `MIT`"));
+    assert!(markdown.contains("| API exposure | `not_probed` |"));
+    assert!(markdown.contains("| Runtime exposure | `unknown` (source: `disabled`) |"));
+    assert!(markdown.contains("- **Provenance:**"));
+    assert!(markdown.contains("`registry.ollama.ai / library / gemma4 / e2b`"));
+    assert!(markdown.contains("- **License:** `MIT`"));
 }
 
 #[test]
@@ -147,7 +146,7 @@ fn runtime_inspect_ollama_honors_ollama_host_env_when_host_flag_omitted() {
     .env("OLLAMA_HOST", "0.0.0.0:11434")
     .assert()
     .success()
-    .stdout(contains("SIGIL Runtime Verdict: WARN"));
+    .stdout(contains("SIGIL Runtime Verdict: [WARN]"));
 
     let json = fs::read_to_string(out).unwrap();
     assert!(json.contains("\"api_exposure\": \"public_bind\""));
