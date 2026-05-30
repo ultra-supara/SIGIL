@@ -748,6 +748,12 @@ fn detect_spdx_from_body(text: &str) -> Option<String> {
         return Some("Apache-2.0".to_string());
     }
     if lc.contains("redistribution and use in source and binary forms") {
+        // BSD-4-Clause adds an advertising clause on top of BSD-3-Clause and
+        // also includes the "neither the name" clause, so it must be checked
+        // first or it would be misreported as BSD-3-Clause.
+        if lc.contains("all advertising materials mentioning features or use of this software") {
+            return Some("BSD-4-Clause".to_string());
+        }
         if lc.contains("neither the name") {
             return Some("BSD-3-Clause".to_string());
         }
@@ -872,6 +878,25 @@ mod tests {
                     may be used to endorse or promote products derived from this software\
                     without specific prior written permission.";
         assert_eq!(detect_spdx_id(body), Some("BSD-3-Clause".to_string()));
+    }
+
+    #[test]
+    fn detects_bsd_4_clause_with_advertising_clause() {
+        let body = "Copyright (c) 2024, Example\n\
+                    All rights reserved.\n\
+                    \n\
+                    Redistribution and use in source and binary forms, with or without\
+                    modification, are permitted provided that the following conditions are met:\n\
+                    \n\
+                    1. Redistributions of source code must retain the above copyright notice,\n\
+                    2. Redistributions in binary form must reproduce the above copyright notice,\n\
+                    3. All advertising materials mentioning features or use of this software\
+                    must display the following acknowledgement: This product includes software\
+                    developed by the Example Project.\n\
+                    4. Neither the name of the copyright holder nor the names of its contributors\
+                    may be used to endorse or promote products derived from this software\
+                    without specific prior written permission.";
+        assert_eq!(detect_spdx_id(body), Some("BSD-4-Clause".to_string()));
     }
 
     #[test]
