@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 
 use crate::runtime::{classify_runtime_exposure, RuntimeExposureReport, RuntimeListeners};
 
+const LICENSE_MEDIA_TYPE: &str = "application/vnd.ollama.image.license";
+const LICENSE_EXCERPT_BYTES: usize = 256;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OllamaInspectOptions {
     pub model: Option<String>,
@@ -78,10 +81,33 @@ pub struct ModelFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelProvenance {
+    pub registry: Option<String>,
+    pub namespace: Option<String>,
+    pub model: Option<String>,
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_digest: Option<String>,
+    pub layer_digests: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LicenseInfo {
+    pub digest: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spdx_id: Option<String>,
+    pub text_excerpt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OllamaModel {
     pub name: String,
     pub manifest_path: PathBuf,
     pub files: Vec<ModelFile>,
+    pub provenance: ModelProvenance,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<LicenseInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,7 +182,16 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
     let mut findings = Vec::new();
     let mut models = Vec::new();
     for manifest_path in manifest_paths {
-        let Some(name) = model_name_from_manifest(&options.models_dir, &manifest_path) else {
+        let Some((name, mut provenance)) =
+            parse_manifest_path(&options.models_dir, &manifest_path)
+        else {
+            findings.push(RuntimeFinding {
+                id: "ollama.provenance_unknown".to_string(),
+                severity: "WARN".to_string(),
+                message: "Ollama manifest path is too shallow to determine provenance"
+                    .to_string(),
+                evidence: manifest_path.display().to_string(),
+            });
             continue;
         };
         if let Some(filter) = &options.model {
@@ -171,7 +206,9 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
                 source,
             })?;
         let mut files = Vec::new();
+        let mut license = None;
         if let Some(config) = manifest.config {
+            provenance.config_digest = Some(config.digest.clone());
             push_model_file_or_finding(
                 &options.models_dir,
                 &config.digest,
@@ -182,11 +219,18 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
             )?;
         }
         for layer in manifest.layers {
+            provenance.layer_digests.push(layer.digest.clone());
+            let is_license = layer
+                .media_type
+                .as_deref()
+                .map(|media_type| media_type == LICENSE_MEDIA_TYPE)
+                .unwrap_or(false);
             let kind = layer
                 .media_type
                 .as_deref()
                 .and_then(|media_type| media_type.rsplit('.').next())
                 .unwrap_or("blob");
+            let before_len = files.len();
             push_model_file_or_finding(
                 &options.models_dir,
                 &layer.digest,
@@ -195,13 +239,35 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
                 &mut files,
                 &mut findings,
             )?;
+            if is_license && license.is_none() {
+                if let Some(file) = files.get(before_len) {
+                    let text = read_license_excerpt(&file.path)?;
+                    let spdx_id = detect_spdx_id(&text);
+                    license = Some(LicenseInfo {
+                        digest: file.digest.clone(),
+                        size: file.size,
+                        spdx_id,
+                        text_excerpt: text,
+                    });
+                }
+            }
         }
         files.sort_by(|left, right| left.digest.cmp(&right.digest));
         files.dedup_by(|left, right| left.digest == right.digest);
+        if license.is_none() {
+            findings.push(RuntimeFinding {
+                id: "ollama.license_missing".to_string(),
+                severity: "WARN".to_string(),
+                message: "Ollama manifest does not reference a license layer".to_string(),
+                evidence: manifest_path.display().to_string(),
+            });
+        }
         models.push(OllamaModel {
             name,
             manifest_path,
             files,
+            provenance,
+            license,
         });
     }
     models.sort_by(|left, right| left.name.cmp(&right.name));
@@ -373,11 +439,21 @@ fn push_model_file_or_finding(
     Ok(())
 }
 
-fn model_name_from_manifest(models_dir: &Path, manifest_path: &Path) -> Option<String> {
+/// Returns `(display_name, ModelProvenance)` parsed from the manifest path.
+///
+/// Ollama lays manifests at `<models_dir>/manifests/<registry>/<namespace...>/<model>/<tag>`.
+/// We treat the last component as the tag, the second-to-last as the model name,
+/// the first as the registry, and everything in between as the namespace
+/// (joined with `/`). Anything shallower than 3 components is treated as
+/// unknown provenance and surfaces as a finding upstream.
+fn parse_manifest_path(
+    models_dir: &Path,
+    manifest_path: &Path,
+) -> Option<(String, ModelProvenance)> {
     let relative = manifest_path
         .strip_prefix(models_dir.join("manifests"))
         .ok()?;
-    let parts: Vec<_> = relative
+    let parts: Vec<String> = relative
         .components()
         .map(|component| component.as_os_str().to_string_lossy().to_string())
         .collect();
@@ -385,8 +461,23 @@ fn model_name_from_manifest(models_dir: &Path, manifest_path: &Path) -> Option<S
         return None;
     }
     let tag = parts.last()?.clone();
-    let name = parts.get(parts.len() - 2)?.clone();
-    Some(format!("{name}:{tag}"))
+    let model = parts.get(parts.len() - 2)?.clone();
+    let registry = parts.first()?.clone();
+    let namespace = if parts.len() > 3 {
+        Some(parts[1..parts.len() - 2].join("/"))
+    } else {
+        None
+    };
+    let display = format!("{model}:{tag}");
+    let provenance = ModelProvenance {
+        registry: Some(registry),
+        namespace,
+        model: Some(model),
+        tag: Some(tag),
+        config_digest: None,
+        layer_digests: Vec::new(),
+    };
+    Some((display, provenance))
 }
 
 fn model_file_for_digest(
@@ -560,4 +651,51 @@ fn extract_json_string_field(response: &str, field: &str) -> Option<String> {
     let body = response.split("\r\n\r\n").nth(1)?;
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     value.get(field)?.as_str().map(str::to_string)
+}
+
+fn read_license_excerpt(path: &Path) -> Result<String, OllamaError> {
+    let file = File::open(path).map_err(|source| OllamaError::ReadFile {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut reader = BufReader::new(file);
+    let mut buffer = vec![0_u8; LICENSE_EXCERPT_BYTES];
+    let mut total = 0;
+    loop {
+        let read = reader
+            .read(&mut buffer[total..])
+            .map_err(|source| OllamaError::ReadFile {
+                path: path.display().to_string(),
+                source,
+            })?;
+        if read == 0 {
+            break;
+        }
+        total += read;
+        if total == buffer.len() {
+            break;
+        }
+    }
+    buffer.truncate(total);
+    Ok(String::from_utf8_lossy(&buffer).trim().to_string())
+}
+
+fn detect_spdx_id(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let first_line = trimmed.lines().next().unwrap_or(trimmed).trim();
+    if first_line.is_empty() {
+        return None;
+    }
+    // SPDX identifiers are short single-token strings (e.g. "MIT", "Apache-2.0",
+    // "GPL-3.0-only"). Reject anything that looks like prose so we never
+    // falsely claim an SPDX id we did not actually identify.
+    if first_line.len() <= 32
+        && !first_line.contains(' ')
+        && first_line
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+    {
+        return Some(first_line.to_string());
+    }
+    None
 }
