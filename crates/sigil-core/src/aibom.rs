@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::assess::Verdict;
-use crate::ollama::{ApiExposure, OllamaReport, RuntimeStatus};
+use crate::ollama::{ApiExposure, LicenseInfo, ModelProvenance, OllamaReport, RuntimeStatus};
 use crate::runtime::RuntimeExposure;
 
 /// Stable AI-BOM schema version. Bump minor for additive changes, major for
 /// breaking changes.
-pub const SCHEMA_VERSION: &str = "1.0";
+pub const SCHEMA_VERSION: &str = "1.1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiBom {
@@ -60,6 +60,9 @@ pub struct ModelEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_path: Option<String>,
     pub files: Vec<FileEntry>,
+    pub provenance: ProvenanceEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<LicenseEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +72,54 @@ pub struct FileEntry {
     pub size: u64,
     pub sha256: String,
     pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenanceEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_digest: Option<String>,
+    pub layer_digests: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LicenseEntry {
+    pub digest: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spdx_id: Option<String>,
+    pub text_excerpt: String,
+}
+
+impl From<&ModelProvenance> for ProvenanceEntry {
+    fn from(value: &ModelProvenance) -> Self {
+        Self {
+            registry: value.registry.clone(),
+            namespace: value.namespace.clone(),
+            model: value.model.clone(),
+            tag: value.tag.clone(),
+            config_digest: value.config_digest.clone(),
+            layer_digests: value.layer_digests.clone(),
+        }
+    }
+}
+
+impl From<&LicenseInfo> for LicenseEntry {
+    fn from(value: &LicenseInfo) -> Self {
+        Self {
+            digest: value.digest.clone(),
+            size: value.size,
+            spdx_id: value.spdx_id.clone(),
+            text_excerpt: value.text_excerpt.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +192,8 @@ impl From<&OllamaReport> for AiBom {
                         kind: file.kind.clone(),
                     })
                     .collect(),
+                provenance: ProvenanceEntry::from(&model.provenance),
+                license: model.license.as_ref().map(LicenseEntry::from),
             })
             .collect();
         let findings = report
@@ -216,6 +269,22 @@ pub fn render_ai_bom(bom: &AiBom) -> String {
         if let Some(manifest) = &model.manifest_path {
             lines.push(format!("  - Manifest: `{manifest}`"));
         }
+        lines.push(format!(
+            "  - Provenance: registry=`{}` namespace=`{}` model=`{}` tag=`{}`",
+            model.provenance.registry.as_deref().unwrap_or("unknown"),
+            model.provenance.namespace.as_deref().unwrap_or("-"),
+            model.provenance.model.as_deref().unwrap_or("unknown"),
+            model.provenance.tag.as_deref().unwrap_or("unknown"),
+        ));
+        match &model.license {
+            Some(license) => lines.push(format!(
+                "  - License: `{}` digest=`{}` size={}",
+                license.spdx_id.as_deref().unwrap_or("unknown"),
+                license.digest,
+                license.size,
+            )),
+            None => lines.push("  - License: missing".to_string()),
+        }
         for file in &model.files {
             lines.push(format!(
                 "  - `{}` size={} sha256=`{}` path=`{}`",
@@ -244,7 +313,9 @@ fn finding_category(id: &str) -> FindingCategory {
         "ollama.invalid_blob_digest"
         | "ollama.blob_digest_mismatch"
         | "ollama.blob_missing"
-        | "ollama.model_not_found" => FindingCategory::Model,
+        | "ollama.model_not_found"
+        | "ollama.license_missing"
+        | "ollama.provenance_unknown" => FindingCategory::Model,
         _ => FindingCategory::Runtime,
     }
 }
@@ -311,6 +382,8 @@ mod tests {
             "ollama.blob_digest_mismatch",
             "ollama.blob_missing",
             "ollama.model_not_found",
+            "ollama.license_missing",
+            "ollama.provenance_unknown",
         ] {
             assert_eq!(finding_category(id), FindingCategory::Model, "{id}");
         }
