@@ -257,6 +257,14 @@ h3 {
   grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
 }
 
+.split.alt {
+  background: var(--surface-strong);
+}
+
+.split h2 {
+  font-size: clamp(28px, 3.4vw, 44px);
+}
+
 .check-list {
   color: var(--muted);
   display: grid;
@@ -290,9 +298,10 @@ pre {
 }
 
 .command-panel pre {
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.55;
   margin: 0;
+  white-space: pre;
 }
 
 .comparison {

@@ -18,7 +18,8 @@
       </a>
       <nav class="nav" aria-label="Primary navigation">
         <a href="#scope">Scope</a>
-        <a href="#ollama">Ollama</a>
+        <a href="#report">Report</a>
+        <a href="#aibom">AI-BOM</a>
         <a href="#docs">Docs</a>
         <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
       </nav>
@@ -32,7 +33,8 @@
           <p class="lead">
             SIGIL inventories local LLM deployments, verifies model artifacts,
             checks runtime exposure, and connects native binary capability
-            evidence to deterministic PASS/WARN/FAIL decisions.
+            evidence to deterministic PASS/WARN/FAIL decisions. No LLM ever
+            decides a verdict.
           </p>
           <div class="actions">
             <a class="button primary" href="../docs/sigil-overview.md">Read the overview</a>
@@ -44,8 +46,8 @@
               <dd>Ollama first</dd>
             </div>
             <div>
-              <dt>Evidence</dt>
-              <dd>AI-BOM JSON and Markdown</dd>
+              <dt>AI-BOM</dt>
+              <dd>Schema 1.1</dd>
             </div>
             <div>
               <dt>Verdicts</dt>
@@ -73,64 +75,124 @@
           <article class="feature-card">
             <h3>Ollama model stores</h3>
             <p>
-              Walks Ollama manifests and blobs, records model names, file
-              digests, sizes, and missing or invalid artifact references.
+              Walks Ollama manifests and blobs, verifies SHA-256, parses
+              <code>registry / namespace / model / tag</code> provenance, and
+              flags missing or invalid artifact references.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>License detection</h3>
+            <p>
+              Reads the <code>application/vnd.ollama.image.license</code> layer
+              and identifies SPDX shortnames plus full-body matches for ten
+              licenses, including Apache-2.0, MPL-2.0, the GPL/LGPL family,
+              BSD-2/3-Clause, ISC, and MIT.
             </p>
           </article>
           <article class="feature-card">
             <h3>Runtime exposure</h3>
             <p>
-              Probes configured Ollama API endpoints and flags public-bind or
-              non-local network hosts as findings.
+              Classifies the configured Ollama host and inspects local
+              listening sockets via <code>/proc</code> — localhost, LAN,
+              public bind, docker-published, or reverse proxy. No subprocesses
+              spawned.
             </p>
           </article>
           <article class="feature-card">
             <h3>Native execution surfaces</h3>
             <p>
-              Loads x86_64 objects, lifts a small instruction subset into IR,
-              and maps external symbols such as network and process calls to
-              capabilities.
-            </p>
-          </article>
-          <article class="feature-card">
-            <h3>AI-BOM reports</h3>
-            <p>
-              Emits machine-readable evidence JSON and a Markdown AI-BOM for
-              local runtime and model-store inspection results.
+              Loads x86_64 objects, lifts a small instruction subset into IR
+              and SafeISA, and maps external symbols such as network and
+              process calls to capabilities.
             </p>
           </article>
         </div>
       </section>
 
-      <section id="ollama" class="section split">
+      <section id="report" class="section split">
         <div>
-          <h2>Gemma 4 on Ollama: verified path</h2>
+          <h2>One report, evidence in line</h2>
           <p>
-            SIGIL was exercised against a real local Ollama installation with
-            <code>gemma4:e2b</code> on May 29, 2026. The run verified the model
-            store, checked a localhost Ollama API endpoint, hashed model blobs,
-            and produced both evidence JSON and an AI-BOM report.
+            SIGIL renders the policy verdict next to the call site, the
+            capability table, and the lifted SafeISA — so a reviewer can read
+            the verdict and the reason together.
           </p>
           <ul class="check-list">
-            <li>Ollama version: <code>0.24.0</code></li>
-            <li>Model: <code>gemma4:e2b</code></li>
-            <li>Runtime status: <code>reachable</code></li>
-            <li>API exposure: <code>localhost</code></li>
-            <li>Verdict: <code>PASS</code></li>
+            <li>Verdict banner: <code>[PASS]</code> / <code>[WARN]</code> / <code>[FAIL]</code></li>
+            <li>Capability table keyed by address and instruction</li>
+            <li>Policy violations carry the call site and the symbol</li>
+            <li>SafeISA fenced block shows blocked external calls as <code>CALL_STUB</code></li>
           </ul>
         </div>
-        <div class="command-panel" aria-label="Ollama commands">
-          <pre><code>ollama pull gemma4:e2b
+        <div class="command-panel" aria-label="Suspicious kernel assess report excerpt">
+          <pre><code># SIGIL Verdict: [FAIL]
 
-cargo run -p sigil-cli -- runtime inspect ollama \
-  --model gemma4:e2b \
-  --out out/gemma4-ollama.evidence.json
+- Binary: `suspicious_kernel.o`
+- Entry: `kernel`
 
-cargo run -p sigil-cli -- aibom generate \
-  --runtime ollama \
-  --model gemma4:e2b \
-  --format md \
-  --out out/gemma4-aibom.md</code></pre>
+## Capabilities
+| Capability | Address | Instruction          | External symbol |
+|------------|---------|----------------------|-----------------|
+| arithmetic | `0x14`  | `imul eax,[rbp-8]`   |                 |
+| network    | `0x26`  | `call ...`           | `connect`       |
+
+## Policy Violations
+- [FAIL] `forbidden.capabilities.network`
+  — capability `network` at `0x26` via `connect`
+
+## SafeISA
+```
+FUNC kernel
+  MUL eax eax [rbp-8]
+  CALL_STUB connect
+  RET
+END
+```</code></pre>
+        </div>
+      </section>
+
+      <section id="aibom" class="section split alt">
+        <div>
+          <h2>AI-BOM with provenance and license</h2>
+          <p>
+            <code>aibom generate --runtime ollama</code> emits the same
+            schema-1.1 JSON / Markdown for every local model — runtime
+            exposure, provenance tuple, detected SPDX id, and a layer table
+            keyed by digest.
+          </p>
+          <ul class="check-list">
+            <li>Stable <code>schema_version: "1.1"</code> JSON contract</li>
+            <li>Runtime property table + observed binds</li>
+            <li>License card with SPDX id and digest</li>
+            <li>Provenance: <code>registry / namespace / model / tag</code></li>
+            <li>Findings table grouped by severity and category</li>
+          </ul>
+        </div>
+        <div class="command-panel" aria-label="Gemma 4 AI-BOM excerpt">
+          <pre><code># SIGIL AI-BOM: [PASS]
+
+- Schema: `1.1`
+- Tool: `sigil 0.1.0`
+
+## Runtime
+| Property         | Value                       |
+|------------------|-----------------------------|
+| Name             | `ollama`                    |
+| Host             | `http://127.0.0.1:11434`    |
+| API exposure     | `localhost`                 |
+| Runtime exposure | `localhost` (source: `proc`)|
+| Status           | `reachable`                 |
+
+## Models
+
+### `gemma4:e2b`
+- **License:** `Apache-2.0` (digest `sha256:7339...`, 11355 B)
+- **Provenance:** `registry.ollama.ai / library / gemma4 / e2b`
+
+| Kind    | Size            | Digest               |
+|---------|-----------------|----------------------|
+| model   | 7162394016 B    | `sha256:4e30...`     |
+| license | 11355 B         | `sha256:7339...`     |</code></pre>
         </div>
       </section>
 
@@ -154,22 +216,37 @@ cargo run -p sigil-cli -- aibom generate \
             <tbody>
               <tr>
                 <td>Model artifact identity</td>
-                <td>Manifest and blob digest verification</td>
+                <td>Manifest + blob SHA-256 verification</td>
                 <td>Implemented for Ollama</td>
               </tr>
               <tr>
+                <td>Provenance</td>
+                <td><code>registry / namespace / model / tag</code> tuple</td>
+                <td>Implemented for Ollama</td>
+              </tr>
+              <tr>
+                <td>License metadata</td>
+                <td>SPDX id from shortname or body match</td>
+                <td>10 licenses detected (Apache-2.0, MIT, MPL-2.0, GPL/LGPL, BSD-2/3, ISC)</td>
+              </tr>
+              <tr>
                 <td>Runtime exposure</td>
-                <td>API endpoint and bind-risk classification</td>
-                <td>Initial Ollama host checks</td>
+                <td>API endpoint + <code>/proc</code> bind classification</td>
+                <td>Implemented (Linux <code>/proc</code>, degrades elsewhere)</td>
               </tr>
               <tr>
                 <td>Native capability evidence</td>
-                <td>External calls and guarded ISA lifting</td>
-                <td>Initial x86_64 path</td>
+                <td>External calls + guarded SafeISA lifting</td>
+                <td>Narrow x86_64 path</td>
+              </tr>
+              <tr>
+                <td>AI-BOM contract</td>
+                <td>Stable, versioned JSON shared with Markdown</td>
+                <td><code>schema_version: 1.1</code></td>
               </tr>
               <tr>
                 <td>Environment comparison</td>
-                <td>Baseline drift and multi-runtime comparison</td>
+                <td>Baseline drift + multi-runtime comparison</td>
                 <td>Planned</td>
               </tr>
             </tbody>
@@ -182,7 +259,7 @@ cargo run -p sigil-cli -- aibom generate \
           <h2>Detailed documentation</h2>
           <p>
             The public page is the short front door. The detailed model,
-            architecture, and roadmap are kept in docs.
+            architecture, and roadmap are in docs.
           </p>
         </div>
         <div class="doc-links">
@@ -192,15 +269,15 @@ cargo run -p sigil-cli -- aibom generate \
           </a>
           <a href="../docs/ollama-inspection.md">
             <span>Ollama Inspection</span>
-            Gemma 4 test path, evidence fields, and findings.
+            Commands, evidence fields, SPDX detection table, findings, runtime bind classes.
           </a>
           <a href="../docs/ai-bom-and-comparison.md">
             <span>AI-BOM and Comparison</span>
-            Report model and future baseline comparison direction.
+            Schema 1.1 contract, enum values, and the planned baseline-comparison direction.
           </a>
           <a href="../docs/architecture-and-safety.md">
             <span>Architecture and Safety</span>
-            Rust crates, SafeISA, policy, and analysis-only boundaries.
+            Crates, SafeISA, capability mapping, policy YAML, and the analysis-only safety boundary.
           </a>
         </div>
       </section>
