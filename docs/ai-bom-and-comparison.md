@@ -7,7 +7,7 @@ SIGIL's AI-BOM output is an evidence record for local AI deployments. It is insp
 SIGIL currently emits:
 
 - JSON evidence from `runtime inspect ollama`
-- Markdown AI-BOM from `aibom generate --runtime ollama`
+- Markdown AI-BOM from `aibom generate --runtime ollama --format md`
 
 The current AI-BOM contains:
 
