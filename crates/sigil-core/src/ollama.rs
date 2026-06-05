@@ -471,7 +471,14 @@ fn parse_manifest_path(
     } else {
         None
     };
-    let display = format!("{model}:{tag}");
+    // `library` is Ollama's conventional default namespace and is omitted from
+    // the short form that `ollama list` prints (`gemma4:e2b`, not
+    // `library/gemma4:e2b`). Every other namespace must be preserved so the
+    // AI-BOM `models[].name` round-trips with what users pass to `--model`.
+    let display = match namespace.as_deref() {
+        Some("library") | None => format!("{model}:{tag}"),
+        Some(ns) => format!("{ns}/{model}:{tag}"),
+    };
     let provenance = ModelProvenance {
         registry: Some(registry),
         namespace,
