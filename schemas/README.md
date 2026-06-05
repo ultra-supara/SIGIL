@@ -18,6 +18,12 @@ and keep the previous version intact for older consumers. The `$id` of
 each schema is version-stamped, so a consumer that pinned v1 keeps
 working when v2 ships.
 
-Within a major version, additive fields require a minor `schema_version`
-bump (e.g. `"1.1"` → `"1.2"`) and a corresponding additive edit to this
-schema's `properties` / `required` block, both in the same change.
+Additive changes within a major version:
+
+- A new **required** field bumps `schema_version` (e.g. `"1.1"` → `"1.2"`)
+  and extends both `properties` and `required` in this schema in the same
+  change.
+- A new **optional** field (an `#[serde(skip_serializing_if = "Option::is_none")]`
+  in Rust) bumps `schema_version` and extends `properties` only — `required`
+  is unchanged. Old consumers can still read v1.x output by ignoring the new
+  field; new consumers can detect it by inspecting `schema_version`.

@@ -132,17 +132,17 @@
         "id": { "type": "string", "minLength": 1 },
         "category": { "$ref": "#/$defs/FindingCategory" },
         "severity": { "$ref": "#/$defs/Severity" },
-        "message": { "type": "string" },
-        "evidence": { "type": "string" }
+        "message": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 }
       }
     },
     "Sha256Digest": {
       "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
     },
     "Sha256Hex": {
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
+      "pattern": "^[0-9a-fA-F]{64}$"
     },
     "ApiExposure": {
       "enum": ["not_probed", "localhost", "network", "public_bind", "unavailable"]
