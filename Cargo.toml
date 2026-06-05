@@ -23,3 +23,4 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 tempfile = "3.10"
 thiserror = "1.0"
+jsonschema = { version = "0.46", default-features = false }
