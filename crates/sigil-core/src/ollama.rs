@@ -471,13 +471,25 @@ fn parse_manifest_path(
     } else {
         None
     };
-    // `library` is Ollama's conventional default namespace and is omitted from
-    // the short form that `ollama list` prints (`gemma4:e2b`, not
-    // `library/gemma4:e2b`). Every other namespace must be preserved so the
-    // AI-BOM `models[].name` round-trips with what users pass to `--model`.
-    let display = match namespace.as_deref() {
-        Some("library") | None => format!("{model}:{tag}"),
-        Some(ns) => format!("{ns}/{model}:{tag}"),
+    // Mirror Ollama's `Name.DisplayShortest` so `models[].name` round-trips
+    // with what users pass to `--model`:
+    //   * Default host (`registry.ollama.ai`) + default namespace (`library`)
+    //     → bare `model:tag`.
+    //   * Default host + non-default namespace → `namespace/model:tag`.
+    //   * Non-default host (e.g. `hf.co`) → always include the host, and
+    //     preserve the namespace verbatim (even when it is `library`)
+    //     so the display stays unambiguous between registries.
+    const DEFAULT_HOST: &str = "registry.ollama.ai";
+    let display = if registry == DEFAULT_HOST {
+        match namespace.as_deref() {
+            Some("library") | None => format!("{model}:{tag}"),
+            Some(ns) => format!("{ns}/{model}:{tag}"),
+        }
+    } else {
+        match namespace.as_deref() {
+            Some(ns) => format!("{registry}/{ns}/{model}:{tag}"),
+            None => format!("{registry}/{model}:{tag}"),
+        }
     };
     let provenance = ModelProvenance {
         registry: Some(registry),

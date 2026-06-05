@@ -573,12 +573,21 @@ fn shallow_manifest_path_is_flagged_as_unknown_provenance() {
 
 /// Build a fake store at `<models_dir>/manifests/registry.ollama.ai/<namespace>/<model>/<tag>`.
 /// Mirrors `fake_store()` but lets each test choose the namespace so we can
-/// exercise both the `library` short form and non-library namespaces.
+/// exercise both the `library` short form and non-library namespaces under
+/// the default `registry.ollama.ai` host.
 fn fake_store_at(namespace: &str, model_name: &str, tag: &str) -> TempDir {
+    fake_store_at_host("registry.ollama.ai", namespace, model_name, tag)
+}
+
+/// Like `fake_store_at` but parameterises the registry host so tests can
+/// exercise non-default registries (e.g. `hf.co`) where Ollama's
+/// `DisplayShortest` keeps the host in the short name.
+fn fake_store_at_host(host: &str, namespace: &str, model_name: &str, tag: &str) -> TempDir {
     let tmp = TempDir::new().unwrap();
     let manifest_dir = tmp
         .path()
-        .join("models/manifests/registry.ollama.ai")
+        .join("models/manifests")
+        .join(host)
         .join(namespace)
         .join(model_name);
     fs::create_dir_all(&manifest_dir).unwrap();
@@ -748,4 +757,82 @@ fn parses_three_component_path_with_no_namespace_as_bare_short_form() {
     assert_eq!(report.models[0].provenance.namespace, None);
     assert_eq!(report.models[0].provenance.model.as_deref(), Some("gemma4"));
     assert_eq!(report.models[0].provenance.tag.as_deref(), Some("e2b"));
+}
+
+#[test]
+fn preserves_host_for_non_default_registry() {
+    // Ollama accepts manifests from non-default hosts (e.g. `hf.co`) and its
+    // `DisplayShortest` keeps the host in the short name whenever it is not
+    // `registry.ollama.ai`. Dropping the host conflates `hf.co/acme/gemma4:e2b`
+    // with `registry.ollama.ai/acme/gemma4:e2b` and breaks `--model` filtering.
+    let tmp = fake_store_at_host("hf.co", "acme", "gemma4", "e2b");
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: None,
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.models.len(), 1);
+    assert_eq!(report.models[0].name, "hf.co/acme/gemma4:e2b");
+    assert_eq!(
+        report.models[0].provenance.registry.as_deref(),
+        Some("hf.co")
+    );
+    assert_eq!(
+        report.models[0].provenance.namespace.as_deref(),
+        Some("acme")
+    );
+}
+
+#[test]
+fn preserves_host_and_library_namespace_for_non_default_registry() {
+    // For a non-default host, `library` is no longer the conventional empty
+    // namespace — the host alone makes the name non-default, so the namespace
+    // must be preserved verbatim to keep the display unambiguous.
+    let tmp = fake_store_at_host("hf.co", "library", "gemma4", "e2b");
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: None,
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.models.len(), 1);
+    assert_eq!(report.models[0].name, "hf.co/library/gemma4:e2b");
+    assert_eq!(
+        report.models[0].provenance.registry.as_deref(),
+        Some("hf.co")
+    );
+    assert_eq!(
+        report.models[0].provenance.namespace.as_deref(),
+        Some("library")
+    );
+}
+
+#[test]
+fn roundtrips_with_model_filter_for_non_default_registry() {
+    // `--model hf.co/acme/gemma4:e2b` must match the manifest at
+    // `.../hf.co/acme/gemma4/e2b`. Before this fix the display dropped `hf.co`
+    // and the filter missed, surfacing `ollama.model_not_found`.
+    let tmp = fake_store_at_host("hf.co", "acme", "gemma4", "e2b");
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("hf.co/acme/gemma4:e2b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: "http://127.0.0.1:11434".to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .unwrap();
+
+    assert_eq!(report.models.len(), 1);
+    assert_eq!(report.models[0].name, "hf.co/acme/gemma4:e2b");
+    assert!(!report
+        .findings
+        .iter()
+        .any(|finding| finding.id == "ollama.model_not_found"));
 }
