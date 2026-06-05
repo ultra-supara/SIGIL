@@ -471,7 +471,40 @@ fn parse_manifest_path(
     } else {
         None
     };
-    let display = format!("{model}:{tag}");
+    // Mirror Ollama's `Name.DisplayShortest` so `models[].name` round-trips
+    // with what users pass to `--model`:
+    //   * Default host (`registry.ollama.ai`) + default namespace (`library`)
+    //     → bare `model:tag`.
+    //   * Default host + non-default namespace → `namespace/model:tag`.
+    //   * Non-default host (e.g. `hf.co`) → always include the host, and
+    //     preserve the namespace verbatim (even when it is `library`) so the
+    //     display stays unambiguous between registries.
+    //
+    // Upstream compares default host/namespace with `strings.EqualFold`
+    // (`ollama/ollama` `types/model/name.go`), so the default-detection here
+    // must be ASCII case-insensitive. The non-default branches keep the
+    // original casing of every retained component verbatim.
+    const DEFAULT_HOST: &str = "registry.ollama.ai";
+    const DEFAULT_NAMESPACE: &str = "library";
+    let host_is_default = registry.eq_ignore_ascii_case(DEFAULT_HOST);
+    let display = if host_is_default {
+        let namespace_is_default = namespace
+            .as_deref()
+            .is_none_or(|ns| ns.eq_ignore_ascii_case(DEFAULT_NAMESPACE));
+        if namespace_is_default {
+            format!("{model}:{tag}")
+        } else {
+            let ns = namespace
+                .as_deref()
+                .expect("namespace_is_default covers the None case");
+            format!("{ns}/{model}:{tag}")
+        }
+    } else {
+        match namespace.as_deref() {
+            Some(ns) => format!("{registry}/{ns}/{model}:{tag}"),
+            None => format!("{registry}/{model}:{tag}"),
+        }
+    };
     let provenance = ModelProvenance {
         registry: Some(registry),
         namespace,
