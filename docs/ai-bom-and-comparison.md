@@ -26,7 +26,10 @@ The two paths produce the **same** AI-BOM model — JSON and Markdown never dive
 
 ## Schema (implemented)
 
-The AI-BOM JSON is a stable, versioned contract produced from a runtime-agnostic `AiBom` model (`crates/sigil-core/src/aibom.rs`):
+The AI-BOM JSON is a stable, versioned contract produced from a runtime-agnostic `AiBom` model (`crates/sigil-core/src/aibom.rs`).
+The contract is formally specified in [`schemas/aibom-v1.schema.json`](../schemas/aibom-v1.schema.json) (JSON Schema draft 2020-12, self-contained, strict `additionalProperties: false`).
+
+The schema captures:
 
 - `schema_version` is explicit (currently `"1.1"`). Minor bumps are additive; major bumps are breaking.
 - Enum values are stabilized and pinned by tests: `verdict`, `severity`, `category`, `api_exposure`, `status`, `exposure.class`.
@@ -166,4 +169,4 @@ Candidate future runtimes:
 
 A future runtime implements its own mapping into the `AiBom` model and reuses the same struct and enum definitions, so downstream consumers and baselines keep working without schema changes.
 
-Still planned: a formal JSON Schema document (`*.schema.json`) and AI-BOM comparison / baseline drift detection.
+The AI-BOM JSON contract is formally specified in [`schemas/aibom-v1.schema.json`](../schemas/aibom-v1.schema.json) (JSON Schema draft 2020-12). Downstream consumers can validate AI-BOM JSON against this schema directly. AI-BOM comparison / baseline drift detection is tracked in issue #16.

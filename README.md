@@ -120,7 +120,7 @@ SIGIL is designed to grow from single-runtime inspection into local AI environme
 - Diff a current AI-BOM against a trusted baseline (planned).
 - Detect model digest drift, missing license, downgraded runtime exposure, new findings.
 - Add llama.cpp, LM Studio, vLLM, and other local OpenAI-compatible runtimes (planned).
-- Publish a formal JSON Schema document for the AI-BOM contract (planned).
+- AI-BOM JSON Schema published at [`schemas/aibom-v1.schema.json`](schemas/aibom-v1.schema.json) (JSON Schema draft 2020-12).
 
 See [ROADMAP.md](ROADMAP.md) and [docs/ai-bom-and-comparison.md](docs/ai-bom-and-comparison.md).
 
@@ -142,7 +142,6 @@ Not yet:
 - Decompiler-level coverage of x86_64 (narrow by design).
 - Runtimes beyond Ollama.
 - AI-BOM baseline comparison and drift detection.
-- Formal JSON Schema document.
 - `trace`, `policy-from-source`, and `explain` are placeholder CLI commands.
 
 ## Documentation
