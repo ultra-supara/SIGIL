@@ -223,6 +223,206 @@ mod schema_envelope_validation {
     }
 }
 
+/// Defends against the Codex review on PR #36 (discussion r3367962268): the
+/// schema declares `minLength`, `pattern`, and `maxLength` constraints on
+/// string fields that serde's `String` deserializer cannot enforce. The
+/// wasm wrapper now runs the bundled schema as a full JSON Schema check
+/// before struct deserialization, so these violations surface as render
+/// errors instead of passing through silently.
+mod schema_scalar_validation {
+    use super::render_aibom_markdown_inner;
+
+    fn valid_pass_sample() -> String {
+        let path = super::samples_dir().join("pass.aibom.json");
+        std::fs::read_to_string(path).expect("read pass sample")
+    }
+
+    #[test]
+    fn rejects_empty_tool_name() {
+        // schema: ToolInfo.name { minLength: 1 }
+        let json = valid_pass_sample().replacen("\"sigil\"", "\"\"", 1);
+        let err = render_aibom_markdown_inner(&json).expect_err("must reject empty name");
+        assert!(
+            err.contains("schema violation") && err.contains("tool"),
+            "error must mention the schema violation and the path: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_non_hex_sha256() {
+        // schema: FileEntry.sha256 { pattern: "^[0-9a-fA-F]{64}$" }
+        // pass sample has files[0].sha256 — replace it with garbage.
+        let json = valid_pass_sample();
+        // Find the first `"sha256": "..."` entry and replace its value.
+        let pat = "\"sha256\":";
+        let idx = json.find(pat).expect("sha256 field in sample");
+        let after = &json[idx + pat.len()..];
+        let start = after.find('"').expect("opening quote") + 1;
+        let end = after[start..].find('"').expect("closing quote") + start;
+        let mut mutated = String::with_capacity(json.len());
+        mutated.push_str(&json[..idx + pat.len() + start]);
+        mutated.push_str("nothex-not-64-chars-not-hex-at-all");
+        mutated.push_str(&after[end..]);
+
+        let err = render_aibom_markdown_inner(&mutated).expect_err("must reject non-hex sha256");
+        assert!(
+            err.contains("schema violation") && err.contains("sha256"),
+            "error must mention the schema violation and field: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_text_excerpt_over_max_length() {
+        // schema: LicenseEntry.text_excerpt { maxLength: 256 }
+        let json = valid_pass_sample();
+        let needle = "\"text_excerpt\":";
+        let idx = json.find(needle).expect("text_excerpt field in sample");
+        let after = &json[idx + needle.len()..];
+        let start = after.find('"').expect("opening quote") + 1;
+        let end = after[start..].find('"').expect("closing quote") + start;
+        let mut mutated = String::with_capacity(json.len() + 300);
+        mutated.push_str(&json[..idx + needle.len() + start]);
+        mutated.push_str(&"x".repeat(257));
+        mutated.push_str(&after[end..]);
+
+        let err = render_aibom_markdown_inner(&mutated)
+            .expect_err("must reject text_excerpt over 256 chars");
+        assert!(
+            err.contains("schema violation") && err.contains("text_excerpt"),
+            "error must mention the violation: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_canonical_sample() {
+        // Real samples must continue to pass after schema validation lands.
+        render_aibom_markdown_inner(&valid_pass_sample())
+            .expect("pass sample must clear the full schema");
+    }
+
+    #[test]
+    fn rejects_bad_sha256_digest_prefix() {
+        // schema: ProvenanceEntry.config_digest pattern ^sha256:[0-9a-fA-F]{64}$
+        let json = valid_pass_sample();
+        // Drop the "sha256:" prefix on the first digest-looking field.
+        let pat = "\"digest\": \"sha256:";
+        let mutated = json.replacen(pat, "\"digest\": \"md5:", 1);
+        let err = render_aibom_markdown_inner(&mutated).expect_err("must reject non-sha256 digest");
+        assert!(
+            err.contains("schema violation") && err.contains("sha256:"),
+            "error must mention the prefix requirement: {err}"
+        );
+    }
+}
+
+/// Guard against drift between `schemas/aibom-v1.schema.json` and
+/// `validate_scalar_constraints` in `src/lib.rs`. Walks the bundled schema
+/// definitions, tallies every `minLength`, `pattern`, and `maxLength`
+/// constraint, and asserts the counts match the hard-rolled validator's
+/// coverage. If a maintainer adds a new constraint to the schema without
+/// updating the validator, this test fails — and points at the specific
+/// path the validator is missing.
+#[test]
+fn scalar_constraints_match_schema() {
+    use std::collections::BTreeSet;
+
+    let schema_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate at <repo>/crates/<name>")
+        .join("schemas/aibom-v1.schema.json");
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&schema_path).expect("read schema"))
+            .expect("parse schema");
+
+    // Walk every property in every $def and collect the (def, property,
+    // constraint) triple. We treat the schema as the source of truth: the
+    // validator must cover everything we find here.
+    let mut min_length: BTreeSet<(String, String, u64)> = BTreeSet::new();
+    let mut max_length: BTreeSet<(String, String, u64)> = BTreeSet::new();
+    let mut patterns: BTreeSet<(String, String, String)> = BTreeSet::new();
+
+    let defs = schema["$defs"].as_object().expect("schema has $defs map");
+    for (def_name, def) in defs {
+        // String-typed $defs (Sha256Digest, Sha256Hex) carry their pattern
+        // at the top level rather than under properties.
+        if def.get("pattern").is_some() && def.get("properties").is_none() {
+            let pattern = def["pattern"].as_str().unwrap().to_string();
+            patterns.insert((def_name.clone(), "<self>".to_string(), pattern));
+            continue;
+        }
+        let Some(properties) = def.get("properties").and_then(|p| p.as_object()) else {
+            continue;
+        };
+        for (prop_name, prop) in properties {
+            if let Some(n) = prop.get("minLength").and_then(|v| v.as_u64()) {
+                min_length.insert((def_name.clone(), prop_name.clone(), n));
+            }
+            if let Some(n) = prop.get("maxLength").and_then(|v| v.as_u64()) {
+                max_length.insert((def_name.clone(), prop_name.clone(), n));
+            }
+            if let Some(p) = prop.get("pattern").and_then(|v| v.as_str()) {
+                patterns.insert((def_name.clone(), prop_name.clone(), p.to_string()));
+            }
+        }
+    }
+
+    // Expected coverage — every constraint type and its pattern. The
+    // validator in src/lib.rs reaches every one of these via its
+    // `non_empty` / `sha256_hex` / `sha256_digest` / `text_excerpt`
+    // helpers. Adding a new constraint to the schema → update both lists.
+    let expected_patterns: BTreeSet<String> = ["^sha256:[0-9a-fA-F]{64}$", "^[0-9a-fA-F]{64}$"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let actual_patterns: BTreeSet<String> = patterns.iter().map(|(_, _, p)| p.clone()).collect();
+    assert_eq!(
+        actual_patterns, expected_patterns,
+        "schema introduced (or removed) a `pattern` constraint that \
+         validate_scalar_constraints does not cover. Update both."
+    );
+
+    // Every `minLength` in the schema is exactly 1 (the only "non-empty"
+    // form SIGIL uses). If a future field adds minLength: 2 we want to
+    // know — the validator's non_empty helper only enforces ≥1.
+    for (def, prop, n) in &min_length {
+        assert_eq!(
+            *n, 1,
+            "schema introduced minLength != 1 on {def}.{prop}; validate_scalar_constraints \
+             only handles minLength: 1 via the non_empty helper. Either add a new helper or \
+             adjust the schema."
+        );
+    }
+
+    // Every `maxLength` in the schema is exactly 256 (text_excerpt). If a
+    // future field adds maxLength: M, the validator needs to learn about it.
+    let known_max = (
+        "LicenseEntry".to_string(),
+        "text_excerpt".to_string(),
+        sigil_aibom_wasm::TEXT_EXCERPT_MAX_LEN as u64,
+    );
+    let actual_max: BTreeSet<(String, String, u64)> = max_length.iter().cloned().collect();
+    assert_eq!(
+        actual_max,
+        std::iter::once(known_max).collect::<BTreeSet<_>>(),
+        "schema introduced a `maxLength` constraint validate_scalar_constraints does not \
+         cover."
+    );
+
+    // Sanity floor: the schema *must* still carry the constraints the
+    // validator's helpers are written against; if the schema drops them
+    // (e.g. someone deletes the sha256 pattern), the validator would go
+    // from enforcing to silently allowing.
+    assert!(
+        !min_length.is_empty(),
+        "schema has no minLength constraints — validator regression risk"
+    );
+    assert!(
+        !patterns.is_empty(),
+        "schema has no pattern constraints — validator regression risk"
+    );
+}
+
 /// Independently re-derives the schema's root `required` field from the
 /// committed `schemas/aibom-v1.schema.json` and asserts that the
 /// `REQUIRED_TOP_LEVEL_KEYS` list in the wasm wrapper matches it. If the
