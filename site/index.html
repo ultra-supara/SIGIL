@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SIGIL - Semantic Inspection for Guarded Intelligence Layers</title>
+    <title>SIGIL — Semantic Inspection for Guarded Intelligence Layers</title>
     <meta
       name="description"
-      content="SIGIL is a local-first security inspection tool for AI runtimes, model stores, and native execution surfaces."
+      content="SIGIL is a local-first security inspection tool for AI runtimes, model stores, and native execution surfaces. Deterministic verdicts, schema-1.1 AI-BOM, no SaaS."
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -17,14 +17,14 @@
         <span>SIGIL</span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
-        <a href="#scope">Scope</a>
-        <a href="#report">Report</a>
-        <a href="#aibom">AI-BOM</a>
-        <a href="./compare/">Compare</a>
-        <a href="./reports/2026-h1/">2026 H1</a>
-        <a href="./viewer/">Viewer</a>
-        <a href="#docs">Docs</a>
-        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
+        <a href="#scope">scope</a>
+        <a href="#report">report</a>
+        <a href="#aibom">ai-bom</a>
+        <a href="./compare/">compare</a>
+        <a href="./reports/2026-h1/">2026 h1</a>
+        <a href="./viewer/">viewer</a>
+        <a href="#docs">docs</a>
+        <a href="https://github.com/ultra-supara/SIGIL">github</a>
       </nav>
     </header>
 
@@ -32,13 +32,14 @@
       <section class="hero">
         <div class="hero-copy">
           <p class="definition">Semantic Inspection for Guarded Intelligence Layers</p>
-          <h1>Local-first inspection for AI runtimes and model stores.</h1>
+          <h1>Quietly notice. See through. Walk on.</h1>
           <p class="lead">
-            SIGIL inventories local LLM deployments, verifies model artifacts,
-            checks runtime exposure, and connects native binary capability
-            evidence to deterministic PASS/WARN/FAIL decisions. No LLM ever
-            decides a verdict.
+            SIGIL inventories local LLM deployments, verifies model
+            artefacts, classifies runtime exposure, and ties native binary
+            evidence to deterministic PASS / WARN / FAIL verdicts. No LLM
+            ever decides a verdict. Nothing leaves your machine.
           </p>
+          <span class="ornament" aria-hidden="true"></span>
           <figure class="hero-quickstart command-panel" aria-label="Run the demo">
             <figcaption class="quickstart-caption">Run the demo · no Ollama required</figcaption>
             <pre><code># Prereqs: rustup (https://rustup.rs) + clang
@@ -49,7 +50,7 @@ git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
           </figure>
           <div class="actions">
             <a class="button primary" href="https://github.com/ultra-supara/SIGIL#quickstart">Run the demo</a>
-            <a class="button secondary" href="https://github.com/ultra-supara/SIGIL/blob/main/docs/sigil-overview.md">Read the overview</a>
+            <a class="button secondary" href="./viewer/">Open the viewer</a>
             <a class="button secondary" href="https://github.com/ultra-supara/SIGIL">View source</a>
           </div>
           <dl class="proof-strip" aria-label="SIGIL properties">
@@ -67,20 +68,28 @@ git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
             </div>
           </dl>
         </div>
-        <div class="hero-visual">
-          <img
-            src="./assets/sigil-layers.png"
-            alt="Abstract inspection layers connecting a local workstation to model, runtime, binary, and policy evidence."
-          />
+        <div class="hero-visual" aria-hidden="true">
+          <object
+            type="image/svg+xml"
+            data="./assets/hero-placeholder.svg"
+            aria-label="Sumi-e ink illustration: torii gate beyond a circular ward, bamboo and faint moon."
+          >
+            <img
+              src="./assets/sigil-layers.png"
+              alt="Layered inspection diagram fallback."
+            />
+          </object>
         </div>
       </section>
 
       <section id="scope" class="section">
         <div class="section-heading">
-          <h2>What SIGIL inspects today</h2>
+          <p class="definition">Scope</p>
+          <h2>What SIGIL inspects today.</h2>
           <p>
-            The current implementation is intentionally narrow, but the pieces
-            are already connected around local AI runtime safety.
+            The current implementation is intentionally narrow, but the
+            pieces are connected around the one thing that matters: local
+            AI runtime safety.
           </p>
         </div>
         <div class="feature-grid">
@@ -88,34 +97,34 @@ git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
             <h3>Ollama model stores</h3>
             <p>
               Walks Ollama manifests and blobs, verifies SHA-256, parses
-              <code>registry / namespace / model / tag</code> provenance, and
-              flags missing or invalid artifact references.
+              <code>registry / namespace / model / tag</code> provenance,
+              flags missing or invalid artefact references.
             </p>
           </article>
           <article class="feature-card">
             <h3>License detection</h3>
             <p>
-              Reads the <code>application/vnd.ollama.image.license</code> layer
-              and identifies SPDX shortnames plus full-body matches for ten
-              licenses, including Apache-2.0, MPL-2.0, the GPL/LGPL family,
-              BSD-2/3-Clause, ISC, and MIT.
+              Reads the <code>application/vnd.ollama.image.license</code>
+              layer and identifies SPDX shortnames plus full-body matches
+              for ten licenses: Apache-2.0, MPL-2.0, the GPL / LGPL family,
+              BSD-2 / 3-Clause, ISC, and MIT.
             </p>
           </article>
           <article class="feature-card">
             <h3>Runtime exposure</h3>
             <p>
               Classifies the configured Ollama host and inspects local
-              listening sockets via <code>/proc</code> — localhost, LAN,
-              public bind, docker-published, or reverse proxy. No subprocesses
-              spawned.
+              listening sockets via <code>/proc</code>: localhost, LAN,
+              public bind, docker-published, or reverse proxy. No
+              subprocesses spawned.
             </p>
           </article>
           <article class="feature-card">
             <h3>Native execution surfaces</h3>
             <p>
-              Loads x86_64 objects, lifts a small instruction subset into IR
-              and SafeISA, and maps external symbols such as network and
-              process calls to capabilities.
+              Loads x86_64 objects, lifts a small instruction subset into
+              IR and SafeISA, maps external symbols such as network and
+              process calls to capability evidence.
             </p>
           </article>
         </div>
@@ -123,11 +132,12 @@ git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
 
       <section id="report" class="section split">
         <div>
-          <h2>One report, evidence in line</h2>
+          <p class="definition">One report</p>
+          <h2>Verdict beside the evidence.</h2>
           <p>
             SIGIL renders the policy verdict next to the call site, the
-            capability table, and the lifted SafeISA — so a reviewer can read
-            the verdict and the reason together.
+            capability table, and the lifted SafeISA — so a reviewer can
+            read the verdict and the reason together.
           </p>
           <ul class="check-list">
             <li>Verdict banner: <code>[PASS]</code> / <code>[WARN]</code> / <code>[FAIL]</code></li>
@@ -165,16 +175,17 @@ END
 
       <section id="aibom" class="section split alt">
         <div>
-          <h2>AI-BOM with provenance and license</h2>
+          <p class="definition">AI-BOM</p>
+          <h2>Provenance and license, in one file.</h2>
           <p>
             <code>aibom generate --runtime ollama</code> emits the same
             schema-1.1 JSON / Markdown for every local model — runtime
-            exposure, provenance tuple, detected SPDX id, and a layer table
-            keyed by digest.
+            exposure, provenance tuple, detected SPDX id, and a layer
+            table keyed by digest.
           </p>
           <ul class="check-list">
             <li>Stable <code>schema_version: "1.1"</code> JSON contract</li>
-            <li>Runtime property table + observed binds</li>
+            <li>Runtime property table and observed binds</li>
             <li>License card with SPDX id and digest</li>
             <li>Provenance: <code>registry / namespace / model / tag</code></li>
             <li>Findings table grouped by severity and category</li>
@@ -208,12 +219,14 @@ END
         </div>
       </section>
 
-      <section class="section comparison">
+      <section class="section">
         <div class="section-heading">
-          <h2>Why this is different from a model catalog</h2>
+          <p class="definition">Difference</p>
+          <h2>Not a model catalog.</h2>
           <p>
             SIGIL treats a local LLM deployment as an environment: model
-            artifacts, runtime exposure, native binaries, and policy all matter.
+            artefacts, runtime exposure, native binaries, and policy all
+            matter, together.
           </p>
         </div>
         <div class="table-wrap">
@@ -239,12 +252,12 @@ END
               <tr>
                 <td>License metadata</td>
                 <td>SPDX id from shortname or body match</td>
-                <td>10 licenses detected (Apache-2.0, MIT, MPL-2.0, GPL/LGPL, BSD-2/3, ISC)</td>
+                <td>10 licenses detected</td>
               </tr>
               <tr>
                 <td>Runtime exposure</td>
                 <td>API endpoint + <code>/proc</code> bind classification</td>
-                <td>Implemented (Linux <code>/proc</code>, degrades elsewhere)</td>
+                <td>Linux <code>/proc</code>, degrades elsewhere</td>
               </tr>
               <tr>
                 <td>Native capability evidence</td>
@@ -264,21 +277,22 @@ END
             </tbody>
           </table>
         </div>
-        <p style="color: var(--muted); margin-top: 26px;">
-          For side-by-side comparison against
-          <a href="./compare/sigil-vs-syft/" style="color: var(--cyan); font-weight: 700;">Anchore Syft</a>,
-          <a href="./compare/sigil-vs-builtins/" style="color: var(--cyan); font-weight: 700;">Ollama / HF built-ins</a>, and the
-          <a href="./compare/sigil-vs-owasp-aibom-generator/" style="color: var(--cyan); font-weight: 700;">OWASP AIBOM Generator</a>,
-          see the <a href="./compare/" style="color: var(--cyan); font-weight: 700;">compare pages</a>.
+        <p style="color: var(--ink-soft); margin-top: 28px; max-width: var(--measure);">
+          Side-by-side comparisons against
+          <a href="./compare/sigil-vs-syft/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">Anchore Syft</a>,
+          <a href="./compare/sigil-vs-builtins/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">Ollama / HF built-ins</a>, and the
+          <a href="./compare/sigil-vs-owasp-aibom-generator/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">OWASP AIBOM Generator</a>
+          live under <a href="./compare/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">compare</a>.
         </p>
       </section>
 
       <section id="docs" class="section docs-section">
         <div class="section-heading">
-          <h2>Detailed documentation</h2>
+          <p class="definition">Documentation</p>
+          <h2>Read further.</h2>
           <p>
             The public page is the short front door. The detailed model,
-            architecture, and roadmap are in docs.
+            architecture, and roadmap live in docs.
           </p>
         </div>
         <div class="doc-links">
@@ -287,15 +301,15 @@ END
             Product position, current scope, and design principles.
           </a>
           <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ollama-inspection.md">
-            <span>Ollama Inspection</span>
+            <span>Ollama inspection</span>
             Commands, evidence fields, SPDX detection table, findings, runtime bind classes.
           </a>
           <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ai-bom-and-comparison.md">
-            <span>AI-BOM and Comparison</span>
+            <span>AI-BOM and comparison</span>
             Schema 1.1 contract, enum values, and the planned baseline-comparison direction.
           </a>
           <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/architecture-and-safety.md">
-            <span>Architecture and Safety</span>
+            <span>Architecture and safety</span>
             Crates, SafeISA, capability mapping, policy YAML, and the analysis-only safety boundary.
           </a>
         </div>
