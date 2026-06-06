@@ -235,10 +235,14 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
                 .as_deref()
                 .map(|media_type| media_type == LICENSE_MEDIA_TYPE)
                 .unwrap_or(false);
+            // mediaType="application/vnd.ollama.image." would otherwise yield
+            // an empty kind, which fails the v1 schema's minLength: 1 on
+            // files[].kind. Fall through to "blob" in that case.
             let kind = layer
                 .media_type
                 .as_deref()
                 .and_then(|media_type| media_type.rsplit('.').next())
+                .filter(|kind| !kind.is_empty())
                 .unwrap_or("blob");
             let before_len = files.len();
             push_model_file_or_finding(

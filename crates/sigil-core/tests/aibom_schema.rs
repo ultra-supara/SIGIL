@@ -258,3 +258,72 @@ fn aibom_with_invalid_layer_digest_still_validates() {
 
     validate_value(&value);
 }
+
+// Regression for PR #24 review comment (discussion r3366692609): a layer
+// mediaType ending in a literal "." (e.g. "application/vnd.ollama.image.")
+// would previously derive an empty `kind` via `rsplit('.').next()` and
+// emit a FileEntry with `kind: ""`, failing the v1 schema's `minLength: 1`.
+// The producer now normalizes empty suffixes back to "blob".
+#[test]
+fn aibom_with_dot_suffixed_media_type_still_validates() {
+    use sigil_core::aibom::AiBom;
+    use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
+    use sigil_core::runtime::RuntimeListeners;
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let manifest_dir = tmp
+        .path()
+        .join("models/manifests/registry.ollama.ai/library/dotmodel");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
+
+    // sha256("weights") — precomputed so the test does not depend on sha2.
+    const PAYLOAD: &[u8] = b"weights";
+    const DIGEST: &str =
+        "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c";
+    fs::write(
+        tmp.path()
+            .join("models/blobs")
+            .join(DIGEST.replace(':', "-")),
+        PAYLOAD,
+    )
+    .unwrap();
+
+    fs::write(
+        manifest_dir.join("e1b"),
+        format!(
+            r#"{{"schemaVersion":2,"layers":[{{"digest":"{DIGEST}","mediaType":"application/vnd.ollama.image."}}]}}"#
+        ),
+    )
+    .unwrap();
+
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("dotmodel:e1b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: PASS_HOST.to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .expect("inspect_ollama tolerates trailing-dot media types");
+
+    let bom = AiBom::from(&report);
+    let value = serde_json::to_value(&bom).expect("AiBom serializes");
+
+    let files = value["models"][0]["files"]
+        .as_array()
+        .expect("files array");
+    assert!(
+        !files.is_empty(),
+        "expected at least one file entry, got: {files:#?}"
+    );
+    for file in files {
+        let kind = file["kind"].as_str().expect("kind is string");
+        assert!(
+            !kind.is_empty(),
+            "file kind must not be empty (schema minLength: 1), entry: {file:#?}"
+        );
+    }
+
+    validate_value(&value);
+}
