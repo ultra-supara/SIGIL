@@ -198,3 +198,63 @@ fn missing_required_field_fails() {
         "host",
     );
 }
+
+// Regression for PR #24 review comment: a manifest with a syntactically
+// invalid layer digest must not leak the raw string into provenance, or
+// the produced AI-BOM would fail the v1 schema's Sha256Digest pattern.
+// The ollama.invalid_blob_digest WARN finding still carries the bad
+// digest as evidence.
+#[test]
+fn aibom_with_invalid_layer_digest_still_validates() {
+    use sigil_core::aibom::AiBom;
+    use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
+    use sigil_core::runtime::RuntimeListeners;
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let manifest_dir = tmp
+        .path()
+        .join("models/manifests/registry.ollama.ai/library/badmodel");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("models/blobs")).unwrap();
+
+    let bad_digest = "sha256:nothex";
+    fs::write(
+        manifest_dir.join("e1b"),
+        format!(
+            r#"{{"schemaVersion":2,"layers":[{{"digest":"{bad_digest}","mediaType":"application/vnd.ollama.image.model"}}]}}"#
+        ),
+    )
+    .unwrap();
+
+    let report = inspect_ollama(OllamaInspectOptions {
+        model: Some("badmodel:e1b".to_string()),
+        models_dir: tmp.path().join("models"),
+        host: PASS_HOST.to_string(),
+        probe_api: false,
+        runtime_listeners: RuntimeListeners::Disabled,
+    })
+    .expect("inspect_ollama tolerates invalid digests");
+
+    let bom = AiBom::from(&report);
+    let value = serde_json::to_value(&bom).expect("AiBom serializes");
+
+    let findings = value["findings"].as_array().expect("findings array");
+    assert!(
+        findings.iter().any(|f| f["id"] == "ollama.invalid_blob_digest"),
+        "expected ollama.invalid_blob_digest finding, got: {findings:#?}"
+    );
+
+    let models = value["models"].as_array().expect("models array");
+    if let Some(model) = models.first() {
+        let layer_digests = model["provenance"]["layer_digests"]
+            .as_array()
+            .expect("layer_digests array");
+        assert!(
+            !layer_digests.iter().any(|d| d == bad_digest),
+            "invalid digest must not appear in provenance.layer_digests, got: {layer_digests:#?}"
+        );
+    }
+
+    validate_value(&value);
+}
