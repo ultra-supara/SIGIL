@@ -2,6 +2,7 @@
 members = [
     "crates/sigil-core",
     "crates/sigil-cli",
+    "crates/sigil-aibom-wasm",
 ]
 resolver = "2"
 

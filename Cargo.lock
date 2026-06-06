@@ -1107,6 +1107,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigil-aibom-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "sigil-core",
+ "tempfile",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "sigil-cli"
 version = "0.1.0"
 dependencies = [
