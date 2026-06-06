@@ -24,6 +24,12 @@ const copyButton = $("copy-md");
 
 let lastMarkdown = "";
 
+// Monotonic token used to discard renders that complete out of order. Two
+// rapid drops (or a sample-button click while a file is being read) would
+// otherwise leave the DOM showing whichever async path finished last,
+// regardless of which the user actually triggered last.
+let renderToken = 0;
+
 const sampleVerdicts = {
   pass: "PASS",
   warn: "WARN",
@@ -111,27 +117,33 @@ function wireUi() {
 }
 
 async function loadFile(file) {
-  if (!file.name.endsWith(".json")) {
+  // Case-insensitive: a screenshot tool that uppercases the filename
+  // (.AIBOM.JSON on Windows captures, for example) shouldn't be rejected.
+  if (!file.name.toLowerCase().endsWith(".json")) {
     showError(
       `Expected a .json file, got "${file.name}". Drop a SIGIL AI-BOM ` +
         `(e.g. gemma3_4b.aibom.json).`,
     );
     return;
   }
+  const token = ++renderToken;
   let text;
   try {
     text = await file.text();
   } catch (err) {
-    showError(`Could not read file: ${humanizeError(err)}`);
+    if (token === renderToken) showError(`Could not read file: ${humanizeError(err)}`);
     return;
   }
+  if (token !== renderToken) return;
   renderJson(text, `file: ${file.name}`);
 }
 
 async function loadSample(key) {
   const url = `./samples/${key}.aibom.json`;
+  const token = ++renderToken;
   try {
     const res = await fetch(url);
+    if (token !== renderToken) return;
     if (!res.ok) {
       showError(
         `Sample fetch returned HTTP ${res.status}. The sample file ${url} ` +
@@ -140,9 +152,12 @@ async function loadSample(key) {
       return;
     }
     const text = await res.text();
+    if (token !== renderToken) return;
     renderJson(text, `sample: ${sampleVerdicts[key] ?? key}`);
   } catch (err) {
-    showError(`Could not load sample (${url}): ${humanizeError(err)}`);
+    if (token === renderToken) {
+      showError(`Could not load sample (${url}): ${humanizeError(err)}`);
+    }
   }
 }
 
@@ -158,12 +173,17 @@ function renderJson(jsonText, sourceLabel) {
     showError(humanizeError(err));
     return;
   }
+  // Only scroll when transitioning from placeholder → output. A second render
+  // (e.g. user dropped a new file after scrolling) shouldn't yank the page.
+  const firstRender = outputWrap.hidden;
   lastMarkdown = markdown;
   outputSource.textContent = sourceLabel;
   output.innerHTML = markdownToHtml(markdown);
   outputWrap.hidden = false;
   placeholder.hidden = true;
-  outputWrap.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (firstRender) {
+    outputWrap.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 function showError(message) {

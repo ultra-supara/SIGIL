@@ -31,7 +31,13 @@ use wasm_bindgen::prelude::*;
 /// `top_level_keys_match_schema` in `tests/determinism.rs` — if the schema
 /// gains or drops a top-level field, the test fails until this list is
 /// updated.
-const REQUIRED_TOP_LEVEL_KEYS: &[&str] = &[
+///
+/// `#[doc(hidden)]` — semantically internal; only `pub` so the integration
+/// test can read it without dropping back to indirect error-message
+/// parsing. Not part of the wasm public API (no `#[wasm_bindgen]`, no JS
+/// export).
+#[doc(hidden)]
+pub const REQUIRED_TOP_LEVEL_KEYS: &[&str] = &[
     "schema_version",
     "tool",
     "runtime",

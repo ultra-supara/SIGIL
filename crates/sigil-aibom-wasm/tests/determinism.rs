@@ -46,18 +46,24 @@ fn collect_samples() -> Vec<PathBuf> {
     entries
 }
 
+/// Native-only test: the pure render path the wasm wrapper forwards to must
+/// be byte-equal to `render_ai_bom`. This does NOT instantiate the wasm
+/// binary — see the module doc above for the rationale. The committed wasm
+/// is exercised against this exact contract behaviourally in CI
+/// (`ci/check-committed-wasm.mjs`), so a stale `site/viewer/pkg/` would fail
+/// there even if it would pass this test.
 #[test]
-fn wasm_render_matches_native_render_byte_for_byte() {
+fn inner_render_matches_core_render_byte_for_byte() {
     for path in collect_samples() {
         let json = fs::read_to_string(&path).expect("read sample");
         let bom: AiBom = serde_json::from_str(&json).expect("parse sample");
         let native = render_ai_bom(&bom);
         let exported = render_aibom_markdown_inner(&json)
-            .unwrap_or_else(|err| panic!("wasm render of {} failed: {err}", path.display()));
+            .unwrap_or_else(|err| panic!("inner render of {} failed: {err}", path.display()));
         assert_eq!(
             native,
             exported,
-            "wasm-exported render diverges from native render for {}",
+            "inner render diverges from render_ai_bom for {}",
             path.display()
         );
     }
@@ -236,17 +242,17 @@ fn top_level_keys_match_schema() {
     let schema: serde_json::Value = serde_json::from_str(&schema_text).expect("parse schema");
 
     let root_def = &schema["$defs"]["AiBom"];
-    let required: BTreeSet<String> = root_def["required"]
+    let required: BTreeSet<&str> = root_def["required"]
         .as_array()
         .expect("schema $defs.AiBom.required is an array")
         .iter()
-        .map(|v| v.as_str().expect("required entry is a string").to_string())
+        .map(|v| v.as_str().expect("required entry is a string"))
         .collect();
-    let properties: BTreeSet<String> = root_def["properties"]
+    let properties: BTreeSet<&str> = root_def["properties"]
         .as_object()
         .expect("schema $defs.AiBom.properties is an object")
         .keys()
-        .cloned()
+        .map(String::as_str)
         .collect();
     assert!(
         root_def["additionalProperties"].as_bool() == Some(false),
@@ -254,33 +260,18 @@ fn top_level_keys_match_schema() {
     );
     assert_eq!(
         required, properties,
-        "every property is required (no optional top-level fields)"
+        "every root property must be required (no optional top-level fields)"
     );
 
-    // Sanity: the validator's allow-list is exactly the schema's property set.
-    // The list is private to the crate but visible to error messages, so we
-    // round-trip an empty object and read the field names back out of the
-    // error.
-    let err = render_aibom_markdown_inner("{}").expect_err("empty object must fail");
-    // The empty-object path errors on missing schema_version before listing
-    // unknown fields; assert separately that an object with every required
-    // key set to a sentinel string but no unknown fields fails *only* on the
-    // deeper schema mismatch — i.e. the envelope check passes.
-    assert!(err.contains("schema_version"), "got: {err}");
-
-    let mut sentinel = serde_json::Map::new();
-    for key in &required {
-        sentinel.insert(key.clone(), serde_json::json!(null));
-    }
-    sentinel.insert(
-        "schema_version".to_string(),
-        serde_json::Value::String(sigil_core::aibom::SCHEMA_VERSION.to_string()),
-    );
-    let json = serde_json::Value::Object(sentinel).to_string();
-    let err = render_aibom_markdown_inner(&json).expect_err("nulls must trigger struct mismatch");
-    assert!(
-        err.contains("schema mismatch") || !err.contains("unexpected top-level field"),
-        "envelope must accept the schema's key set (any failure must come from the struct \
-         deserializer, not the unknown-field branch): {err}"
+    // Direct comparison: the validator's allow-list IS the schema's property
+    // set. No indirection through error messages.
+    let validator_allow_list: BTreeSet<&str> = sigil_aibom_wasm::REQUIRED_TOP_LEVEL_KEYS
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(
+        validator_allow_list, properties,
+        "REQUIRED_TOP_LEVEL_KEYS in src/lib.rs has drifted from the schema's root property set. \
+         Update the constant to match."
     );
 }
