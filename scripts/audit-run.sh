@@ -37,13 +37,22 @@ if [[ ! -f "$MODELS_FILE" ]]; then
   exit 1
 fi
 
-if [[ ! -r "$MODELS_DIR" ]]; then
-  echo "error: MODELS_DIR is not readable: $MODELS_DIR" >&2
+models_dir_hint() {
   echo "hint: the systemd Ollama service stores models under" >&2
   echo "      /usr/share/ollama/.ollama/models — run" >&2
-  echo "      sudo chmod -R o+rX /usr/share/ollama/.ollama" >&2
+  echo "      sudo chmod -R o+rX /usr/share/ollama" >&2
   echo "      then re-run with MODELS_DIR=/usr/share/ollama/.ollama/models" >&2
+}
+
+# Preflight: only fail when MODELS_DIR exists but is unreadable. A missing
+# directory is fine — ollama pull will create it on first use.
+if [[ -e "$MODELS_DIR" && ! -r "$MODELS_DIR" ]]; then
+  echo "error: MODELS_DIR exists but is not readable: $MODELS_DIR" >&2
+  models_dir_hint
   exit 1
+fi
+if [[ ! -e "$MODELS_DIR" ]]; then
+  echo "note: MODELS_DIR does not exist yet ($MODELS_DIR); ollama pull will create it"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -70,6 +79,14 @@ for model in "${MODELS[@]}"; do
       failures=$((failures + 1))
       continue
     fi
+  fi
+  # Re-check readability now that pull may have created MODELS_DIR. This
+  # catches the systemd-Ollama case where the directory exists under a
+  # different user even after a successful pull.
+  if [[ ! -r "$MODELS_DIR" ]]; then
+    echo "error: MODELS_DIR is not readable after pull: $MODELS_DIR" >&2
+    models_dir_hint
+    exit 1
   fi
   slug="${model//[:\/]/_}"
   if ! cargo run --release -q -p sigil-cli -- \
