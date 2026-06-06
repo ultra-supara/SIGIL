@@ -4,15 +4,28 @@ name: AI-BOM wasm viewer
 # Rust source under `crates/sigil-aibom-wasm` and `crates/sigil-core`.
 #
 # Both jobs run on push to `main` and on pull_request when the relevant paths
-# change. The `determinism` job is the load-bearing one — it asserts the
-# native render path the wasm wrapper exposes is byte-equal to the CLI's
-# render, plus schema-envelope validation for the viewer's drop-zone input.
-# `wasm-artifact-freshness` is a softer signal: it rebuilds the bundle and
-# diffs the **API surface** (the `.d.ts` declaration, which is stable across
-# rustc/wasm-bindgen patch versions) plus enforces the ≤ 500 KB gzipped
-# budget. A byte-equality diff on the .wasm itself would be brittle —
-# wasm-bindgen's runtime layer changes the function-type table between
-# patch releases without changing the API contract.
+# change.
+#
+# The `determinism` job is the load-bearing one — it asserts the native render
+# path the wasm wrapper exposes is byte-equal to the CLI's render, plus
+# schema-envelope validation for the viewer's drop-zone input.
+#
+# The `wasm-artifact-freshness` job has two layers, both load-bearing:
+#   1. A **behavioural** check: load the committed
+#      `site/viewer/pkg/sigil_aibom_wasm_bg.wasm` (the bundle the browser
+#      actually serves), render every sample through it, and assert each
+#      rendered byte sequence matches what the current Rust source produces
+#      via the native path (the `render_sample` example). This catches the
+#      case Codex flagged on PR #36 (discussion r3367938924): a behavioural
+#      change in `sigil-core` whose `#[wasm_bindgen]` signatures and wasm
+#      size both stay the same — the API-surface diff alone would miss it,
+#      and the deployed viewer would silently diverge from the PR's source.
+#   2. A **rebuild + size budget** check: builds a fresh bundle and verifies
+#      the rebuilt `.d.ts` API surface matches what's committed and the
+#      `.wasm` is within the 500 KB gzipped budget. Byte-equality on the
+#      `.wasm` body itself is intentionally skipped — wasm-bindgen's runtime
+#      layer changes the function-type table between patch releases without
+#      changing the API contract.
 on:
   push:
     branches: [main]
@@ -73,6 +86,20 @@ jobs:
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           workspaces: '. -> target'
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '22'
+      - name: Render samples natively (source of truth)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/expected-render
+          for sample in site/viewer/samples/*.aibom.json; do
+            name=$(basename "$sample" .aibom.json)
+            cargo run -q -p sigil-aibom-wasm --example render_sample -- "$sample" \
+              > "/tmp/expected-render/${name}.md"
+          done
+      - name: Behavioural check — committed wasm renders == native render
+        run: node ci/check-committed-wasm.mjs /tmp/expected-render
       - name: Install wasm-pack (pinned)
         run: cargo install wasm-pack --version 0.15.0 --locked
       - name: Snapshot committed artifact

@@ -23,6 +23,14 @@ sha2.workspace = true
 name = "regen_viewer_samples"
 path = "examples/regen_viewer_samples.rs"
 
+# Used by CI (.github/workflows/aibom-wasm.yml) to produce the source-of-truth
+# native render for each sample, which is then compared against the committed
+# wasm artifact's actual output. This is what closes the behavioural gap that
+# d.ts-only diffing leaves open.
+[[example]]
+name = "render_sample"
+path = "examples/render_sample.rs"
+
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
