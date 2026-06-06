@@ -1,0 +1,8 @@
+# State of Local AI Audit — sample model list (2026 H1).
+# One Ollama tag per line. Comments and blank lines ignored.
+# Picked for license diversity: Gemma + Llama (custom community), Qwen + Mistral (Apache-2.0), Phi (MIT).
+gemma3:4b
+llama3.2:3b
+qwen2.5:7b
+mistral:7b
+phi3:mini
