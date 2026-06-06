@@ -31,6 +31,12 @@ path = "examples/regen_viewer_samples.rs"
 name = "render_sample"
 path = "examples/render_sample.rs"
 
+# Regenerates the invalid-input fixtures under site/viewer/samples/invalid/
+# that exercise the wasm wrapper's error paths in the behavioural smoke.
+[[example]]
+name = "regen_invalid_samples"
+path = "examples/regen_invalid_samples.rs"
+
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 

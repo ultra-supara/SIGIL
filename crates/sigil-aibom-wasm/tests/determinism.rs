@@ -300,6 +300,48 @@ mod schema_scalar_validation {
             .expect("pass sample must clear the full schema");
     }
 
+    /// Codex PR #36 P2 (discussion r3367974319): the error-path fixtures
+    /// under `site/viewer/samples/invalid/` are walked by
+    /// `ci/check-committed-wasm.mjs` to confirm the committed wasm rejects
+    /// each one. We mirror that walk here so the native render path stays
+    /// in sync with what the smoke asserts — if a maintainer updates the
+    /// fixture set without regenerating the manifest, this native test
+    /// fails with the same error the Node smoke would report on the rebuild.
+    #[test]
+    fn native_render_rejects_every_invalid_fixture_with_manifest_substring() {
+        let dir = super::samples_dir().join("invalid");
+        assert!(
+            dir.exists(),
+            "invalid fixtures missing; run `cargo run -p sigil-aibom-wasm --example regen_invalid_samples`"
+        );
+        let manifest_text =
+            std::fs::read_to_string(dir.join("manifest.json")).expect("read manifest");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_text).expect("parse manifest");
+        let entries = manifest.as_object().expect("manifest is an object");
+        assert!(!entries.is_empty(), "manifest must have at least one entry");
+
+        for (file, spec) in entries {
+            let expected = spec["expected_error_contains"]
+                .as_str()
+                .unwrap_or_else(|| panic!("entry {file} missing expected_error_contains"));
+            let json = std::fs::read_to_string(dir.join(file))
+                .unwrap_or_else(|err| panic!("read {file}: {err}"));
+            let result = render_aibom_markdown_inner(&json);
+            let err = match result {
+                Err(e) => e,
+                Ok(rendered) => panic!(
+                    "fixture {file} unexpectedly rendered OK (first 80 bytes: {:?})",
+                    &rendered[..rendered.len().min(80)]
+                ),
+            };
+            assert!(
+                err.contains(expected),
+                "fixture {file}: error message {err:?} must contain {expected:?}"
+            );
+        }
+    }
+
     #[test]
     fn rejects_bad_sha256_digest_prefix() {
         // schema: ProvenanceEntry.config_digest pattern ^sha256:[0-9a-fA-F]{64}$

@@ -109,6 +109,87 @@ for (const sample of samples) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Invalid-input behavioural check (Codex PR #36 P2, discussion r3367974319).
+//
+// A stale committed wasm could still pass the valid-render comparison above
+// if the Rust source only added new error paths — none of the committed
+// fixtures would change. We exercise the error paths by feeding each
+// fixture under `site/viewer/samples/invalid/` through the committed wasm
+// and asserting it throws AND the thrown message contains the substring
+// declared in `invalid/manifest.json`. Substrings are kept in the manifest
+// (not derived from the native render at check time) so the fixture set
+// describes the error contract independently of either build.
+// ---------------------------------------------------------------------------
+
+const invalidDir = path.join(samplesDir, "invalid");
+let invalidChecked = 0;
+try {
+  await fs.access(invalidDir);
+} catch {
+  // Directory absent — skip silently. The `regen_invalid_samples` example
+  // populates it; if it's gone, downstream tests will catch the regression.
+}
+
+let invalidManifest = null;
+try {
+  const manifestText = await fs.readFile(path.join(invalidDir, "manifest.json"), "utf8");
+  invalidManifest = JSON.parse(manifestText);
+} catch (err) {
+  if (err.code !== "ENOENT") {
+    console.error(`::error::Could not read invalid/manifest.json: ${err.message}`);
+    failed += 1;
+  }
+}
+
+if (invalidManifest) {
+  for (const [file, spec] of Object.entries(invalidManifest)) {
+    const expected = spec?.expected_error_contains;
+    if (typeof expected !== "string" || expected.length === 0) {
+      console.error(
+        `::error::invalid/manifest.json entry for ${file} has no expected_error_contains string`,
+      );
+      failed += 1;
+      continue;
+    }
+    const fixturePath = path.join(invalidDir, file);
+    let json;
+    try {
+      json = await fs.readFile(fixturePath, "utf8");
+    } catch (err) {
+      console.error(`::error::Could not read invalid fixture ${file}: ${err.message}`);
+      failed += 1;
+      continue;
+    }
+    let threw = false;
+    let message = "";
+    try {
+      wasmMod.render_aibom_markdown(json);
+    } catch (err) {
+      threw = true;
+      message = err?.message ?? String(err);
+    }
+    if (!threw) {
+      console.error(
+        `::error file=site/viewer/samples/invalid/${file}::Committed wasm accepted an input the current source rejects (expected error mentioning ${JSON.stringify(expected)}).`,
+      );
+      failed += 1;
+      continue;
+    }
+    if (!message.includes(expected)) {
+      console.error(
+        `::error file=site/viewer/samples/invalid/${file}::Committed wasm rejected the input but with the wrong error.`,
+      );
+      console.error(`  expected message to contain: ${JSON.stringify(expected)}`);
+      console.error(`  actual message: ${JSON.stringify(message)}`);
+      failed += 1;
+      continue;
+    }
+    invalidChecked += 1;
+    console.log(`OK invalid/${file} (rejected: ${message.slice(0, 80)})`);
+  }
+}
+
 if (failed > 0) {
   console.error(
     `::error::${failed} sample(s) diverged between committed wasm and native render. Rebuild and commit site/viewer/pkg/.`,
@@ -117,5 +198,5 @@ if (failed > 0) {
 }
 
 console.log(
-  `Committed wasm behaviourally matches the native render for all ${samples.length} sample(s).`,
+  `Committed wasm behaviourally matches the native render for all ${samples.length} valid sample(s) and rejects all ${invalidChecked} invalid fixture(s).`,
 );

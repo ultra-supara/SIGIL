@@ -21,6 +21,7 @@
 //!   - `models[*].manifest_path`
 //!   - `models[*].files[*].path`
 //!   - `findings[*].evidence`
+//!
 //! All other fields (digests, sizes, provenance tuples, license text,
 //! verdict, findings shape) come straight from the inspector.
 
