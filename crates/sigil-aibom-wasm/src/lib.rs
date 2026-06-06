@@ -57,9 +57,12 @@ const REQUIRED_TOP_LEVEL_KEYS: &[&str] = &[
 ///   `#[derive(Deserialize)]` silently drops unknown fields, so we walk the
 ///   `Value` first to catch that.
 ///
-/// Anything deeper (per-field enum values, nested `additionalProperties:
-/// false` rules) is already enforced by `serde` deserialization plus the
-/// `#[serde(rename_all = ...)]` annotations on the enums in `sigil-core`.
+/// Nested `additionalProperties: false` (e.g. `runtime.unexpected`,
+/// `models[*].unexpected`) is enforced one level down by
+/// `#[serde(deny_unknown_fields)]` on every AI-BOM struct in
+/// `crates/sigil-core/src/aibom.rs`. That attribute makes
+/// `serde_json::from_value::<AiBom>` reject any extra field at any depth,
+/// matching the schema's behaviour.
 pub fn render_aibom_markdown_inner(json: &str) -> Result<String, String> {
     let value: Value = serde_json::from_str(json)
         .map_err(|err| format!("invalid AI-BOM JSON (parse error): {err}"))?;

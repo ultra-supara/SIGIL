@@ -17,9 +17,10 @@ fn workspace_root() -> PathBuf {
 }
 
 fn load_schema_value() -> Value {
-    let path = workspace_root().join("schemas").join("aibom-v1.schema.json");
-    let raw = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let path = workspace_root()
+        .join("schemas")
+        .join("aibom-v1.schema.json");
+    let raw = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&raw).expect("schema is valid JSON")
 }
 
@@ -41,7 +42,10 @@ fn schema_compiles_against_draft_2020_12() {
 
 fn validate_value(value: &Value) {
     let validator = load_validator();
-    let errors: Vec<_> = validator.iter_errors(value).map(|e| e.to_string()).collect();
+    let errors: Vec<_> = validator
+        .iter_errors(value)
+        .map(|e| e.to_string())
+        .collect();
     assert!(
         validator.is_valid(value),
         "expected AiBom to validate against schema, errors: {errors:#?}"
@@ -241,7 +245,9 @@ fn aibom_with_invalid_layer_digest_still_validates() {
 
     let findings = value["findings"].as_array().expect("findings array");
     assert!(
-        findings.iter().any(|f| f["id"] == "ollama.invalid_blob_digest"),
+        findings
+            .iter()
+            .any(|f| f["id"] == "ollama.invalid_blob_digest"),
         "expected ollama.invalid_blob_digest finding, got: {findings:#?}"
     );
 
@@ -280,8 +286,7 @@ fn aibom_with_dot_suffixed_media_type_still_validates() {
 
     // sha256("weights") — precomputed so the test does not depend on sha2.
     const PAYLOAD: &[u8] = b"weights";
-    const DIGEST: &str =
-        "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c";
+    const DIGEST: &str = "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c";
     fs::write(
         tmp.path()
             .join("models/blobs")
@@ -310,9 +315,7 @@ fn aibom_with_dot_suffixed_media_type_still_validates() {
     let bom = AiBom::from(&report);
     let value = serde_json::to_value(&bom).expect("AiBom serializes");
 
-    let files = value["models"][0]["files"]
-        .as_array()
-        .expect("files array");
+    let files = value["models"][0]["files"].as_array().expect("files array");
     assert!(
         !files.is_empty(),
         "expected at least one file entry, got: {files:#?}"

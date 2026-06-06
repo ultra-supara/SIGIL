@@ -170,6 +170,51 @@ mod schema_envelope_validation {
             .expect("pass sample must pass the validator");
         assert!(bom.starts_with("# SIGIL AI-BOM:"), "bad render: {bom}");
     }
+
+    // Codex PR #36 P2 (discussion r3367938925): the schema sets
+    // `additionalProperties: false` on every nested object too. Without
+    // `deny_unknown_fields` on the structs in sigil-core, serde happily
+    // dropped `runtime.unexpected` etc. The tests below pin each nested
+    // object to the same behaviour the schema requires.
+
+    #[test]
+    fn rejects_unknown_field_inside_runtime() {
+        // Insert `"sneaky": true` into the runtime object.
+        let json = valid_pass_sample().replacen(
+            "\"runtime\": {",
+            "\"runtime\": {\n    \"sneaky\": true,",
+            1,
+        );
+        let err = render_aibom_markdown_inner(&json).expect_err("must reject");
+        assert!(
+            err.contains("sneaky") || err.contains("unknown field"),
+            "error must name the rejected nested field: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_tool() {
+        let json = valid_pass_sample().replacen("\"tool\": {", "\"tool\": {\n    \"extra\": 1,", 1);
+        let err = render_aibom_markdown_inner(&json).expect_err("must reject");
+        assert!(
+            err.contains("extra") || err.contains("unknown field"),
+            "error must name the rejected nested field: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_runtime_exposure() {
+        let json = valid_pass_sample().replacen(
+            "\"exposure\": {",
+            "\"exposure\": {\n      \"creep\": 0,",
+            1,
+        );
+        let err = render_aibom_markdown_inner(&json).expect_err("must reject");
+        assert!(
+            err.contains("creep") || err.contains("unknown field"),
+            "error must name the rejected nested field: {err}"
+        );
+    }
 }
 
 /// Independently re-derives the schema's root `required` field from the
