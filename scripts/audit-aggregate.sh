@@ -30,8 +30,21 @@ fi
 mkdir -p "$(dirname "$OUT_FILE")"
 
 jq -s '
+  # Finding ids that indicate manifest-integrity failure. Any of these on a
+  # model means the on-disk artifact did not match what the Ollama manifest
+  # declared. Source: crates/sigil-core/src/ollama.rs.
+  [
+    "ollama.invalid_blob_digest",
+    "ollama.blob_digest_mismatch",
+    "ollama.blob_missing",
+    "ollama.model_not_found"
+  ] as $INTEGRITY_FAIL_IDS
+  |
   def total_model_bytes:
     [.[].models[].files[] | select(.kind == "model") | .size] | add // 0;
+
+  def has_integrity_fail($finding_ids):
+    any($finding_ids[]; . as $id | $INTEGRITY_FAIL_IDS | index($id));
 
   {
     sample_size: length,
@@ -83,24 +96,46 @@ jq -s '
         | group_by(.)
         | map({category: .[0], count: length})
     ),
+    findings_by_id: (
+      [.[].findings[].id]
+        | group_by(.)
+        | map({id: .[0], count: length})
+        | sort_by(-.count)
+    ),
     models_with_findings: (
       [.[] | select(.findings | length > 0)] | length
     ),
+    manifest_integrity: (
+      ([.[]] | length) as $total
+      | ([.[] | select(has_integrity_fail([.findings[].id]) | not)] | length) as $pass
+      | {
+          integrity_pass_count: $pass,
+          integrity_fail_count: ($total - $pass),
+          total: $total,
+          rate_percent: (if $total == 0 then 0 else ($pass * 100 / $total | floor) end),
+          fail_ids: $INTEGRITY_FAIL_IDS
+        }
+    ),
     total_model_bytes: total_model_bytes,
     per_model: [
-      .[] | {
-        name: (.models[0].name // "unknown"),
-        verdict: .verdict,
-        license: (.models[0].license.spdx_id // "unknown"),
-        license_present: (.models[0].license != null),
-        layer_count: (.models[0].files | length),
-        model_bytes: ([.models[0].files[] | select(.kind == "model") | .size] | add // 0),
-        provenance: (
-          .models[0].provenance
-          | (.registry // "?") + "/" + (.namespace // "?") + "/" + (.model // "?") + ":" + (.tag // "?")
-        ),
-        findings_count: (.findings | length)
-      }
+      .[] | (
+        [.findings[].id] as $finding_ids
+        | {
+            name: (.models[0].name // "unknown"),
+            verdict: .verdict,
+            license: (.models[0].license.spdx_id // "unknown"),
+            license_present: (.models[0].license != null),
+            layer_count: (.models[0].files | length),
+            model_bytes: ([.models[0].files[] | select(.kind == "model") | .size] | add // 0),
+            provenance: (
+              .models[0].provenance
+              | (.registry // "?") + "/" + (.namespace // "?") + "/" + (.model // "?") + ":" + (.tag // "?")
+            ),
+            findings_count: (.findings | length),
+            finding_ids: $finding_ids,
+            integrity_pass: (has_integrity_fail($finding_ids) | not)
+          }
+      )
     ] | sort_by(.name)
   }
 ' "${files[@]}" > "$OUT_FILE"
@@ -114,7 +149,9 @@ jq '
     license_status,
     license_distribution,
     verdict_distribution,
+    manifest_integrity,
     findings_total,
+    findings_by_id,
     models_with_findings
   }
 ' "$OUT_FILE"

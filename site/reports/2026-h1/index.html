@@ -252,6 +252,11 @@
             <li>Audit date: <span class="pending-marker">Pending</span> (recorded in <code>summary.json</code>)</li>
             <li>Verdict path: deterministic severity aggregation in <code>crates/sigil-core/src/ollama.rs:349-356</code></li>
             <li>SPDX detection: shortname + body match over 10 families</li>
+            <li>
+              Manifest integrity = no finding with id in
+              <code>{ollama.blob_digest_mismatch, ollama.invalid_blob_digest, ollama.blob_missing, ollama.model_not_found}</code>.
+              Surfaced as <code>manifest_integrity.integrity_pass_count</code> in <code>summary.json</code>.
+            </li>
           </ul>
         </div>
         <div>
