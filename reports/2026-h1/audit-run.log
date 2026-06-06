@@ -1,0 +1,26 @@
+Models:     5
+Output:     reports/2026-h1/raw
+Models dir: /usr/share/ollama/.ollama/models
+Skip pull:  1
+
+=== gemma3:4b ===
+  already present, skipping pull
+SIGIL AI-BOM: reports/2026-h1/raw/gemma3_4b.aibom.json
+
+=== llama3.2:3b ===
+  already present, skipping pull
+SIGIL AI-BOM: reports/2026-h1/raw/llama3.2_3b.aibom.json
+
+=== qwen2.5:7b ===
+  already present, skipping pull
+SIGIL AI-BOM: reports/2026-h1/raw/qwen2.5_7b.aibom.json
+
+=== mistral:7b ===
+  already present, skipping pull
+SIGIL AI-BOM: reports/2026-h1/raw/mistral_7b.aibom.json
+
+=== phi3:mini ===
+  already present, skipping pull
+SIGIL AI-BOM: reports/2026-h1/raw/phi3_mini.aibom.json
+
+Done. AI-BOM JSON files in reports/2026-h1/raw

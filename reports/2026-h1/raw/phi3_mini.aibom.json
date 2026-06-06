@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "name": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "models_dir": "/usr/share/ollama/.ollama/models",
+    "api_exposure": "localhost",
+    "status": "reachable",
+    "version": "0.30.6",
+    "exposure": {
+      "class": "localhost",
+      "source": "proc",
+      "observed": [
+        {
+          "addr": "127.0.0.1",
+          "port": 11434
+        }
+      ]
+    }
+  },
+  "models": [
+    {
+      "name": "phi3:mini",
+      "manifest_path": "/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/phi3/mini",
+      "files": [
+        {
+          "digest": "sha256:23291dc44752bac878bf46ab0f2b8daf75c710060f80f1a351151c7be2f5ee0f",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-23291dc44752bac878bf46ab0f2b8daf75c710060f80f1a351151c7be2f5ee0f",
+          "size": 483,
+          "sha256": "23291dc44752bac878bf46ab0f2b8daf75c710060f80f1a351151c7be2f5ee0f",
+          "kind": "config"
+        },
+        {
+          "digest": "sha256:542b217f179c7825eeb5bca3c77d2b75ed05bafbd3451d9188891a60a85337c6",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-542b217f179c7825eeb5bca3c77d2b75ed05bafbd3451d9188891a60a85337c6",
+          "size": 148,
+          "sha256": "542b217f179c7825eeb5bca3c77d2b75ed05bafbd3451d9188891a60a85337c6",
+          "kind": "template"
+        },
+        {
+          "digest": "sha256:633fc5be925f9a484b61d6f9b9a78021eeb462100bd557309f01ba84cac26adf",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-633fc5be925f9a484b61d6f9b9a78021eeb462100bd557309f01ba84cac26adf",
+          "size": 2176177120,
+          "sha256": "633fc5be925f9a484b61d6f9b9a78021eeb462100bd557309f01ba84cac26adf",
+          "kind": "model"
+        },
+        {
+          "digest": "sha256:8dde1baf1db03d318a2ab076ae363318357dff487bdd8c1703a29886611e581f",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-8dde1baf1db03d318a2ab076ae363318357dff487bdd8c1703a29886611e581f",
+          "size": 78,
+          "sha256": "8dde1baf1db03d318a2ab076ae363318357dff487bdd8c1703a29886611e581f",
+          "kind": "params"
+        },
+        {
+          "digest": "sha256:fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+          "size": 1084,
+          "sha256": "fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+          "kind": "license"
+        }
+      ],
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "phi3",
+        "tag": "mini",
+        "config_digest": "sha256:23291dc44752bac878bf46ab0f2b8daf75c710060f80f1a351151c7be2f5ee0f",
+        "layer_digests": [
+          "sha256:633fc5be925f9a484b61d6f9b9a78021eeb462100bd557309f01ba84cac26adf",
+          "sha256:fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+          "sha256:542b217f179c7825eeb5bca3c77d2b75ed05bafbd3451d9188891a60a85337c6",
+          "sha256:8dde1baf1db03d318a2ab076ae363318357dff487bdd8c1703a29886611e581f"
+        ]
+      },
+      "license": {
+        "digest": "sha256:fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
+        "size": 1084,
+        "spdx_id": "Microsoft.",
+        "text_excerpt": "Microsoft.\nCopyright (c) Microsoft Corporation.\n\nMIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, in"
+      }
+    }
+  ],
+  "findings": [],
+  "verdict": "PASS"
+}

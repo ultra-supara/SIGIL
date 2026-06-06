@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "name": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "models_dir": "/usr/share/ollama/.ollama/models",
+    "api_exposure": "localhost",
+    "status": "reachable",
+    "version": "0.30.6",
+    "exposure": {
+      "class": "localhost",
+      "source": "proc",
+      "observed": [
+        {
+          "addr": "127.0.0.1",
+          "port": 11434
+        }
+      ]
+    }
+  },
+  "models": [
+    {
+      "name": "gemma3:4b",
+      "manifest_path": "/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/gemma3/4b",
+      "files": [
+        {
+          "digest": "sha256:3116c52250752e00dd06b16382e952bd33c34fd79fc4fe3a5d2c77cf7de1b14b",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-3116c52250752e00dd06b16382e952bd33c34fd79fc4fe3a5d2c77cf7de1b14b",
+          "size": 77,
+          "sha256": "3116c52250752e00dd06b16382e952bd33c34fd79fc4fe3a5d2c77cf7de1b14b",
+          "kind": "params"
+        },
+        {
+          "digest": "sha256:aeda25e63ebd698fab8638ffb778e68bed908b960d39d0becc650fa981609d25",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-aeda25e63ebd698fab8638ffb778e68bed908b960d39d0becc650fa981609d25",
+          "size": 3338792448,
+          "sha256": "aeda25e63ebd698fab8638ffb778e68bed908b960d39d0becc650fa981609d25",
+          "kind": "model"
+        },
+        {
+          "digest": "sha256:b6ae5839783f2ba248e65e4b960ab15f9c4b7118db285827dba6cba9754759e2",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-b6ae5839783f2ba248e65e4b960ab15f9c4b7118db285827dba6cba9754759e2",
+          "size": 489,
+          "sha256": "b6ae5839783f2ba248e65e4b960ab15f9c4b7118db285827dba6cba9754759e2",
+          "kind": "config"
+        },
+        {
+          "digest": "sha256:dd084c7d92a3c1c14cc09ae77153b903fd2024b64a100a0cc8ec9316063d2dbc",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-dd084c7d92a3c1c14cc09ae77153b903fd2024b64a100a0cc8ec9316063d2dbc",
+          "size": 8432,
+          "sha256": "dd084c7d92a3c1c14cc09ae77153b903fd2024b64a100a0cc8ec9316063d2dbc",
+          "kind": "license"
+        },
+        {
+          "digest": "sha256:e0a42594d802e5d31cdc786deb4823edb8adff66094d49de8fffe976d753e348",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-e0a42594d802e5d31cdc786deb4823edb8adff66094d49de8fffe976d753e348",
+          "size": 358,
+          "sha256": "e0a42594d802e5d31cdc786deb4823edb8adff66094d49de8fffe976d753e348",
+          "kind": "template"
+        }
+      ],
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "gemma3",
+        "tag": "4b",
+        "config_digest": "sha256:b6ae5839783f2ba248e65e4b960ab15f9c4b7118db285827dba6cba9754759e2",
+        "layer_digests": [
+          "sha256:aeda25e63ebd698fab8638ffb778e68bed908b960d39d0becc650fa981609d25",
+          "sha256:e0a42594d802e5d31cdc786deb4823edb8adff66094d49de8fffe976d753e348",
+          "sha256:dd084c7d92a3c1c14cc09ae77153b903fd2024b64a100a0cc8ec9316063d2dbc",
+          "sha256:3116c52250752e00dd06b16382e952bd33c34fd79fc4fe3a5d2c77cf7de1b14b"
+        ]
+      },
+      "license": {
+        "digest": "sha256:dd084c7d92a3c1c14cc09ae77153b903fd2024b64a100a0cc8ec9316063d2dbc",
+        "size": 8432,
+        "text_excerpt": "Gemma Terms of Use \n\nLast modified: February 21, 2024\n\nBy using, reproducing, modifying, distributing, performing or displaying any portion or element of Gemma, Model Derivatives including via any Hosted Service, (each as defined below) (collectively, the"
+      }
+    }
+  ],
+  "findings": [],
+  "verdict": "PASS"
+}

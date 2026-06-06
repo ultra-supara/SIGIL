@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "name": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "models_dir": "/usr/share/ollama/.ollama/models",
+    "api_exposure": "localhost",
+    "status": "reachable",
+    "version": "0.30.6",
+    "exposure": {
+      "class": "localhost",
+      "source": "proc",
+      "observed": [
+        {
+          "addr": "127.0.0.1",
+          "port": 11434
+        }
+      ]
+    }
+  },
+  "models": [
+    {
+      "name": "mistral:7b",
+      "manifest_path": "/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/mistral/7b",
+      "files": [
+        {
+          "digest": "sha256:1064e17101bdd2460dd5c4e03e4f5cc1b38a4dee66084dc91faba294ccb64a92",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-1064e17101bdd2460dd5c4e03e4f5cc1b38a4dee66084dc91faba294ccb64a92",
+          "size": 487,
+          "sha256": "1064e17101bdd2460dd5c4e03e4f5cc1b38a4dee66084dc91faba294ccb64a92",
+          "kind": "config"
+        },
+        {
+          "digest": "sha256:1ff5b64b61b9a63146475a24f70d3ca2fd6fdeec44247987163479968896fc0b",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-1ff5b64b61b9a63146475a24f70d3ca2fd6fdeec44247987163479968896fc0b",
+          "size": 799,
+          "sha256": "1ff5b64b61b9a63146475a24f70d3ca2fd6fdeec44247987163479968896fc0b",
+          "kind": "template"
+        },
+        {
+          "digest": "sha256:43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+          "size": 11356,
+          "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+          "kind": "license"
+        },
+        {
+          "digest": "sha256:ed11eda7790d05b49395598a42b155812b17e263214292f7b87d15e14003d337",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-ed11eda7790d05b49395598a42b155812b17e263214292f7b87d15e14003d337",
+          "size": 30,
+          "sha256": "ed11eda7790d05b49395598a42b155812b17e263214292f7b87d15e14003d337",
+          "kind": "params"
+        },
+        {
+          "digest": "sha256:f5074b1221da0f5a2910d33b642efa5b9eb58cfdddca1c79e16d7ad28aa2b31f",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-f5074b1221da0f5a2910d33b642efa5b9eb58cfdddca1c79e16d7ad28aa2b31f",
+          "size": 4372811712,
+          "sha256": "f5074b1221da0f5a2910d33b642efa5b9eb58cfdddca1c79e16d7ad28aa2b31f",
+          "kind": "model"
+        }
+      ],
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "mistral",
+        "tag": "7b",
+        "config_digest": "sha256:1064e17101bdd2460dd5c4e03e4f5cc1b38a4dee66084dc91faba294ccb64a92",
+        "layer_digests": [
+          "sha256:f5074b1221da0f5a2910d33b642efa5b9eb58cfdddca1c79e16d7ad28aa2b31f",
+          "sha256:43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+          "sha256:1ff5b64b61b9a63146475a24f70d3ca2fd6fdeec44247987163479968896fc0b",
+          "sha256:ed11eda7790d05b49395598a42b155812b17e263214292f7b87d15e14003d337"
+        ]
+      },
+      "license": {
+        "digest": "sha256:43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+        "size": 11356,
+        "spdx_id": "Apache-2.0",
+        "text_excerpt": "Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"Licens"
+      }
+    }
+  ],
+  "findings": [],
+  "verdict": "PASS"
+}

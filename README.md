@@ -134,7 +134,7 @@ Implemented:
 - IR → SafeISA emission.
 - CLI: `lift` and `assess` through the deterministic analysis path; structured Markdown report with verdict banner, capability table, policy violations with call-site lookup, and SafeISA excerpt.
 - Ollama model-store inventory, manifest + blob SHA-256 verification, provenance extraction.
-- SPDX license detection across ten families (Apache-2.0, MIT, MPL-2.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, ISC).
+- SPDX license detection across ten families (Apache-2.0, MIT, MPL-2.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, ISC). Known fast-path false positive when a license layer begins with a leading non-license token — see [#33](https://github.com/ultra-supara/SIGIL/issues/33).
 - Runtime API exposure classification, Linux `/proc`-based listener walk with `localhost` / `lan` / `public_bind` / `docker_published` / `proxy` classes.
 - Stable AI-BOM JSON contract at `schema_version: "1.1"`, runtime-agnostic, shared by `runtime inspect ollama --out` and `aibom generate`.
 
@@ -150,4 +150,9 @@ Not yet:
 - [Ollama Inspection](docs/ollama-inspection.md) — commands, evidence fields, SPDX detection table, findings, runtime bind classes.
 - [AI-BOM and Comparison](docs/ai-bom-and-comparison.md) — schema 1.1 contract, enum reference, planned comparison direction.
 - [Architecture and Safety](docs/architecture-and-safety.md) — crates, SafeISA, capability mapping, policy YAML, analysis-only safety boundary.
-- [Public overview page](site/index.html)
+
+## Live site
+
+- [Overview](https://ultra-supara.github.io/SIGIL/) — published product page.
+- [Compare](https://ultra-supara.github.io/SIGIL/compare/) — SIGIL vs Anchore Syft, Ollama / Hugging Face built-ins, and the OWASP AIBOM Generator.
+- [State of Local AI Audit — 2026 H1](https://ultra-supara.github.io/SIGIL/reports/2026-h1/) — five-model Ollama registry sample. Reproducible via `./scripts/audit-run.sh` (pulls + scans) and `./scripts/audit-aggregate.sh` (writes `reports/2026-h1/summary.json`).
