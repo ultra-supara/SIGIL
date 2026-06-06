@@ -1,20 +1,26 @@
-/* Viewer-specific styles. Layered on top of ../styles.css; reuses tokens. */
+/* Viewer-specific styles. Layered on top of ../styles.css; reuses tokens.
+ * Strict monochrome — verdict tokens carry meaning through weight, italic,
+ * and the single SIGIL accent (green for PASS only), never additional hues. */
 
 .viewer-hero {
-  padding: 72px clamp(20px, 5vw, 72px) 36px;
-  max-width: 880px;
+  padding: clamp(64px, 8vw, 120px) var(--gutter) 32px;
+  max-width: 980px;
+}
+
+.viewer-hero .lead {
+  max-width: 760px;
 }
 
 .viewer-section {
-  padding-top: 24px;
+  padding: 32px var(--gutter) clamp(48px, 6vw, 96px);
 }
 
 .viewer-controls {
   align-items: stretch;
   display: grid;
-  gap: 24px;
+  gap: 28px;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  margin-bottom: 28px;
+  margin-bottom: 32px;
 }
 
 @media (max-width: 820px) {
@@ -25,69 +31,77 @@
 
 .dropzone {
   align-items: center;
-  background: var(--surface);
-  border: 2px dashed var(--line);
-  border-radius: 10px;
-  color: var(--muted);
+  background: var(--paper-soft);
+  border: 1px dashed var(--ink-line);
+  color: var(--ink-soft);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   justify-content: center;
-  min-height: 220px;
+  min-height: 240px;
   outline: none;
-  padding: 28px;
+  padding: 32px;
   text-align: center;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: background 0.18s ease, border-color 0.18s ease;
 }
 
 .dropzone:hover,
 .dropzone:focus-visible,
 .dropzone.is-hover {
-  background: var(--surface-strong);
-  border-color: var(--cyan);
+  background: var(--paper-strong);
+  border-color: var(--ink);
+  border-style: solid;
 }
 
 .dropzone-title {
-  color: var(--text);
-  font-size: 20px;
-  font-weight: 800;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: -0.005em;
   margin: 0;
 }
 
 .dropzone-or {
+  font-family: var(--font-display);
+  font-style: italic;
   margin: 0;
 }
 
 .dropzone-pick {
-  color: var(--cyan);
+  border-bottom: 1px solid var(--ink);
+  color: var(--ink);
   cursor: pointer;
-  font-weight: 700;
-  text-decoration: underline;
+  font-style: normal;
+  font-weight: 500;
 }
 
 .dropzone-hint {
-  color: var(--muted);
-  font-size: 14px;
-  margin: 4px 0 0;
-  max-width: 380px;
+  color: var(--ink-mute);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-style: italic;
+  margin: 6px 0 0;
+  max-width: 420px;
 }
 
 .samples {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  background: var(--paper-soft);
+  border: var(--rule);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 24px;
+  gap: 14px;
+  padding: 28px;
 }
 
 .samples-label {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0.14em;
   margin: 0;
   text-transform: uppercase;
 }
@@ -100,24 +114,24 @@
 
 .sample-button {
   align-items: center;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--text);
+  background: var(--paper);
+  border: var(--rule);
+  color: var(--ink);
   cursor: pointer;
   display: flex;
-  font-family: inherit;
+  font-family: var(--font-body);
   font-size: 15px;
-  font-weight: 650;
-  gap: 12px;
-  padding: 12px 16px;
+  font-weight: 500;
+  gap: 14px;
+  padding: 14px 18px;
   text-align: left;
-  transition: border-color 0.15s ease, transform 0.05s ease;
+  transition: background 0.18s ease, border-color 0.18s ease;
   width: 100%;
 }
 
 .sample-button:hover {
-  border-color: var(--cyan);
+  background: var(--paper-strong);
+  border-color: var(--ink);
 }
 
 .sample-button:active {
@@ -125,45 +139,49 @@
 }
 
 .sample-verdict {
-  font-family:
-    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace,
-    monospace;
-  font-weight: 800;
-  min-width: 70px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 76px;
 }
 
 .sample-pass .sample-verdict {
-  color: var(--green);
+  color: var(--accent);
 }
+
 .sample-warn .sample-verdict {
-  color: #c47700;
+  color: var(--ink-soft);
+  font-style: italic;
+  font-weight: 500;
 }
+
 .sample-fail .sample-verdict {
-  color: #c41a1a;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .error-banner {
-  background: #fff4f4;
-  border: 1px solid #f1bcbc;
-  border-left: 4px solid #c41a1a;
-  border-radius: 8px;
-  color: #5a0d0d;
-  font-family:
-    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace,
-    monospace;
-  font-size: 14px;
-  margin-bottom: 24px;
-  padding: 14px 18px;
+  background: var(--paper-soft);
+  border: var(--rule);
+  border-left: 3px solid var(--ink);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  margin-bottom: 28px;
+  padding: 16px 20px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .output-placeholder {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--muted);
-  padding: 36px;
+  background: var(--paper-soft);
+  border: var(--rule);
+  color: var(--ink-mute);
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-style: italic;
+  padding: 40px;
   text-align: center;
 }
 
@@ -172,72 +190,78 @@
 }
 
 .output-wrap {
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: var(--rule);
   overflow: hidden;
 }
 
 .output-meta {
   align-items: center;
-  background: var(--surface-strong);
-  border-bottom: 1px solid var(--line);
+  background: var(--paper-soft);
+  border-bottom: var(--rule);
   display: flex;
   font-size: 13px;
   gap: 12px;
   justify-content: space-between;
-  padding: 10px 18px;
+  padding: 12px 20px;
 }
 
 .output-source {
-  color: var(--muted);
-  font-family:
-    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace,
-    monospace;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
 }
 
 .output-copy {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--text);
+  background: var(--paper);
+  border: var(--rule);
+  color: var(--ink);
   cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 12px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 7px 14px;
+  text-transform: uppercase;
 }
 
 .output-copy:hover {
-  border-color: var(--cyan);
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .report-output {
-  padding: 32px clamp(20px, 4vw, 48px);
+  background: var(--paper);
+  padding: clamp(28px, 4vw, 48px);
 }
 
 .report-output h1 {
-  font-size: 28px;
-  letter-spacing: 0;
-  line-height: 1.2;
-  margin: 0 0 18px;
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  margin: 0 0 22px;
   max-width: none;
 }
 
 .report-output h2 {
-  border-top: 1px solid var(--line);
+  border-top: var(--rule);
+  font-family: var(--font-display);
   font-size: 22px;
-  margin: 32px 0 14px;
+  font-weight: 400;
+  margin: 36px 0 16px;
   padding-top: 24px;
 }
 
 .report-output h3 {
-  font-size: 17px;
-  margin: 22px 0 10px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 400;
+  margin: 24px 0 12px;
 }
 
 .report-output ul {
-  color: var(--text);
-  margin: 0 0 16px;
+  color: var(--ink);
+  margin: 0 0 18px;
   padding-left: 22px;
 }
 
@@ -250,17 +274,17 @@
 }
 
 .report-output code {
-  background: var(--surface-strong);
-  border-radius: 4px;
+  background: var(--paper-strong);
+  border-radius: 2px;
   font-size: 0.92em;
-  padding: 2px 6px;
+  padding: 1px 6px;
 }
 
 .report-output table {
   border-collapse: collapse;
   display: block;
   font-size: 14px;
-  margin: 0 0 22px;
+  margin: 0 0 24px;
   max-width: 100%;
   overflow-x: auto;
   white-space: nowrap;
@@ -268,25 +292,30 @@
 
 .report-output th,
 .report-output td {
-  border-bottom: 1px solid var(--line);
-  padding: 8px 12px;
+  border-bottom: var(--rule);
+  padding: 10px 14px;
   text-align: left;
 }
 
 .report-output th {
-  background: var(--surface);
-  font-weight: 700;
+  background: var(--paper-soft);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .report-output tr:hover td {
-  background: var(--surface);
+  background: var(--paper-soft);
 }
 
 .report-output em {
-  color: var(--muted);
+  color: var(--ink-mute);
   font-style: italic;
 }
 
 .viewer-determinism {
-  padding-bottom: 96px;
+  padding-bottom: clamp(64px, 8vw, 120px);
 }

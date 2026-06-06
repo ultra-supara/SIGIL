@@ -130,7 +130,8 @@
 
       <section class="section viewer-determinism">
         <div class="section-heading">
-          <h2>Why the output is the same as the CLI</h2>
+          <p class="definition">Determinism</p>
+          <h2>One renderer, two surfaces.</h2>
           <p>
             <code>render_ai_bom</code> in
             <code>crates/sigil-core/src/aibom.rs</code> is a pure function of
@@ -139,8 +140,9 @@
             it. A native Rust test in
             <code>crates/sigil-aibom-wasm/tests/determinism.rs</code> asserts
             wasm-rendered output is byte-for-byte equal to the native render
-            for every committed sample. If a renderer change breaks parity,
-            that test fails before the page does.
+            for every committed sample, and CI runs the committed
+            <code>.wasm</code> against the same fixtures so the deployed
+            bundle cannot drift from the source.
           </p>
         </div>
       </section>
