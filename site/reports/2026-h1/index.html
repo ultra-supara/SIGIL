@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>State of Local AI Audit — 2026 H1 (SIGIL Report)</title>
+    <meta
+      name="description"
+      content="A sample audit of five popular Ollama models. License layer presence, SPDX detection, runtime exposure, manifest integrity, and verdict distribution — generated with SIGIL."
+    />
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../" aria-label="SIGIL home">
+        <span class="brand-mark">S</span>
+        <span>SIGIL</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="../../#scope">Scope</a>
+        <a href="../../#report">Report</a>
+        <a href="../../#aibom">AI-BOM</a>
+        <a href="../../compare/">Compare</a>
+        <a href="../../#docs">Docs</a>
+        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="compare-hero">
+        <span class="report-badge pending">Data collection in progress</span>
+        <p class="definition">Report · 2026 H1</p>
+        <h1>State of Local AI Audit</h1>
+        <p class="lead">
+          A 5-model sample of the Ollama public registry, audited with
+          SIGIL. We report license layer presence, SPDX detection,
+          manifest integrity, and verdict distribution — derived
+          deterministically from each model's on-disk evidence, with no
+          LLM in the verdict path.
+        </p>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>Headline numbers</h2>
+          <p>
+            Four numbers a compliance reviewer can quote. The raw
+            per-model AI-BOM JSONs are linked below so the figures can be
+            re-aggregated independently.
+          </p>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">Sample size</div>
+            <div class="stat-value">5</div>
+            <div class="stat-sub">Ollama tags, see Methodology</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">License layer presence</div>
+            <div class="stat-value pending">— %</div>
+            <div class="stat-sub"><span class="pending-marker">Pending</span> models shipping a license layer</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">SPDX detection rate</div>
+            <div class="stat-value pending">— %</div>
+            <div class="stat-sub"><span class="pending-marker">Pending</span> license layer matched to an SPDX id</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Manifest integrity</div>
+            <div class="stat-value pending">— / 5</div>
+            <div class="stat-sub"><span class="pending-marker">Pending</span> models where every blob SHA-256 matched the manifest digest</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section compare-axes">
+        <div class="section-heading">
+          <h2>License analysis</h2>
+          <p>
+            License-layer states partition into three buckets: absent, present
+            but not matched to an SPDX family, and present + matched.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>License layer state</th>
+                <th>Count</th>
+                <th>Share of sample</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Present, SPDX detected</td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+              <tr>
+                <td>Present, SPDX undetected</td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+              <tr>
+                <td>Absent</td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section-heading" style="margin-top: 38px;">
+          <h2>SPDX family distribution</h2>
+          <p>
+            For the models with a license layer matched to an SPDX
+            shortname, the family distribution.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>SPDX id</th>
+                <th>Count</th>
+                <th>Models</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section split">
+        <div>
+          <h2>Verdict and findings</h2>
+          <p>
+            Each model's AI-BOM carries a deterministic
+            <code>PASS</code> / <code>WARN</code> / <code>FAIL</code> verdict
+            aggregated from analyzer-emitted finding severities. The
+            distribution across the sample is reported as-is.
+          </p>
+          <ul class="check-list">
+            <li><code>PASS</code> count: <span class="pending-marker">Pending</span></li>
+            <li><code>WARN</code> count: <span class="pending-marker">Pending</span></li>
+            <li><code>FAIL</code> count: <span class="pending-marker">Pending</span></li>
+            <li>Total findings: <span class="pending-marker">Pending</span></li>
+            <li>Models with at least one finding: <span class="pending-marker">Pending</span></li>
+          </ul>
+        </div>
+        <div>
+          <h2>Runtime exposure</h2>
+          <p>
+            Reported as the default Ollama install on the audit
+            workstation — the host was not specially configured. This is
+            the as-shipped picture, not a hardened deployment.
+          </p>
+          <ul class="check-list">
+            <li>Default <code>OLLAMA_HOST</code>: <code>http://127.0.0.1:11434</code></li>
+            <li>Observed listener class: <span class="pending-marker">Pending</span></li>
+            <li>Source: <code>/proc</code></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section compare-axes">
+        <div class="section-heading">
+          <h2>Per-model index</h2>
+          <p>
+            One row per scanned model. The per-model AI-BOM JSON is the
+            authoritative source for everything above.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Verdict</th>
+                <th>License</th>
+                <th>Layer count</th>
+                <th>Model bytes</th>
+                <th>Findings</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>gemma3:4b</code></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+              <tr>
+                <td><code>llama3.2:3b</code></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+              <tr>
+                <td><code>qwen2.5:7b</code></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+              <tr>
+                <td><code>mistral:7b</code></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+              <tr>
+                <td><code>phi3:mini</code></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+                <td><span class="pending-marker">Pending</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section split alt">
+        <div>
+          <h2>Methodology</h2>
+          <p>
+            Five Ollama tags were chosen by license diversity rather than
+            by popularity ranking: Gemma + Llama for vendor-custom
+            community licenses; Qwen + Mistral for Apache-2.0; Phi for
+            MIT.
+          </p>
+          <ul class="check-list">
+            <li>Sample size: 5 tags from the Ollama public registry</li>
+            <li>Tool: <code>sigil aibom generate --runtime ollama --format json</code></li>
+            <li>SIGIL version at run time: <span class="pending-marker">Pending</span></li>
+            <li>AI-BOM schema version: <code>1.1</code></li>
+            <li>Audit date: <span class="pending-marker">Pending</span> (recorded in <code>summary.json</code>)</li>
+            <li>Verdict path: deterministic severity aggregation in <code>crates/sigil-core/src/ollama.rs:349-356</code></li>
+            <li>SPDX detection: shortname + body match over 10 families</li>
+          </ul>
+        </div>
+        <div>
+          <h2>Reproduce this</h2>
+          <p>
+            The runner and aggregator are checked in. The model list is a
+            plain text file with one Ollama tag per line.
+          </p>
+          <div class="command-panel">
+            <pre><code>git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
+sudo apt-get install -y clang jq         # Linux
+
+# Edit scripts/audit-models.txt if you want a different sample.
+./scripts/audit-run.sh                   # pulls + runs sigil on each model
+./scripts/audit-aggregate.sh             # writes reports/2026-h1/summary.json</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section docs-section">
+        <div class="section-heading">
+          <h2>Sources and raw data</h2>
+          <p>
+            Per-model AI-BOM JSONs are the authoritative source for
+            everything in this report.
+          </p>
+        </div>
+        <div class="doc-links">
+          <a href="https://github.com/ultra-supara/SIGIL/tree/main/reports/2026-h1">
+            <span>Per-model AI-BOM JSONs</span>
+            <code>reports/2026-h1/raw/&lt;model&gt;.aibom.json</code> — one per model, schema 1.1.
+          </a>
+          <a href="https://github.com/ultra-supara/SIGIL/blob/main/reports/2026-h1/summary.json">
+            <span>Aggregated summary JSON</span>
+            <code>reports/2026-h1/summary.json</code> — the numbers in this report come from here.
+          </a>
+          <a href="https://github.com/ultra-supara/SIGIL/blob/main/scripts/audit-run.sh">
+            <span>Runner</span>
+            <code>scripts/audit-run.sh</code> — pull + scan + emit per-model JSON.
+          </a>
+          <a href="https://github.com/ultra-supara/SIGIL/blob/main/scripts/audit-aggregate.sh">
+            <span>Aggregator</span>
+            <code>scripts/audit-aggregate.sh</code> — jq pipeline that builds <code>summary.json</code>.
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>SIGIL is local-first and analysis-only.</span>
+      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
+    </footer>
+  </body>
+</html>
