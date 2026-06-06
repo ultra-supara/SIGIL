@@ -36,8 +36,17 @@
             evidence to deterministic PASS/WARN/FAIL decisions. No LLM ever
             decides a verdict.
           </p>
+          <figure class="hero-quickstart command-panel" aria-label="Run the demo">
+            <figcaption class="quickstart-caption">Run the demo · no Ollama required</figcaption>
+            <pre><code># Prereqs: rustup (https://rustup.rs) + clang
+sudo apt-get install -y clang     # Linux; macOS: brew install llvm
+git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
+./demos/demo_suspicious_fail.sh
+<span class="quickstart-output"># → SIGIL Verdict: [FAIL]    out/suspicious.report.md</span></code></pre>
+          </figure>
           <div class="actions">
-            <a class="button primary" href="https://github.com/ultra-supara/SIGIL/blob/main/docs/sigil-overview.md">Read the overview</a>
+            <a class="button primary" href="https://github.com/ultra-supara/SIGIL#quickstart">Run the demo</a>
+            <a class="button secondary" href="https://github.com/ultra-supara/SIGIL/blob/main/docs/sigil-overview.md">Read the overview</a>
             <a class="button secondary" href="https://github.com/ultra-supara/SIGIL">View source</a>
           </div>
           <dl class="proof-strip" aria-label="SIGIL properties">
