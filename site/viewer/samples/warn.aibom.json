@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "name": "ollama",
+    "host": "0.0.0.0:11434",
+    "models_dir": "/var/lib/ollama/.ollama/models",
+    "api_exposure": "public_bind",
+    "status": "not_probed",
+    "exposure": {
+      "class": "unknown",
+      "source": "disabled",
+      "observed": []
+    }
+  },
+  "models": [
+    {
+      "name": "llama3:8b",
+      "manifest_path": "/var/lib/ollama/.ollama/models/manifests/registry.ollama.ai/library/llama3/8b",
+      "files": [
+        {
+          "digest": "sha256:2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608",
+          "path": "/var/lib/ollama/.ollama/models/blobs/sha256-2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608",
+          "size": 10,
+          "sha256": "2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608",
+          "kind": "license"
+        },
+        {
+          "digest": "sha256:53db73e67333ea1ac2bc890efe8cf91b6585bff1c0e2f9016930b026a5400b31",
+          "path": "/var/lib/ollama/.ollama/models/blobs/sha256-53db73e67333ea1ac2bc890efe8cf91b6585bff1c0e2f9016930b026a5400b31",
+          "size": 30,
+          "sha256": "53db73e67333ea1ac2bc890efe8cf91b6585bff1c0e2f9016930b026a5400b31",
+          "kind": "config"
+        },
+        {
+          "digest": "sha256:ef268cc032ff5eb937e7cb3fc20915747ad9aaaf9f38f269d1fdbbbb30f4c623",
+          "path": "/var/lib/ollama/.ollama/models/blobs/sha256-ef268cc032ff5eb937e7cb3fc20915747ad9aaaf9f38f269d1fdbbbb30f4c623",
+          "size": 19,
+          "sha256": "ef268cc032ff5eb937e7cb3fc20915747ad9aaaf9f38f269d1fdbbbb30f4c623",
+          "kind": "model"
+        }
+      ],
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "llama3",
+        "tag": "8b",
+        "config_digest": "sha256:53db73e67333ea1ac2bc890efe8cf91b6585bff1c0e2f9016930b026a5400b31",
+        "layer_digests": [
+          "sha256:ef268cc032ff5eb937e7cb3fc20915747ad9aaaf9f38f269d1fdbbbb30f4c623",
+          "sha256:2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608"
+        ]
+      },
+      "license": {
+        "digest": "sha256:2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608",
+        "size": 10,
+        "spdx_id": "Apache-2.0",
+        "text_excerpt": "Apache-2.0"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "ollama.public_bind",
+      "category": "runtime",
+      "severity": "WARN",
+      "message": "Ollama host is configured as a public bind address",
+      "evidence": "0.0.0.0:11434"
+    }
+  ],
+  "verdict": "WARN"
+}

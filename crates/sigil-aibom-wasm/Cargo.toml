@@ -1,0 +1,42 @@
+[package]
+name = "sigil-aibom-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "wasm32 binding for SIGIL's AI-BOM Markdown renderer (browser viewer)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sigil-core = { path = "../sigil-core" }
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+sha2.workspace = true
+
+[[example]]
+name = "regen_viewer_samples"
+path = "examples/regen_viewer_samples.rs"
+
+# Used by CI (.github/workflows/aibom-wasm.yml) to produce the source-of-truth
+# native render for each sample, which is then compared against the committed
+# wasm artifact's actual output. This is what closes the behavioural gap that
+# d.ts-only diffing leaves open.
+[[example]]
+name = "render_sample"
+path = "examples/render_sample.rs"
+
+# Regenerates the invalid-input fixtures under site/viewer/samples/invalid/
+# that exercise the wasm wrapper's error paths in the behavioural smoke.
+[[example]]
+name = "regen_invalid_samples"
+path = "examples/regen_invalid_samples.rs"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+

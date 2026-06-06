@@ -1,0 +1,190 @@
+name: AI-BOM wasm viewer
+
+# Goal: keep the committed wasm artifact in `site/viewer/pkg/` aligned with the
+# Rust source under `crates/sigil-aibom-wasm` and `crates/sigil-core`.
+#
+# Both jobs run on push to `main` and on pull_request when the relevant paths
+# change.
+#
+# The `determinism` job is the load-bearing one — it asserts the native render
+# path the wasm wrapper exposes is byte-equal to the CLI's render, plus
+# schema-envelope validation for the viewer's drop-zone input.
+#
+# The `wasm-artifact-freshness` job has two layers, both load-bearing:
+#   1. A **behavioural** check: load the committed
+#      `site/viewer/pkg/sigil_aibom_wasm_bg.wasm` (the bundle the browser
+#      actually serves), render every sample through it, and assert each
+#      rendered byte sequence matches what the current Rust source produces
+#      via the native path (the `render_sample` example). This catches the
+#      case Codex flagged on PR #36 (discussion r3367938924): a behavioural
+#      change in `sigil-core` whose `#[wasm_bindgen]` signatures and wasm
+#      size both stay the same — the API-surface diff alone would miss it,
+#      and the deployed viewer would silently diverge from the PR's source.
+#   2. A **rebuild + size budget** check: builds a fresh bundle and verifies
+#      the rebuilt `.d.ts` API surface matches what's committed and the
+#      `.wasm` is within the 500 KB gzipped budget. Byte-equality on the
+#      `.wasm` body itself is intentionally skipped — wasm-bindgen's runtime
+#      layer changes the function-type table between patch releases without
+#      changing the API contract.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/sigil-core/**'
+      - 'crates/sigil-aibom-wasm/**'
+      - 'site/viewer/**'
+      - 'schemas/**'
+      - 'ci/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/aibom-wasm.yml'
+  pull_request:
+    paths:
+      - 'crates/sigil-core/**'
+      - 'crates/sigil-aibom-wasm/**'
+      - 'site/viewer/**'
+      - 'schemas/**'
+      - 'ci/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/aibom-wasm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  determinism:
+    name: Determinism + schema-envelope tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: '. -> target'
+      - name: Run determinism + envelope tests
+        run: cargo test -p sigil-aibom-wasm --tests
+      - name: Compile-check for wasm32 target
+        run: cargo build -p sigil-aibom-wasm --target wasm32-unknown-unknown --release
+
+  wasm-artifact-freshness:
+    name: Committed wasm tracks Rust source (API surface + size budget)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: '. -> target'
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '22'
+      - name: Render samples natively (source of truth)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/expected-render
+          for sample in site/viewer/samples/*.aibom.json; do
+            name=$(basename "$sample" .aibom.json)
+            cargo run -q -p sigil-aibom-wasm --example render_sample -- "$sample" \
+              > "/tmp/expected-render/${name}.md"
+          done
+      - name: Behavioural check — committed wasm renders == native render
+        run: node ci/check-committed-wasm.mjs /tmp/expected-render
+      - name: Install wasm-pack (pinned)
+        run: cargo install wasm-pack --version 0.15.0 --locked
+      - name: Snapshot committed artifact
+        id: before
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/wasm-before
+          cp site/viewer/pkg/sigil_aibom_wasm_bg.wasm /tmp/wasm-before/
+          cp site/viewer/pkg/sigil_aibom_wasm.d.ts /tmp/wasm-before/
+          cp site/viewer/pkg/sigil_aibom_wasm_bg.wasm.d.ts /tmp/wasm-before/
+          before_size=$(stat -c '%s' site/viewer/pkg/sigil_aibom_wasm_bg.wasm)
+          before_gz=$(gzip -c site/viewer/pkg/sigil_aibom_wasm_bg.wasm | wc -c)
+          {
+            echo "before_size=$before_size"
+            echo "before_gz=$before_gz"
+          } >>"$GITHUB_OUTPUT"
+      - name: Rebuild wasm
+        run: |
+          wasm-pack build crates/sigil-aibom-wasm \
+            --target web --release \
+            --out-dir ../../site/viewer/pkg \
+            --out-name sigil_aibom_wasm
+          # wasm-pack drops a .gitignore that masks the artifact from git;
+          # remove it so a subsequent commit picks up the rebuilt files.
+          rm -f site/viewer/pkg/.gitignore
+      - name: Compare API surface + enforce size budget
+        run: |
+          set -euo pipefail
+          after_size=$(stat -c '%s' site/viewer/pkg/sigil_aibom_wasm_bg.wasm)
+          after_gz=$(gzip -c site/viewer/pkg/sigil_aibom_wasm_bg.wasm | wc -c)
+          before_size='${{ steps.before.outputs.before_size }}'
+          before_gz='${{ steps.before.outputs.before_gz }}'
+
+          # 500 KB gzipped cap from issue #35 acceptance criteria.
+          max_gz=$((500 * 1024))
+
+          {
+            echo "## AI-BOM wasm viewer artifact"
+            echo
+            echo "| Metric          | Committed | Rebuilt   |"
+            echo "|-----------------|-----------|-----------|"
+            printf "| .wasm bytes     | %9s | %9s |\n" "$before_size" "$after_size"
+            printf "| .wasm gzipped   | %9s | %9s |\n" "$before_gz" "$after_gz"
+            printf "| Budget (gz)     | %9s | (cap)     |\n" "$max_gz"
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          fail=0
+
+          if [ "$after_gz" -gt "$max_gz" ]; then
+            echo "::error::wasm artifact exceeds 500 KB gzipped budget ($after_gz > $max_gz)"
+            fail=1
+          fi
+
+          # API surface check: the .d.ts is the function-name + signature
+          # declaration emitted by wasm-bindgen. It is stable across
+          # rustc/wasm-bindgen patch releases as long as the Rust API has
+          # not changed. If a developer modifies `#[wasm_bindgen]` signatures
+          # without rebuilding the artifact, the d.ts diverges and this
+          # check fails — exactly the regression we want to catch.
+          if ! diff -u /tmp/wasm-before/sigil_aibom_wasm.d.ts site/viewer/pkg/sigil_aibom_wasm.d.ts; then
+            echo "::error::Committed wasm API surface (sigil_aibom_wasm.d.ts) does not match a fresh build."
+            echo "::error::Run: wasm-pack build crates/sigil-aibom-wasm --target web --release --out-dir ../../site/viewer/pkg --out-name sigil_aibom_wasm && rm -f site/viewer/pkg/.gitignore"
+            echo "::error::Then commit the updated files under site/viewer/pkg/."
+            fail=1
+          fi
+
+          if ! diff -u /tmp/wasm-before/sigil_aibom_wasm_bg.wasm.d.ts site/viewer/pkg/sigil_aibom_wasm_bg.wasm.d.ts; then
+            echo "::error::Internal wasm export table (sigil_aibom_wasm_bg.wasm.d.ts) does not match a fresh build."
+            fail=1
+          fi
+
+          # Size sanity: huge swings (>50% or >100 KB) almost always indicate
+          # a real source change that wasn't accompanied by a rebuild.
+          delta=$(( after_size > before_size ? after_size - before_size : before_size - after_size ))
+          threshold=$(( before_size / 2 ))
+          if [ "$delta" -gt "$threshold" ] && [ "$delta" -gt 102400 ]; then
+            echo "::error::wasm size moved by $delta bytes between committed and rebuild (>50% and >100 KB)."
+            echo "::error::This is almost always a stale artifact. Rebuild and commit site/viewer/pkg/."
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Committed wasm artifact tracks the Rust source."

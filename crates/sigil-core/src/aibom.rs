@@ -9,6 +9,7 @@ use crate::runtime::RuntimeExposure;
 pub const SCHEMA_VERSION: &str = "1.1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiBom {
     pub schema_version: String,
     pub tool: ToolInfo,
@@ -19,12 +20,14 @@ pub struct AiBom {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolInfo {
     pub name: String,
     pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeInfo {
     pub name: String,
     pub host: String,
@@ -39,6 +42,7 @@ pub struct RuntimeInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExposureInfo {
     pub class: RuntimeExposure,
     pub source: String,
@@ -46,6 +50,7 @@ pub struct ExposureInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BindEntry {
     pub addr: String,
     pub port: u16,
@@ -54,6 +59,7 @@ pub struct BindEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelEntry {
     pub name: String,
     // None is reserved for runtimes without per-model manifests; always Some for Ollama.
@@ -66,6 +72,7 @@ pub struct ModelEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileEntry {
     pub digest: String,
     pub path: String,
@@ -75,6 +82,7 @@ pub struct FileEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProvenanceEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
@@ -90,6 +98,7 @@ pub struct ProvenanceEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LicenseEntry {
     pub digest: String,
     pub size: u64,
@@ -123,6 +132,7 @@ impl From<&LicenseInfo> for LicenseEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Finding {
     pub id: String,
     pub category: FindingCategory,
