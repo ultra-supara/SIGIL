@@ -1,0 +1,123 @@
+name: AI-BOM wasm viewer
+
+# Goal: keep the committed wasm artifact in `site/viewer/pkg/` in sync with the
+# Rust source under `crates/sigil-aibom-wasm` and `crates/sigil-core`. The
+# determinism test runs on every push and PR; the wasm-rebuild check runs on
+# PRs that touch the renderer, the wasm crate, or the artifact itself, and
+# surfaces a size diff in the job summary.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/sigil-core/**'
+      - 'crates/sigil-aibom-wasm/**'
+      - 'site/viewer/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/aibom-wasm.yml'
+  pull_request:
+    paths:
+      - 'crates/sigil-core/**'
+      - 'crates/sigil-aibom-wasm/**'
+      - 'site/viewer/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/aibom-wasm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  determinism:
+    name: Determinism test (wasm render == native render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: '. -> target'
+      - name: Run determinism + structural tests
+        run: cargo test -p sigil-aibom-wasm --tests
+      - name: Compile-check for wasm32 target
+        run: cargo build -p sigil-aibom-wasm --target wasm32-unknown-unknown --release
+
+  wasm-artifact-freshness:
+    name: Committed wasm tracks Rust source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: '. -> target'
+      - name: Install wasm-pack (pinned)
+        run: cargo install wasm-pack --version 0.15.0 --locked
+      - name: Snapshot committed artifact
+        id: before
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/wasm-before
+          cp site/viewer/pkg/sigil_aibom_wasm_bg.wasm /tmp/wasm-before/
+          cp site/viewer/pkg/sigil_aibom_wasm.js /tmp/wasm-before/
+          before_size=$(stat -c '%s' site/viewer/pkg/sigil_aibom_wasm_bg.wasm)
+          before_gz=$(gzip -c site/viewer/pkg/sigil_aibom_wasm_bg.wasm | wc -c)
+          echo "before_size=$before_size" >>"$GITHUB_OUTPUT"
+          echo "before_gz=$before_gz" >>"$GITHUB_OUTPUT"
+      - name: Rebuild wasm
+        run: |
+          wasm-pack build crates/sigil-aibom-wasm \
+            --target web --release \
+            --out-dir ../../site/viewer/pkg \
+            --out-name sigil_aibom_wasm
+          # wasm-pack drops a .gitignore that masks the artifact from git;
+          # remove it so the diff check sees the rebuilt files.
+          rm -f site/viewer/pkg/.gitignore
+      - name: Compare against committed artifact
+        id: after
+        run: |
+          set -euo pipefail
+          after_size=$(stat -c '%s' site/viewer/pkg/sigil_aibom_wasm_bg.wasm)
+          after_gz=$(gzip -c site/viewer/pkg/sigil_aibom_wasm_bg.wasm | wc -c)
+          before_size='${{ steps.before.outputs.before_size }}'
+          before_gz='${{ steps.before.outputs.before_gz }}'
+          {
+            echo "## AI-BOM wasm viewer artifact"
+            echo
+            echo "| Metric             | Committed | Rebuilt   |"
+            echo "|--------------------|-----------|-----------|"
+            printf "| .wasm bytes        | %9s | %9s |\n" "$before_size" "$after_size"
+            printf "| .wasm gzipped      | %9s | %9s |\n" "$before_gz" "$after_gz"
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
+          # 500 KB gzipped cap from issue #35 acceptance criteria.
+          max_gz=$((500 * 1024))
+          if [ "$after_gz" -gt "$max_gz" ]; then
+            echo "::error::wasm artifact exceeds 500 KB gzipped budget ($after_gz > $max_gz)"
+            exit 1
+          fi
+          if ! cmp -s /tmp/wasm-before/sigil_aibom_wasm_bg.wasm site/viewer/pkg/sigil_aibom_wasm_bg.wasm; then
+            echo "::error::Committed wasm does not match a fresh build."
+            echo "::error::Run: wasm-pack build crates/sigil-aibom-wasm --target web --release --out-dir ../../site/viewer/pkg --out-name sigil_aibom_wasm && rm site/viewer/pkg/.gitignore"
+            echo "::error::Then commit the updated files under site/viewer/pkg/."
+            diff -u <(xxd /tmp/wasm-before/sigil_aibom_wasm_bg.wasm | head -20) <(xxd site/viewer/pkg/sigil_aibom_wasm_bg.wasm | head -20) || true
+            exit 1
+          fi
+          if ! cmp -s /tmp/wasm-before/sigil_aibom_wasm.js site/viewer/pkg/sigil_aibom_wasm.js; then
+            echo "::error::Committed sigil_aibom_wasm.js does not match a fresh build."
+            diff -u /tmp/wasm-before/sigil_aibom_wasm.js site/viewer/pkg/sigil_aibom_wasm.js | head -200 || true
+            exit 1
+          fi
+          echo "Committed wasm artifact matches a fresh build."
