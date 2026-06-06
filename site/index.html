@@ -36,10 +36,11 @@
             evidence to deterministic PASS/WARN/FAIL decisions. No LLM ever
             decides a verdict.
           </p>
-          <figure class="hero-quickstart command-panel" aria-label="30-second demo">
-            <figcaption class="quickstart-caption">30-second demo · no Ollama required</figcaption>
-            <pre><code>git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
-sudo apt-get install -y clang     # Linux only; macOS: brew install llvm
+          <figure class="hero-quickstart command-panel" aria-label="Run the demo">
+            <figcaption class="quickstart-caption">Run the demo · no Ollama required</figcaption>
+            <pre><code># Prereqs: rustup (https://rustup.rs) + clang
+sudo apt-get install -y clang     # Linux; macOS: brew install llvm
+git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
 ./demos/demo_suspicious_fail.sh
 <span class="quickstart-output"># → SIGIL Verdict: [FAIL]    out/suspicious.report.md</span></code></pre>
           </figure>
