@@ -52,8 +52,9 @@
               The model is already deployed locally through Ollama and you
               want the AI-BOM derived from the on-disk manifest, with every
               blob's SHA-256 verified against the declared digest, runtime
-              exposure classified from <code>/proc</code>, and a PASS/WARN/FAIL
-              verdict from a YAML policy.
+              exposure classified from <code>/proc</code>, and a deterministic
+              PASS/WARN/FAIL verdict aggregated from analyzer findings — no
+              LLM in the path.
             </p>
           </div>
         </div>
@@ -115,7 +116,7 @@
               <tr>
                 <td>Verdict</td>
                 <td>AIBOM completeness score (0–100) + recommendations</td>
-                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> from analyzer + YAML policy</td>
+                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> aggregated deterministically from analyzer-emitted finding severities (no LLM; YAML-policy path is separate, via <code>sigil assess</code> for native binaries)</td>
               </tr>
               <tr>
                 <td>Network egress</td>

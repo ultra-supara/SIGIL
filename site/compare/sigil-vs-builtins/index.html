@@ -52,7 +52,8 @@
               You need one artifact you can attach to a compliance review —
               JSON for diffing, Markdown for the ticket — that records
               runtime exposure, manifest provenance, SPDX license family,
-              every blob's SHA-256, and a policy verdict in one record.
+              every blob's SHA-256, and a deterministic verdict aggregated
+              from analyzer findings (no LLM).
             </p>
           </div>
         </div>
@@ -128,7 +129,7 @@
                 <td>Verdict</td>
                 <td>None</td>
                 <td>Pass/fail per file</td>
-                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> per model + per finding, from analyzer + policy</td>
+                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> per AI-BOM, aggregated deterministically from analyzer-emitted finding severities (no LLM)</td>
               </tr>
               <tr>
                 <td>Reach</td>
@@ -198,14 +199,14 @@ template: """..."""
           <h2>Where SIGIL extends the surface</h2>
           <p>
             SIGIL covers what the built-ins leave out: the auditable
-            artifact, the structured policy verdict, the manifest-aware
-            integrity check, and the runtime exposure picture as it was
-            when you audited.
+            artifact, the structured deterministic verdict, the
+            manifest-aware integrity check, and the runtime exposure
+            picture as it was when you audited.
           </p>
           <ul class="check-list">
             <li>One JSON (schema 1.1) + Markdown — same model, never drift</li>
             <li>Manifest-aware SHA-256 against the declared digest</li>
-            <li>Verdict bound to a YAML policy, no LLM in the path</li>
+            <li>Verdict aggregated from analyzer findings — no LLM, no remote service</li>
             <li><code>/proc</code>-derived listener classification recorded with a timestamp</li>
           </ul>
         </div>

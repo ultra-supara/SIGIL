@@ -54,7 +54,8 @@
               you need every blob's SHA-256 verified against the manifest
               digest, you want runtime exposure classified from <code>/proc</code>,
               you need SPDX from the Ollama license layer, and you want a
-              deterministic PASS/WARN/FAIL verdict bound to a YAML policy.
+              deterministic PASS/WARN/FAIL verdict aggregated from the
+              analyzer's per-finding severities — no LLM in the path.
             </p>
           </div>
         </div>
@@ -121,7 +122,7 @@
               <tr>
                 <td>Verdict</td>
                 <td>None (inventory-first)</td>
-                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> from analyzer + YAML policy</td>
+                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> aggregated deterministically from analyzer-emitted finding severities (no LLM; the YAML-policy path applies to <code>sigil assess</code> for native binaries)</td>
               </tr>
               <tr>
                 <td>Subprocess spawn</td>
@@ -211,14 +212,17 @@
           <h2>Verdict path vs. inventory</h2>
           <p>
             Syft answers <em>"what is here"</em>. SIGIL also answers
-            <em>"and is it acceptable, against this policy, right now"</em>.
-            The verdict comes from analyzer output plus a YAML rule — never
-            from an LLM, and never from a remote service.
+            <em>"and is it acceptable, right now"</em>. For the AI-BOM,
+            the verdict is aggregated deterministically from the analyzer's
+            per-finding severities — never from an LLM, never from a
+            remote service. A separate YAML-policy path applies to native
+            binary capability evaluation via <code>sigil assess</code>.
           </p>
           <ul class="check-list">
             <li>Syft: components list, no verdict</li>
-            <li>SIGIL: components + policy verdict + violations + call sites</li>
-            <li>Both: deterministic, scriptable in CI</li>
+            <li>SIGIL AI-BOM: components + findings + aggregated verdict</li>
+            <li>SIGIL assess (binary capability): analyzer + YAML policy → violations + call sites</li>
+            <li>Both deterministic and scriptable in CI</li>
           </ul>
         </div>
       </section>
