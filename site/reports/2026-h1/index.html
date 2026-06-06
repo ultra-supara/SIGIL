@@ -28,12 +28,12 @@
 
     <main id="top">
       <section class="compare-hero">
-        <span class="report-badge pending">Data collection in progress</span>
+        <span class="report-badge">Published 2026-06-07</span>
         <p class="definition">Report · 2026 H1</p>
         <h1>State of Local AI Audit</h1>
         <p class="lead">
           A 5-model sample of the Ollama public registry, audited with
-          SIGIL. We report license layer presence, SPDX detection,
+          SIGIL 0.1.0. We report license layer presence, SPDX detection,
           manifest integrity, and verdict distribution — derived
           deterministically from each model's on-disk evidence, with no
           LLM in the verdict path.
@@ -57,18 +57,18 @@
           </div>
           <div class="stat-card">
             <div class="stat-label">License layer presence</div>
-            <div class="stat-value pending">— %</div>
-            <div class="stat-sub"><span class="pending-marker">Pending</span> models shipping a license layer</div>
+            <div class="stat-value">100 %</div>
+            <div class="stat-sub">5/5 models shipping a license layer</div>
           </div>
           <div class="stat-card">
             <div class="stat-label">SPDX detection rate</div>
-            <div class="stat-value pending">— %</div>
-            <div class="stat-sub"><span class="pending-marker">Pending</span> license layer matched to an SPDX id</div>
+            <div class="stat-value">60 %</div>
+            <div class="stat-sub">3/5 license layers matched to an SPDX id <em>(one detection is a known false positive — see Methodology)</em></div>
           </div>
           <div class="stat-card">
             <div class="stat-label">Manifest integrity</div>
-            <div class="stat-value pending">— / 5</div>
-            <div class="stat-sub"><span class="pending-marker">Pending</span> models where every blob SHA-256 matched the manifest digest</div>
+            <div class="stat-value">5 / 5</div>
+            <div class="stat-sub">models where every blob SHA-256 matched the manifest digest</div>
           </div>
         </div>
       </section>
@@ -93,18 +93,18 @@
             <tbody>
               <tr>
                 <td>Present, SPDX detected</td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td>3</td>
+                <td>60 %</td>
               </tr>
               <tr>
                 <td>Present, SPDX undetected</td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td>2</td>
+                <td>40 %</td>
               </tr>
               <tr>
                 <td>Absent</td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td>0</td>
+                <td>0 %</td>
               </tr>
             </tbody>
           </table>
@@ -128,9 +128,14 @@
             </thead>
             <tbody>
               <tr>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td><code>Apache-2.0</code></td>
+                <td>2</td>
+                <td><code>mistral:7b</code>, <code>qwen2.5:7b</code></td>
+              </tr>
+              <tr>
+                <td><code>"Microsoft."</code> <em>(false positive — see Methodology)</em></td>
+                <td>1</td>
+                <td><code>phi3:mini</code> (actual license is MIT)</td>
               </tr>
             </tbody>
           </table>
@@ -147,11 +152,11 @@
             distribution across the sample is reported as-is.
           </p>
           <ul class="check-list">
-            <li><code>PASS</code> count: <span class="pending-marker">Pending</span></li>
-            <li><code>WARN</code> count: <span class="pending-marker">Pending</span></li>
-            <li><code>FAIL</code> count: <span class="pending-marker">Pending</span></li>
-            <li>Total findings: <span class="pending-marker">Pending</span></li>
-            <li>Models with at least one finding: <span class="pending-marker">Pending</span></li>
+            <li><code>PASS</code> count: 5</li>
+            <li><code>WARN</code> count: 0</li>
+            <li><code>FAIL</code> count: 0</li>
+            <li>Total findings: 0</li>
+            <li>Models with at least one finding: 0</li>
           </ul>
         </div>
         <div>
@@ -163,7 +168,7 @@
           </p>
           <ul class="check-list">
             <li>Default <code>OLLAMA_HOST</code>: <code>http://127.0.0.1:11434</code></li>
-            <li>Observed listener class: <span class="pending-marker">Pending</span></li>
+            <li>Observed listener class: <code>localhost</code> (single bind <code>127.0.0.1:11434</code>)</li>
             <li>Source: <code>/proc</code></li>
           </ul>
         </div>
@@ -192,43 +197,43 @@
             <tbody>
               <tr>
                 <td><code>gemma3:4b</code></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td><code>PASS</code></td>
+                <td>present, SPDX undetected</td>
+                <td>5</td>
+                <td>3.34 GB</td>
+                <td>0</td>
               </tr>
               <tr>
                 <td><code>llama3.2:3b</code></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-              </tr>
-              <tr>
-                <td><code>qwen2.5:7b</code></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td><code>PASS</code></td>
+                <td>present, SPDX undetected</td>
+                <td>6</td>
+                <td>2.02 GB</td>
+                <td>0</td>
               </tr>
               <tr>
                 <td><code>mistral:7b</code></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td><code>PASS</code></td>
+                <td><code>Apache-2.0</code></td>
+                <td>5</td>
+                <td>4.37 GB</td>
+                <td>0</td>
               </tr>
               <tr>
                 <td><code>phi3:mini</code></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
-                <td><span class="pending-marker">Pending</span></td>
+                <td><code>PASS</code></td>
+                <td><code>"Microsoft."</code> (FP — actual MIT)</td>
+                <td>5</td>
+                <td>2.18 GB</td>
+                <td>0</td>
+              </tr>
+              <tr>
+                <td><code>qwen2.5:7b</code></td>
+                <td><code>PASS</code></td>
+                <td><code>Apache-2.0</code></td>
+                <td>5</td>
+                <td>4.68 GB</td>
+                <td>0</td>
               </tr>
             </tbody>
           </table>
@@ -247,9 +252,10 @@
           <ul class="check-list">
             <li>Sample size: 5 tags from the Ollama public registry</li>
             <li>Tool: <code>sigil aibom generate --runtime ollama --format json</code></li>
-            <li>SIGIL version at run time: <span class="pending-marker">Pending</span></li>
+            <li>SIGIL version at run time: <code>0.1.0</code></li>
             <li>AI-BOM schema version: <code>1.1</code></li>
-            <li>Audit date: <span class="pending-marker">Pending</span> (recorded in <code>summary.json</code>)</li>
+            <li>Audit date: <code>2026-06-07</code> (recorded in <code>summary.json</code>)</li>
+            <li>Ollama version on the audit workstation: <code>0.30.6</code></li>
             <li>Verdict path: deterministic severity aggregation in <code>crates/sigil-core/src/ollama.rs:349-356</code></li>
             <li>SPDX detection: shortname + body match over 10 families</li>
             <li>
@@ -258,6 +264,20 @@
               Surfaced as <code>manifest_integrity.integrity_pass_count</code> in <code>summary.json</code>.
             </li>
           </ul>
+          <div class="anti-persona" style="margin-top: 28px;">
+            <h3>Known limitation surfaced by this audit</h3>
+            <p>
+              The <code>phi3:mini</code> license layer starts with the literal
+              text <code>Microsoft.\n</code> before the standard MIT body. SIGIL's
+              SPDX detector reports <code>spdx_id: "Microsoft."</code> for this
+              layer, which is a false positive — the actual license is MIT. The
+              detection logic in <code>crates/sigil-core/src/ollama.rs</code> needs
+              to skip the leading non-license tokens before matching the
+              body. We are reporting the raw output above without correction so
+              the number is reproducible from <code>summary.json</code>; a fix
+              will land in a separate PR and a follow-up report.
+            </p>
+          </div>
         </div>
         <div>
           <h2>Reproduce this</h2>

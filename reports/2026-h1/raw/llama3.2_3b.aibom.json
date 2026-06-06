@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "name": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "models_dir": "/usr/share/ollama/.ollama/models",
+    "api_exposure": "localhost",
+    "status": "reachable",
+    "version": "0.30.6",
+    "exposure": {
+      "class": "localhost",
+      "source": "proc",
+      "observed": [
+        {
+          "addr": "127.0.0.1",
+          "port": 11434
+        }
+      ]
+    }
+  },
+  "models": [
+    {
+      "name": "llama3.2:3b",
+      "manifest_path": "/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/llama3.2/3b",
+      "files": [
+        {
+          "digest": "sha256:34bb5ab01051a11372a91f95f3fbbc51173eed8e7f13ec395b9ae9b8bd0e242b",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-34bb5ab01051a11372a91f95f3fbbc51173eed8e7f13ec395b9ae9b8bd0e242b",
+          "size": 561,
+          "sha256": "34bb5ab01051a11372a91f95f3fbbc51173eed8e7f13ec395b9ae9b8bd0e242b",
+          "kind": "config"
+        },
+        {
+          "digest": "sha256:56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb",
+          "size": 96,
+          "sha256": "56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb",
+          "kind": "params"
+        },
+        {
+          "digest": "sha256:966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396",
+          "size": 1429,
+          "sha256": "966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396",
+          "kind": "template"
+        },
+        {
+          "digest": "sha256:a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd",
+          "size": 6016,
+          "sha256": "a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd",
+          "kind": "license"
+        },
+        {
+          "digest": "sha256:dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff",
+          "size": 2019377376,
+          "sha256": "dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff",
+          "kind": "model"
+        },
+        {
+          "digest": "sha256:fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d",
+          "path": "/usr/share/ollama/.ollama/models/blobs/sha256-fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d",
+          "size": 7711,
+          "sha256": "fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d",
+          "kind": "license"
+        }
+      ],
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "llama3.2",
+        "tag": "3b",
+        "config_digest": "sha256:34bb5ab01051a11372a91f95f3fbbc51173eed8e7f13ec395b9ae9b8bd0e242b",
+        "layer_digests": [
+          "sha256:dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff",
+          "sha256:966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396",
+          "sha256:fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d",
+          "sha256:a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd",
+          "sha256:56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb"
+        ]
+      },
+      "license": {
+        "digest": "sha256:fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d",
+        "size": 7711,
+        "text_excerpt": "LLAMA 3.2 COMMUNITY LICENSE AGREEMENT\nLlama 3.2 Version Release Date: September 25, 2024\n\n“Agreement” means the terms and conditions for use, reproduction, distribution \nand modification of the Llama Materials set forth herein.\n\n“Documentation” mea"
+      }
+    }
+  ],
+  "findings": [],
+  "verdict": "PASS"
+}

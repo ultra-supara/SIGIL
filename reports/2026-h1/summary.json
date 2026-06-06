@@ -1,0 +1,127 @@
+{
+  "sample_size": 5,
+  "generated_at": "2026-06-06T16:06:52Z",
+  "sigil_versions": [
+    "0.1.0"
+  ],
+  "schema_versions": [
+    "1.1"
+  ],
+  "verdict_distribution": [
+    {
+      "verdict": "PASS",
+      "count": 5
+    }
+  ],
+  "runtime_exposure_distribution": [
+    {
+      "class": "localhost",
+      "count": 5
+    }
+  ],
+  "license_distribution": [
+    {
+      "spdx_id": "Apache-2.0",
+      "count": 2
+    },
+    {
+      "spdx_id": "Microsoft.",
+      "count": 1
+    }
+  ],
+  "license_status": [
+    {
+      "status": "present_detected",
+      "count": 3
+    },
+    {
+      "status": "present_undetected",
+      "count": 2
+    }
+  ],
+  "license_layer_presence": {
+    "with_license": 5,
+    "total": 5,
+    "rate_percent": 100
+  },
+  "findings_total": 0,
+  "findings_by_severity": [],
+  "findings_by_category": [],
+  "findings_by_id": [],
+  "models_with_findings": 0,
+  "manifest_integrity": {
+    "integrity_pass_count": 5,
+    "integrity_fail_count": 0,
+    "total": 5,
+    "rate_percent": 100,
+    "fail_ids": [
+      "ollama.invalid_blob_digest",
+      "ollama.blob_digest_mismatch",
+      "ollama.blob_missing",
+      "ollama.model_not_found"
+    ]
+  },
+  "total_model_bytes": 16590232608,
+  "per_model": [
+    {
+      "name": "gemma3:4b",
+      "verdict": "PASS",
+      "license": "unknown",
+      "license_present": true,
+      "layer_count": 5,
+      "model_bytes": 3338792448,
+      "provenance": "registry.ollama.ai/library/gemma3:4b",
+      "findings_count": 0,
+      "finding_ids": [],
+      "integrity_pass": true
+    },
+    {
+      "name": "llama3.2:3b",
+      "verdict": "PASS",
+      "license": "unknown",
+      "license_present": true,
+      "layer_count": 6,
+      "model_bytes": 2019377376,
+      "provenance": "registry.ollama.ai/library/llama3.2:3b",
+      "findings_count": 0,
+      "finding_ids": [],
+      "integrity_pass": true
+    },
+    {
+      "name": "mistral:7b",
+      "verdict": "PASS",
+      "license": "Apache-2.0",
+      "license_present": true,
+      "layer_count": 5,
+      "model_bytes": 4372811712,
+      "provenance": "registry.ollama.ai/library/mistral:7b",
+      "findings_count": 0,
+      "finding_ids": [],
+      "integrity_pass": true
+    },
+    {
+      "name": "phi3:mini",
+      "verdict": "PASS",
+      "license": "Microsoft.",
+      "license_present": true,
+      "layer_count": 5,
+      "model_bytes": 2176177120,
+      "provenance": "registry.ollama.ai/library/phi3:mini",
+      "findings_count": 0,
+      "finding_ids": [],
+      "integrity_pass": true
+    },
+    {
+      "name": "qwen2.5:7b",
+      "verdict": "PASS",
+      "license": "Apache-2.0",
+      "license_present": true,
+      "layer_count": 5,
+      "model_bytes": 4683073952,
+      "provenance": "registry.ollama.ai/library/qwen2.5:7b",
+      "findings_count": 0,
+      "finding_ids": [],
+      "integrity_pass": true
+    }
+  ]
+}
