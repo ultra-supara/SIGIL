@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SIGIL vs Anchore Syft — GGUF cataloger and the local AI-BOM gap</title>
+    <meta
+      name="description"
+      content="Honest comparison between SIGIL and Anchore Syft's GGUF cataloger (v1.38+) for local AI Bill of Materials generation."
+    />
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../" aria-label="SIGIL home">
+        <span class="brand-mark">S</span>
+        <span>SIGIL</span>
+      </a>
+      <nav class="nav" aria-label="Primary navigation">
+        <a href="../../#scope">Scope</a>
+        <a href="../../#report">Report</a>
+        <a href="../../#aibom">AI-BOM</a>
+        <a href="../">Compare</a>
+        <a href="../../#docs">Docs</a>
+        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="compare-hero">
+        <p class="definition">Compare · SBOM family</p>
+        <h1>SIGIL vs Anchore Syft</h1>
+        <p class="lead">
+          Syft 1.38 added a GGUF cataloger that emits CycloneDX ML-BOM
+          components — the closest mainstream tool to SIGIL on the
+          AI-BOM axis. This is what each tool covers, where they overlap,
+          and where they don't.
+        </p>
+        <div class="verdict-box">
+          <div>
+            <h3>Pick Syft when</h3>
+            <p>
+              You need general-purpose SBOM coverage across packages, OS
+              layers, language ecosystems, container images, and now GGUF
+              model files. CycloneDX 1.6 is a hard requirement. Your AI
+              artifacts live as standalone <code>.gguf</code> files on disk
+              or inside <code>vnd.docker.ai.gguf.v3</code> OCI layers.
+            </p>
+          </div>
+          <div>
+            <h3>Pick SIGIL when</h3>
+            <p>
+              Your local AI runs through Ollama (<code>~/.ollama/models/</code>),
+              you need every blob's SHA-256 verified against the manifest
+              digest, you want runtime exposure classified from <code>/proc</code>,
+              you need SPDX from the Ollama license layer, and you want a
+              deterministic PASS/WARN/FAIL verdict aggregated from the
+              analyzer's per-finding severities — no LLM in the path.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section compare-axes">
+        <div class="section-heading">
+          <h2>Axis-by-axis</h2>
+          <p>
+            Each row is a piece of evidence that ends up — or doesn't —
+            in the resulting BOM artifact.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Axis</th>
+                <th>Syft 1.45 (gguf-cataloger)</th>
+                <th>SIGIL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Output format</td>
+                <td>CycloneDX 1.6 / 1.7, SPDX</td>
+                <td>SIGIL AI-BOM <code>schema_version: 1.1</code> (JSON + Markdown)</td>
+              </tr>
+              <tr>
+                <td>Local source</td>
+                <td>Filesystem walk for <code>.gguf</code> files</td>
+                <td><code>~/.ollama/models/</code> manifest walk</td>
+              </tr>
+              <tr>
+                <td>OCI source</td>
+                <td><code>application/vnd.docker.ai.gguf.v3</code></td>
+                <td>Ollama manifest layers (model / config / params / license)</td>
+              </tr>
+              <tr>
+                <td>Integrity check</td>
+                <td>GGUF header magic + format version</td>
+                <td>Streaming SHA-256 of every blob vs. manifest digest</td>
+              </tr>
+              <tr>
+                <td>License detection</td>
+                <td>License field from GGUF metadata when present</td>
+                <td>SPDX id from Ollama license layer — 10 families by shortname or body match</td>
+              </tr>
+              <tr>
+                <td>Provenance</td>
+                <td>GGUF metadata fields (name, source URL)</td>
+                <td><code>registry / namespace / model / tag</code> tuple parsed from manifest path</td>
+              </tr>
+              <tr>
+                <td>Runtime exposure</td>
+                <td>Out of scope</td>
+                <td><code>/proc</code> walk → <code>localhost / lan / public_bind / docker_published / proxy</code></td>
+              </tr>
+              <tr>
+                <td>Native binary capability</td>
+                <td>Out of scope</td>
+                <td>x86_64 → IR → SafeISA; <code>network / file_read / process_spawn / …</code></td>
+              </tr>
+              <tr>
+                <td>Verdict</td>
+                <td>None (inventory-first)</td>
+                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> aggregated deterministically from analyzer-emitted finding severities (no LLM; the YAML-policy path applies to <code>sigil assess</code> for native binaries)</td>
+              </tr>
+              <tr>
+                <td>Subprocess spawn</td>
+                <td>Yes for some catalogers</td>
+                <td>None — <code>/proc</code> parsed directly</td>
+              </tr>
+              <tr>
+                <td>Network egress</td>
+                <td>Yes when pulling OCI / matching vulns</td>
+                <td>None</td>
+              </tr>
+              <tr>
+                <td>Language / distribution</td>
+                <td>Go, single static binary</td>
+                <td>Rust, single static binary</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section split">
+        <div>
+          <h2>The gap that matters: Ollama OCI manifests</h2>
+          <p>
+            Syft's OCI AI source resolves layers tagged
+            <code>application/vnd.docker.ai.gguf.v3</code> — Docker's
+            AI image format. Ollama ships a different OCI layer schema
+            (<code>application/vnd.ollama.image.model</code>,
+            <code>application/vnd.ollama.image.license</code>, and friends)
+            and a different on-disk layout (<code>~/.ollama/models/manifests/&lt;registry&gt;/&lt;namespace&gt;/&lt;model&gt;/&lt;tag&gt;</code>).
+            Syft as of 1.45 does not parse it.
+          </p>
+          <p>
+            SIGIL parses the Ollama manifest, walks each referenced blob,
+            streams SHA-256, and reports any digest mismatch as a
+            <code>FAIL</code> finding tied to the model and tag.
+          </p>
+        </div>
+        <div class="command-panel" aria-label="SIGIL Ollama AI-BOM excerpt">
+          <pre><code># SIGIL AI-BOM: [PASS]
+
+- Schema: `1.1`
+
+## Runtime
+| Property         | Value                       |
+|------------------|-----------------------------|
+| Host             | `http://127.0.0.1:11434`    |
+| Runtime exposure | `localhost` (source: `proc`)|
+
+## Models
+
+### `gemma4:e2b`
+- **License:** `Apache-2.0` (digest `sha256:7339...`, 11355 B)
+- **Provenance:** `registry.ollama.ai / library / gemma4 / e2b`
+
+| Kind    | Size            | Digest             |
+|---------|-----------------|--------------------|
+| model   | 7162394016 B    | `sha256:4e30...`   |
+| license | 11355 B         | `sha256:7339...`   |</code></pre>
+        </div>
+      </section>
+
+      <section class="section split alt">
+        <div>
+          <h2>Standard schema vs. pinned schema</h2>
+          <p>
+            CycloneDX gives Syft broad ecosystem interop — vulnerability
+            scanners, viewers, registries, and policy engines speak it.
+            That is real value.
+          </p>
+          <p>
+            SIGIL's AI-BOM uses a custom <code>schema_version: "1.1"</code>
+            pinned by tests in the workspace. JSON and Markdown share the
+            same internal model so they cannot drift. The tradeoff is
+            narrower interop today; the upside is a schema small enough to
+            review end-to-end and stable enough to diff across review
+            cycles. A CycloneDX export path is on the roadmap.
+          </p>
+          <ul class="check-list">
+            <li>Syft → CycloneDX 1.6 / 1.7 / SPDX</li>
+            <li>SIGIL → SIGIL AI-BOM 1.1 (JSON + Markdown)</li>
+            <li>Both → single static binary</li>
+          </ul>
+        </div>
+        <div>
+          <h2>Verdict path vs. inventory</h2>
+          <p>
+            Syft answers <em>"what is here"</em>. SIGIL also answers
+            <em>"and is it acceptable, right now"</em>. For the AI-BOM,
+            the verdict is aggregated deterministically from the analyzer's
+            per-finding severities — never from an LLM, never from a
+            remote service. A separate YAML-policy path applies to native
+            binary capability evaluation via <code>sigil assess</code>.
+          </p>
+          <ul class="check-list">
+            <li>Syft: components list, no verdict</li>
+            <li>SIGIL AI-BOM: components + findings + aggregated verdict</li>
+            <li>SIGIL assess (binary capability): analyzer + YAML policy → violations + call sites</li>
+            <li>Both deterministic and scriptable in CI</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>Use both</h2>
+          <p>
+            They are complementary, not exclusive.
+          </p>
+        </div>
+        <ul class="check-list">
+          <li>Run <code>syft</code> for general SBOM coverage — OS packages, language ecosystems, container layers, and standalone GGUF model files</li>
+          <li>Run <code>sigil runtime inspect ollama</code> for the Ollama runtime + manifest + license layer + exposure</li>
+          <li>Attach both to the same review ticket; the Ollama-specific record is the one that answers compliance's local-AI question</li>
+        </ul>
+        <div class="anti-persona">
+          <h3>When SIGIL is the wrong choice</h3>
+          <p>
+            If you are not running a local LLM runtime, or your AI runs
+            entirely against hosted APIs (OpenAI / Bedrock / Vertex), SIGIL
+            has nothing to inspect today. If you need CycloneDX output for
+            a downstream tool, run Syft and revisit SIGIL when the
+            CycloneDX export path lands. If your model store is plain
+            <code>.gguf</code> files outside of any Ollama install, Syft is
+            the right tool right now.
+          </p>
+        </div>
+      </section>
+
+      <section class="section docs-section">
+        <div class="section-heading">
+          <h2>Sources</h2>
+          <p>Facts above are checked against the linked code and releases.</p>
+        </div>
+        <div class="doc-links">
+          <a href="https://github.com/anchore/syft/pull/4279">
+            <span>Syft PR #4279</span>
+            "feat: 4184 gguf parser (ai artifact cataloger) part 1" — merged 2025-11-13, shipped in v1.38.0.
+          </a>
+          <a href="https://github.com/anchore/syft/blob/main/syft/pkg/cataloger/ai/cataloger.go">
+            <span>Syft gguf-cataloger</span>
+            Source: <code>syft/pkg/cataloger/ai/cataloger.go</code> — name <code>gguf-cataloger</code>.
+          </a>
+          <a href="https://github.com/anchore/syft/blob/main/syft/source/ocimodelsource/registry_client.go">
+            <span>Syft OCI model source</span>
+            <code>application/vnd.docker.ai.gguf.v3</code> layer media type, header-only fetch.
+          </a>
+          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ollama-inspection.md">
+            <span>SIGIL Ollama inspection</span>
+            Manifest walk, SHA-256, SPDX detection, <code>/proc</code> exposure classes, findings.
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>SIGIL is local-first and analysis-only.</span>
+      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
+    </footer>
+  </body>
+</html>
