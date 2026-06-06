@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ultra-supara/SIGIL/main/schemas/aibom-v1.schema.json",
+  "title": "SIGIL AI-BOM v1",
+  "description": "Schema for AI-BOM JSON produced by sigil — schema_version 1.x. Self-contained: no external $ref. Strict: additionalProperties: false on every object.",
+  "$ref": "#/$defs/AiBom",
+  "$defs": {
+    "AiBom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "tool", "runtime", "models", "findings", "verdict"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "tool": { "$ref": "#/$defs/ToolInfo" },
+        "runtime": { "$ref": "#/$defs/RuntimeInfo" },
+        "models": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ModelEntry" }
+        },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Finding" }
+        },
+        "verdict": { "$ref": "#/$defs/Verdict" }
+      }
+    },
+    "ToolInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "RuntimeInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "host", "api_exposure", "status", "exposure"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1 },
+        "models_dir": { "type": "string", "minLength": 1 },
+        "api_exposure": { "$ref": "#/$defs/ApiExposure" },
+        "status": { "$ref": "#/$defs/RuntimeStatus" },
+        "version": { "type": "string", "minLength": 1 },
+        "exposure": { "$ref": "#/$defs/ExposureInfo" }
+      }
+    },
+    "ExposureInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "source", "observed"],
+      "properties": {
+        "class": { "$ref": "#/$defs/RuntimeExposureClass" },
+        "source": { "type": "string", "minLength": 1 },
+        "observed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/BindEntry" }
+        }
+      }
+    },
+    "BindEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["addr", "port"],
+      "properties": {
+        "addr": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "process": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ModelEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "files", "provenance"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "manifest_path": { "type": "string", "minLength": 1 },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FileEntry" }
+        },
+        "provenance": { "$ref": "#/$defs/ProvenanceEntry" },
+        "license": { "$ref": "#/$defs/LicenseEntry" }
+      }
+    },
+    "FileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "path", "size", "sha256", "kind"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/Sha256Digest" },
+        "path": { "type": "string", "minLength": 1 },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/Sha256Hex" },
+        "kind": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ProvenanceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer_digests"],
+      "properties": {
+        "registry": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "config_digest": { "$ref": "#/$defs/Sha256Digest" },
+        "layer_digests": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Sha256Digest" }
+        }
+      }
+    },
+    "LicenseEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "size", "text_excerpt"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/Sha256Digest" },
+        "size": { "type": "integer", "minimum": 0 },
+        "spdx_id": { "type": "string", "minLength": 1 },
+        "text_excerpt": { "type": "string", "maxLength": 256 }
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "severity", "message", "evidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "category": { "$ref": "#/$defs/FindingCategory" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "message": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "ApiExposure": {
+      "enum": ["not_probed", "localhost", "network", "public_bind", "unavailable"]
+    },
+    "RuntimeStatus": {
+      "enum": ["not_probed", "reachable", "unreachable"]
+    },
+    "RuntimeExposureClass": {
+      "enum": ["localhost", "lan", "public_bind", "docker_published", "proxy", "unknown"]
+    },
+    "FindingCategory": {
+      "enum": ["runtime", "model", "binary"]
+    },
+    "Severity": {
+      "enum": ["WARN", "FAIL"]
+    },
+    "Verdict": {
+      "enum": ["PASS", "WARN", "FAIL"]
+    }
+  }
+}

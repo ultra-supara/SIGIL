@@ -211,7 +211,12 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
         let mut files = Vec::new();
         let mut license = None;
         if let Some(config) = manifest.config {
-            provenance.config_digest = Some(config.digest.clone());
+            // Only record well-formed digests in provenance; invalid ones are
+            // still preserved as evidence inside ollama.invalid_blob_digest
+            // findings emitted by push_model_file_or_finding below.
+            if is_valid_ollama_digest(&config.digest) {
+                provenance.config_digest = Some(config.digest.clone());
+            }
             push_model_file_or_finding(
                 &options.models_dir,
                 &config.digest,
@@ -222,16 +227,22 @@ pub fn inspect_ollama(options: OllamaInspectOptions) -> Result<OllamaReport, Oll
             )?;
         }
         for layer in manifest.layers {
-            provenance.layer_digests.push(layer.digest.clone());
+            if is_valid_ollama_digest(&layer.digest) {
+                provenance.layer_digests.push(layer.digest.clone());
+            }
             let is_license = layer
                 .media_type
                 .as_deref()
                 .map(|media_type| media_type == LICENSE_MEDIA_TYPE)
                 .unwrap_or(false);
+            // mediaType="application/vnd.ollama.image." would otherwise yield
+            // an empty kind, which fails the v1 schema's minLength: 1 on
+            // files[].kind. Fall through to "blob" in that case.
             let kind = layer
                 .media_type
                 .as_deref()
                 .and_then(|media_type| media_type.rsplit('.').next())
+                .filter(|kind| !kind.is_empty())
                 .unwrap_or("blob");
             let before_len = files.len();
             push_model_file_or_finding(
