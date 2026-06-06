@@ -14,10 +14,15 @@
 //!   - site/viewer/samples/warn.aibom.json
 //!   - site/viewer/samples/fail.aibom.json
 //!
-//! The `models_dir` and `manifest_path` fields are rewritten from the tempdir
-//! paths to stable, fictional ones — otherwise the committed sample would
-//! churn on every developer's machine. Everything else is verbatim from the
-//! inspector.
+//! Every field that holds a tempdir path is rewritten to a stable, fictional
+//! one — otherwise the committed sample would churn on every developer's
+//! machine. Specifically `stabilize_paths` substitutes the tempdir root in:
+//!   - `runtime.models_dir`
+//!   - `models[*].manifest_path`
+//!   - `models[*].files[*].path`
+//!   - `findings[*].evidence`
+//! All other fields (digests, sizes, provenance tuples, license text,
+//! verdict, findings shape) come straight from the inspector.
 
 use std::fs;
 use std::path::{Path, PathBuf};
