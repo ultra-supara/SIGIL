@@ -415,7 +415,7 @@ p {
 .feature-grid {
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 44px;
 }
 
@@ -828,7 +828,7 @@ tr:last-child td {
 .doc-links {
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 44px;
 }
 
