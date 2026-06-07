@@ -29,15 +29,53 @@
     </header>
 
     <main id="top">
-      <section class="compare-hero">
-        <p class="definition">Compare · Vendor built-ins</p>
-        <h1>SIGIL vs <code>ollama show</code> + <code>hf cache verify</code></h1>
-        <p class="lead">
-          These are the commands a developer reaches for first — and they
-          are the right tools for what they do. This page is honest about
-          what each covers and where SIGIL extends the surface into an
-          audit-ready artifact.
-        </p>
+      <section class="page-hero">
+        <div class="hero-copy">
+          <p class="definition">Compare · Vendor built-ins</p>
+          <h1>SIGIL vs <code>ollama show</code> + <code>hf cache verify</code></h1>
+          <p class="lead">
+            These are the commands a developer reaches for first — and they
+            are the right tools for what they do. This page is honest about
+            what each covers and where SIGIL extends the surface into an
+            audit-ready artifact.
+          </p>
+        </div>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">sigil ⟷ built-ins</span>
+            <div class="diff">
+              <div class="col">
+                <div class="col-label">SIGIL</div>
+                <div class="verdict-row"><span class="verdict-pill pass">[PASS]</span></div>
+                <div class="section-label">Artifact</div>
+                <div style="font-size: 12px; line-height: 1.6;">
+                  aibom.json (schema 1.1)<br/>
+                  manifest provenance tuple<br/>
+                  SPDX from license layer<br/>
+                  runtime exposure class<br/>
+                  every blob SHA-256 verified
+                </div>
+              </div>
+              <div class="col">
+                <div class="col-label">ollama show · hf cache verify</div>
+                <div class="verdict-row"><span class="verdict-pill">[—]</span></div>
+                <div class="section-label">Output</div>
+                <div style="font-size: 12px; line-height: 1.6;">
+                  Modelfile + tokenizer<br/>
+                  feature flags (vision, …)<br/>
+                  cache integrity check<br/>
+                  no BOM, no SPDX,<br/>
+                  no exposure classification
+                </div>
+              </div>
+            </div>
+            <div class="footnote">built-ins answer the terminal · SIGIL answers the review ticket</div>
+          </div>
+          <figcaption class="visually-hidden">SIGIL emits an audit-ready AI-BOM artifact with a PASS verdict; ollama show and hf cache verify emit terminal-only output.</figcaption>
+        </figure>
+      </section>
+
+      <section class="section verdict-section">
         <div class="verdict-box">
           <div>
             <h3>Pick the built-in when</h3>
