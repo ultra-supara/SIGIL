@@ -237,10 +237,10 @@ p {
 .hero {
   align-items: center;
   display: grid;
-  gap: clamp(40px, 5vw, 96px);
-  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 1fr);
-  min-height: calc(94vh - 72px);
-  padding: clamp(56px, 8vw, 120px) var(--gutter) clamp(56px, 8vw, 120px);
+  gap: clamp(48px, 5vw, 96px);
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.1fr);
+  min-height: calc(100vh - 72px);
+  padding: clamp(72px, 9vw, 140px) var(--gutter);
   position: relative;
 }
 
@@ -274,8 +274,8 @@ p {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.06em;
-  min-height: 48px;
-  padding: 0 26px;
+  min-height: 52px;
+  padding: 0 30px;
   text-transform: uppercase;
   transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
@@ -367,6 +367,83 @@ p {
 .hero-visual svg {
   height: auto;
   width: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared hero grammar for subpages (compare, reports, viewer).
+ * Same two-column rhythm as the home hero, slightly smaller.
+ * --------------------------------------------------------------------------- */
+
+.page-hero {
+  align-items: center;
+  border-bottom: var(--rule);
+  display: grid;
+  gap: clamp(48px, 5vw, 88px);
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.1fr);
+  padding: clamp(96px, 11vw, 160px) var(--gutter) clamp(56px, 6vw, 96px);
+}
+
+.page-hero .art {
+  font-size: 12.5px;
+  padding: 32px 36px 28px;
+}
+
+.page-hero .art .row {
+  font-size: 11.5px;
+  grid-template-columns: 100px 50px 1fr 90px;
+}
+
+.page-hero .art .safeisa {
+  font-size: 11.5px;
+}
+
+/* Demoted quickstart — small full-bleed strip placed above #scope. */
+.quickstart-strip {
+  background: var(--paper-soft);
+  border-bottom: var(--rule);
+  border-top: var(--rule);
+  padding: 24px var(--gutter);
+}
+
+.quickstart-strip-inner {
+  align-items: center;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(160px, max-content) minmax(0, 1fr);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.quickstart-strip .quickstart-caption {
+  color: var(--ink-mute);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-style: italic;
+  letter-spacing: 0.18em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.quickstart-strip pre {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.66;
+  margin: 0;
+  overflow-x: auto;
+  padding: 16px 20px;
+  position: relative;
+}
+
+.quickstart-strip pre::before {
+  background: var(--accent);
+  content: "";
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 2px;
 }
 
 /* ---------------------------------------------------------------------------
