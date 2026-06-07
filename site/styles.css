@@ -77,6 +77,16 @@ svg {
   max-width: 100%;
 }
 
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 /* ---------------------------------------------------------------------------
  * Header & navigation
  * --------------------------------------------------------------------------- */
@@ -526,6 +536,15 @@ p {
   font-size: 15px;
   line-height: 1.6;
   margin: 0;
+}
+
+.feature-footnote {
+  color: var(--ink-soft);
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.55;
+  margin: 36px 0 0;
+  max-width: var(--measure);
 }
 
 .split {
