@@ -29,14 +29,43 @@
     </header>
 
     <main id="top">
-      <section class="compare-hero">
-        <p class="definition">Compare</p>
-        <h1>SIGIL next to the tools you would otherwise reach for.</h1>
-        <p class="lead">
-          AI-BOM and local-model tooling has moved fast in the last twelve
-          months. These pages are honest about what each tool covers, where
-          SIGIL extends the surface, and where another tool is the right pick.
-        </p>
+      <section class="page-hero">
+        <div class="hero-copy">
+          <p class="definition">Compare</p>
+          <h1>SIGIL next to the tools you would otherwise reach for.</h1>
+          <p class="lead">
+            AI-BOM and local-model tooling has moved fast in the last twelve
+            months. These pages are honest about what each tool covers, where
+            SIGIL extends the surface, and where another tool is the right pick.
+          </p>
+        </div>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">verdict comparison</span>
+            <div class="section-label">SIGIL</div>
+            <div class="verdict-row">
+              <span class="verdict-pill pass">[PASS]</span>
+              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">aibom + runtime + capability evidence</span>
+            </div>
+            <div class="section-label">Anchore Syft 1.38+</div>
+            <div class="verdict-row">
+              <span class="verdict-pill">[—]</span>
+              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">CycloneDX ML-BOM, no verdict, no runtime</span>
+            </div>
+            <div class="section-label">Vendor built-ins</div>
+            <div class="verdict-row">
+              <span class="verdict-pill">[—]</span>
+              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">integrity only, no BOM, no exposure</span>
+            </div>
+            <div class="section-label">OWASP AIBOM Generator</div>
+            <div class="verdict-row">
+              <span class="verdict-pill">[—]</span>
+              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">CycloneDX 1.6 from Hugging Face metadata</span>
+            </div>
+            <div class="footnote">verdict only emitted by SIGIL</div>
+          </div>
+          <figcaption class="visually-hidden">SIGIL emits a PASS/WARN/FAIL verdict; the three adjacent tools (Anchore Syft, vendor built-ins, OWASP AIBOM Generator) do not.</figcaption>
+        </figure>
       </section>
 
       <section class="section">
