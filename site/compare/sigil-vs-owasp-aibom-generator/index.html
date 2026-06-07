@@ -29,15 +29,51 @@
     </header>
 
     <main id="top">
-      <section class="compare-hero">
-        <p class="definition">Compare · Institutional reference</p>
-        <h1>SIGIL vs OWASP AIBOM Generator</h1>
-        <p class="lead">
-          The OWASP AIBOM Generator is the institutional reference for what
-          an AI Bill of Materials looks like, listed in the CycloneDX Tool
-          Center. SIGIL covers the same artifact name from a different
-          angle — what is actually installed on the box, hashed.
-        </p>
+      <section class="page-hero">
+        <div class="hero-copy">
+          <p class="definition">Compare · Institutional reference</p>
+          <h1>SIGIL vs OWASP AIBOM Generator</h1>
+          <p class="lead">
+            The OWASP AIBOM Generator is the institutional reference for what
+            an AI Bill of Materials looks like, listed in the CycloneDX Tool
+            Center. SIGIL covers the same artifact name from a different
+            angle — what is actually installed on the box, hashed.
+          </p>
+        </div>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">sigil ⟷ owasp aibom</span>
+            <div class="diff">
+              <div class="col">
+                <div class="col-label">SIGIL</div>
+                <div class="verdict-row"><span class="verdict-pill pass">[PASS]</span></div>
+                <div class="section-label">Source</div>
+                <div style="font-size: 12px; line-height: 1.6;">
+                  on-disk Ollama manifest<br/>
+                  every blob hashed locally<br/>
+                  /proc runtime exposure<br/>
+                  deterministic verdict
+                </div>
+              </div>
+              <div class="col">
+                <div class="col-label">OWASP AIBOM Generator</div>
+                <div class="verdict-row"><span class="verdict-pill">[—]</span></div>
+                <div class="section-label">Source</div>
+                <div style="font-size: 12px; line-height: 1.6;">
+                  Hugging Face model card<br/>
+                  repository metadata<br/>
+                  CycloneDX 1.6 schema<br/>
+                  no on-box evidence
+                </div>
+              </div>
+            </div>
+            <div class="footnote">same artifact name · different epistemics</div>
+          </div>
+          <figcaption class="visually-hidden">SIGIL derives the AI-BOM from on-disk Ollama evidence with a PASS verdict; the OWASP generator derives it from Hugging Face metadata.</figcaption>
+        </figure>
+      </section>
+
+      <section class="section verdict-section">
         <div class="verdict-box">
           <div>
             <h3>Pick OWASP AIBOM Generator when</h3>
