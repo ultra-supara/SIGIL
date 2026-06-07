@@ -29,17 +29,44 @@
     </header>
 
     <main id="top">
-      <section class="compare-hero">
-        <span class="report-badge">Published 2026-06-07</span>
-        <p class="definition">Report · 2026 H1</p>
-        <h1>State of Local AI Audit</h1>
-        <p class="lead">
-          A 5-model sample of the Ollama public registry, audited with
-          SIGIL 0.1.0. We report license layer presence, SPDX detection,
-          manifest integrity, and verdict distribution — derived
-          deterministically from each model's on-disk evidence, with no
-          LLM in the verdict path.
-        </p>
+      <section class="page-hero">
+        <div class="hero-copy">
+          <span class="report-badge">Published 2026-06-07</span>
+          <p class="definition">Report · 2026 H1</p>
+          <h1>State of Local AI Audit</h1>
+          <p class="lead">
+            A 5-model sample of the Ollama public registry, audited with
+            SIGIL 0.1.0. We report license layer presence, SPDX detection,
+            manifest integrity, and verdict distribution — derived
+            deterministically from each model's on-disk evidence, with no
+            LLM in the verdict path.
+          </p>
+        </div>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">report · 2026 H1</span>
+            <div class="verdict-row">
+              <span class="verdict-label">Aggregate</span>
+              <span class="verdict-pill pass">[PASS]</span>
+            </div>
+            <div class="section-label">Sample</div>
+            <div style="font-size: 12px; line-height: 1.6;">
+              5 Ollama tags · 100 % license layer presence<br/>
+              60 % SPDX detection (1 known FP)<br/>
+              5 / 5 manifest integrity
+            </div>
+            <div class="section-label">Per-model verdicts</div>
+            <div style="font-size: 12px; line-height: 1.7; color: rgba(246,244,236,0.85);">
+              <div>gemma3:4b &nbsp;&nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
+              <div>llama3.2:3b &nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
+              <div>mistral:7b &nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
+              <div>phi3:mini &nbsp;&nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
+              <div>qwen2.5:7b &nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
+            </div>
+            <div class="footnote">methodology · per-model index below</div>
+          </div>
+          <figcaption class="visually-hidden">Aggregate PASS verdict for the 2026 H1 sample: all five models (gemma3:4b, llama3.2:3b, mistral:7b, phi3:mini, qwen2.5:7b) PASS.</figcaption>
+        </figure>
       </section>
 
       <section class="section">
