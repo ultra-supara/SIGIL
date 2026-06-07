@@ -1132,11 +1132,13 @@ tr:last-child td {
 
 @media (max-width: 980px) {
   .hero,
-  .split {
+  .split,
+  .page-hero {
     grid-template-columns: 1fr;
   }
 
-  .hero {
+  .hero,
+  .page-hero {
     min-height: auto;
   }
 
@@ -1183,6 +1185,10 @@ tr:last-child td {
 
   .stat-card:last-child {
     border-bottom: 0;
+  }
+
+  .quickstart-strip-inner {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1248,5 +1254,24 @@ tr:last-child td {
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .art .meta .k + * {
+    display: inline-block;
+    max-width: calc(100% - 70px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
+  }
+}
+
+/* Landscape phones: don't trap the user in a 100vh hero. */
+@media (max-aspect-ratio: 4/3) and (max-height: 540px) {
+  .hero,
+  .page-hero {
+    min-height: auto;
+    padding-top: 48px;
+    padding-bottom: 48px;
   }
 }
