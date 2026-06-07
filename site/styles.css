@@ -1265,6 +1265,16 @@ tr:last-child td {
     vertical-align: bottom;
     white-space: nowrap;
   }
+
+  .art .row {
+    gap: 4px 14px;
+    grid-template-columns: 1fr;
+  }
+
+  .art .row > span:nth-child(2) {
+    color: rgba(246, 244, 236, 0.55);
+    font-size: 11px;
+  }
 }
 
 /* Landscape phones: don't trap the user in a 100vh hero. */
