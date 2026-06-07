@@ -2,15 +2,6 @@
  * Strict monochrome — verdict tokens carry meaning through weight, italic,
  * and the single SIGIL accent (green for PASS only), never additional hues. */
 
-.viewer-hero {
-  padding: clamp(64px, 8vw, 120px) var(--gutter) 32px;
-  max-width: 980px;
-}
-
-.viewer-hero .lead {
-  max-width: 760px;
-}
-
 .viewer-section {
   padding: 32px var(--gutter) clamp(48px, 6vw, 96px);
 }
