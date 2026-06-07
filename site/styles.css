@@ -1275,6 +1275,23 @@ tr:last-child td {
     color: rgba(246, 244, 236, 0.55);
     font-size: 11px;
   }
+
+  .art .diff {
+    gap: 18px;
+    grid-template-columns: 1fr;
+  }
+
+  .art .diff .col {
+    border-left: 0;
+    border-top: 1px solid rgba(246, 244, 236, 0.12);
+    padding-left: 0;
+    padding-top: 18px;
+  }
+
+  .art .diff .col:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
 }
 
 /* Landscape phones: don't trap the user in a 100vh hero. */
