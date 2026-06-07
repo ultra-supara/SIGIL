@@ -32,7 +32,7 @@
       <section class="hero">
         <div class="hero-copy">
           <p class="definition">Semantic Inspection for Guarded Intelligence Layers</p>
-          <h1>Quietly notice. See through. Walk on.</h1>
+          <h1>Quietly notice.<br/>See through.<br/>Walk on.</h1>
           <p class="lead">
             SIGIL inventories local LLM deployments, verifies model
             artefacts, classifies runtime exposure, and ties native binary
@@ -40,14 +40,6 @@
             ever decides a verdict. Nothing leaves your machine.
           </p>
           <span class="ornament" aria-hidden="true"></span>
-          <figure class="hero-quickstart command-panel" aria-label="Run the demo">
-            <figcaption class="quickstart-caption">Run the demo · no Ollama required</figcaption>
-            <pre><code># Prereqs: rustup (https://rustup.rs) + clang
-sudo apt-get install -y clang     # Linux; macOS: brew install llvm
-git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
-./demos/demo_suspicious_fail.sh
-<span class="quickstart-output"># → SIGIL Verdict: [FAIL]    out/suspicious.report.md</span></code></pre>
-          </figure>
           <div class="actions">
             <a class="button primary" href="https://github.com/ultra-supara/SIGIL#quickstart">Run the demo</a>
             <a class="button secondary" href="./viewer/">Open the viewer</a>
@@ -68,17 +60,44 @@ git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
             </div>
           </dl>
         </div>
-        <div class="hero-visual" aria-hidden="true">
-          <object
-            type="image/svg+xml"
-            data="./assets/hero-placeholder.svg"
-            aria-label="Sumi-e ink illustration: torii gate beyond a circular ward, bamboo and faint moon."
-          >
-            <img
-              src="./assets/sigil-layers.png"
-              alt="Layered inspection diagram fallback."
-            />
-          </object>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">SIGIL · evidence</span>
+            <div class="verdict-row">
+              <span class="verdict-label">Verdict</span>
+              <span class="verdict-pill">[FAIL]</span>
+            </div>
+            <div class="meta">
+              <div><span class="k">binary</span>examples/binaries/suspicious_kernel.o</div>
+              <div><span class="k">entry</span>kernel</div>
+            </div>
+            <div class="section-label">Capabilities</div>
+            <div class="row"><span>arithmetic</span><span>0x14</span><span>imul eax,[rbp-8]</span><span></span></div>
+            <div class="row"><span>arithmetic</span><span>0x18</span><span>add eax,[rbp-0Ch]</span><span></span></div>
+            <div class="row"><span>network</span><span>0x26</span><span>call …</span><span>connect</span></div>
+            <div class="section-label">Policy violations</div>
+            <div class="row violation"><span class="tag">[FAIL]</span><span>forbidden.capabilities.network — at 0x26 via connect</span></div>
+            <div class="section-label">SafeISA</div>
+            <pre class="safeisa">FUNC kernel
+  MUL eax eax [rbp-8]
+  ADD eax eax [rbp-0Ch]
+  <span class="stub">CALL_STUB connect</span>
+  RET
+END</pre>
+            <div class="footnote">out / suspicious.report.md</div>
+          </div>
+          <figcaption class="visually-hidden">SIGIL FAIL verdict for suspicious_kernel.o — the network capability at 0x26 (call connect) violates the forbidden-capabilities policy.</figcaption>
+        </figure>
+      </section>
+
+      <section class="quickstart-strip" aria-label="Quickstart">
+        <div class="quickstart-strip-inner">
+          <p class="quickstart-caption">Run the demo · no Ollama required</p>
+          <pre><code># Prereqs: rustup (https://rustup.rs) + clang
+sudo apt-get install -y clang     # Linux; macOS: brew install llvm
+git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
+./demos/demo_suspicious_fail.sh
+<span class="quickstart-output"># → SIGIL Verdict: [FAIL]    out/suspicious.report.md</span></code></pre>
         </div>
       </section>
 
@@ -119,15 +138,13 @@ git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
               subprocesses spawned.
             </p>
           </article>
-          <article class="feature-card">
-            <h3>Native execution surfaces</h3>
-            <p>
-              Loads x86_64 objects, lifts a small instruction subset into
-              IR and SafeISA, maps external symbols such as network and
-              process calls to capability evidence.
-            </p>
-          </article>
         </div>
+        <p class="feature-footnote">
+          SIGIL also lifts a narrow subset of x86_64 objects into IR and SafeISA,
+          mapping external symbols such as network and process calls to
+          capability evidence — exposed beside the model evidence on the
+          <a href="#report">report</a> below.
+        </p>
       </section>
 
       <section id="report" class="section split">

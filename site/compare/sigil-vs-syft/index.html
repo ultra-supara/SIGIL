@@ -29,15 +29,51 @@
     </header>
 
     <main id="top">
-      <section class="compare-hero">
-        <p class="definition">Compare · SBOM family</p>
-        <h1>SIGIL vs Anchore Syft</h1>
-        <p class="lead">
-          Syft 1.38 added a GGUF cataloger that emits CycloneDX ML-BOM
-          components — the closest mainstream tool to SIGIL on the
-          AI-BOM axis. This is what each tool covers, where they overlap,
-          and where they don't.
-        </p>
+      <section class="page-hero">
+        <div class="hero-copy">
+          <p class="definition">Compare · SBOM family</p>
+          <h1>SIGIL vs Anchore Syft</h1>
+          <p class="lead">
+            Syft 1.38 added a GGUF cataloger that emits CycloneDX ML-BOM
+            components — the closest mainstream tool to SIGIL on the
+            AI-BOM axis. This is what each tool covers, where they overlap,
+            and where they don't.
+          </p>
+        </div>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">sigil ⟷ syft</span>
+            <div class="diff">
+              <div class="col">
+                <div class="col-label">SIGIL</div>
+                <div class="verdict-row"><span class="verdict-pill pass">[PASS]</span></div>
+                <div class="section-label">Evidence</div>
+                <div style="font-size: 12px; line-height: 1.6;">
+                  manifest digest · blob SHA-256<br/>
+                  Ollama license layer → SPDX<br/>
+                  runtime exposure (/proc bind)<br/>
+                  native capability map
+                </div>
+              </div>
+              <div class="col">
+                <div class="col-label">Syft 1.38+</div>
+                <div class="verdict-row"><span class="verdict-pill">[—]</span></div>
+                <div class="section-label">Output</div>
+                <div style="font-size: 12px; line-height: 1.6;">
+                  CycloneDX ML-BOM components<br/>
+                  GGUF metadata fields<br/>
+                  general-purpose SBOM<br/>
+                  no verdict, no runtime
+                </div>
+              </div>
+            </div>
+            <div class="footnote">overlap: gguf identity · divergence: runtime + verdict</div>
+          </div>
+          <figcaption class="visually-hidden">SIGIL emits a PASS verdict with runtime evidence; Anchore Syft 1.38+ emits CycloneDX ML-BOM components only.</figcaption>
+        </figure>
+      </section>
+
+      <section class="section verdict-section">
         <div class="verdict-box">
           <div>
             <h3>Pick Syft when</h3>

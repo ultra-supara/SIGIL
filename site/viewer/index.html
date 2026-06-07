@@ -30,30 +30,58 @@
     </header>
 
     <main id="top">
-      <section class="viewer-hero">
-        <p class="definition">Viewer</p>
-        <h1>Drop an AI-BOM. See the report.</h1>
-        <p class="lead">
-          The SIGIL CLI's Markdown renderer, compiled to <code>wasm32</code> and
-          running on the client. Drop a <code>*.aibom.json</code> below — the
-          rendered report is byte-identical to what <code>sigil aibom generate
-          --format md</code> writes to disk for the same input. No upload, no
-          signup, no network call after the page is cached.
-        </p>
-        <dl class="proof-strip" aria-label="Viewer properties">
-          <div>
-            <dt>Renderer</dt>
-            <dd id="schema-caption">Schema —</dd>
+      <section class="page-hero">
+        <div class="hero-copy">
+          <p class="definition">Viewer</p>
+          <h1>Drop an AI-BOM. See the report.</h1>
+          <p class="lead">
+            The SIGIL CLI's Markdown renderer, compiled to <code>wasm32</code> and
+            running on the client. Drop a <code>*.aibom.json</code> below — the
+            rendered report is byte-identical to what <code>sigil aibom generate
+            --format md</code> writes to disk for the same input. No upload, no
+            signup, no network call after the page is cached.
+          </p>
+          <dl class="proof-strip" aria-label="Viewer properties">
+            <div>
+              <dt>Renderer</dt>
+              <dd id="schema-caption">Schema —</dd>
+            </div>
+            <div>
+              <dt>Network</dt>
+              <dd>Zero egress</dd>
+            </div>
+            <div>
+              <dt>Source of truth</dt>
+              <dd><code>sigil-core</code></dd>
+            </div>
+          </dl>
+        </div>
+        <figure class="hero-visual">
+          <div class="art" aria-hidden="true">
+            <span class="brandchip">ai-bom · schema 1.1</span>
+            <div class="verdict-row">
+              <span class="verdict-label">Verdict</span>
+              <span class="verdict-pill pass">[PASS]</span>
+            </div>
+            <div class="meta">
+              <div><span class="k">schema</span>1.1</div>
+              <div><span class="k">tool</span>sigil 0.1.0</div>
+            </div>
+            <div class="section-label">Runtime</div>
+            <div style="font-size: 12px; line-height: 1.7;">
+              ollama · <code style="background: transparent; color: rgba(246,244,236,0.92); padding: 0;">http://127.0.0.1:11434</code><br/>
+              exposure · localhost (source: proc)
+            </div>
+            <div class="section-label">Models</div>
+            <div style="font-size: 12px; line-height: 1.7;">
+              gemma4:e2b · Apache-2.0 · 7.16 GB<br/>
+              license digest · sha256:7339…<br/>
+              provenance · registry.ollama.ai / library / gemma4 / e2b
+            </div>
+            <div class="footnote">excerpt · sigil aibom generate --runtime ollama</div>
           </div>
-          <div>
-            <dt>Network</dt>
-            <dd>Zero egress</dd>
-          </div>
-          <div>
-            <dt>Source of truth</dt>
-            <dd><code>sigil-core</code></dd>
-          </div>
-        </dl>
+          <figcaption class="visually-hidden">Example SIGIL AI-BOM excerpt: PASS verdict, schema 1.1, runtime ollama on localhost, gemma4:e2b under Apache-2.0.</figcaption>
+        </figure>
       </section>
 
       <section class="section viewer-section">
