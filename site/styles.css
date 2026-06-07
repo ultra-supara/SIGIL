@@ -629,12 +629,6 @@ code {
   padding: 0;
 }
 
-.hero-quickstart {
-  margin: 28px 0 0;
-  max-width: var(--measure);
-  padding: 22px 26px;
-}
-
 .quickstart-caption {
   color: rgba(246, 244, 236, 0.65);
   font-family: var(--font-display);
@@ -657,19 +651,6 @@ code {
 .comparison,
 .compare-axes {
   background: var(--paper);
-}
-
-.compare-hero {
-  padding: clamp(72px, 8vw, 120px) var(--gutter) 32px;
-}
-
-.compare-hero h1 {
-  font-size: clamp(32px, 4vw, 52px);
-  line-height: 1.08;
-}
-
-.compare-hero .lead {
-  font-size: clamp(18px, 1.7vw, 21px);
 }
 
 .verdict-box {
@@ -924,7 +905,7 @@ tr:last-child td {
 .doc-links {
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 44px;
 }
 
@@ -1286,7 +1267,7 @@ tr:last-child td {
 }
 
 /* Landscape phones: don't trap the user in a 100vh hero. */
-@media (max-aspect-ratio: 4/3) and (max-height: 540px) {
+@media (min-aspect-ratio: 4/3) and (max-height: 540px) {
   .hero,
   .page-hero {
     min-height: auto;
