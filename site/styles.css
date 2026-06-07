@@ -895,6 +895,161 @@ tr:last-child td {
 }
 
 /* ---------------------------------------------------------------------------
+ * Art panels — the shared "evidence-as-key-visual" block used by every hero.
+ * Black field, monospace, a single accent stripe. No window chrome.
+ * --------------------------------------------------------------------------- */
+
+.art {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.85;
+  padding: 40px 44px 32px;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(12, 11, 8, 0.18);
+}
+
+.art::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--accent);
+}
+
+.art .brandchip {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-style: italic;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(246, 244, 236, 0.55);
+}
+
+.art .verdict-row {
+  align-items: baseline;
+  display: flex;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.art .verdict-label {
+  color: rgba(246, 244, 236, 0.55);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.art .verdict-pill {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 4px 12px;
+}
+
+.art .verdict-pill.pass {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+.art .meta {
+  color: rgba(246, 244, 236, 0.72);
+  font-size: 12.5px;
+  line-height: 1.7;
+  margin-bottom: 22px;
+}
+
+.art .meta .k {
+  color: rgba(246, 244, 236, 0.42);
+  display: inline-block;
+  width: 64px;
+}
+
+.art .section-label {
+  color: rgba(246, 244, 236, 0.45);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-style: italic;
+  letter-spacing: 0.24em;
+  margin: 22px 0 8px;
+  text-transform: uppercase;
+}
+
+.art .row {
+  color: rgba(246, 244, 236, 0.92);
+  display: grid;
+  font-size: 12.5px;
+  gap: 10px;
+  grid-template-columns: 110px 60px 1fr 100px;
+}
+
+.art .row.violation {
+  grid-template-columns: 60px 1fr;
+}
+
+.art .row.violation .tag {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.art .safeisa {
+  color: rgba(246, 244, 236, 0.82);
+  font-size: 12.5px;
+  line-height: 1.7;
+  margin: 0;
+  white-space: pre;
+}
+
+.art .safeisa .stub {
+  color: var(--accent);
+}
+
+.art .footnote {
+  color: rgba(246, 244, 236, 0.35);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-style: italic;
+  letter-spacing: 0.18em;
+  margin-top: 22px;
+  text-transform: uppercase;
+}
+
+/* Two-column diff variant used by sigil-vs-* pages. */
+.art .diff {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.art .diff .col {
+  border-left: 1px solid rgba(246, 244, 236, 0.12);
+  padding-left: 18px;
+}
+
+.art .diff .col:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.art .diff .col-label {
+  color: rgba(246, 244, 236, 0.55);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-style: italic;
+  letter-spacing: 0.22em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+/* ---------------------------------------------------------------------------
  * Responsive
  * --------------------------------------------------------------------------- */
 
