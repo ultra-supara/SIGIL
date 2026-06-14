@@ -10,20 +10,22 @@
     />
     <link rel="stylesheet" href="../../styles.css" />
   </head>
-  <body>
+  <body class="sakura-page report-page">
+    <div class="site-noise"></div>
+    <div class="site-bg"></div>
+
     <header class="site-header">
       <a class="brand" href="../../" aria-label="SIGIL home">
-        <span class="brand-mark">S</span>
-        <span>SIGIL</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">SIGIL</span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
-        <a href="../../#scope">Scope</a>
-        <a href="../../#report">Report</a>
-        <a href="../../#aibom">AI-BOM</a>
+        <a href="../../#platform">Platform</a>
+        <a href="../../#research">Research</a>
+        <a href="../../#tools">Tools</a>
         <a href="../../compare/">Compare</a>
         <a href="./" aria-current="page">2026 H1</a>
         <a href="../../viewer/">Viewer</a>
-        <a href="../../#docs">Docs</a>
         <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
       </nav>
     </header>
@@ -42,28 +44,43 @@
             LLM in the verdict path.
           </p>
         </div>
-        <figure class="hero-visual">
-          <div class="art" aria-hidden="true">
-            <span class="brandchip">report · 2026 H1</span>
-            <div class="verdict-row">
-              <span class="verdict-label">Aggregate</span>
-              <span class="verdict-pill pass">[PASS]</span>
+        <figure class="hero-visual" aria-label="SIGIL 2026 H1 report visual">
+          <div class="sigil-orb" aria-hidden="true">
+            <div class="sigil-ring ring-a"></div>
+            <div class="sigil-ring ring-b"></div>
+            <div class="sigil-ring ring-c"></div>
+            <div class="sigil-kanji">印</div>
+            <div class="sigil-axis axis-x"></div>
+            <div class="sigil-axis axis-y"></div>
+            <div class="sigil-axis axis-d1"></div>
+            <div class="sigil-axis axis-d2"></div>
+          </div>
+
+          <div class="floating-label label-one">
+            <span>REPORT</span>
+            <strong>2026 H1</strong>
+          </div>
+
+          <div class="floating-label label-two">
+            <span>AGGREGATE</span>
+            <strong>5 / 5 PASS</strong>
+          </div>
+
+          <div class="terminal-card" aria-hidden="true">
+            <div class="terminal-top">
+              <span></span>
+              <span></span>
+              <span></span>
+              <strong>sigil://report</strong>
             </div>
-            <div class="section-label">Sample</div>
-            <div style="font-size: 12px; line-height: 1.6;">
-              5 Ollama tags · 100 % license layer presence<br/>
-              60 % SPDX detection (1 known FP)<br/>
-              5 / 5 manifest integrity
+
+            <div class="terminal-body">
+              <p><em>$</em> sigil report 2026-h1 --sample ollama</p>
+              <p><b>[sample]</b> 5 Ollama tags audited</p>
+              <p><b>[license]</b> 100% layer presence · 60% SPDX</p>
+              <p><b>[integrity]</b> 5 / 5 manifest digests matched</p>
+              <p><b>[ok]</b> aggregate verdict sealed as PASS.</p>
             </div>
-            <div class="section-label">Per-model verdicts</div>
-            <div style="font-size: 12px; line-height: 1.7; color: rgba(246,244,236,0.85);">
-              <div>gemma3:4b &nbsp;&nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
-              <div>llama3.2:3b &nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
-              <div>mistral:7b &nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
-              <div>phi3:mini &nbsp;&nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
-              <div>qwen2.5:7b &nbsp;&nbsp;&nbsp; <span class="verdict-pill pass">[PASS]</span></div>
-            </div>
-            <div class="footnote">methodology · per-model index below</div>
           </div>
           <figcaption class="visually-hidden">Aggregate PASS verdict for the 2026 H1 sample: all five models (gemma3:4b, llama3.2:3b, mistral:7b, phi3:mini, qwen2.5:7b) PASS.</figcaption>
         </figure>

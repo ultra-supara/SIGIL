@@ -3,339 +3,256 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SIGIL — Semantic Inspection for Guarded Intelligence Layers</title>
+    <title>SIGIL — Local-first AI-BOMs for Local LLMs</title>
     <meta
       name="description"
-      content="SIGIL is a local-first security inspection tool for AI runtimes, model stores, and native execution surfaces. Deterministic verdicts, schema-1.1 AI-BOM, no SaaS."
+      content="SIGIL builds local-first AI-BOMs for auditing local LLMs, inspecting local AI runtimes, model stores, runtime exposure, and native execution surfaces."
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+
+  <body class="home-page">
+    <div class="site-noise"></div>
+    <div class="site-bg"></div>
+
     <header class="site-header">
-      <a class="brand" href="#top" aria-label="SIGIL home">
-        <span class="brand-mark">S</span>
-        <span>SIGIL</span>
+      <a href="#top" class="brand" aria-label="SIGIL home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">SIGIL</span>
       </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="#scope">scope</a>
-        <a href="#report">report</a>
-        <a href="#aibom">ai-bom</a>
-        <a href="./compare/">compare</a>
-        <a href="./reports/2026-h1/">2026 h1</a>
-        <a href="./viewer/">viewer</a>
-        <a href="#docs">docs</a>
-        <a href="https://github.com/ultra-supara/SIGIL">github</a>
+
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="#platform" class="nav-section">Platform</a>
+        <a href="#research" class="nav-section">Research</a>
+        <a href="#tools" class="nav-section">Tools</a>
+        <a href="./compare/" class="nav-route">Compare</a>
+        <a href="./viewer/" class="nav-route">Viewer</a>
       </nav>
+
+      <a href="https://github.com/ultra-supara/SIGIL#quickstart" class="header-cta">Run SIGIL</a>
     </header>
 
     <main id="top">
       <section class="hero">
         <div class="hero-copy">
-          <p class="definition">Semantic Inspection for Guarded Intelligence Layers</p>
-          <h1>Quietly notice.<br/>See through.<br/>Walk on.</h1>
-          <p class="lead">
-            SIGIL inventories local LLM deployments, verifies model
-            artefacts, classifies runtime exposure, and ties native binary
-            evidence to deterministic PASS / WARN / FAIL verdicts. No LLM
-            ever decides a verdict. Nothing leaves your machine.
+          <p class="eyebrow">AI Security / Local AI-BOM / Offensive Research</p>
+
+          <h1>
+            Local-first AI-BOMs
+            <span>for auditing local LLMs.</span>
+          </h1>
+
+          <p class="hero-lead">
+            SIGIL turns local AI runtimes, model stores, native binaries, and
+            policy into deterministic evidence. Inspect what is running, where
+            it is exposed, and why a system earns PASS, WARN, or FAIL.
           </p>
-          <span class="ornament" aria-hidden="true"></span>
-          <div class="actions">
-            <a class="button primary" href="https://github.com/ultra-supara/SIGIL#quickstart">Run the demo</a>
-            <a class="button secondary" href="./viewer/">Open the viewer</a>
-            <a class="button secondary" href="https://github.com/ultra-supara/SIGIL">View source</a>
+
+          <div class="hero-actions">
+            <a href="#platform" class="button button-primary">Explore Platform</a>
+            <a href="./compare/" class="button button-secondary">Compare Tools</a>
+            <a href="./viewer/" class="button button-secondary">Open Viewer</a>
           </div>
-          <dl class="proof-strip" aria-label="SIGIL properties">
-            <div>
-              <dt>Runtime</dt>
-              <dd>Ollama first</dd>
-            </div>
-            <div>
-              <dt>AI-BOM</dt>
-              <dd>Schema 1.1</dd>
-            </div>
-            <div>
-              <dt>Verdicts</dt>
-              <dd>Deterministic policy</dd>
-            </div>
-          </dl>
+
+          <div class="hero-tags" aria-label="SIGIL capabilities">
+            <span>Local-first analysis</span>
+            <span>Schema 1.1 AI-BOM</span>
+            <span>Deterministic verdicts</span>
+            <span>Native capability evidence</span>
+          </div>
         </div>
-        <figure class="hero-visual">
-          <div class="art" aria-hidden="true">
-            <span class="brandchip">SIGIL · evidence</span>
-            <div class="verdict-row">
-              <span class="verdict-label">Verdict</span>
-              <span class="verdict-pill">[FAIL]</span>
-            </div>
-            <div class="meta">
-              <div><span class="k">binary</span>examples/binaries/suspicious_kernel.o</div>
-              <div><span class="k">entry</span>kernel</div>
-            </div>
-            <div class="section-label">Capabilities</div>
-            <div class="row"><span>arithmetic</span><span>0x14</span><span>imul eax,[rbp-8]</span><span></span></div>
-            <div class="row"><span>arithmetic</span><span>0x18</span><span>add eax,[rbp-0Ch]</span><span></span></div>
-            <div class="row"><span>network</span><span>0x26</span><span>call …</span><span>connect</span></div>
-            <div class="section-label">Policy violations</div>
-            <div class="row violation"><span class="tag">[FAIL]</span><span>forbidden.capabilities.network — at 0x26 via connect</span></div>
-            <div class="section-label">SafeISA</div>
-            <pre class="safeisa">FUNC kernel
-  MUL eax eax [rbp-8]
-  ADD eax eax [rbp-0Ch]
-  <span class="stub">CALL_STUB connect</span>
-  RET
-END</pre>
-            <div class="footnote">out / suspicious.report.md</div>
+
+        <figure class="hero-visual" aria-label="SIGIL cyber Japanese visual">
+          <div class="sigil-orb" aria-hidden="true">
+            <div class="sigil-ring ring-a"></div>
+            <div class="sigil-ring ring-b"></div>
+            <div class="sigil-ring ring-c"></div>
+
+            <div class="sigil-kanji">印</div>
+
+            <div class="sigil-axis axis-x"></div>
+            <div class="sigil-axis axis-y"></div>
+            <div class="sigil-axis axis-d1"></div>
+            <div class="sigil-axis axis-d2"></div>
           </div>
-          <figcaption class="visually-hidden">SIGIL FAIL verdict for suspicious_kernel.o — the network capability at 0x26 (call connect) violates the forbidden-capabilities policy.</figcaption>
+
+          <div class="terminal-card">
+            <div class="terminal-top">
+              <span></span>
+              <span></span>
+              <span></span>
+              <strong>sigil://lab</strong>
+            </div>
+
+            <div class="terminal-body">
+              <p><em>$</em> sigil aibom generate --runtime ollama</p>
+              <p><b>[ai]</b> reading local model manifests...</p>
+              <p><b>[sec]</b> classifying runtime exposure...</p>
+              <p><b>[dev]</b> mapping native capability evidence...</p>
+              <p><b>[ok]</b> report sealed as schema 1.1.</p>
+            </div>
+          </div>
+
+          <div class="anime-guardian" aria-hidden="true">
+            <div class="guardian-halo"></div>
+            <div class="guardian-face"></div>
+            <div class="guardian-hair"></div>
+            <div class="guardian-body"></div>
+            <div class="guardian-sleeve sleeve-left"></div>
+            <div class="guardian-sleeve sleeve-right"></div>
+            <div class="guardian-visor"></div>
+          </div>
+
+          <div class="floating-label label-one">
+            <span>RESEARCH</span>
+            <strong>LOCAL AI RISK</strong>
+          </div>
+
+          <div class="floating-label label-two">
+            <span>BUILD</span>
+            <strong>SECURE BY DEFAULT</strong>
+          </div>
         </figure>
       </section>
 
-      <section class="quickstart-strip" aria-label="Quickstart">
-        <div class="quickstart-strip-inner">
-          <p class="quickstart-caption">Run the demo · no Ollama required</p>
-          <pre><code># Prereqs: rustup (https://rustup.rs) + clang
-sudo apt-get install -y clang     # Linux; macOS: brew install llvm
-git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
-./demos/demo_suspicious_fail.sh
-<span class="quickstart-output"># → SIGIL Verdict: [FAIL]    out/suspicious.report.md</span></code></pre>
-        </div>
-      </section>
-
-      <section id="scope" class="section">
+      <section class="section platform" id="platform">
         <div class="section-heading">
-          <p class="definition">Scope</p>
-          <h2>What SIGIL inspects today.</h2>
-          <p>
-            The current implementation is intentionally narrow, but the
-            pieces are connected around the one thing that matters: local
-            AI runtime safety.
-          </p>
+          <p class="eyebrow">Platform</p>
+          <h2>Security tooling for the local AI software era.</h2>
         </div>
-        <div class="feature-grid">
-          <article class="feature-card">
-            <h3>Ollama model stores</h3>
+
+        <div class="platform-grid">
+          <article class="platform-card large">
+            <span class="card-index">01</span>
+            <h3>AI-BOM evidence that survives review.</h3>
             <p>
-              Walks Ollama manifests and blobs, verifies SHA-256, parses
-              <code>registry / namespace / model / tag</code> provenance,
-              flags missing or invalid artefact references.
+              SIGIL inventories local model artefacts, verifies digests, detects
+              license metadata, and emits synchronized JSON and Markdown that a
+              reviewer can attach to an audit ticket.
             </p>
           </article>
-          <article class="feature-card">
-            <h3>License detection</h3>
+
+          <article class="platform-card">
+            <span class="card-index">02</span>
+            <h3>Runtime exposure without shelling out.</h3>
             <p>
-              Reads the <code>application/vnd.ollama.image.license</code>
-              layer and identifies SPDX shortnames plus full-body matches
-              for ten licenses: Apache-2.0, MPL-2.0, the GPL / LGPL family,
-              BSD-2 / 3-Clause, ISC, and MIT.
+              Ollama endpoints and Linux listener state are classified in place:
+              localhost, LAN, public bind, docker-published, reverse proxy, or
+              unavailable.
             </p>
           </article>
-          <article class="feature-card">
-            <h3>Runtime exposure</h3>
+
+          <article class="platform-card">
+            <span class="card-index">03</span>
+            <h3>Verdicts from policy, not vibes.</h3>
             <p>
-              Classifies the configured Ollama host and inspects local
-              listening sockets via <code>/proc</code>: localhost, LAN,
-              public bind, docker-published, or reverse proxy. No
-              subprocesses spawned.
+              PASS, WARN, and FAIL come from deterministic analyzers and YAML
+              policy. No cloud call and no LLM sits in the verdict path.
             </p>
           </article>
         </div>
-        <p class="feature-footnote">
-          SIGIL also lifts a narrow subset of x86_64 objects into IR and SafeISA,
-          mapping external symbols such as network and process calls to
-          capability evidence — exposed beside the model evidence on the
-          <a href="#report">report</a> below.
-        </p>
       </section>
 
-      <section id="report" class="section split">
-        <div>
-          <p class="definition">One report</p>
-          <h2>Verdict beside the evidence.</h2>
+      <section class="section research" id="research">
+        <div class="research-panel">
+          <div>
+            <p class="eyebrow">Research DNA</p>
+            <h2>Built with the mindset of an offensive lab.</h2>
+          </div>
+
           <p>
-            SIGIL renders the policy verdict next to the call site, the
-            capability table, and the lifted SafeISA — so a reviewer can
-            read the verdict and the reason together.
+            SIGIL treats a local AI deployment as an attack surface: model
+            provenance, runtime exposure, native capability evidence, and policy
+            all matter together. The result is security software that feels
+            sharp, calm, and usable under pressure.
           </p>
-          <ul class="check-list">
-            <li>Verdict banner: <code>[PASS]</code> / <code>[WARN]</code> / <code>[FAIL]</code></li>
-            <li>Capability table keyed by address and instruction</li>
-            <li>Policy violations carry the call site and the symbol</li>
-            <li>SafeISA fenced block shows blocked external calls as <code>CALL_STUB</code></li>
-          </ul>
-        </div>
-        <div class="command-panel" aria-label="Suspicious kernel assess report excerpt">
-          <pre><code># SIGIL Verdict: [FAIL]
-
-- Binary: `suspicious_kernel.o`
-- Entry: `kernel`
-
-## Capabilities
-| Capability | Address | Instruction          | External symbol |
-|------------|---------|----------------------|-----------------|
-| arithmetic | `0x14`  | `imul eax,[rbp-8]`   |                 |
-| network    | `0x26`  | `call ...`           | `connect`       |
-
-## Policy Violations
-- [FAIL] `forbidden.capabilities.network`
-  — capability `network` at `0x26` via `connect`
-
-## SafeISA
-```
-FUNC kernel
-  MUL eax eax [rbp-8]
-  CALL_STUB connect
-  RET
-END
-```</code></pre>
         </div>
       </section>
 
-      <section id="aibom" class="section split alt">
-        <div>
-          <p class="definition">AI-BOM</p>
-          <h2>Provenance and license, in one file.</h2>
-          <p>
-            <code>aibom generate --runtime ollama</code> emits the same
-            schema-1.1 JSON / Markdown for every local model — runtime
-            exposure, provenance tuple, detected SPDX id, and a layer
-            table keyed by digest.
-          </p>
-          <ul class="check-list">
-            <li>Stable <code>schema_version: "1.1"</code> JSON contract</li>
-            <li>Runtime property table and observed binds</li>
-            <li>License card with SPDX id and digest</li>
-            <li>Provenance: <code>registry / namespace / model / tag</code></li>
-            <li>Findings table grouped by severity and category</li>
-          </ul>
-        </div>
-        <div class="command-panel" aria-label="Gemma 4 AI-BOM excerpt">
-          <pre><code># SIGIL AI-BOM: [PASS]
-
-- Schema: `1.1`
-- Tool: `sigil 0.1.0`
-
-## Runtime
-| Property         | Value                       |
-|------------------|-----------------------------|
-| Name             | `ollama`                    |
-| Host             | `http://127.0.0.1:11434`    |
-| API exposure     | `localhost`                 |
-| Runtime exposure | `localhost` (source: `proc`)|
-| Status           | `reachable`                 |
-
-## Models
-
-### `gemma4:e2b`
-- **License:** `Apache-2.0` (digest `sha256:7339...`, 11355 B)
-- **Provenance:** `registry.ollama.ai / library / gemma4 / e2b`
-
-| Kind    | Size            | Digest               |
-|---------|-----------------|----------------------|
-| model   | 7162394016 B    | `sha256:4e30...`     |
-| license | 11355 B         | `sha256:7339...`     |</code></pre>
-        </div>
-      </section>
-
-      <section class="section">
+      <section class="section tools" id="tools">
         <div class="section-heading">
-          <p class="definition">Difference</p>
-          <h2>Not a model catalog.</h2>
-          <p>
-            SIGIL treats a local LLM deployment as an environment: model
-            artefacts, runtime exposure, native binaries, and policy all
-            matter, together.
-          </p>
+          <p class="eyebrow">Tools</p>
+          <h2>From investigation to evidence.</h2>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Inspection axis</th>
-                <th>SIGIL direction</th>
-                <th>Current status</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Model artifact identity</td>
-                <td>Manifest + blob SHA-256 verification</td>
-                <td>Implemented for Ollama</td>
-              </tr>
-              <tr>
-                <td>Provenance</td>
-                <td><code>registry / namespace / model / tag</code> tuple</td>
-                <td>Implemented for Ollama</td>
-              </tr>
-              <tr>
-                <td>License metadata</td>
-                <td>SPDX id from shortname or body match</td>
-                <td>10 licenses detected</td>
-              </tr>
-              <tr>
-                <td>Runtime exposure</td>
-                <td>API endpoint + <code>/proc</code> bind classification</td>
-                <td>Linux <code>/proc</code>, degrades elsewhere</td>
-              </tr>
-              <tr>
-                <td>Native capability evidence</td>
-                <td>External calls + guarded SafeISA lifting</td>
-                <td>Narrow x86_64 path</td>
-              </tr>
-              <tr>
-                <td>AI-BOM contract</td>
-                <td>Stable, versioned JSON shared with Markdown</td>
-                <td><code>schema_version: 1.1</code></td>
-              </tr>
-              <tr>
-                <td>Environment comparison</td>
-                <td>Baseline drift + multi-runtime comparison</td>
-                <td>Planned</td>
-              </tr>
-            </tbody>
-          </table>
+
+        <div class="tool-list">
+          <article>
+            <span>Inspect</span>
+            <h3>Understand local AI surfaces faster.</h3>
+            <p>
+              Walk Ollama model stores, runtime settings, and observed binds
+              into one security picture.
+            </p>
+          </article>
+
+          <article>
+            <span>Assess</span>
+            <h3>Tie findings to deterministic verdicts.</h3>
+            <p>
+              Evaluate native binary capabilities and runtime evidence against
+              explicit policy instead of opaque scoring.
+            </p>
+          </article>
+
+          <article>
+            <span>Render</span>
+            <h3>Give reviewers the artefact they need.</h3>
+            <p>
+              Generate schema-stable AI-BOM JSON, Markdown reports, and a
+              browser viewer that runs fully client-side.
+            </p>
+          </article>
         </div>
-        <p style="color: var(--ink-soft); margin-top: 28px; max-width: var(--measure);">
-          Side-by-side comparisons against
-          <a href="./compare/sigil-vs-syft/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">Anchore Syft</a>,
-          <a href="./compare/sigil-vs-builtins/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">Ollama / HF built-ins</a>, and the
-          <a href="./compare/sigil-vs-owasp-aibom-generator/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">OWASP AIBOM Generator</a>
-          live under <a href="./compare/" style="color: var(--ink); border-bottom: 1px solid var(--ink);">compare</a>.
-        </p>
       </section>
 
-      <section id="docs" class="section docs-section">
+      <section class="section proof" id="proof">
         <div class="section-heading">
-          <p class="definition">Documentation</p>
-          <h2>Read further.</h2>
-          <p>
-            The public page is the short front door. The detailed model,
-            architecture, and roadmap live in docs.
-          </p>
+          <p class="eyebrow">Live Artefacts</p>
+          <h2>Evidence you can open now.</h2>
         </div>
-        <div class="doc-links">
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/sigil-overview.md">
-            <span>Overview</span>
-            Product position, current scope, and design principles.
+
+        <div class="proof-grid">
+          <a href="./viewer/" class="proof-card">
+            <span>Viewer</span>
+            <h3>Try the AI-BOM viewer.</h3>
+            <p>Load sample PASS, WARN, and FAIL reports in the browser with no upload path.</p>
           </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ollama-inspection.md">
-            <span>Ollama inspection</span>
-            Commands, evidence fields, SPDX detection table, findings, runtime bind classes.
+
+          <a href="./compare/" class="proof-card">
+            <span>Compare</span>
+            <h3>See SIGIL beside adjacent tools.</h3>
+            <p>Compare against Anchore Syft, vendor built-ins, and OWASP AIBOM Generator.</p>
           </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ai-bom-and-comparison.md">
-            <span>AI-BOM and comparison</span>
-            Schema 1.1 contract, enum values, and the planned baseline-comparison direction.
+
+          <a href="./reports/2026-h1/" class="proof-card">
+            <span>Report</span>
+            <h3>Read State of Local AI Audit.</h3>
+            <p>The 2026 H1 report captures where local AI audit evidence is still missing.</p>
           </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/architecture-and-safety.md">
-            <span>Architecture and safety</span>
-            Crates, SafeISA, capability mapping, policy YAML, and the analysis-only safety boundary.
-          </a>
+        </div>
+      </section>
+
+      <section class="section contact" id="contact">
+        <div class="contact-box">
+          <p class="eyebrow">Start</p>
+          <h2>Seal your local AI system with intent.</h2>
+
+          <p>
+            Run SIGIL locally, inspect the emitted evidence, and wire the
+            report into your review workflow.
+          </p>
+
+          <div class="contact-actions">
+            <a href="https://github.com/ultra-supara/SIGIL#quickstart" class="button button-primary">Run Quickstart</a>
+            <a href="https://github.com/ultra-supara/SIGIL" class="contact-link">github.com/ultra-supara/SIGIL</a>
+          </div>
         </div>
       </section>
     </main>
 
     <footer class="site-footer">
-      <span>SIGIL is local-first and analysis-only.</span>
-      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
+      <p>© 2026 SIGIL. Local-first AI security devtools.</p>
+      <a href="#top">Back to top</a>
     </footer>
   </body>
 </html>

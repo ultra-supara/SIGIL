@@ -11,20 +11,22 @@
     <link rel="stylesheet" href="../styles.css" />
     <link rel="stylesheet" href="./viewer.css" />
   </head>
-  <body>
+  <body class="sakura-page viewer-page">
+    <div class="site-noise"></div>
+    <div class="site-bg"></div>
+
     <header class="site-header">
       <a class="brand" href="../" aria-label="SIGIL home">
-        <span class="brand-mark">S</span>
-        <span>SIGIL</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">SIGIL</span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
-        <a href="../#scope">Scope</a>
-        <a href="../#report">Report</a>
-        <a href="../#aibom">AI-BOM</a>
+        <a href="../#platform">Platform</a>
+        <a href="../#research">Research</a>
+        <a href="../#tools">Tools</a>
         <a href="../compare/">Compare</a>
         <a href="../reports/2026-h1/">2026 H1</a>
         <a href="./" aria-current="page">Viewer</a>
-        <a href="../#docs">Docs</a>
         <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
       </nav>
     </header>
@@ -56,29 +58,43 @@
             </div>
           </dl>
         </div>
-        <figure class="hero-visual">
-          <div class="art" aria-hidden="true">
-            <span class="brandchip">ai-bom · schema 1.1</span>
-            <div class="verdict-row">
-              <span class="verdict-label">Verdict</span>
-              <span class="verdict-pill pass">[PASS]</span>
+        <figure class="hero-visual" aria-label="SIGIL AI-BOM viewer visual">
+          <div class="sigil-orb" aria-hidden="true">
+            <div class="sigil-ring ring-a"></div>
+            <div class="sigil-ring ring-b"></div>
+            <div class="sigil-ring ring-c"></div>
+            <div class="sigil-kanji">印</div>
+            <div class="sigil-axis axis-x"></div>
+            <div class="sigil-axis axis-y"></div>
+            <div class="sigil-axis axis-d1"></div>
+            <div class="sigil-axis axis-d2"></div>
+          </div>
+
+          <div class="floating-label label-one">
+            <span>VIEWER</span>
+            <strong>CLIENT SIDE</strong>
+          </div>
+
+          <div class="floating-label label-two">
+            <span>SCHEMA</span>
+            <strong>AI-BOM 1.1</strong>
+          </div>
+
+          <div class="terminal-card" aria-hidden="true">
+            <div class="terminal-top">
+              <span></span>
+              <span></span>
+              <span></span>
+              <strong>sigil://viewer</strong>
             </div>
-            <div class="meta">
-              <div><span class="k">schema</span>1.1</div>
-              <div><span class="k">tool</span>sigil 0.1.0</div>
+
+            <div class="terminal-body">
+              <p><em>$</em> load sample/pass.aibom.json</p>
+              <p><b>[schema]</b> 1.1 validated in browser</p>
+              <p><b>[runtime]</b> ollama · localhost exposure</p>
+              <p><b>[model]</b> gemma4:e2b · Apache-2.0</p>
+              <p><b>[ok]</b> markdown rendered without upload.</p>
             </div>
-            <div class="section-label">Runtime</div>
-            <div style="font-size: 12px; line-height: 1.7;">
-              ollama · <code style="background: transparent; color: rgba(246,244,236,0.92); padding: 0;">http://127.0.0.1:11434</code><br/>
-              exposure · localhost (source: proc)
-            </div>
-            <div class="section-label">Models</div>
-            <div style="font-size: 12px; line-height: 1.7;">
-              gemma4:e2b · Apache-2.0 · 7.16 GB<br/>
-              license digest · sha256:7339…<br/>
-              provenance · registry.ollama.ai / library / gemma4 / e2b
-            </div>
-            <div class="footnote">excerpt · sigil aibom generate --runtime ollama</div>
           </div>
           <figcaption class="visually-hidden">Example SIGIL AI-BOM excerpt: PASS verdict, schema 1.1, runtime ollama on localhost, gemma4:e2b under Apache-2.0.</figcaption>
         </figure>

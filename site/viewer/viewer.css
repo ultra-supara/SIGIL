@@ -307,6 +307,94 @@
   font-style: italic;
 }
 
+.sakura-page .report-output code {
+  background: rgba(255, 216, 231, 0.08);
+  border: 1px solid rgba(255, 216, 231, 0.13);
+  border-radius: 4px;
+  color: var(--home-sakura);
+  overflow-wrap: anywhere;
+  padding: 1px 6px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.sakura-page .report-output tr:hover td {
+  background: rgba(255, 216, 231, 0.045);
+}
+
+.sakura-page .report-output table {
+  display: table;
+  min-width: 0;
+  table-layout: fixed;
+  white-space: normal;
+  width: 100%;
+}
+
+.sakura-page .report-output th,
+.sakura-page .report-output td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .viewer-determinism {
   padding-bottom: clamp(64px, 8vw, 120px);
+}
+
+@media (max-width: 680px) {
+  .sakura-page .report-output table:has(th:nth-child(3)) {
+    display: block;
+    white-space: normal;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) thead {
+    display: none;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) tbody {
+    display: block;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 14px;
+    padding: 12px 0;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) tr + tr {
+    border-top: 1px solid rgba(200, 162, 74, 0.16);
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) td {
+    border-bottom: 0;
+    display: block;
+    padding: 0;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) td::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--home-gold-2);
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-style: italic;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) td:nth-child(1)::before {
+    content: "Kind";
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) td:nth-child(2)::before {
+    content: "Size";
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) td:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .sakura-page .report-output table:has(th:nth-child(3)) td:nth-child(3)::before {
+    content: "Digest";
+  }
 }

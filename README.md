@@ -1,6 +1,6 @@
 # SIGIL
 
-**Semantic Inspection for Guarded Intelligence Layers.**
+**Local-first AI-BOMs for auditing local LLMs.**
 
 The local-AI audit artifact you can attach to a review ticket — no cloud, no LLM in the verdict path, no subprocess spawned.
 

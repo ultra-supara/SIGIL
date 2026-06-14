@@ -10,20 +10,22 @@
     />
     <link rel="stylesheet" href="../styles.css" />
   </head>
-  <body>
+  <body class="sakura-page compare-page">
+    <div class="site-noise"></div>
+    <div class="site-bg"></div>
+
     <header class="site-header">
       <a class="brand" href="../" aria-label="SIGIL home">
-        <span class="brand-mark">S</span>
-        <span>SIGIL</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">SIGIL</span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
-        <a href="../#scope">Scope</a>
-        <a href="../#report">Report</a>
-        <a href="../#aibom">AI-BOM</a>
+        <a href="../#platform">Platform</a>
+        <a href="../#research">Research</a>
+        <a href="../#tools">Tools</a>
         <a href="./" aria-current="page">Compare</a>
         <a href="../reports/2026-h1/">2026 H1</a>
         <a href="../viewer/">Viewer</a>
-        <a href="../#docs">Docs</a>
         <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
       </nav>
     </header>
@@ -39,30 +41,43 @@
             SIGIL extends the surface, and where another tool is the right pick.
           </p>
         </div>
-        <figure class="hero-visual">
-          <div class="art" aria-hidden="true">
-            <span class="brandchip">verdict comparison</span>
-            <div class="section-label">SIGIL</div>
-            <div class="verdict-row">
-              <span class="verdict-pill pass">[PASS]</span>
-              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">aibom + runtime + capability evidence</span>
+        <figure class="hero-visual" aria-label="SIGIL comparison visual">
+          <div class="sigil-orb" aria-hidden="true">
+            <div class="sigil-ring ring-a"></div>
+            <div class="sigil-ring ring-b"></div>
+            <div class="sigil-ring ring-c"></div>
+            <div class="sigil-kanji">印</div>
+            <div class="sigil-axis axis-x"></div>
+            <div class="sigil-axis axis-y"></div>
+            <div class="sigil-axis axis-d1"></div>
+            <div class="sigil-axis axis-d2"></div>
+          </div>
+
+          <div class="floating-label label-one">
+            <span>COMPARE</span>
+            <strong>EVIDENCE AXES</strong>
+          </div>
+
+          <div class="floating-label label-two">
+            <span>VERDICT</span>
+            <strong>SIGIL ONLY</strong>
+          </div>
+
+          <div class="terminal-card" aria-hidden="true">
+            <div class="terminal-top">
+              <span></span>
+              <span></span>
+              <span></span>
+              <strong>sigil://compare</strong>
             </div>
-            <div class="section-label">Anchore Syft 1.38+</div>
-            <div class="verdict-row">
-              <span class="verdict-pill">[—]</span>
-              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">CycloneDX ML-BOM, no verdict, no runtime</span>
+
+            <div class="terminal-body comparison-terminal">
+              <p><b>[sigil]</b> AI-BOM + runtime + capability evidence</p>
+              <p><em>[syft]</em> CycloneDX ML-BOM, no runtime verdict</p>
+              <p><em>[builtins]</em> integrity only, no exposure model</p>
+              <p><em>[owasp]</em> Hugging Face metadata to CycloneDX</p>
+              <p><b>[ok]</b> verdict boundary stays explicit.</p>
             </div>
-            <div class="section-label">Vendor built-ins</div>
-            <div class="verdict-row">
-              <span class="verdict-pill">[—]</span>
-              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">integrity only, no BOM, no exposure</span>
-            </div>
-            <div class="section-label">OWASP AIBOM Generator</div>
-            <div class="verdict-row">
-              <span class="verdict-pill">[—]</span>
-              <span style="color: rgba(246,244,236,0.72); font-size: 12.5px;">CycloneDX 1.6 from Hugging Face metadata</span>
-            </div>
-            <div class="footnote">verdict only emitted by SIGIL</div>
           </div>
           <figcaption class="visually-hidden">SIGIL emits a PASS/WARN/FAIL verdict; the three adjacent tools (Anchore Syft, vendor built-ins, OWASP AIBOM Generator) do not.</figcaption>
         </figure>
@@ -90,11 +105,12 @@
           </a>
           <a class="compare-index-card" href="./sigil-vs-builtins/">
             <span class="tag">Vendor built-ins</span>
-            <h3>SIGIL vs <code>ollama show</code> + <code>hf cache verify</code></h3>
+            <h3>SIGIL vs Ollama / Hugging Face built-ins</h3>
             <p>
-              The tools users reach for first. They verify integrity and show
-              configuration, but emit no BOM, classify no exposure, and detect
-              no license families.
+              The tools users reach for first:
+              <code>ollama show</code> and <code>hf cache verify</code>. They
+              verify integrity and show configuration, but emit no BOM,
+              classify no exposure, and detect no license families.
             </p>
           </a>
           <a class="compare-index-card" href="./sigil-vs-owasp-aibom-generator/">

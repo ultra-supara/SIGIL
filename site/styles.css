@@ -1292,3 +1292,2217 @@ tr:last-child td {
     padding-bottom: 48px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Home page — cyber-Japanese corporate front door.
+ * Scoped to body.home-page so compare, reports, and viewer keep the existing
+ * monochrome editorial system.
+ * --------------------------------------------------------------------------- */
+
+.home-page {
+  --home-black: #050509;
+  --home-ink: #090a12;
+  --home-ink-2: #101421;
+  --home-ivory: #f6efe2;
+  --home-muted: #bdb5a7;
+  --home-gold: #c8a24a;
+  --home-gold-2: #ead084;
+  --home-red: #d64f67;
+  --home-sakura: #ffd8e7;
+  --home-sakura-2: #e8a8bf;
+  --home-neon: #8cffd1;
+  --home-cyan: #86d9ff;
+  --home-line-gold: rgba(200, 162, 74, 0.28);
+  --home-line-soft: rgba(246, 239, 226, 0.13);
+  --home-glass: rgba(255, 255, 255, 0.045);
+  --home-shadow: 0 34px 120px rgba(0, 0, 0, 0.5);
+
+  background: var(--home-black);
+  color: var(--home-ivory);
+  font-family:
+    Avenir Next, "Hiragino Sans", "Yu Gothic", ui-sans-serif, system-ui,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+
+.home-page a {
+  color: inherit;
+}
+
+.home-page ::selection {
+  background: var(--home-gold);
+  color: var(--home-black);
+}
+
+.home-page .site-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  background:
+    radial-gradient(circle at 78% 16%, rgba(255, 216, 231, 0.12), transparent 24%),
+    radial-gradient(circle at 18% 28%, rgba(234, 208, 132, 0.12), transparent 25%),
+    linear-gradient(135deg, #050509 0%, #0c0b10 52%, #07060a 100%);
+}
+
+.home-page .site-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.64;
+  background-image:
+    url("./assets/sakura-gold-top.jpeg"),
+    url("./assets/sakura-gold-bottom.jpeg");
+  background-position:
+    right -40px top -295px,
+    right -150px bottom -245px;
+  background-repeat: no-repeat;
+  background-size:
+    min(920px, 78vw) auto,
+    min(1120px, 96vw) auto;
+  filter: saturate(1.08) contrast(1.04);
+  mix-blend-mode: screen;
+}
+
+.home-page .site-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(5, 5, 9, 0.55) 0%, transparent 28%, rgba(5, 5, 9, 0.24) 100%),
+    linear-gradient(to bottom, rgba(5, 5, 9, 0.12) 0%, rgba(5, 5, 9, 0.72) 88%),
+    radial-gradient(circle at center, transparent, rgba(0, 0, 0, 0.5));
+}
+
+.home-page .site-noise {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 0.055;
+  background-image:
+    repeating-radial-gradient(
+      circle at 0 0,
+      rgba(255, 255, 255, 0.7) 0,
+      rgba(255, 255, 255, 0.7) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+}
+
+.home-page .site-header {
+  position: sticky;
+  top: 18px;
+  z-index: 20;
+  width: min(1180px, calc(100% - 40px));
+  height: 78px;
+  margin: 22px auto 0;
+  padding: 0 18px 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--home-line-gold);
+  border-radius: 999px;
+  background: rgba(5, 5, 9, 0.62);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.36);
+}
+
+.home-page .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 13px;
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+}
+
+.home-page .brand-mark {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--home-gold);
+  border-radius: 50%;
+  color: transparent;
+  box-shadow:
+    0 0 24px rgba(200, 162, 74, 0.28),
+    inset 0 0 18px rgba(200, 162, 74, 0.18);
+}
+
+.home-page .brand-mark::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border: 1px solid rgba(255, 216, 231, 0.78);
+  transform: rotate(45deg);
+}
+
+.home-page .brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border: 1px solid var(--home-gold-2);
+  border-radius: 50%;
+}
+
+.home-page .brand-name {
+  color: var(--home-ivory);
+  font-size: 0.96rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+}
+
+.home-page .site-nav {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  color: var(--home-muted);
+  font-size: 0.86rem;
+}
+
+.home-page .site-nav a {
+  transition: color 0.18s ease;
+}
+
+.home-page .site-nav a:hover,
+.home-page .site-footer a:hover,
+.home-page .proof-card:hover h3 {
+  color: var(--home-sakura);
+}
+
+.home-page .header-cta {
+  padding: 12px 18px;
+  border: 1px solid rgba(255, 216, 231, 0.42);
+  border-radius: 999px;
+  color: var(--home-sakura);
+  background: rgba(255, 216, 231, 0.06);
+  font-size: 0.84rem;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.home-page .header-cta:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 216, 231, 0.12);
+}
+
+.home-page .hero {
+  width: min(1180px, calc(100% - 40px));
+  min-height: auto;
+  margin: 0 auto;
+  padding: 56px 0 28px;
+  display: grid;
+  grid-template-columns: 1.04fr 0.96fr;
+  align-items: center;
+  gap: 42px;
+  isolation: isolate;
+  position: relative;
+}
+
+.home-page .hero::before {
+  content: "";
+  position: absolute;
+  left: -170px;
+  top: 72px;
+  z-index: 0;
+  width: min(650px, 58vw);
+  height: 420px;
+  pointer-events: none;
+  opacity: 0.46;
+  background:
+    repeating-radial-gradient(
+      ellipse at 0% 38%,
+      transparent 0 19px,
+      rgba(234, 208, 132, 0.56) 20px 22px,
+      transparent 23px 36px
+    );
+  filter: blur(0.1px);
+  mask-image: linear-gradient(90deg, black, transparent 82%);
+  -webkit-mask-image: linear-gradient(90deg, black, transparent 82%);
+  transform: rotate(-9deg);
+}
+
+.home-page .hero::after {
+  display: none;
+}
+
+.home-page .hero-copy,
+.home-page .hero-visual {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.home-page .eyebrow {
+  margin: 0 0 18px;
+  color: var(--home-sakura);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.home-page .hero h1 {
+  max-width: 800px;
+  margin: 0;
+  color: var(--home-ivory);
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-size: 5.35rem;
+  font-weight: 400;
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.home-page .hero h1 span {
+  display: block;
+  color: var(--home-muted);
+}
+
+.home-page .hero-lead {
+  max-width: 650px;
+  margin: 30px 0 0;
+  color: var(--home-muted);
+  font-size: 1.14rem;
+  line-height: 1.86;
+}
+
+.home-page .hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 38px;
+}
+
+.home-page .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 24px;
+  border-radius: 999px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.home-page .button:hover {
+  transform: translateY(-3px);
+}
+
+.home-page .button-primary {
+  color: #12090d;
+  background: linear-gradient(135deg, var(--home-sakura), #fff7fb);
+  box-shadow: 0 18px 40px rgba(255, 216, 231, 0.18);
+}
+
+.home-page .button-secondary {
+  color: var(--home-gold-2);
+  border: 1px solid rgba(200, 162, 74, 0.4);
+  background: rgba(200, 162, 74, 0.06);
+}
+
+.home-page .button-secondary:hover {
+  background: rgba(200, 162, 74, 0.12);
+}
+
+.home-page .hero-tags {
+  max-width: 720px;
+  margin-top: 46px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.home-page .hero-tags span {
+  padding: 10px 13px;
+  border: 1px solid rgba(246, 239, 226, 0.13);
+  border-radius: 999px;
+  color: rgba(246, 239, 226, 0.76);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.82rem;
+}
+
+.home-page .hero-visual {
+  position: relative;
+  min-height: 660px;
+  display: block;
+  margin: 0;
+  border: 1px solid rgba(200, 162, 74, 0.24);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255, 216, 231, 0.12), transparent 27%),
+    radial-gradient(circle at 55% 58%, rgba(234, 208, 132, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(9, 10, 18, 0.78);
+  box-shadow: var(--home-shadow);
+  overflow: hidden;
+}
+
+.home-page .hero-visual::before {
+  content: "";
+  position: absolute;
+  inset: 26px;
+  border: 1px solid rgba(200, 162, 74, 0.18);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.home-page .hero-visual::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  background-image:
+    linear-gradient(rgba(140, 255, 209, 0.17) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(140, 255, 209, 0.11) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: linear-gradient(to bottom, black, transparent 76%);
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 76%);
+}
+
+.home-page .sigil-orb {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  width: 340px;
+  height: 340px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  animation: homeFloatOrb 7s ease-in-out infinite;
+}
+
+.home-page .sigil-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(234, 208, 132, 0.74);
+  box-shadow:
+    0 0 44px rgba(200, 162, 74, 0.15),
+    inset 0 0 26px rgba(200, 162, 74, 0.14);
+}
+
+.home-page .ring-a::before,
+.home-page .ring-a::after,
+.home-page .ring-b::before,
+.home-page .ring-b::after {
+  content: "";
+  position: absolute;
+  border: 1px solid rgba(255, 216, 231, 0.38);
+}
+
+.home-page .ring-a::before {
+  inset: 44px;
+  transform: rotate(45deg);
+}
+
+.home-page .ring-a::after {
+  inset: 44px;
+}
+
+.home-page .ring-b {
+  inset: 48px;
+  border-color: rgba(255, 216, 231, 0.48);
+  animation: homeRotateSlow 28s linear infinite;
+}
+
+.home-page .ring-b::before {
+  inset: 32px;
+  transform: rotate(22.5deg);
+}
+
+.home-page .ring-b::after {
+  inset: 72px;
+  border-radius: 50%;
+  border-color: rgba(234, 208, 132, 0.5);
+}
+
+.home-page .ring-c {
+  inset: 116px;
+  border-color: rgba(246, 239, 226, 0.52);
+}
+
+.home-page .sigil-kanji {
+  position: absolute;
+  inset: 126px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(234, 208, 132, 0.65);
+  border-radius: 50%;
+  color: var(--home-gold-2);
+  background: rgba(5, 5, 9, 0.78);
+  font-family:
+    "Hiragino Mincho ProN", "Yu Mincho", Georgia, "Noto Serif JP", serif;
+  font-size: 3rem;
+  box-shadow:
+    0 0 36px rgba(200, 162, 74, 0.2),
+    inset 0 0 24px rgba(200, 162, 74, 0.16);
+}
+
+.home-page .sigil-axis {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 300px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 216, 231, 0.58),
+    rgba(234, 208, 132, 0.76),
+    transparent
+  );
+  transform-origin: center;
+}
+
+.home-page .axis-x {
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+
+.home-page .axis-y {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.home-page .axis-d1 {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.home-page .axis-d2 {
+  transform: translate(-50%, -50%) rotate(135deg);
+}
+
+.home-page .terminal-card {
+  position: absolute;
+  left: 36px;
+  right: 36px;
+  bottom: 38px;
+  z-index: 4;
+  border: 1px solid rgba(140, 255, 209, 0.22);
+  border-radius: 8px;
+  background: rgba(5, 5, 9, 0.72);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.home-page .terminal-top {
+  height: 44px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(246, 239, 226, 0.09);
+  color: rgba(246, 239, 226, 0.52);
+  font-size: 0.76rem;
+}
+
+.home-page .terminal-top span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(246, 239, 226, 0.24);
+}
+
+.home-page .terminal-top span:nth-child(1) {
+  background: var(--home-red);
+}
+
+.home-page .terminal-top span:nth-child(2) {
+  background: var(--home-gold);
+}
+
+.home-page .terminal-top span:nth-child(3) {
+  background: var(--home-sakura);
+}
+
+.home-page .terminal-top strong {
+  margin-left: auto;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+}
+
+.home-page .terminal-body {
+  padding: 20px;
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
+  font-size: 0.86rem;
+}
+
+.home-page .terminal-body p {
+  margin: 0;
+  color: rgba(246, 239, 226, 0.76);
+  line-height: 1.85;
+}
+
+.home-page .terminal-body em {
+  color: var(--home-gold-2);
+  font-style: normal;
+}
+
+.home-page .terminal-body b {
+  color: var(--home-sakura);
+  font-weight: 700;
+}
+
+.home-page .anime-guardian {
+  position: absolute;
+  left: 50%;
+  top: 250px;
+  width: 230px;
+  height: 260px;
+  transform: translateX(-50%);
+  z-index: 3;
+  opacity: 0.94;
+  pointer-events: none;
+}
+
+.home-page .guardian-halo {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  width: 180px;
+  height: 180px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 216, 231, 0.2), transparent 68%);
+  filter: blur(2px);
+}
+
+.home-page .guardian-hair {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  width: 126px;
+  height: 142px;
+  transform: translateX(-50%);
+  border-radius: 52% 52% 46% 46%;
+  background: linear-gradient(150deg, #17101b, #30213b 55%, #0b0b12);
+  box-shadow: 0 0 34px rgba(214, 79, 103, 0.18);
+}
+
+.home-page .guardian-face {
+  position: absolute;
+  top: 42px;
+  left: 50%;
+  width: 76px;
+  height: 88px;
+  transform: translateX(-50%);
+  border-radius: 48% 48% 44% 44%;
+  background: linear-gradient(180deg, #f0c7b4, #d49486);
+  z-index: 2;
+}
+
+.home-page .guardian-visor {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  width: 84px;
+  height: 15px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--home-sakura), transparent);
+  box-shadow: 0 0 22px rgba(255, 216, 231, 0.55);
+  z-index: 3;
+}
+
+.home-page .guardian-body {
+  position: absolute;
+  top: 130px;
+  left: 50%;
+  width: 138px;
+  height: 136px;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 48%,
+      rgba(200, 162, 74, 0.9) 49%,
+      rgba(200, 162, 74, 0.9) 51%,
+      transparent 52%
+    ),
+    linear-gradient(135deg, #f6efe2, #b9ad9e 52%, #eee1cd);
+  overflow: hidden;
+  z-index: 1;
+}
+
+.home-page .guardian-body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    45deg,
+    transparent 43%,
+    rgba(214, 79, 103, 0.55) 44%,
+    rgba(214, 79, 103, 0.55) 56%,
+    transparent 57%
+  );
+}
+
+.home-page .guardian-sleeve {
+  position: absolute;
+  top: 150px;
+  width: 82px;
+  height: 104px;
+  background: linear-gradient(180deg, #efe1cf, #703143);
+  z-index: 0;
+}
+
+.home-page .sleeve-left {
+  left: 14px;
+  border-radius: 8px;
+  transform: rotate(17deg);
+}
+
+.home-page .sleeve-right {
+  right: 14px;
+  border-radius: 8px;
+  transform: rotate(-17deg);
+}
+
+.home-page .floating-label {
+  position: absolute;
+  z-index: 5;
+  padding: 13px 15px;
+  border: 1px solid rgba(246, 239, 226, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 5, 9, 0.58);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.28);
+}
+
+.home-page .floating-label span {
+  display: block;
+  color: rgba(246, 239, 226, 0.52);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+}
+
+.home-page .floating-label strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--home-gold-2);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.home-page .label-one {
+  top: 148px;
+  left: 38px;
+}
+
+.home-page .label-two {
+  top: 224px;
+  right: 38px;
+}
+
+.home-page .section {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 96px 0;
+  border-top: 0;
+}
+
+.home-page .platform {
+  padding-top: 68px;
+}
+
+.home-page .section-heading {
+  max-width: 780px;
+  margin-bottom: 42px;
+}
+
+.home-page .section-heading::after {
+  display: none;
+}
+
+.home-page .section-heading h2,
+.home-page .research-panel h2,
+.home-page .contact-box h2 {
+  margin: 0;
+  color: var(--home-ivory);
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-size: 3.7rem;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.home-page .platform-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 18px;
+}
+
+.home-page .platform-card,
+.home-page .proof-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(200, 162, 74, 0.2);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 80% 20%, rgba(140, 255, 209, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+}
+
+.home-page .platform-card {
+  min-height: 280px;
+  padding: 28px;
+}
+
+.home-page .platform-card.large {
+  grid-row: span 2;
+  min-height: 578px;
+}
+
+.home-page .platform-card::after,
+.home-page .proof-card::after {
+  content: "";
+  position: absolute;
+  right: -48px;
+  bottom: -48px;
+  width: 145px;
+  height: 145px;
+  border: 1px solid rgba(140, 255, 209, 0.16);
+  border-radius: 50%;
+}
+
+.home-page .card-index {
+  color: var(--home-sakura);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+}
+
+.home-page .platform-card h3 {
+  margin: 74px 0 16px;
+  color: var(--home-ivory);
+  font-size: 1.25rem;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.home-page .platform-card.large h3 {
+  margin-top: 270px;
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-size: 3rem;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+.home-page .platform-card p,
+.home-page .tool-list p,
+.home-page .proof-card p,
+.home-page .contact-box p:not(.eyebrow),
+.home-page .research-panel p:not(.eyebrow) {
+  margin: 0;
+  color: var(--home-muted);
+  font-size: 0.96rem;
+  line-height: 1.8;
+}
+
+.home-page .platform-card p {
+  max-width: 620px;
+}
+
+.home-page .research-panel {
+  position: relative;
+  min-height: 440px;
+  padding: 48px;
+  display: grid;
+  grid-template-columns: 1.08fr 0.92fr;
+  align-items: end;
+  gap: 40px;
+  border: 1px solid rgba(200, 162, 74, 0.25);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 74% 24%, rgba(214, 79, 103, 0.15), transparent 34%),
+    radial-gradient(circle at 18% 30%, rgba(140, 255, 209, 0.12), transparent 32%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.02));
+  box-shadow: var(--home-shadow);
+  overflow: hidden;
+}
+
+.home-page .research-panel::before {
+  content: "攻防";
+  position: absolute;
+  right: 32px;
+  top: 4px;
+  color: rgba(246, 239, 226, 0.045);
+  font-family:
+    "Hiragino Mincho ProN", "Yu Mincho", Georgia, "Noto Serif JP", serif;
+  font-size: 13rem;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.home-page .research-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.home-page .tool-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid rgba(200, 162, 74, 0.22);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.home-page .tool-list article {
+  min-height: 320px;
+  padding: 32px;
+  border-right: 1px solid rgba(200, 162, 74, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+    rgba(255, 255, 255, 0.012);
+}
+
+.home-page .tool-list article:last-child {
+  border-right: 0;
+}
+
+.home-page .tool-list span,
+.home-page .proof-card span {
+  color: var(--home-gold-2);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.home-page .tool-list h3,
+.home-page .proof-card h3 {
+  margin: 86px 0 16px;
+  color: var(--home-ivory);
+  font-family: inherit;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  transition: color 0.18s ease;
+}
+
+.home-page .proof-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+
+.home-page .proof-card {
+  display: block;
+  min-height: 300px;
+  padding: 30px;
+}
+
+.home-page .contact {
+  padding-top: 72px;
+}
+
+.home-page .contact-box {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 70px 36px;
+  text-align: center;
+  border-top: 1px solid rgba(200, 162, 74, 0.24);
+  border-bottom: 1px solid rgba(200, 162, 74, 0.24);
+}
+
+.home-page .contact-box p:not(.eyebrow) {
+  max-width: 650px;
+  margin: 26px auto 0;
+  font-size: 1.05rem;
+  line-height: 1.84;
+}
+
+.home-page .contact-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 22px;
+  margin-top: 34px;
+}
+
+.home-page .contact-link {
+  display: inline-flex;
+  color: var(--home-sakura);
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-size: 2rem;
+  border-bottom: 1px solid rgba(255, 216, 231, 0.42);
+}
+
+.home-page .site-footer {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 30px 0 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-top: 0;
+  color: rgba(246, 239, 226, 0.46);
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-style: normal;
+}
+
+.home-page .site-footer p {
+  margin: 0;
+}
+
+.home-page .site-footer a {
+  color: var(--home-gold-2);
+}
+
+@keyframes homeRotateSlow {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes homeFloatOrb {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+  }
+
+  50% {
+    transform: translateX(-50%) translateY(-14px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-page *,
+  .home-page *::before,
+  .home-page *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media (max-width: 1180px) {
+  .home-page .hero h1 {
+    font-size: 4.85rem;
+  }
+
+  .home-page .section-heading h2,
+  .home-page .research-panel h2,
+  .home-page .contact-box h2 {
+    font-size: 3.35rem;
+  }
+}
+
+@media (max-width: 980px) {
+  .home-page .site-header {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 8px;
+  }
+
+  .home-page .site-nav {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    gap: 18px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(200, 162, 74, 0.14);
+  }
+
+  .home-page .hero {
+    grid-template-columns: 1fr;
+    padding-top: 64px;
+  }
+
+  .home-page .site-bg::before {
+    background-position:
+      right -190px top -260px,
+      right -280px bottom -320px;
+    background-size:
+      840px auto,
+      980px auto;
+  }
+
+  .home-page .hero h1 {
+    font-size: 4.8rem;
+  }
+
+  .home-page .hero-visual {
+    min-height: 640px;
+    max-width: none;
+  }
+
+  .home-page .platform-grid,
+  .home-page .research-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .home-page .platform-card.large {
+    min-height: 420px;
+  }
+
+  .home-page .platform-card.large h3 {
+    margin-top: 160px;
+  }
+
+  .home-page .tool-list,
+  .home-page .proof-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-page .tool-list article {
+    border-right: 0;
+    border-bottom: 1px solid rgba(200, 162, 74, 0.16);
+  }
+
+  .home-page .tool-list article:last-child {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .home-page .site-header,
+  .home-page .hero,
+  .home-page .section,
+  .home-page .site-footer {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .home-page .site-nav {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    padding-top: 14px;
+  }
+
+  .home-page .nav-section {
+    display: none;
+  }
+
+  .home-page .nav-route {
+    min-width: 112px;
+    padding: 9px 16px;
+    border: 1px solid rgba(200, 162, 74, 0.28);
+    border-radius: 999px;
+    color: var(--home-gold-2);
+    text-align: center;
+    background: rgba(200, 162, 74, 0.055);
+  }
+
+  .home-page .brand-name {
+    font-size: 0.84rem;
+  }
+
+  .home-page .header-cta {
+    padding: 10px 13px;
+    font-size: 0.78rem;
+  }
+
+  .home-page .hero {
+    min-height: auto;
+    padding-top: 56px;
+  }
+
+  .home-page .site-bg::before {
+    opacity: 0.6;
+    background-position:
+      right -120px top -190px,
+      right -430px bottom -640px;
+    background-size:
+      700px auto,
+      760px auto;
+  }
+
+  .home-page .hero::before {
+    left: -210px;
+    top: 118px;
+    width: 560px;
+    height: 360px;
+    opacity: 0.32;
+  }
+
+  .home-page .hero h1 {
+    font-size: 3.6rem;
+    line-height: 1;
+  }
+
+  .home-page .hero-lead {
+    font-size: 1rem;
+  }
+
+  .home-page .hero-actions {
+    align-items: stretch;
+  }
+
+  .home-page .button {
+    width: 100%;
+  }
+
+  .home-page .hero-visual {
+    min-height: 620px;
+  }
+
+  .home-page .sigil-orb {
+    top: 62px;
+    width: 276px;
+    height: 276px;
+  }
+
+  .home-page .sigil-kanji {
+    inset: 102px;
+    font-size: 2.5rem;
+  }
+
+  .home-page .sigil-axis {
+    width: 240px;
+  }
+
+  .home-page .anime-guardian {
+    top: 226px;
+    transform: translateX(-50%) scale(0.86);
+  }
+
+  .home-page .terminal-card {
+    left: 20px;
+    right: 20px;
+    bottom: 28px;
+  }
+
+  .home-page .terminal-body {
+    font-size: 0.78rem;
+    padding: 18px;
+  }
+
+  .home-page .floating-label {
+    display: none;
+  }
+
+  .home-page .section-heading h2,
+  .home-page .research-panel h2,
+  .home-page .contact-box h2 {
+    font-size: 2.85rem;
+  }
+
+  .home-page .platform-card,
+  .home-page .research-panel,
+  .home-page .contact-box,
+  .home-page .proof-card {
+    padding: 28px;
+  }
+
+  .home-page .platform-card.large {
+    min-height: 360px;
+  }
+
+  .home-page .platform-card.large h3 {
+    margin-top: 120px;
+  }
+
+  .home-page .tool-list article {
+    min-height: 270px;
+    padding: 28px;
+  }
+
+  .home-page .tool-list h3,
+  .home-page .proof-card h3 {
+    margin-top: 60px;
+  }
+
+  .home-page .contact-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .home-page .contact-link {
+    justify-content: center;
+    font-size: 1.34rem;
+    overflow-wrap: anywhere;
+  }
+
+  .home-page .site-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Sakura-aligned subpages — used by /compare/, /viewer/, and reports.
+ * Keeps their content model, but makes the image language and surrounding
+ * surface match the home page.
+ * --------------------------------------------------------------------------- */
+
+.sakura-page {
+  --home-black: #050509;
+  --home-ink: #090a12;
+  --home-ink-2: #101421;
+  --home-ivory: #f6efe2;
+  --home-muted: #bdb5a7;
+  --home-gold: #c8a24a;
+  --home-gold-2: #ead084;
+  --home-red: #d64f67;
+  --home-sakura: #ffd8e7;
+  --home-sakura-2: #e8a8bf;
+  --home-line-gold: rgba(200, 162, 74, 0.28);
+  --home-shadow: 0 34px 120px rgba(0, 0, 0, 0.5);
+
+  background: var(--home-black);
+  color: var(--home-ivory);
+  font-family:
+    Avenir Next, "Hiragino Sans", "Yu Gothic", ui-sans-serif, system-ui,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.sakura-page a {
+  color: inherit;
+}
+
+.sakura-page .site-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  background:
+    radial-gradient(circle at 78% 16%, rgba(255, 216, 231, 0.12), transparent 24%),
+    radial-gradient(circle at 18% 28%, rgba(234, 208, 132, 0.12), transparent 25%),
+    linear-gradient(135deg, #050509 0%, #0c0b10 52%, #07060a 100%);
+}
+
+.sakura-page .site-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.58;
+  background-image:
+    url("./assets/sakura-gold-top.jpeg"),
+    url("./assets/sakura-gold-bottom.jpeg");
+  background-position:
+    right -60px top -330px,
+    right -180px bottom -300px;
+  background-repeat: no-repeat;
+  background-size:
+    min(900px, 78vw) auto,
+    min(1040px, 92vw) auto;
+  filter: saturate(1.08) contrast(1.04);
+  mix-blend-mode: screen;
+}
+
+.sakura-page .site-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(5, 5, 9, 0.58) 0%, transparent 32%, rgba(5, 5, 9, 0.28) 100%),
+    linear-gradient(to bottom, rgba(5, 5, 9, 0.16) 0%, rgba(5, 5, 9, 0.74) 88%),
+    radial-gradient(circle at center, transparent, rgba(0, 0, 0, 0.52));
+}
+
+.sakura-page .site-noise {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 0.055;
+  background-image:
+    repeating-radial-gradient(
+      circle at 0 0,
+      rgba(255, 255, 255, 0.7) 0,
+      rgba(255, 255, 255, 0.7) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+}
+
+.sakura-page .site-header {
+  position: sticky;
+  top: 18px;
+  z-index: 20;
+  width: min(1180px, calc(100% - 40px));
+  min-height: 78px;
+  margin: 22px auto 0;
+  padding: 0 18px 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--home-line-gold);
+  border-radius: 999px;
+  background: rgba(5, 5, 9, 0.62);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.36);
+}
+
+.sakura-page .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 13px;
+  color: var(--home-ivory);
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-size: 0.96rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+}
+
+.sakura-page .brand-mark {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--home-gold);
+  border-radius: 50%;
+  color: transparent;
+  box-shadow:
+    0 0 24px rgba(200, 162, 74, 0.28),
+    inset 0 0 18px rgba(200, 162, 74, 0.18);
+}
+
+.sakura-page .brand-mark::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border: 1px solid rgba(255, 216, 231, 0.78);
+  transform: rotate(45deg);
+}
+
+.sakura-page .brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border: 1px solid var(--home-gold-2);
+  border-radius: 50%;
+}
+
+.sakura-page .nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(18px, 2.4vw, 28px);
+  color: var(--home-muted);
+  font-size: 0.84rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sakura-page .nav a {
+  padding: 0;
+  color: inherit;
+}
+
+.sakura-page .nav a:hover,
+.sakura-page .nav a[aria-current="page"] {
+  color: var(--home-sakura);
+}
+
+.sakura-page .nav a[aria-current="page"]::after {
+  display: none;
+}
+
+.sakura-page .page-hero {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 70px 0 72px;
+  display: grid;
+  grid-template-columns: 1.02fr 0.98fr;
+  align-items: center;
+  gap: 42px;
+  border-bottom: 0;
+  position: relative;
+}
+
+.sakura-page .page-hero::before {
+  content: "";
+  position: absolute;
+  left: -170px;
+  top: 96px;
+  z-index: 0;
+  width: min(650px, 58vw);
+  height: 420px;
+  pointer-events: none;
+  opacity: 0.36;
+  background:
+    repeating-radial-gradient(
+      ellipse at 0% 38%,
+      transparent 0 19px,
+      rgba(234, 208, 132, 0.56) 20px 22px,
+      transparent 23px 36px
+    );
+  mask-image: linear-gradient(90deg, black, transparent 82%);
+  -webkit-mask-image: linear-gradient(90deg, black, transparent 82%);
+  transform: rotate(-9deg);
+}
+
+.sakura-page .hero-copy,
+.sakura-page .hero-visual {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.sakura-page .definition {
+  margin: 0 0 18px;
+  color: var(--home-sakura);
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.4;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.sakura-page h1,
+.sakura-page h2,
+.sakura-page h3 {
+  color: var(--home-ivory);
+  font-family:
+    Georgia, "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.sakura-page h1 {
+  max-width: 780px;
+  font-size: 4.85rem;
+  line-height: 0.98;
+}
+
+.sakura-page .lead,
+.sakura-page .section-heading p,
+.sakura-page .compare-index-card p,
+.sakura-page .dropzone-hint,
+.sakura-page .output-placeholder {
+  color: var(--home-muted);
+}
+
+.sakura-page .lead {
+  max-width: 650px;
+  font-family: inherit;
+  font-size: 1.08rem;
+  line-height: 1.86;
+}
+
+.sakura-page code {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--home-sakura);
+}
+
+.sakura-page .proof-strip {
+  border-top: 1px solid rgba(200, 162, 74, 0.22);
+}
+
+.sakura-page .proof-strip > div + div {
+  border-left: 1px solid rgba(200, 162, 74, 0.18);
+}
+
+.sakura-page .proof-strip dt {
+  color: rgba(246, 239, 226, 0.52);
+}
+
+.sakura-page .proof-strip dd {
+  color: var(--home-ivory);
+}
+
+.sakura-page .hero-visual {
+  position: relative;
+  min-height: 620px;
+  display: block;
+  margin: 0;
+  border: 1px solid rgba(200, 162, 74, 0.24);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255, 216, 231, 0.12), transparent 27%),
+    radial-gradient(circle at 55% 58%, rgba(234, 208, 132, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(9, 10, 18, 0.78);
+  box-shadow: var(--home-shadow);
+  overflow: hidden;
+}
+
+.sakura-page .hero-visual::before {
+  content: "";
+  position: absolute;
+  inset: 26px;
+  border: 1px solid rgba(200, 162, 74, 0.18);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.sakura-page .hero-visual::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  background-image:
+    linear-gradient(rgba(255, 216, 231, 0.13) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(234, 208, 132, 0.11) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: linear-gradient(to bottom, black, transparent 76%);
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 76%);
+}
+
+.sakura-page .sigil-orb {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  width: 330px;
+  height: 330px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  animation: homeFloatOrb 7s ease-in-out infinite;
+}
+
+.sakura-page .sigil-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(234, 208, 132, 0.74);
+  box-shadow:
+    0 0 44px rgba(200, 162, 74, 0.15),
+    inset 0 0 26px rgba(200, 162, 74, 0.14);
+}
+
+.sakura-page .ring-a::before,
+.sakura-page .ring-a::after,
+.sakura-page .ring-b::before,
+.sakura-page .ring-b::after {
+  content: "";
+  position: absolute;
+  border: 1px solid rgba(255, 216, 231, 0.38);
+}
+
+.sakura-page .ring-a::before {
+  inset: 44px;
+  transform: rotate(45deg);
+}
+
+.sakura-page .ring-a::after {
+  inset: 44px;
+}
+
+.sakura-page .ring-b {
+  inset: 48px;
+  border-color: rgba(255, 216, 231, 0.48);
+  animation: homeRotateSlow 28s linear infinite;
+}
+
+.sakura-page .ring-b::before {
+  inset: 32px;
+  transform: rotate(22.5deg);
+}
+
+.sakura-page .ring-b::after {
+  inset: 72px;
+  border-radius: 50%;
+  border-color: rgba(234, 208, 132, 0.5);
+}
+
+.sakura-page .ring-c {
+  inset: 116px;
+  border-color: rgba(246, 239, 226, 0.52);
+}
+
+.sakura-page .sigil-kanji {
+  position: absolute;
+  inset: 122px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(234, 208, 132, 0.65);
+  border-radius: 50%;
+  color: var(--home-gold-2);
+  background: rgba(5, 5, 9, 0.78);
+  font-family:
+    "Hiragino Mincho ProN", "Yu Mincho", Georgia, "Noto Serif JP", serif;
+  font-size: 3rem;
+  box-shadow:
+    0 0 36px rgba(200, 162, 74, 0.2),
+    inset 0 0 24px rgba(200, 162, 74, 0.16);
+}
+
+.sakura-page .sigil-axis {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 292px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 216, 231, 0.58),
+    rgba(234, 208, 132, 0.76),
+    transparent
+  );
+  transform-origin: center;
+}
+
+.sakura-page .axis-x {
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+
+.sakura-page .axis-y {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.sakura-page .axis-d1 {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.sakura-page .axis-d2 {
+  transform: translate(-50%, -50%) rotate(135deg);
+}
+
+.sakura-page .terminal-card {
+  position: absolute;
+  left: 36px;
+  right: 36px;
+  bottom: 38px;
+  z-index: 4;
+  border: 1px solid rgba(255, 216, 231, 0.2);
+  border-radius: 8px;
+  background: rgba(5, 5, 9, 0.72);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.sakura-page .terminal-top {
+  height: 44px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(246, 239, 226, 0.09);
+  color: rgba(246, 239, 226, 0.52);
+  font-size: 0.76rem;
+}
+
+.sakura-page .terminal-top span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(246, 239, 226, 0.24);
+}
+
+.sakura-page .terminal-top span:nth-child(1) {
+  background: var(--home-red);
+}
+
+.sakura-page .terminal-top span:nth-child(2) {
+  background: var(--home-gold);
+}
+
+.sakura-page .terminal-top span:nth-child(3) {
+  background: var(--home-sakura);
+}
+
+.sakura-page .terminal-top strong {
+  margin-left: auto;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+}
+
+.sakura-page .terminal-body {
+  padding: 20px;
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
+  font-size: 0.86rem;
+}
+
+.sakura-page .terminal-body p {
+  margin: 0;
+  color: rgba(246, 239, 226, 0.76);
+  line-height: 1.85;
+}
+
+.sakura-page .terminal-body em {
+  color: var(--home-gold-2);
+  font-style: normal;
+}
+
+.sakura-page .terminal-body b {
+  color: var(--home-sakura);
+  font-weight: 700;
+}
+
+.sakura-page .floating-label {
+  position: absolute;
+  z-index: 5;
+  padding: 13px 15px;
+  border: 1px solid rgba(246, 239, 226, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 5, 9, 0.58);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.28);
+}
+
+.sakura-page .floating-label span {
+  display: block;
+  color: rgba(246, 239, 226, 0.52);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+}
+
+.sakura-page .floating-label strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--home-gold-2);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.sakura-page .label-one {
+  top: 132px;
+  left: 38px;
+}
+
+.sakura-page .label-two {
+  top: 210px;
+  right: 38px;
+}
+
+.sakura-page .section {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding-left: 0;
+  padding-right: 0;
+  border-top: 1px solid rgba(200, 162, 74, 0.16);
+}
+
+.sakura-page .section-heading::after {
+  display: none;
+}
+
+.sakura-page .section-heading h2 {
+  font-size: 3.7rem;
+}
+
+.sakura-page .report-badge {
+  border: 1px solid rgba(255, 216, 231, 0.32);
+  color: var(--home-sakura);
+  background: rgba(255, 216, 231, 0.055);
+  font-family: inherit;
+  font-style: normal;
+}
+
+.sakura-page .stat-grid {
+  border-top: 1px solid rgba(200, 162, 74, 0.22);
+}
+
+.sakura-page .stat-card {
+  border-right: 1px solid rgba(200, 162, 74, 0.16);
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.05), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+}
+
+.sakura-page .stat-card .stat-label {
+  color: var(--home-gold-2);
+  font-family: inherit;
+  font-style: normal;
+}
+
+.sakura-page .stat-card .stat-value {
+  color: var(--home-ivory);
+}
+
+.sakura-page .stat-card .stat-sub {
+  color: var(--home-muted);
+}
+
+.sakura-page .comparison,
+.sakura-page .compare-axes {
+  background: transparent;
+}
+
+.sakura-page .verdict-box {
+  border: 1px solid rgba(200, 162, 74, 0.22);
+  border-left: 3px solid var(--home-sakura);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.06), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+  color: var(--home-muted);
+}
+
+.sakura-page .verdict-box h3 {
+  color: var(--home-gold-2);
+  font-family: inherit;
+  font-style: normal;
+}
+
+.sakura-page .verdict-box p {
+  color: var(--home-muted);
+}
+
+.sakura-page .table-wrap {
+  border: 1px solid rgba(200, 162, 74, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.sakura-page .compare-axes .table-wrap {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.sakura-page table {
+  background: transparent;
+  color: var(--home-muted);
+}
+
+.sakura-page th,
+.sakura-page td {
+  border-bottom: 1px solid rgba(200, 162, 74, 0.16);
+}
+
+.sakura-page th {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--home-gold-2);
+  font-family: inherit;
+  font-style: normal;
+}
+
+.sakura-page .compare-axes td code,
+.sakura-page .compare-axes th code,
+.sakura-page td code,
+.sakura-page th code {
+  background: rgba(255, 216, 231, 0.08);
+  color: var(--home-sakura);
+  border-radius: 4px;
+  padding: 2px 7px;
+}
+
+.sakura-page .split {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.sakura-page .split.alt,
+.sakura-page .docs-section {
+  background: transparent;
+}
+
+.sakura-page .check-list {
+  color: var(--home-muted);
+  font-family: inherit;
+}
+
+.sakura-page .check-list li::before {
+  color: var(--home-gold-2);
+}
+
+.sakura-page .anti-persona,
+.sakura-page .command-panel {
+  border: 1px solid rgba(200, 162, 74, 0.22);
+  border-left: 3px solid var(--home-sakura);
+  border-radius: 8px;
+  background: rgba(5, 5, 9, 0.72);
+  color: var(--home-muted);
+}
+
+.sakura-page .anti-persona h3 {
+  color: var(--home-ivory);
+}
+
+.sakura-page .anti-persona p {
+  color: var(--home-muted);
+}
+
+.sakura-page .command-panel::before {
+  display: none;
+}
+
+.sakura-page .doc-links {
+  gap: 18px;
+}
+
+.sakura-page .doc-links a {
+  border: 1px solid rgba(200, 162, 74, 0.2);
+  border-radius: 8px;
+  color: var(--home-muted);
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.06), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+}
+
+.sakura-page .doc-links a:first-child,
+.sakura-page .doc-links a:not(:first-child) {
+  padding: 28px 24px;
+}
+
+.sakura-page .doc-links a:hover {
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.025));
+}
+
+.sakura-page .doc-links span {
+  color: var(--home-ivory);
+}
+
+.sakura-page .compare-index-card,
+.sakura-page .dropzone,
+.sakura-page .samples,
+.sakura-page .output-placeholder,
+.sakura-page .output-wrap {
+  border: 1px solid rgba(200, 162, 74, 0.2);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.06), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+}
+
+.sakura-page .compare-index-card {
+  border-right: 1px solid rgba(200, 162, 74, 0.2);
+  border-top: 1px solid rgba(200, 162, 74, 0.2);
+  color: var(--home-muted);
+  padding: 30px;
+}
+
+.sakura-page .compare-index-card:hover {
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.025));
+}
+
+.sakura-page .compare-index-card .tag,
+.sakura-page .samples-label {
+  color: var(--home-gold-2);
+}
+
+.sakura-page .viewer-section {
+  padding-top: 32px;
+}
+
+.sakura-page .viewer-controls {
+  color: var(--home-ivory);
+}
+
+.sakura-page .dropzone {
+  border-style: dashed;
+  color: var(--home-muted);
+}
+
+.sakura-page .dropzone:hover,
+.sakura-page .dropzone:focus-visible,
+.sakura-page .dropzone.is-hover {
+  background:
+    radial-gradient(circle at 80% 20%, rgba(255, 216, 231, 0.11), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+  border-color: rgba(255, 216, 231, 0.42);
+}
+
+.sakura-page .dropzone-title,
+.sakura-page .dropzone-pick,
+.sakura-page .sample-button,
+.sakura-page .output-copy {
+  color: var(--home-ivory);
+}
+
+.sakura-page .sample-button,
+.sakura-page .output-copy {
+  background: rgba(5, 5, 9, 0.52);
+  border: 1px solid rgba(200, 162, 74, 0.22);
+}
+
+.sakura-page .sample-button:hover,
+.sakura-page .output-copy:hover {
+  background: rgba(255, 216, 231, 0.09);
+  border-color: rgba(255, 216, 231, 0.32);
+}
+
+.sakura-page .sample-pass .sample-verdict,
+.sakura-page .sample-warn .sample-verdict,
+.sakura-page .sample-fail .sample-verdict {
+  color: var(--home-sakura);
+}
+
+.sakura-page .error-banner,
+.sakura-page .output-meta,
+.sakura-page .report-output {
+  background: rgba(5, 5, 9, 0.72);
+  border-color: rgba(200, 162, 74, 0.2);
+  color: var(--home-ivory);
+}
+
+.sakura-page .output-source,
+.sakura-page .report-output li,
+.sakura-page .report-output p,
+.sakura-page .report-output td {
+  color: var(--home-muted);
+}
+
+.sakura-page .report-output th {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--home-gold-2);
+}
+
+.sakura-page .report-output h1,
+.sakura-page .report-output h2,
+.sakura-page .report-output h3 {
+  color: var(--home-ivory);
+}
+
+.sakura-page .site-footer {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 30px 0 46px;
+  border-top: 1px solid rgba(200, 162, 74, 0.16);
+  color: rgba(246, 239, 226, 0.46);
+  font-family: inherit;
+  font-style: normal;
+}
+
+.sakura-page .site-footer a {
+  color: var(--home-gold-2);
+}
+
+@media (max-width: 980px) {
+  .sakura-page .site-header {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 8px;
+  }
+
+  .sakura-page .nav {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 14px 18px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(200, 162, 74, 0.14);
+  }
+
+  .sakura-page .page-hero {
+    grid-template-columns: 1fr;
+    padding-top: 64px;
+  }
+
+  .sakura-page h1 {
+    font-size: 4.4rem;
+  }
+
+  .sakura-page .hero-visual {
+    min-height: 620px;
+    max-width: none;
+  }
+
+  .sakura-page .compare-index-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+
+@media (max-width: 680px) {
+  .sakura-page .site-header,
+  .sakura-page .page-hero,
+  .sakura-page .section,
+  .sakura-page .site-footer {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .sakura-page .site-bg::before {
+    opacity: 0.58;
+    background-position:
+      right -120px top -190px,
+      right -430px bottom -640px;
+    background-size:
+      700px auto,
+      760px auto;
+  }
+
+  .sakura-page .brand-name {
+    font-size: 0.84rem;
+  }
+
+  .sakura-page .nav {
+    gap: 10px 14px;
+    font-size: 0.8rem;
+  }
+
+  .sakura-page .page-hero {
+    padding-top: 56px;
+  }
+
+  .sakura-page h1 {
+    font-size: 3.25rem;
+    line-height: 1;
+  }
+
+  .sakura-page .lead {
+    font-size: 1rem;
+  }
+
+  .sakura-page .hero-visual {
+    min-height: 590px;
+  }
+
+  .sakura-page .sigil-orb {
+    top: 58px;
+    width: 270px;
+    height: 270px;
+  }
+
+  .sakura-page .sigil-kanji {
+    inset: 100px;
+    font-size: 2.4rem;
+  }
+
+  .sakura-page .sigil-axis {
+    width: 236px;
+  }
+
+  .sakura-page .terminal-card {
+    left: 20px;
+    right: 20px;
+    bottom: 28px;
+  }
+
+  .sakura-page .terminal-body {
+    font-size: 0.76rem;
+    padding: 18px;
+  }
+
+  .sakura-page .floating-label {
+    display: none;
+  }
+
+  .sakura-page .section-heading h2 {
+    font-size: 2.8rem;
+  }
+
+  .sakura-page .proof-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .sakura-page .proof-strip > div + div {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .sakura-page .site-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}

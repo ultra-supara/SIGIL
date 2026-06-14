@@ -10,20 +10,22 @@
     />
     <link rel="stylesheet" href="../../styles.css" />
   </head>
-  <body>
+  <body class="sakura-page compare-detail-page">
+    <div class="site-noise"></div>
+    <div class="site-bg"></div>
+
     <header class="site-header">
       <a class="brand" href="../../" aria-label="SIGIL home">
-        <span class="brand-mark">S</span>
-        <span>SIGIL</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">SIGIL</span>
       </a>
       <nav class="nav" aria-label="Primary navigation">
-        <a href="../../#scope">Scope</a>
-        <a href="../../#report">Report</a>
-        <a href="../../#aibom">AI-BOM</a>
+        <a href="../../#platform">Platform</a>
+        <a href="../../#research">Research</a>
+        <a href="../../#tools">Tools</a>
         <a href="../" aria-current="page">Compare</a>
         <a href="../../reports/2026-h1/">2026 H1</a>
         <a href="../../viewer/">Viewer</a>
-        <a href="../../#docs">Docs</a>
         <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
       </nav>
     </header>
@@ -40,34 +42,43 @@
             angle — what is actually installed on the box, hashed.
           </p>
         </div>
-        <figure class="hero-visual">
-          <div class="art" aria-hidden="true">
-            <span class="brandchip">sigil ⟷ owasp aibom</span>
-            <div class="diff">
-              <div class="col">
-                <div class="col-label">SIGIL</div>
-                <div class="verdict-row"><span class="verdict-pill pass">[PASS]</span></div>
-                <div class="section-label">Source</div>
-                <div style="font-size: 12px; line-height: 1.6;">
-                  on-disk Ollama manifest<br/>
-                  every blob hashed locally<br/>
-                  /proc runtime exposure<br/>
-                  deterministic verdict
-                </div>
-              </div>
-              <div class="col">
-                <div class="col-label">OWASP AIBOM Generator</div>
-                <div class="verdict-row"><span class="verdict-pill">[—]</span></div>
-                <div class="section-label">Source</div>
-                <div style="font-size: 12px; line-height: 1.6;">
-                  Hugging Face model card<br/>
-                  repository metadata<br/>
-                  CycloneDX 1.6 schema<br/>
-                  no on-box evidence
-                </div>
-              </div>
+        <figure class="hero-visual" aria-label="SIGIL versus OWASP AIBOM Generator visual">
+          <div class="sigil-orb" aria-hidden="true">
+            <div class="sigil-ring ring-a"></div>
+            <div class="sigil-ring ring-b"></div>
+            <div class="sigil-ring ring-c"></div>
+            <div class="sigil-kanji">印</div>
+            <div class="sigil-axis axis-x"></div>
+            <div class="sigil-axis axis-y"></div>
+            <div class="sigil-axis axis-d1"></div>
+            <div class="sigil-axis axis-d2"></div>
+          </div>
+
+          <div class="floating-label label-one">
+            <span>COMPARE</span>
+            <strong>OWASP AIBOM</strong>
+          </div>
+
+          <div class="floating-label label-two">
+            <span>SOURCE</span>
+            <strong>LOCAL EVIDENCE</strong>
+          </div>
+
+          <div class="terminal-card" aria-hidden="true">
+            <div class="terminal-top">
+              <span></span>
+              <span></span>
+              <span></span>
+              <strong>sigil://owasp</strong>
             </div>
-            <div class="footnote">same artifact name · different epistemics</div>
+
+            <div class="terminal-body comparison-terminal">
+              <p><b>[sigil]</b> hashes installed Ollama artifacts</p>
+              <p><em>[owasp]</em> reads Hugging Face metadata</p>
+              <p><b>[sigil]</b> classifies local runtime exposure</p>
+              <p><em>[owasp]</em> emits CycloneDX from claims</p>
+              <p><b>[ok]</b> artifact source made explicit.</p>
+            </div>
           </div>
           <figcaption class="visually-hidden">SIGIL derives the AI-BOM from on-disk Ollama evidence with a PASS verdict; the OWASP generator derives it from Hugging Face metadata.</figcaption>
         </figure>
