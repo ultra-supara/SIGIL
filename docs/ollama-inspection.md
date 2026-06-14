@@ -95,7 +95,7 @@ SIGIL reads up to 4 KB of the license blob for detection (so longer signatures l
 
 Detection priority:
 
-1. **Fast path** — the first line is a short SPDX identifier (e.g. `MIT`, `Apache-2.0`, `BSD-3-Clause`). Accepted directly.
+1. **Fast path** — the first line is a recognized short SPDX identifier (e.g. `MIT`, `Apache-2.0`, `BSD-3-Clause`). SIGIL validates the token against the supported family set before accepting it.
 2. **Body match** — whitespace-condensed, lowercased text is scanned for unambiguous license preambles. Order matters; the more-specific variant is checked first so we never confuse two similar licenses:
 
    | License | Signature |

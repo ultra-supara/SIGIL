@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 
 const css = readFileSync("site/styles.css", "utf8");
 const viewerCss = readFileSync("site/viewer/viewer.css", "utf8");
+const h1ReportHtml = readFileSync("site/reports/2026-h1/index.html", "utf8");
+const h1Summary = readFileSync("reports/2026-h1/summary.json", "utf8");
+const h1Phi3Raw = readFileSync("reports/2026-h1/raw/phi3_mini.aibom.json", "utf8");
 const compareIndexHtml = readFileSync("site/compare/index.html", "utf8");
 const compareCardHeadings = [
   ...compareIndexHtml.matchAll(
@@ -145,6 +148,17 @@ checks.push(
     pass:
       compareCardHeadings.length === 3 &&
       compareCardHeadings.every((heading) => !heading.includes("<code>")),
+  },
+  {
+    name: "2026 H1 report no longer carries the phi3 Microsoft SPDX false positive",
+    pass:
+      !h1ReportHtml.includes("Microsoft.") &&
+      !h1ReportHtml.includes("false positive") &&
+      !h1Summary.includes("Microsoft.") &&
+      !h1Phi3Raw.includes('"spdx_id": "Microsoft."') &&
+      h1ReportHtml.includes("<td><code>MIT</code></td>") &&
+      h1Summary.includes('"spdx_id": "MIT"') &&
+      h1Phi3Raw.includes('"spdx_id": "MIT"'),
   },
 );
 

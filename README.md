@@ -155,7 +155,7 @@ See [ROADMAP.md](ROADMAP.md) and [docs/ai-bom-and-comparison.md](docs/ai-bom-and
 - IR → SafeISA emission.
 - CLI: `lift` and `assess` through the deterministic analysis path; structured Markdown report with verdict banner, capability table, policy violations with call-site lookup, and SafeISA excerpt.
 - Ollama model-store inventory, manifest + blob SHA-256 verification, provenance extraction.
-- SPDX license detection across 10 families (Apache-2.0, MIT, MPL-2.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, ISC). Known fast-path false positive when a license layer begins with a leading non-license token — [#33](https://github.com/ultra-supara/SIGIL/issues/33).
+- SPDX license detection across 10 families (Apache-2.0, MIT, MPL-2.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, ISC), with fast-path shortnames validated against the supported set before body matching.
 - Runtime API exposure classification, Linux `/proc`-based listener walk with `localhost` / `lan` / `public_bind` / `docker_published` / `proxy` classes.
 - Stable AI-BOM JSON contract at `schema_version: "1.1"`, runtime-agnostic, shared by `runtime inspect ollama --out` and `aibom generate`.
 - Browser AI-BOM viewer at [`site/viewer/`](site/viewer/) — same renderer compiled to wasm32, schema-validated client-side, CI-pinned against the Rust source on every PR.

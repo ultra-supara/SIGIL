@@ -79,7 +79,7 @@
       "license": {
         "digest": "sha256:fa8235e5b48faca34e3ca98cf4f694ef08bd216d28b58071a1f85b1d50cb814d",
         "size": 1084,
-        "spdx_id": "Microsoft.",
+        "spdx_id": "MIT",
         "text_excerpt": "Microsoft.\nCopyright (c) Microsoft Corporation.\n\nMIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, in"
       }
     }

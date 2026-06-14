@@ -747,18 +747,43 @@ fn detect_spdx_id(text: &str) -> Option<String> {
     let trimmed = text.trim();
     let first_line = trimmed.lines().next().unwrap_or(trimmed).trim();
     // Fast path: the blob is already an SPDX short identifier (e.g. "MIT",
-    // "Apache-2.0", "GPL-3.0-only"). Reject prose so we never claim an SPDX id
-    // we did not actually identify.
-    if !first_line.is_empty()
-        && first_line.len() <= 32
-        && !first_line.contains(' ')
-        && first_line
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
-    {
-        return Some(first_line.to_string());
+    // "Apache-2.0", "BSD-3-Clause"). Reject prose and unknown short tokens so
+    // we never claim an SPDX id we did not actually identify.
+    if has_spdx_shortname_shape(first_line) {
+        if let Some(canonical) = canonical_spdx_shortname(first_line) {
+            return Some(canonical.to_string());
+        }
     }
     detect_spdx_from_body(trimmed)
+}
+
+fn has_spdx_shortname_shape(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 32
+        && !token.contains(' ')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+}
+
+fn canonical_spdx_shortname(token: &str) -> Option<&'static str> {
+    const ACCEPTED_SPDX_SHORTNAMES: &[&str] = &[
+        "Apache-2.0",
+        "MIT",
+        "MPL-2.0",
+        "GPL-2.0",
+        "GPL-3.0",
+        "LGPL-2.1",
+        "LGPL-3.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC",
+    ];
+
+    ACCEPTED_SPDX_SHORTNAMES
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(token))
 }
 
 /// Match well-known license preambles in the first ~256 bytes of a license
@@ -838,9 +863,20 @@ mod tests {
     }
 
     #[test]
+    fn fast_path_canonicalizes_known_spdx_token() {
+        assert_eq!(detect_spdx_id("mit"), Some("MIT".to_string()));
+        assert_eq!(detect_spdx_id("apache-2.0"), Some("Apache-2.0".to_string()));
+    }
+
+    #[test]
     fn fast_path_rejects_empty_or_prose() {
         assert_eq!(detect_spdx_id(""), None);
         assert_eq!(detect_spdx_id("   "), None);
+    }
+
+    #[test]
+    fn fast_path_rejects_unknown_shape_valid_token() {
+        assert_eq!(detect_spdx_id("NotASpdxId"), None);
     }
 
     #[test]
@@ -867,6 +903,19 @@ mod tests {
     fn detects_mit_from_bare_permission_text() {
         let body = "Permission is hereby granted, free of charge, to any person obtaining a copy\
                     of this software and associated documentation files...";
+        assert_eq!(detect_spdx_id(body), Some("MIT".to_string()));
+    }
+
+    #[test]
+    fn detects_mit_after_leading_vendor_token() {
+        let body = "Microsoft.\n\
+                    Copyright (c) Microsoft Corporation.\n\
+                    \n\
+                    MIT License\n\
+                    \n\
+                    Permission is hereby granted, free of charge, to any person obtaining a copy\
+                    of this software and associated documentation files (the \"Software\"), to deal\
+                    in the Software without restriction.";
         assert_eq!(detect_spdx_id(body), Some("MIT".to_string()));
     }
 
