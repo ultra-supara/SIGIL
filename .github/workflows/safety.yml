@@ -1,0 +1,69 @@
+name: Safety contracts
+
+# ADR-002 (docs/adr/ADR-002-execution-modes.md): SIGIL checks its safety contracts C-1..C-6
+# through build-time API restrictions and syscall tests over exercised paths. These are checks,
+# not a runtime sandbox.
+#
+# SIGIL_SAFETY_REQUIRED=1 makes a missing tracer or fixture compiler a failure, so this job can
+# never pass by skipping. On failure the raw strace traces are uploaded as an artifact.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  safety:
+    name: Safety contracts (C-1..C-6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SIGIL_SAFETY_REQUIRED: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the syscall tracer and the fixture compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends strace clang
+          strace -V
+          clang --version
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-deny
+      - name: Build-time bans (clippy disallowed types and methods)
+        # Cached clippy results are not invalidated by clippy.toml edits, so the workspace crates
+        # are cleaned first (dependencies stay cached).
+        run: |
+          cargo clean -p sigil-core -p sigil-cli -p sigil-aibom-wasm
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build-time bans (crates)
+        run: cargo deny check bans
+      - name: Syscall safety tests and negative controls
+        run: cargo test -p sigil-cli --test safety
+      - name: Check that the negative controls and CLI cases produced traces
+        run: |
+          n=$(ls -d target/tmp/safety-traces/control-* | wc -l)
+          c=$(ls -d target/tmp/safety-traces/* | wc -l)
+          echo "negative-control traces: $n, all traced cases: $c"
+          test "$n" -ge 15
+          test "$c" -ge 25
+      - name: Upload syscall traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: safety-traces
+          path: target/tmp/safety-traces/
+          if-no-files-found: warn
+          retention-days: 14

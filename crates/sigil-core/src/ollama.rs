@@ -1,6 +1,5 @@
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -660,9 +659,14 @@ fn host_name_for_classification(host: &str) -> String {
         .to_ascii_lowercase()
 }
 
+// C-4 exception (ADR-002): the legacy API probe opens a TCP connection. It is the only network
+// code in the product, it runs only when `--no-probe-api` is not given, and it moves behind an
+// explicit active mode in PR-3b. The safety harness detects it when exercised
+// (`legacy_api_probe_is_detected_as_a_network_violation`).
+#[allow(clippy::disallowed_types)]
 fn probe_ollama_version(host: &str) -> std::io::Result<Option<String>> {
     let (hostname, port) = parse_http_host(host).unwrap_or(("127.0.0.1".to_string(), 11434));
-    let mut stream = TcpStream::connect((hostname.as_str(), port))?;
+    let mut stream = std::net::TcpStream::connect((hostname.as_str(), port))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let request = format!(

@@ -1,3 +1,7 @@
+// Test code compiles fixtures with a C compiler, so it spawns processes; the C-1 bans in
+// clippy.toml apply to product code (docs/adr/ADR-002-execution-modes.md).
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,0 +1,21 @@
+# SIGIL safety contracts: crate bans (docs/adr/ADR-002-execution-modes.md).
+# Checked with `cargo deny check bans`; the other cargo-deny checks are not configured here.
+#
+# Only crates whose purpose is a forbidden operation are banned. General-purpose crates that
+# *could* do one (e.g. libc) are not; their use in product code is covered by review and by the
+# syscall tests. Lifting a ban needs an ADR.
+
+[graph]
+all-features = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+    { crate = "libloading", reason = "C-2: SIGIL never dlopens; inspected binaries are data (ADR-002)" },
+    { crate = "dlopen", reason = "C-2: SIGIL never dlopens; inspected binaries are data (ADR-002)" },
+    { crate = "dlopen2", reason = "C-2: SIGIL never dlopens; inspected binaries are data (ADR-002)" },
+    { crate = "sharedlib", reason = "C-2: SIGIL never dlopens; inspected binaries are data (ADR-002)" },
+    { crate = "memmap", reason = "C-3: target files are read with read/pread, never mmap (ADR-002)" },
+    { crate = "memmap2", reason = "C-3: target files are read with read/pread, never mmap (ADR-002)" },
+]

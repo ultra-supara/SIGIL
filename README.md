@@ -43,12 +43,12 @@ The artefact covers:
 
 ## Why local-first, LLM-free
 
-- **Nothing leaves the machine.** Model bytes, manifests, license text, and runtime metadata are read in place. Zero network egress.
+- **Nothing leaves the machine.** Model bytes, manifests, license text, and runtime metadata are read in place. With `--no-probe-api` there is no network I/O; the optional Ollama API probe, on by default until v2 makes it an explicit active mode, connects to the configured Ollama host.
 - **No subprocess spawn.** Runtime bind detection parses `/proc/net/tcp{,6}` and `/proc/<pid>/comm` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
 - **No LLM in the verdict path.** Every verdict comes from a deterministic analyzer ([`crates/sigil-core/src/assess`](crates/sigil-core/src/assess)) plus a YAML policy rule. An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
 - **Read-only.** SIGIL does not execute lifted code, call inspected external symbols, or mutate any artefact it inspects.
 
-Full safety boundary in [docs/architecture-and-safety.md](docs/architecture-and-safety.md).
+Full safety boundary in [docs/architecture-and-safety.md](docs/architecture-and-safety.md). These properties are **checked** by build-time API bans and by syscall tests over the exercised CLI paths ([ADR-002](docs/adr/ADR-002-execution-modes.md)). They are not enforced by a runtime sandbox.
 
 ## Quickstart
 
