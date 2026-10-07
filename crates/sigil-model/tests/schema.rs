@@ -121,7 +121,7 @@ fn registered() -> Vec<(&'static str, Probe)> {
         ObligationRef => "ObligationRef", PredicateCheck => "PredicateCheck", Atom => "Atom",
         CloseCheck => "CloseCheck", CheckResult => "CheckResult", CheckUnknown => "CheckUnknown",
         GuardRegion => "GuardRegion", RegionKind => "RegionKind", GuardBranch => "GuardBranch",
-        GuardCond => "GuardCond", CmpOp => "CmpOp", ExitKind => "ExitKind", MustPass => "MustPass",
+        GuardCond => "GuardCond", CmpOp => "CmpOp", ExitKind => "ExitKind",
         ParamMapping => "ParamMapping", SourceParamRef => "SourceParamRef", BinaryParam => "BinaryParam",
         Relation => "Relation", DeclKind => "DeclKind", SearchRule => "SearchRule", SearchDir => "SearchDir",
         ObligationResult => "ObligationResult", ObligationState => "ObligationState", RuleSupport => "RuleSupport",
@@ -424,12 +424,6 @@ fn gallery() -> Vec<(&'static str, Value)> {
             },
         ),
         sample(
-            "DiscoverySource",
-            DiscoverySource::ProcessMapping {
-                process: process.clone(),
-            },
-        ),
-        sample(
             "ProcessExe",
             ProcessExe::Instance {
                 instance: id("inst:bin/ollama"),
@@ -601,7 +595,6 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("Signal", Signal::String),
         sample("Signal", Signal::Needed),
         sample("Signal", Signal::GoFunction),
-        sample("BoundsSource", BoundsSource::SymbolSize),
         sample("CallKind", CallKind::TailJump),
         sample("ImportVia", ImportVia::PltSec),
         sample("ImportVia", ImportVia::Got),
@@ -744,16 +737,6 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 CmpOp::GtU,
                 CmpOp::GeU,
             ],
-        ),
-        sample(
-            "MustPass",
-            MustPass {
-                function: id("fn:0x10"),
-                from: Loc::VAddr(0x10),
-                via: call.clone(),
-                until: Loc::VAddr(0x40),
-                holds: TriState::No,
-            },
         ),
         sample(
             "BinaryParam",

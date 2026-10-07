@@ -49,8 +49,8 @@ pub use artifact::{
 pub use code::{
     ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,
     CheckResult, CheckUnknown, CloseCheck, CmpOp, CodeFacts, ExitKind, FnRef, Function,
-    GuardBranch, GuardCond, GuardRegion, ImportVia, MustPass, ObligationRef, ParamMapping,
-    PredicateCheck, Reg, RegionKind, SourceParamRef, ValueUnknown,
+    GuardBranch, GuardCond, GuardRegion, ImportVia, ObligationRef, ParamMapping, PredicateCheck,
+    Reg, RegionKind, SourceParamRef, ValueUnknown,
 };
 pub use coverage::{AbsenceBasis, BudgetUse, Coverage, CoverageState, SkipReason, Unavailability};
 pub use evidence::{

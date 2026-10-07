@@ -278,7 +278,6 @@
         }
       ],
       "guard_regions": [],
-      "must_pass": [],
       "param_mappings": [
         {
           "function": "fn:0xecb0",

@@ -176,8 +176,6 @@ pub enum DiscoverySource {
     ServiceUnit { config: ConfigRef },
     /// The executable of an observed process.
     ProcessExe { process: ProcessRef },
-    /// Mapped in an observed process (matched by dev:ino).
-    ProcessMapping { process: ProcessRef },
 }
 
 /// A process, guarded against PID reuse by its start time and boot ID.

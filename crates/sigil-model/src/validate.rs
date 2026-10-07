@@ -634,8 +634,7 @@ impl<'a> Validator<'a> {
                     crate::artifact::DiscoverySource::ServiceUnit { config } => {
                         self.config(config, &at)
                     }
-                    crate::artifact::DiscoverySource::ProcessExe { process }
-                    | crate::artifact::DiscoverySource::ProcessMapping { process } => {
+                    crate::artifact::DiscoverySource::ProcessExe { process } => {
                         self.process(process, &at)
                     }
                 }
@@ -844,13 +843,6 @@ impl<'a> Validator<'a> {
                     self.arg(slice, value, &at);
                 }
             }
-        }
-        for must in &facts.must_pass {
-            let at = format!("code[{slice}].must_pass[{}]", must.function);
-            self.function(slice, must.function.as_str(), &at);
-            self.loc(slice, &must.from, &at);
-            self.loc(slice, &must.until, &at);
-            self.call_ref(slice, must.via.as_str(), &at);
         }
         for mapping in &facts.param_mappings {
             let at = format!("code[{slice}].param_mappings[{}]", mapping.function);

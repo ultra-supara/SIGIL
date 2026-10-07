@@ -558,19 +558,6 @@
               "properties": {"process": {"$ref": "#/$defs/ProcessRef"}}
             }
           }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["ProcessMapping"],
-          "properties": {
-            "ProcessMapping": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["process"],
-              "properties": {"process": {"$ref": "#/$defs/ProcessRef"}}
-            }
-          }
         }
       ]
     },
@@ -1546,7 +1533,6 @@
         "predicate_checks",
         "close_checks",
         "guard_regions",
-        "must_pass",
         "param_mappings"
       ],
       "properties": {
@@ -1556,7 +1542,6 @@
         "predicate_checks": {"type": "array", "items": {"$ref": "#/$defs/PredicateCheck"}},
         "close_checks": {"type": "array", "items": {"$ref": "#/$defs/CloseCheck"}},
         "guard_regions": {"type": "array", "items": {"$ref": "#/$defs/GuardRegion"}},
-        "must_pass": {"type": "array", "items": {"$ref": "#/$defs/MustPass"}},
         "param_mappings": {"type": "array", "items": {"$ref": "#/$defs/ParamMapping"}}
       }
     },
@@ -1584,7 +1569,7 @@
         "names": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}}
       }
     },
-    "BoundsSource": {"type": "string", "enum": ["EhFrameFde", "SymbolSize"]},
+    "BoundsSource": {"type": "string", "enum": ["EhFrameFde"]},
     "CallSite": {
       "type": "object",
       "additionalProperties": false,
@@ -2119,18 +2104,6 @@
           }
         }
       ]
-    },
-    "MustPass": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["function", "from", "via", "until", "holds"],
-      "properties": {
-        "function": {"$ref": "#/$defs/FnId"},
-        "from": {"$ref": "#/$defs/Loc"},
-        "via": {"$ref": "#/$defs/CallId"},
-        "until": {"$ref": "#/$defs/Loc"},
-        "holds": {"$ref": "#/$defs/TriState"}
-      }
     },
     "ParamMapping": {
       "type": "object",

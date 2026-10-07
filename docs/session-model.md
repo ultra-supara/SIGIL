@@ -237,7 +237,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
 | B: presence | `FeatureHint`, `Signal` | A feature signal exists |
-| C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `MustPass`, `ParamMapping` | Reconstructed calls, values, and checks of one slice |
+| C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice |
 | Relations | `Relation` (`Declares`, `Candidate`, `SymbolCandidate`, `ProfileMatch`, `SearchPath`, `Spawns`), `ObligationResult`, `BindingPremise` | Dependencies, profile obligations, search paths, topology, binding |
 | D: behavior | `RuleSupport`, `Support`, `LoadFacts`, `Tri`, `ProcessValue`, `ValueOrigin` | Per-rule support and per-file facts, with premises and value provenance |
 | Access | `WriteAccess`, `NodeAccess`, `CapabilityAccess`, `AccessConclusion` | Who can write where, from observed metadata |

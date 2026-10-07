@@ -76,7 +76,7 @@ pub enum EvidenceRef {
 }
 
 /// A location inside a binary slice.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Loc {
     FileOffset(u64),

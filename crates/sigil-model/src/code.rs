@@ -25,7 +25,6 @@ pub struct CodeFacts {
     pub predicate_checks: Vec<PredicateCheck>,
     pub close_checks: Vec<CloseCheck>,
     pub guard_regions: Vec<GuardRegion>,
-    pub must_pass: Vec<MustPass>,
     pub param_mappings: Vec<ParamMapping>,
 }
 
@@ -57,11 +56,11 @@ pub struct Function {
     pub names: Vec<UntrustedText>,
 }
 
-/// Where function bounds came from.
+/// Where function bounds came from. M1 uses only FDEs, with no fallback to symbol sizes
+/// (plan §4.6.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoundsSource {
     EhFrameFde,
-    SymbolSize,
 }
 
 /// A call or tail jump at an address, with its target and recovered argument values.
@@ -347,17 +346,6 @@ pub enum ExitKind {
         callees: Vec<UntrustedText>,
     },
     Other,
-}
-
-/// "From `from`, every normal-control-flow path passes `via` before `until`."
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MustPass {
-    pub function: FnId,
-    pub from: Loc,
-    pub via: CallId,
-    pub until: Loc,
-    pub holds: TriState,
 }
 
 /// How a source-level parameter is passed in this binary (plan §5.4). Source parameter numbers

@@ -59,7 +59,6 @@ impl Session {
             sort_json(&mut facts.predicate_checks);
             sort_json(&mut facts.close_checks);
             sort_json(&mut facts.guard_regions);
-            sort_json(&mut facts.must_pass);
             sort_json(&mut facts.param_mappings);
         }
         sort_json(&mut self.code);

@@ -441,7 +441,6 @@ pub fn add_loader_code(s: &mut Session, g: &Placed) {
             result: CheckResult::Match,
         }],
         guard_regions: vec![],
-        must_pass: vec![],
         param_mappings: vec![ParamMapping {
             function: id("fn:0xecb0"),
             source: SourceParamRef {
