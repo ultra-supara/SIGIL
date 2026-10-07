@@ -48,10 +48,12 @@ fn policy(fx: &Fixture, outputs: &[&Path], scopes: &[&'static str]) -> Policy {
 /// The run opened something under `root` (evidence that the inspection path was exercised).
 fn assert_read_under(run: &TracedRun, root: &Path) {
     let root = std::fs::canonicalize(root).unwrap();
-    let read = run
-        .events
-        .iter()
-        .any(|e| matches!(e.name.as_str(), "openat" | "open" | "openat2") && fd_path(&e.ret).map(|p| p.starts_with(&root)).unwrap_or(false));
+    let read = run.events.iter().any(|e| {
+        matches!(e.name.as_str(), "openat" | "open" | "openat2")
+            && fd_path(&e.ret)
+                .map(|p| p.starts_with(&root))
+                .unwrap_or(false)
+    });
     assert!(read, "case `{}` never opened anything under {}; the fixture did not exercise the path.\nstdout: {}\nstderr: {}", run.case, root.display(), run.stdout, run.stderr);
 }
 
@@ -73,8 +75,20 @@ fn static_assess_on_a_compiled_object() {
         return;
     }
     let fx = fixture();
-    let Some(obj) = require("static_assess_on_a_compiled_object", fixtures::kernel_object(&fx.target)) else { return };
-    let args = os(&[&"assess", &obj, &"--entry", &"kernel", &"--policy", &policy_file()]);
+    let Some(obj) = require(
+        "static_assess_on_a_compiled_object",
+        fixtures::kernel_object(&fx.target),
+    ) else {
+        return;
+    };
+    let args = os(&[
+        &"assess",
+        &obj,
+        &"--entry",
+        &"kernel",
+        &"--policy",
+        &policy_file(),
+    ]);
     let r = run("assess-object", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     assert_read_under(&r, &fx.target);
@@ -87,12 +101,31 @@ fn static_assess_on_malformed_inputs() {
         return;
     }
     let fx = fixture();
-    let Some(obj) = require("static_assess_on_malformed_inputs", fixtures::kernel_object(&fx.out)) else { return };
+    let Some(obj) = require(
+        "static_assess_on_malformed_inputs",
+        fixtures::kernel_object(&fx.out),
+    ) else {
+        return;
+    };
     let (garbage, truncated) = fixtures::malformed_inputs(&fx.target, &obj);
-    for (case, input) in [("assess-garbage", garbage), ("assess-truncated-elf", truncated)] {
-        let args = os(&[&"assess", &input, &"--entry", &"kernel", &"--policy", &policy_file()]);
+    for (case, input) in [
+        ("assess-garbage", garbage),
+        ("assess-truncated-elf", truncated),
+    ] {
+        let args = os(&[
+            &"assess",
+            &input,
+            &"--entry",
+            &"kernel",
+            &"--policy",
+            &policy_file(),
+        ]);
         let r = run(case, &fx, &refs(&args));
-        assert!(!r.status.unwrap().success(), "malformed input should be rejected: {}", r.stdout);
+        assert!(
+            !r.status.unwrap().success(),
+            "malformed input should be rejected: {}",
+            r.stdout
+        );
         assert_read_under(&r, &fx.target);
         assert_clean(&r, &policy(&fx, &[], &["runtime"]));
     }
@@ -104,9 +137,25 @@ fn static_assess_writes_only_the_named_outputs() {
         return;
     }
     let fx = fixture();
-    let Some(obj) = require("static_assess_writes_only_the_named_outputs", fixtures::kernel_object(&fx.target)) else { return };
+    let Some(obj) = require(
+        "static_assess_writes_only_the_named_outputs",
+        fixtures::kernel_object(&fx.target),
+    ) else {
+        return;
+    };
     let (report_md, evidence) = (fx.out.join("report.md"), fx.out.join("evidence.json"));
-    let args = os(&[&"assess", &obj, &"--entry", &"kernel", &"--policy", &policy_file(), &"--out", &report_md, &"--emit-evidence", &evidence]);
+    let args = os(&[
+        &"assess",
+        &obj,
+        &"--entry",
+        &"kernel",
+        &"--policy",
+        &policy_file(),
+        &"--out",
+        &report_md,
+        &"--emit-evidence",
+        &evidence,
+    ]);
     let r = run("assess-with-outputs", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     assert!(report_md.is_file() && evidence.is_file());
@@ -120,9 +169,23 @@ fn static_lift_writes_only_the_named_outputs() {
         return;
     }
     let fx = fixture();
-    let Some(obj) = require("static_lift_writes_only_the_named_outputs", fixtures::kernel_object(&fx.target)) else { return };
+    let Some(obj) = require(
+        "static_lift_writes_only_the_named_outputs",
+        fixtures::kernel_object(&fx.target),
+    ) else {
+        return;
+    };
     let (ir, safeisa) = (fx.out.join("kernel.ir"), fx.out.join("kernel.safeisa"));
-    let args = os(&[&"lift", &obj, &"--entry", &"kernel", &"--emit-ir", &ir, &"--emit-safeisa", &safeisa]);
+    let args = os(&[
+        &"lift",
+        &obj,
+        &"--entry",
+        &"kernel",
+        &"--emit-ir",
+        &ir,
+        &"--emit-safeisa",
+        &safeisa,
+    ]);
     let r = run("lift-with-outputs", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     assert_read_under(&r, &fx.target);
@@ -137,7 +200,17 @@ fn ollama_store_inspection_without_probe_or_runtime() {
     let fx = fixture();
     let models = fixtures::ollama_store(&fx.target);
     let bom = fx.out.join("aibom.json");
-    let args = os(&[&"runtime", &"inspect", &"ollama", &"--models-dir", &models, &"--no-probe-api", &"--no-inspect-runtime", &"--out", &bom]);
+    let args = os(&[
+        &"runtime",
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--no-probe-api",
+        &"--no-inspect-runtime",
+        &"--out",
+        &bom,
+    ]);
     let r = run("ollama-static", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     assert!(bom.is_file());
@@ -154,17 +227,41 @@ fn ollama_runtime_inspection_reads_only_allowlisted_proc() {
     let models = fixtures::ollama_store(&fx.target);
     let bom = fx.out.join("aibom.json");
     // Probe off, runtime (listener) inspection on: today's observe-like path (PR-3b: --mode observe).
-    let args = os(&[&"runtime", &"inspect", &"ollama", &"--models-dir", &models, &"--no-probe-api", &"--out", &bom]);
+    let args = os(&[
+        &"runtime",
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--no-probe-api",
+        &"--out",
+        &bom,
+    ]);
     let r = run("ollama-observe-current", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
-    let proc_reads = r.events.iter().filter(|e| e.raw.contains("/proc") || e.args.iter().any(|a| crate::trace::str_arg(a).map(|p| p.starts_with("/proc")).unwrap_or(false))).count();
-    assert!(proc_reads > 0, "runtime inspection did not touch /proc; the observe allowlist was not exercised");
+    let proc_reads = r
+        .events
+        .iter()
+        .filter(|e| {
+            e.raw.contains("/proc")
+                || e.args.iter().any(|a| {
+                    crate::trace::str_arg(a)
+                        .map(|p| p.starts_with("/proc"))
+                        .unwrap_or(false)
+                })
+        })
+        .count();
+    assert!(
+        proc_reads > 0,
+        "runtime inspection did not touch /proc; the observe allowlist was not exercised"
+    );
     assert_clean(&r, &policy(&fx, &[&bom], &["runtime", "observe"]));
     // The same trace under the static scope must fail C-6: the observe entries do real work.
     let v = check(&r, &policy(&fx, &[&bom], &["runtime"]));
     for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
         assert!(
-            v.iter().any(|x| x.contract == Contract::C6ProcScope && x.detail.contains(path)),
+            v.iter()
+                .any(|x| x.contract == Contract::C6ProcScope && x.detail.contains(path)),
             "{path} was not flagged under the static scope:\n{}",
             report(&r, &v)
         );
@@ -179,7 +276,20 @@ fn aibom_generate_markdown() {
     let fx = fixture();
     let models = fixtures::ollama_store(&fx.target);
     let md = fx.out.join("nested/aibom.md");
-    let args = os(&[&"aibom", &"generate", &"--runtime", &"ollama", &"--models-dir", &models, &"--no-probe-api", &"--no-inspect-runtime", &"--format", &"md", &"--out", &md]);
+    let args = os(&[
+        &"aibom",
+        &"generate",
+        &"--runtime",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--no-probe-api",
+        &"--no-inspect-runtime",
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
     let r = run("aibom-generate-md", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     assert!(md.is_file());
@@ -194,7 +304,15 @@ fn ollama_store_with_a_malformed_manifest() {
     }
     let fx = fixture();
     let models = fixtures::malformed_store(&fx.target);
-    let args = os(&[&"runtime", &"inspect", &"ollama", &"--models-dir", &models, &"--no-probe-api", &"--no-inspect-runtime"]);
+    let args = os(&[
+        &"runtime",
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--no-probe-api",
+        &"--no-inspect-runtime",
+    ]);
     let r = run("ollama-malformed-manifest", &fx, &refs(&args));
     assert_read_under(&r, &models);
     assert_clean(&r, &policy(&fx, &[], &["runtime"]));
@@ -209,15 +327,29 @@ fn legacy_api_probe_is_detected_as_a_network_violation() {
     }
     let fx = fixture();
     let models = fixtures::ollama_store(&fx.target);
-    let args = os(&[&"runtime", &"inspect", &"ollama", &"--models-dir", &models, &"--no-inspect-runtime", &"--host", &"http://127.0.0.1:9"]);
+    let args = os(&[
+        &"runtime",
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--no-inspect-runtime",
+        &"--host",
+        &"http://127.0.0.1:9",
+    ]);
     let r = run("ollama-legacy-probe", &fx, &refs(&args));
     let v = check(&r, &policy(&fx, &[], &["runtime"]));
     for syscall in ["socket", "connect"] {
         assert!(
-            v.iter().any(|x| x.contract == Contract::C4NoNetwork && x.syscall == syscall),
+            v.iter()
+                .any(|x| x.contract == Contract::C4NoNetwork && x.syscall == syscall),
             "the legacy probe's {syscall} was not detected as C-4:\n{}",
             report(&r, &v)
         );
     }
-    assert!(v.iter().all(|x| x.contract == Contract::C4NoNetwork), "only C-4 was expected:\n{}", report(&r, &v));
+    assert!(
+        v.iter().all(|x| x.contract == Contract::C4NoNetwork),
+        "only C-4 was expected:\n{}",
+        report(&r, &v)
+    );
 }

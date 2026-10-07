@@ -63,35 +63,135 @@ pub struct Policy {
 /// Every syscall a rule below inspects. `trace::trace_expr` traces all of them.
 pub const RULE_SYSCALLS: &[&str] = &[
     // C-1
-    "execve", "execveat", "fork", "vfork", "clone", "clone3",
+    "execve",
+    "execveat",
+    "fork",
+    "vfork",
+    "clone",
+    "clone3",
     // C-2 / C-3
-    "mmap", "mmap2",
+    "mmap",
+    "mmap2",
     // C-4
-    "socket", "socketpair", "connect", "bind", "listen", "accept", "accept4", "sendto", "sendmsg", "sendmmsg",
-    "recvfrom", "recvmsg", "recvmmsg", "getsockopt", "setsockopt", "getpeername", "getsockname", "shutdown",
+    "socket",
+    "socketpair",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "accept4",
+    "sendto",
+    "sendmsg",
+    "sendmmsg",
+    "recvfrom",
+    "recvmsg",
+    "recvmmsg",
+    "getsockopt",
+    "setsockopt",
+    "getpeername",
+    "getsockname",
+    "shutdown",
     // C-5 (write-capable opens and mutations) and C-6 (path-taking calls)
-    "open", "openat", "openat2", "creat", "rename", "renameat", "renameat2", "unlink", "unlinkat", "rmdir",
-    "mkdir", "mkdirat", "symlink", "symlinkat", "link", "linkat", "truncate", "ftruncate", "chmod", "fchmod",
-    "fchmodat", "fchmodat2", "chown", "fchown", "lchown", "fchownat", "setxattr", "lsetxattr", "fsetxattr",
-    "removexattr", "lremovexattr", "fremovexattr", "utimensat", "utimes", "futimesat", "utime", "mknod", "mknodat",
-    "readlink", "readlinkat", "stat", "lstat", "newfstatat", "statx", "access", "faccessat", "faccessat2",
-    "chdir", "getdents64", "inotify_add_watch",
+    "open",
+    "openat",
+    "openat2",
+    "creat",
+    "rename",
+    "renameat",
+    "renameat2",
+    "unlink",
+    "unlinkat",
+    "rmdir",
+    "mkdir",
+    "mkdirat",
+    "symlink",
+    "symlinkat",
+    "link",
+    "linkat",
+    "truncate",
+    "ftruncate",
+    "chmod",
+    "fchmod",
+    "fchmodat",
+    "fchmodat2",
+    "chown",
+    "fchown",
+    "lchown",
+    "fchownat",
+    "setxattr",
+    "lsetxattr",
+    "fsetxattr",
+    "removexattr",
+    "lremovexattr",
+    "fremovexattr",
+    "utimensat",
+    "utimes",
+    "futimesat",
+    "utime",
+    "mknod",
+    "mknodat",
+    "readlink",
+    "readlinkat",
+    "stat",
+    "lstat",
+    "newfstatat",
+    "statx",
+    "access",
+    "faccessat",
+    "faccessat2",
+    "chdir",
+    "getdents64",
+    "inotify_add_watch",
     // C-6 (process memory outside /proc)
-    "ptrace", "process_vm_readv", "process_vm_writev",
+    "ptrace",
+    "process_vm_readv",
+    "process_vm_writev",
     // Harness: I/O channels invisible to syscall tracing
-    "io_uring_setup", "io_uring_enter", "io_uring_register",
+    "io_uring_setup",
+    "io_uring_enter",
+    "io_uring_register",
 ];
 
 const NETWORK: &[&str] = &[
-    "socket", "socketpair", "connect", "bind", "listen", "accept", "accept4", "sendto", "sendmsg", "sendmmsg",
-    "recvfrom", "recvmsg", "recvmmsg", "getsockopt", "setsockopt", "getpeername", "getsockname", "shutdown",
+    "socket",
+    "socketpair",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "accept4",
+    "sendto",
+    "sendmsg",
+    "sendmmsg",
+    "recvfrom",
+    "recvmsg",
+    "recvmmsg",
+    "getsockopt",
+    "setsockopt",
+    "getpeername",
+    "getsockname",
+    "shutdown",
 ];
 const IO_URING: &[&str] = &["io_uring_setup", "io_uring_enter", "io_uring_register"];
 const PROC_MEMORY: &[&str] = &["ptrace", "process_vm_readv", "process_vm_writev"];
 const FD_MUTATIONS: &[&str] = &["ftruncate", "fchmod", "fchown", "fsetxattr", "fremovexattr"];
-const WRITE_FLAGS: &[&str] = &["O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_TMPFILE"];
+const WRITE_FLAGS: &[&str] = &[
+    "O_WRONLY",
+    "O_RDWR",
+    "O_CREAT",
+    "O_TRUNC",
+    "O_APPEND",
+    "O_TMPFILE",
+];
 /// Directories whose shared objects the dynamic loader maps for SIGIL itself (C-2 rule (b)).
-const SYSTEM_LIB_DIRS: &[&str] = &["/lib", "/lib64", "/lib32", "/usr/lib", "/usr/lib64", "/usr/lib32"];
+const SYSTEM_LIB_DIRS: &[&str] = &[
+    "/lib",
+    "/lib64",
+    "/lib32",
+    "/usr/lib",
+    "/usr/lib64",
+    "/usr/lib32",
+];
 
 /// Path-taking syscalls: `(name, [(dirfd argument, path argument)], mutates the file system)`.
 /// A missing or empty path means the dirfd itself (`AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)`).
@@ -184,7 +284,9 @@ fn resolve(e: &Event, dirfd: Option<usize>, path: usize, cwd: &Path) -> Option<P
             if p.is_absolute() {
                 Some(normalize(&p))
             } else {
-                Some(normalize(&base.unwrap_or_else(|| cwd.to_path_buf()).join(p)))
+                Some(normalize(
+                    &base.unwrap_or_else(|| cwd.to_path_buf()).join(p),
+                ))
             }
         }
         _ => base.map(|b| normalize(&b)),
@@ -207,9 +309,16 @@ pub fn proc_allowlist() -> Vec<AllowEntry> {
             if line.is_empty() || line.starts_with('#') {
                 return None;
             }
-            let (body, reason) = line.split_once('#').map(|(a, b)| (a.trim(), b.trim())).unwrap_or((line, ""));
+            let (body, reason) = line
+                .split_once('#')
+                .map(|(a, b)| (a.trim(), b.trim()))
+                .unwrap_or((line, ""));
             let mut it = body.split_whitespace();
-            Some(AllowEntry { scope: it.next()?.to_string(), pattern: it.next()?.to_string(), reason: reason.to_string() })
+            Some(AllowEntry {
+                scope: it.next()?.to_string(),
+                pattern: it.next()?.to_string(),
+                reason: reason.to_string(),
+            })
         })
         .collect()
 }
@@ -225,14 +334,19 @@ fn pattern_matches(pattern: &str, path: &Path) -> bool {
         .collect();
     want.len() == got.len()
         && want.iter().zip(&got).all(|(w, g)| match *w {
-            "{pid}" => g == "self" || g == "thread-self" || (!g.is_empty() && g.bytes().all(|b| b.is_ascii_digit())),
+            "{pid}" => {
+                g == "self"
+                    || g == "thread-self"
+                    || (!g.is_empty() && g.bytes().all(|b| b.is_ascii_digit()))
+            }
             "{n}" => !g.is_empty() && g.bytes().all(|b| b.is_ascii_digit()),
             lit => lit == g,
         })
 }
 
 fn proc_allowed(path: &Path, scopes: &[&str], list: &[AllowEntry]) -> bool {
-    list.iter().any(|e| scopes.contains(&e.scope.as_str()) && pattern_matches(&e.pattern, path))
+    list.iter()
+        .any(|e| scopes.contains(&e.scope.as_str()) && pattern_matches(&e.pattern, path))
 }
 
 fn short(s: &str) -> String {
@@ -294,7 +408,13 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
     }
 
     let mut push = |contract, e: &Event, detail: String| {
-        out.push(Violation { contract, syscall: e.name.clone(), detail, location: e.location.clone(), raw: short(&e.raw) });
+        out.push(Violation {
+            contract,
+            syscall: e.name.clone(),
+            detail,
+            location: e.location.clone(),
+            raw: short(&e.raw),
+        });
     };
     let mut cwd: std::collections::HashMap<u32, PathBuf> = std::collections::HashMap::new();
     for e in &run.events {
@@ -302,8 +422,14 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
         let name = e.name.as_str();
         match name {
             "execve" | "execveat" if startup.as_deref() != Some(e.location.as_str()) => {
-                let (d, i) = if name == "execve" { (None, 0) } else { (Some(0), 1) };
-                let target = resolve(e, d, i, &here).map(|p| p.display().to_string()).unwrap_or_else(|| "?".into());
+                let (d, i) = if name == "execve" {
+                    (None, 0)
+                } else {
+                    (Some(0), 1)
+                };
+                let target = resolve(e, d, i, &here)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "?".into());
                 push(Contract::C1NoExec, e, format!("executes {target}"));
             }
             "fork" | "vfork" => push(Contract::C1NoExec, e, "creates a child process".into()),
@@ -313,44 +439,95 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
                 } else {
                     e.args.iter().find_map(|a| field(a, "flags"))
                 };
-                if !f.map(|f| flags(f).contains(&"CLONE_THREAD")).unwrap_or(false) {
-                    push(Contract::C1NoExec, e, format!("creates a child process (flags={})", f.unwrap_or("?")));
+                if !f
+                    .map(|f| flags(f).contains(&"CLONE_THREAD"))
+                    .unwrap_or(false)
+                {
+                    push(
+                        Contract::C1NoExec,
+                        e,
+                        format!("creates a child process (flags={})", f.unwrap_or("?")),
+                    );
                 }
             }
             "mmap" | "mmap2" => {
-                let exec = e.args.get(2).map(|a| flags(a).contains(&"PROT_EXEC")).unwrap_or(false);
+                let exec = e
+                    .args
+                    .get(2)
+                    .map(|a| flags(a).contains(&"PROT_EXEC"))
+                    .unwrap_or(false);
                 if let Some(path) = e.args.get(4).and_then(|a| fd_path(a)) {
                     if is_target(&path) {
-                        push(Contract::C3NoMmap, e, format!("maps inspected target {} ({})", path.display(), e.args[2]));
+                        push(
+                            Contract::C3NoMmap,
+                            e,
+                            format!("maps inspected target {} ({})", path.display(), e.args[2]),
+                        );
                         if exec {
-                            push(Contract::C2NoDlopen, e, format!("maps inspected target {} executable", path.display()));
+                            push(
+                                Contract::C2NoDlopen,
+                                e,
+                                format!("maps inspected target {} executable", path.display()),
+                            );
                         }
                     } else if exec && !is_binary(&path) && !is_system_lib(&path) {
-                        push(Contract::C2NoDlopen, e, format!("maps non-system code {} executable", path.display()));
+                        push(
+                            Contract::C2NoDlopen,
+                            e,
+                            format!("maps non-system code {} executable", path.display()),
+                        );
                     }
                 }
             }
-            _ if NETWORK.contains(&name) => push(Contract::C4NoNetwork, e, format!("socket operation {}({})", name, short(&e.args.join(", ")))),
-            _ if IO_URING.contains(&name) => push(Contract::Harness, e, "io_uring operations are invisible to syscall tracing".into()),
-            _ if PROC_MEMORY.contains(&name) => push(Contract::C6ProcScope, e, "reads or controls another process outside /proc".into()),
+            _ if NETWORK.contains(&name) => push(
+                Contract::C4NoNetwork,
+                e,
+                format!("socket operation {}({})", name, short(&e.args.join(", "))),
+            ),
+            _ if IO_URING.contains(&name) => push(
+                Contract::Harness,
+                e,
+                "io_uring operations are invisible to syscall tracing".into(),
+            ),
+            _ if PROC_MEMORY.contains(&name) => push(
+                Contract::C6ProcScope,
+                e,
+                "reads or controls another process outside /proc".into(),
+            ),
             "getdents64" => {
                 if let Some(path) = e.args.first().and_then(|a| fd_path(a)) {
-                    if path.starts_with("/proc") && !proc_allowed(&path, &p.proc_scopes, &allowlist) {
-                        push(Contract::C6ProcScope, e, format!("lists {} (not in proc_allowlist.txt for scopes {:?})", path.display(), p.proc_scopes));
+                    if path.starts_with("/proc") && !proc_allowed(&path, &p.proc_scopes, &allowlist)
+                    {
+                        push(
+                            Contract::C6ProcScope,
+                            e,
+                            format!(
+                                "lists {} (not in proc_allowlist.txt for scopes {:?})",
+                                path.display(),
+                                p.proc_scopes
+                            ),
+                        );
                     }
                 }
             }
             _ if FD_MUTATIONS.contains(&name) => {
                 if let Some(path) = e.args.first().and_then(|a| fd_path(a)) {
                     if !write_allowed(&path) {
-                        push(Contract::C5ReadOnly, e, format!("modifies {}", path.display()));
+                        push(
+                            Contract::C5ReadOnly,
+                            e,
+                            format!("modifies {}", path.display()),
+                        );
                     }
                 }
             }
             _ => {}
         }
         if let Some((_, operands, mutates)) = PATH_CALLS.iter().find(|(n, _, _)| *n == name) {
-            let paths: Vec<PathBuf> = operands.iter().filter_map(|(d, i)| resolve(e, *d, *i, &here)).collect();
+            let paths: Vec<PathBuf> = operands
+                .iter()
+                .filter_map(|(d, i)| resolve(e, *d, *i, &here))
+                .collect();
             if name == "chdir" && e.ret == "0" {
                 if let Some(p) = paths.first() {
                     cwd.insert(e.pid, p.clone());
@@ -362,18 +539,44 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
                 "openat2" => e.args.get(2).and_then(|a| field(a, "flags")),
                 _ => None,
             };
-            let writes_by_open = open_flags.map(|f| flags(f).iter().any(|x| WRITE_FLAGS.contains(x))).unwrap_or(false);
+            let writes_by_open = open_flags
+                .map(|f| flags(f).iter().any(|x| WRITE_FLAGS.contains(x)))
+                .unwrap_or(false);
             for path in &paths {
                 if writes_by_open && !write_allowed(path) {
-                    push(Contract::C5ReadOnly, e, format!("write-capable open ({}) of {}", open_flags.unwrap_or(""), path.display()));
+                    push(
+                        Contract::C5ReadOnly,
+                        e,
+                        format!(
+                            "write-capable open ({}) of {}",
+                            open_flags.unwrap_or(""),
+                            path.display()
+                        ),
+                    );
                 } else if *mutates {
-                    let ok = if name.starts_with("mkdir") { mkdir_allowed(path) || write_allowed(path) } else { write_allowed(path) };
+                    let ok = if name.starts_with("mkdir") {
+                        mkdir_allowed(path) || write_allowed(path)
+                    } else {
+                        write_allowed(path)
+                    };
                     if !ok {
-                        push(Contract::C5ReadOnly, e, format!("{} {}", name, path.display()));
+                        push(
+                            Contract::C5ReadOnly,
+                            e,
+                            format!("{} {}", name, path.display()),
+                        );
                     }
                 }
                 if path.starts_with("/proc") && !proc_allowed(path, &p.proc_scopes, &allowlist) {
-                    push(Contract::C6ProcScope, e, format!("accesses {} (not in proc_allowlist.txt for scopes {:?})", path.display(), p.proc_scopes));
+                    push(
+                        Contract::C6ProcScope,
+                        e,
+                        format!(
+                            "accesses {} (not in proc_allowlist.txt for scopes {:?})",
+                            path.display(),
+                            p.proc_scopes
+                        ),
+                    );
                 }
             }
         }
@@ -396,7 +599,14 @@ pub fn report(run: &TracedRun, v: &[Violation]) -> String {
     let mut sorted: Vec<&Violation> = v.iter().collect();
     sorted.sort_by_key(|v| v.contract);
     for x in sorted {
-        s.push_str(&format!("  [{}] {}: {}\n      at {}: {}\n", x.contract.label(), x.syscall, x.detail, x.location, x.raw));
+        s.push_str(&format!(
+            "  [{}] {}: {}\n      at {}: {}\n",
+            x.contract.label(),
+            x.syscall,
+            x.detail,
+            x.location,
+            x.raw
+        ));
     }
     s
 }
@@ -466,8 +676,18 @@ mod tests {
     #[test]
     fn c1_second_exec_and_process_creation() {
         let run = with(&[
-            (10, "clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 12".into()),
-            (12, format!("execve(\"{}\", [\"{}\"], 0x7ffd /* 3 vars */) = 0", hex("/bin/sh"), hex("sh"))),
+            (
+                10,
+                "clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 12".into(),
+            ),
+            (
+                12,
+                format!(
+                    "execve(\"{}\", [\"{}\"], 0x7ffd /* 3 vars */) = 0",
+                    hex("/bin/sh"),
+                    hex("sh")
+                ),
+            ),
             (10, "vfork() = 13".into()),
         ]);
         let f = found(&check(&run, &policy(&["runtime"])));
@@ -479,14 +699,40 @@ mod tests {
     #[test]
     fn c2_c3_mappings_of_targets_and_foreign_code() {
         let run = with(&[
-            (10, format!("mmap(NULL, 64, PROT_READ, MAP_PRIVATE, 4<{}>, 0) = 0x7e00", hex("/fx/target/a.o"))),
-            (10, format!("mmap(NULL, 64, PROT_READ|PROT_EXEC, MAP_PRIVATE, 4<{}>, 0) = 0x7e10", hex("/fx/target/lib.so"))),
-            (10, format!("mmap(NULL, 64, PROT_READ|PROT_EXEC, MAP_PRIVATE, 5<{}>, 0) = 0x7e20", hex("/home/u/plugin.so"))),
+            (
+                10,
+                format!(
+                    "mmap(NULL, 64, PROT_READ, MAP_PRIVATE, 4<{}>, 0) = 0x7e00",
+                    hex("/fx/target/a.o")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "mmap(NULL, 64, PROT_READ|PROT_EXEC, MAP_PRIVATE, 4<{}>, 0) = 0x7e10",
+                    hex("/fx/target/lib.so")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "mmap(NULL, 64, PROT_READ|PROT_EXEC, MAP_PRIVATE, 5<{}>, 0) = 0x7e20",
+                    hex("/home/u/plugin.so")
+                ),
+            ),
         ]);
         let v = check(&run, &policy(&["runtime"]));
         let f = found(&v);
-        assert_eq!(f.iter().filter(|x| x.0 == Contract::C3NoMmap).count(), 2, "{v:#?}");
-        assert_eq!(f.iter().filter(|x| x.0 == Contract::C2NoDlopen).count(), 2, "{v:#?}");
+        assert_eq!(
+            f.iter().filter(|x| x.0 == Contract::C3NoMmap).count(),
+            2,
+            "{v:#?}"
+        );
+        assert_eq!(
+            f.iter().filter(|x| x.0 == Contract::C2NoDlopen).count(),
+            2,
+            "{v:#?}"
+        );
     }
 
     #[test]
@@ -497,7 +743,11 @@ mod tests {
             (10, "socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE) = 7".into()),
         ]);
         let f = found(&check(&run, &policy(&["runtime"])));
-        assert_eq!(f.iter().filter(|x| x.0 == Contract::C4NoNetwork).count(), 3, "{f:?}");
+        assert_eq!(
+            f.iter().filter(|x| x.0 == Contract::C4NoNetwork).count(),
+            3,
+            "{f:?}"
+        );
     }
 
     #[test]
@@ -512,7 +762,10 @@ mod tests {
         ]);
         let f = found(&check(&run, &policy(&["runtime"])));
         for s in ["openat", "openat2", "renameat2", "unlinkat", "mkdir"] {
-            assert!(f.contains(&(Contract::C5ReadOnly, s.into())), "{s} not flagged: {f:?}");
+            assert!(
+                f.contains(&(Contract::C5ReadOnly, s.into())),
+                "{s} not flagged: {f:?}"
+            );
         }
         // renameat2 is reported for both its source and its destination.
         assert_eq!(f.len(), 6, "{f:?}");
@@ -530,19 +783,36 @@ mod tests {
         let observe = found(&check(&with(&lines), &policy(&["runtime", "observe"])));
         assert_eq!(
             observe,
-            vec![(Contract::C6ProcScope, "openat".into()), (Contract::C6ProcScope, "process_vm_readv".into())],
+            vec![
+                (Contract::C6ProcScope, "openat".into()),
+                (Contract::C6ProcScope, "process_vm_readv".into())
+            ],
         );
         let stat = found(&check(&with(&lines), &policy(&["runtime"])));
-        assert_eq!(stat.iter().filter(|x| x.0 == Contract::C6ProcScope).count(), 4, "{stat:?}");
+        assert_eq!(
+            stat.iter().filter(|x| x.0 == Contract::C6ProcScope).count(),
+            4,
+            "{stat:?}"
+        );
     }
 
     #[test]
     fn harness_requires_the_binary_to_start_and_rule_lines_to_parse() {
-        let run = from_lines("unit", &[(10, format!("openat(AT_FDCWD<{}>, \"{}\", O_RDONLY", hex("/"), hex("/x")))]);
+        let run = from_lines(
+            "unit",
+            &[(
+                10,
+                format!("openat(AT_FDCWD<{}>, \"{}\", O_RDONLY", hex("/"), hex("/x")),
+            )],
+        );
         let f = found(&check(&run, &policy(&["runtime"])));
-        assert!(f.iter().filter(|x| x.0 == Contract::Harness).count() >= 2, "{f:?}");
+        assert!(
+            f.iter().filter(|x| x.0 == Contract::Harness).count() >= 2,
+            "{f:?}"
+        );
         let run = with(&[(10, "io_uring_setup(8, 0x7ffd) = 9".into())]);
-        assert!(found(&check(&run, &policy(&["runtime"]))).contains(&(Contract::Harness, "io_uring_setup".into())));
+        assert!(found(&check(&run, &policy(&["runtime"])))
+            .contains(&(Contract::Harness, "io_uring_setup".into())));
     }
 
     #[test]

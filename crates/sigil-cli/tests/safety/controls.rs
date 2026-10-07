@@ -17,7 +17,8 @@ const ARMED: &str = "SIGIL_SAFETY_NEGATIVE_CONTROL";
 const TARGET: &str = "SIGIL_SAFETY_CONTROL_TARGET";
 
 fn armed() -> Option<PathBuf> {
-    (std::env::var(ARMED).as_deref() == Ok("1")).then(|| PathBuf::from(std::env::var_os(TARGET).expect("control target")))
+    (std::env::var(ARMED).as_deref() == Ok("1"))
+        .then(|| PathBuf::from(std::env::var_os(TARGET).expect("control target")))
 }
 
 #[repr(C)]
@@ -35,10 +36,24 @@ struct OpenHow {
 
 extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
-    fn mmap(addr: *mut c_void, len: usize, prot: c_int, flags: c_int, fd: c_int, off: i64) -> *mut c_void;
+    fn mmap(
+        addr: *mut c_void,
+        len: usize,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        off: i64,
+    ) -> *mut c_void;
     fn syscall(number: c_long, ...) -> c_long;
     fn getpid() -> c_int;
-    fn process_vm_readv(pid: c_int, local: *const IoVec, liovcnt: u64, remote: *const IoVec, riovcnt: u64, flags: u64) -> isize;
+    fn process_vm_readv(
+        pid: c_int,
+        local: *const IoVec,
+        liovcnt: u64,
+        remote: *const IoVec,
+        riovcnt: u64,
+        flags: u64,
+    ) -> isize;
 }
 
 // Generic syscall numbers (identical on x86_64 and aarch64).
@@ -58,9 +73,19 @@ fn cpath(p: &Path) -> CString {
 }
 
 fn openat2(path: &Path, flags: u64) {
-    let how = OpenHow { flags, mode: 0o600, resolve: 0 };
+    let how = OpenHow {
+        flags,
+        mode: 0o600,
+        resolve: 0,
+    };
     unsafe {
-        syscall(SYS_OPENAT2, AT_FDCWD, cpath(path).as_ptr(), &how as *const OpenHow, std::mem::size_of::<OpenHow>());
+        syscall(
+            SYS_OPENAT2,
+            AT_FDCWD,
+            cpath(path).as_ptr(),
+            &how as *const OpenHow,
+            std::mem::size_of::<OpenHow>(),
+        );
     }
 }
 
@@ -68,7 +93,14 @@ fn map(target: &Path, prot: c_int) {
     use std::os::fd::AsRawFd;
     let f = std::fs::File::open(target).unwrap();
     unsafe {
-        mmap(std::ptr::null_mut(), 4096, prot, MAP_PRIVATE, f.as_raw_fd(), 0);
+        mmap(
+            std::ptr::null_mut(),
+            4096,
+            prot,
+            MAP_PRIVATE,
+            f.as_raw_fd(),
+            0,
+        );
     }
 }
 
@@ -78,7 +110,9 @@ fn map(target: &Path, prot: c_int) {
 #[ignore = "negative control body; run by its driver"]
 fn exec_child() {
     if armed().is_some() {
-        let _ = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).status();
+        let _ = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .status();
     }
 }
 
@@ -186,8 +220,14 @@ fn process_vm_readv_self() {
     if armed().is_some() {
         let mut a = [0u8; 8];
         let b = [1u8; 8];
-        let local = IoVec { base: a.as_mut_ptr().cast(), len: 8 };
-        let remote = IoVec { base: b.as_ptr() as *mut c_void, len: 8 };
+        let local = IoVec {
+            base: a.as_mut_ptr().cast(),
+            len: 8,
+        };
+        let remote = IoVec {
+            base: b.as_ptr() as *mut c_void,
+            len: 8,
+        };
         unsafe {
             process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
         }
@@ -209,7 +249,10 @@ fn io_uring_setup() {
 
 /// Re-executes this test binary under strace so that only `negative_controls::<name>` runs,
 /// armed, against a target file inside a fresh inspected root.
-fn run_control(name: &str, target_file: impl FnOnce(&Path) -> Option<PathBuf>) -> Option<(TracedRun, Vec<Violation>)> {
+fn run_control(
+    name: &str,
+    target_file: impl FnOnce(&Path) -> Option<PathBuf>,
+) -> Option<(TracedRun, Vec<Violation>)> {
     if !require_tracer(name) {
         return None;
     }
@@ -226,10 +269,23 @@ fn run_control(name: &str, target_file: impl FnOnce(&Path) -> Option<PathBuf>) -
         &exe,
         &args,
         tmp.path(),
-        &[(ARMED, std::ffi::OsStr::new("1")), (TARGET, target.as_os_str())],
+        &[
+            (ARMED, std::ffi::OsStr::new("1")),
+            (TARGET, target.as_os_str()),
+        ],
     );
-    assert!(run.stdout.contains("1 passed"), "control body `{filter}` did not run (stdout: {})", run.stdout);
-    let policy = Policy { binary: exe, targets: vec![root], allowed_writes: vec![], proc_scopes: vec!["runtime"], cwd: tmp.path().to_path_buf() };
+    assert!(
+        run.stdout.contains("1 passed"),
+        "control body `{filter}` did not run (stdout: {})",
+        run.stdout
+    );
+    let policy = Policy {
+        binary: exe,
+        targets: vec![root],
+        allowed_writes: vec![],
+        proc_scopes: vec!["runtime"],
+        cwd: tmp.path().to_path_buf(),
+    };
     let v = check(&run, &policy);
     Some((run, v))
 }
@@ -241,8 +297,14 @@ fn plain_target(root: &Path) -> Option<PathBuf> {
 }
 
 /// Asserts that every `(contract, any of syscalls)` expectation is among the violations.
-fn expect(name: &str, target_file: impl FnOnce(&Path) -> Option<PathBuf>, expected: &[(Contract, &[&str])]) {
-    let Some((run, v)) = run_control(name, target_file) else { return };
+fn expect(
+    name: &str,
+    target_file: impl FnOnce(&Path) -> Option<PathBuf>,
+    expected: &[(Contract, &[&str])],
+) {
+    let Some((run, v)) = run_control(name, target_file) else {
+        return;
+    };
     for (contract, syscalls) in expected {
         assert!(
             v.iter().any(|x| x.contract == *contract && syscalls.contains(&x.syscall.as_str())),
@@ -255,81 +317,167 @@ fn expect(name: &str, target_file: impl FnOnce(&Path) -> Option<PathBuf>, expect
 
 #[test]
 fn control_exec_child_is_detected() {
-    expect("exec_child", plain_target, &[(Contract::C1NoExec, &["execve"]), (Contract::C1NoExec, &["clone", "clone3", "fork", "vfork"])]);
+    expect(
+        "exec_child",
+        plain_target,
+        &[
+            (Contract::C1NoExec, &["execve"]),
+            (Contract::C1NoExec, &["clone", "clone3", "fork", "vfork"]),
+        ],
+    );
 }
 
 #[test]
 fn control_dlopen_target_is_detected() {
     expect(
         "dlopen_target",
-        |root| fixtures::require("control_dlopen_target_is_detected", fixtures::shared_object(root)),
-        &[(Contract::C2NoDlopen, &["mmap"]), (Contract::C3NoMmap, &["mmap"])],
+        |root| {
+            fixtures::require(
+                "control_dlopen_target_is_detected",
+                fixtures::shared_object(root),
+            )
+        },
+        &[
+            (Contract::C2NoDlopen, &["mmap"]),
+            (Contract::C3NoMmap, &["mmap"]),
+        ],
     );
 }
 
 #[test]
 fn control_mmap_target_is_detected_as_c3_only() {
-    let Some((run, v)) = run_control("mmap_target", plain_target) else { return };
-    assert!(v.iter().any(|x| x.contract == Contract::C3NoMmap && x.syscall == "mmap"), "{}", report(&run, &v));
-    assert!(!v.iter().any(|x| x.contract == Contract::C2NoDlopen), "a PROT_READ mapping is not a load:\n{}", report(&run, &v));
+    let Some((run, v)) = run_control("mmap_target", plain_target) else {
+        return;
+    };
+    assert!(
+        v.iter()
+            .any(|x| x.contract == Contract::C3NoMmap && x.syscall == "mmap"),
+        "{}",
+        report(&run, &v)
+    );
+    assert!(
+        !v.iter().any(|x| x.contract == Contract::C2NoDlopen),
+        "a PROT_READ mapping is not a load:\n{}",
+        report(&run, &v)
+    );
 }
 
 #[test]
 fn control_mmap_exec_target_is_detected() {
-    expect("mmap_exec_target", plain_target, &[(Contract::C2NoDlopen, &["mmap"]), (Contract::C3NoMmap, &["mmap"])]);
+    expect(
+        "mmap_exec_target",
+        plain_target,
+        &[
+            (Contract::C2NoDlopen, &["mmap"]),
+            (Contract::C3NoMmap, &["mmap"]),
+        ],
+    );
 }
 
 #[test]
 fn control_tcp_connect_is_detected() {
-    expect("tcp_connect", plain_target, &[(Contract::C4NoNetwork, &["socket"]), (Contract::C4NoNetwork, &["connect"])]);
+    expect(
+        "tcp_connect",
+        plain_target,
+        &[
+            (Contract::C4NoNetwork, &["socket"]),
+            (Contract::C4NoNetwork, &["connect"]),
+        ],
+    );
 }
 
 #[test]
 fn control_udp_bind_is_detected() {
-    expect("udp_bind", plain_target, &[(Contract::C4NoNetwork, &["socket"]), (Contract::C4NoNetwork, &["bind"])]);
+    expect(
+        "udp_bind",
+        plain_target,
+        &[
+            (Contract::C4NoNetwork, &["socket"]),
+            (Contract::C4NoNetwork, &["bind"]),
+        ],
+    );
 }
 
 #[test]
 fn control_unix_connect_is_detected() {
-    expect("unix_connect", plain_target, &[(Contract::C4NoNetwork, &["socket"]), (Contract::C4NoNetwork, &["connect"])]);
+    expect(
+        "unix_connect",
+        plain_target,
+        &[
+            (Contract::C4NoNetwork, &["socket"]),
+            (Contract::C4NoNetwork, &["connect"]),
+        ],
+    );
 }
 
 #[test]
 fn control_append_to_target_is_detected() {
-    expect("append_to_target", plain_target, &[(Contract::C5ReadOnly, &["openat", "open"])]);
+    expect(
+        "append_to_target",
+        plain_target,
+        &[(Contract::C5ReadOnly, &["openat", "open"])],
+    );
 }
 
 #[test]
 fn control_create_in_target_dir_is_detected() {
-    expect("create_in_target_dir", plain_target, &[(Contract::C5ReadOnly, &["openat", "open", "creat"])]);
+    expect(
+        "create_in_target_dir",
+        plain_target,
+        &[(Contract::C5ReadOnly, &["openat", "open", "creat"])],
+    );
 }
 
 #[test]
 fn control_rename_target_is_detected() {
-    expect("rename_target", plain_target, &[(Contract::C5ReadOnly, &["rename", "renameat", "renameat2"])]);
+    expect(
+        "rename_target",
+        plain_target,
+        &[(Contract::C5ReadOnly, &["rename", "renameat", "renameat2"])],
+    );
 }
 
 #[test]
 fn control_openat2_write_is_detected() {
-    expect("openat2_write", plain_target, &[(Contract::C5ReadOnly, &["openat2"])]);
+    expect(
+        "openat2_write",
+        plain_target,
+        &[(Contract::C5ReadOnly, &["openat2"])],
+    );
 }
 
 #[test]
 fn control_read_proc_environ_is_detected() {
-    expect("read_proc_environ", plain_target, &[(Contract::C6ProcScope, &["openat", "open"])]);
+    expect(
+        "read_proc_environ",
+        plain_target,
+        &[(Contract::C6ProcScope, &["openat", "open"])],
+    );
 }
 
 #[test]
 fn control_openat2_proc_is_detected() {
-    expect("openat2_proc", plain_target, &[(Contract::C6ProcScope, &["openat2"])]);
+    expect(
+        "openat2_proc",
+        plain_target,
+        &[(Contract::C6ProcScope, &["openat2"])],
+    );
 }
 
 #[test]
 fn control_process_vm_readv_is_detected() {
-    expect("process_vm_readv_self", plain_target, &[(Contract::C6ProcScope, &["process_vm_readv"])]);
+    expect(
+        "process_vm_readv_self",
+        plain_target,
+        &[(Contract::C6ProcScope, &["process_vm_readv"])],
+    );
 }
 
 #[test]
 fn control_io_uring_is_detected() {
-    expect("io_uring_setup", plain_target, &[(Contract::Harness, &["io_uring_setup"])]);
+    expect(
+        "io_uring_setup",
+        plain_target,
+        &[(Contract::Harness, &["io_uring_setup"])],
+    );
 }

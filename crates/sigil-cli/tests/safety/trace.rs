@@ -19,7 +19,10 @@ use crate::contracts::RULE_SYSCALLS;
 /// that names missing on an architecture do not abort strace. `trace_expr_covers_rule_syscalls`
 /// keeps the two in sync, so a rule can never silently look at an untraced syscall.
 pub fn trace_expr() -> String {
-    let mut parts: Vec<String> = ["%process", "%network", "%file", "%desc"].iter().map(|s| s.to_string()).collect();
+    let mut parts: Vec<String> = ["%process", "%network", "%file", "%desc"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     parts.extend(RULE_SYSCALLS.iter().map(|s| format!("?{s}")));
     format!("trace={}", parts.join(","))
 }
@@ -46,11 +49,14 @@ pub fn trace_root() -> PathBuf {
 }
 
 fn probe_tracer() -> Result<String, String> {
-    let version = Command::new("strace")
-        .arg("-V")
-        .output()
-        .map_err(|e| format!("strace is not available ({e}); install it (e.g. `apt-get install strace`)"))?;
-    let version = String::from_utf8_lossy(&version.stdout).lines().next().unwrap_or("").to_string();
+    let version = Command::new("strace").arg("-V").output().map_err(|e| {
+        format!("strace is not available ({e}); install it (e.g. `apt-get install strace`)")
+    })?;
+    let version = String::from_utf8_lossy(&version.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
     let probe = Command::new("strace")
         .args(["-f", "-qq", "-o", "/dev/null", "--", "/bin/true"])
         .stdin(Stdio::null())
@@ -82,7 +88,9 @@ pub fn require_tracer(test: &str) -> bool {
             if std::env::var("SIGIL_SAFETY_REQUIRED").as_deref() == Ok("1") {
                 panic!("SIGIL_SAFETY_REQUIRED=1, but the syscall tracer is unusable: {reason}");
             }
-            eprintln!("SKIPPED {test}: {reason} (set SIGIL_SAFETY_REQUIRED=1 to make this a failure)");
+            eprintln!(
+                "SKIPPED {test}: {reason} (set SIGIL_SAFETY_REQUIRED=1 to make this a failure)"
+            );
             false
         }
     }
@@ -91,20 +99,36 @@ pub fn require_tracer(test: &str) -> bool {
 /// Runs `program args` under strace with the contract filter. Traces and a `command.txt` with the
 /// command line, working directory, exit status, stdout and stderr are kept in
 /// `trace_root()/<case>/` (uploaded by CI on failure).
-pub fn run_traced(case: &str, program: &Path, args: &[&OsStr], cwd: &Path, envs: &[(&str, &OsStr)]) -> TracedRun {
+pub fn run_traced(
+    case: &str,
+    program: &Path,
+    args: &[&OsStr],
+    cwd: &Path,
+    envs: &[(&str, &OsStr)],
+) -> TracedRun {
     let dir = trace_root().join(case);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create trace dir");
     let mut cmd = Command::new("strace");
-    cmd.args(["-ff", "-yy", "-xx", "-qq", "-s", "256", "-e", "signal=none", "-e"])
-        .arg(trace_expr())
-        .arg("-o")
-        .arg(dir.join("t"))
-        .arg("--")
-        .arg(program)
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::null());
+    cmd.args([
+        "-ff",
+        "-yy",
+        "-xx",
+        "-qq",
+        "-s",
+        "256",
+        "-e",
+        "signal=none",
+        "-e",
+    ])
+    .arg(trace_expr())
+    .arg("-o")
+    .arg(dir.join("t"))
+    .arg("--")
+    .arg(program)
+    .args(args)
+    .current_dir(cwd)
+    .stdin(Stdio::null());
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -135,7 +159,9 @@ fn load_dir(case: &str, dir: &Path) -> TracedRun {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            name.strip_prefix("t.").and_then(|p| p.parse().ok()).map(|pid| (pid, e.path()))
+            name.strip_prefix("t.")
+                .and_then(|p| p.parse().ok())
+                .map(|pid| (pid, e.path()))
         })
         .collect();
     files.sort();
@@ -161,7 +187,14 @@ pub fn from_lines(case: &str, lines: &[(u32, String)]) -> TracedRun {
         *n += 1;
         let location = format!("t.{pid}:{n}");
         match parse_line(line) {
-            Ok(Some((name, args, ret))) => events.push(Event { pid: *pid, location, name, args, ret, raw: line.clone() }),
+            Ok(Some((name, args, ret))) => events.push(Event {
+                pid: *pid,
+                location,
+                name,
+                args,
+                ret,
+                raw: line.clone(),
+            }),
             Ok(None) => {}
             Err(e) => {
                 let name = line.split('(').next().unwrap_or("").trim().to_string();
@@ -278,12 +311,19 @@ pub fn parse_line(line: &str) -> Result<Option<(String, Vec<String>, String)>, S
     let inner = &line[open + 1..];
     let (parts, close) = scan(inner, true)?;
     let close = close.expect("stop_at_close returns the index");
-    let mut args: Vec<String> = parts.iter().map(|(a, z)| inner[*a..*z].trim().to_string()).collect();
+    let mut args: Vec<String> = parts
+        .iter()
+        .map(|(a, z)| inner[*a..*z].trim().to_string())
+        .collect();
     if args.len() == 1 && args[0].is_empty() {
         args.clear();
     }
     let rest = inner[close + 1..].trim_start();
-    let ret = rest.strip_prefix('=').ok_or("no return value")?.trim().to_string();
+    let ret = rest
+        .strip_prefix('=')
+        .ok_or("no return value")?
+        .trim()
+        .to_string();
     Ok(Some((name.to_string(), args, ret)))
 }
 
@@ -367,9 +407,15 @@ pub fn fd_path(raw: &str) -> Option<PathBuf> {
 /// `name=value` argument itself.
 pub fn field<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
     let raw = raw.trim();
-    let inner = raw.strip_prefix('{').and_then(|r| r.strip_suffix('}')).unwrap_or(raw);
+    let inner = raw
+        .strip_prefix('{')
+        .and_then(|r| r.strip_suffix('}'))
+        .unwrap_or(raw);
     let (parts, _) = scan(inner, false).ok()?;
-    parts.iter().map(|(a, z)| inner[*a..*z].trim()).find_map(|p| p.strip_prefix(name).and_then(|r| r.strip_prefix('=')))
+    parts
+        .iter()
+        .map(|(a, z)| inner[*a..*z].trim())
+        .find_map(|p| p.strip_prefix(name).and_then(|r| r.strip_prefix('=')))
 }
 
 pub fn flags(raw: &str) -> Vec<&str> {
@@ -423,7 +469,8 @@ mod tests {
         let (_, args, _) = parse_line(&line).unwrap().unwrap();
         assert_eq!(args.len(), 6);
         assert_eq!(fd_path(&args[4]), Some(PathBuf::from("/lib/x.so")));
-        let line = "poll([{fd=0<UNIX-STREAM:[1->2]>, events=0}, {fd=1, events=0}], 2, 0) = 0 (Timeout)";
+        let line =
+            "poll([{fd=0<UNIX-STREAM:[1->2]>, events=0}, {fd=1, events=0}], 2, 0) = 0 (Timeout)";
         let (_, args, _) = parse_line(line).unwrap().unwrap();
         assert_eq!(args.len(), 3);
         assert_eq!(fd_path("0<UNIX-STREAM:[1->2]>"), None);
@@ -433,12 +480,17 @@ mod tests {
     fn parses_clone3_flags_comments_and_unknown_return() {
         let line = "clone3({flags=CLONE_VM|CLONE_THREAD|CLONE_SETTLS, exit_signal=0, stack=0x7f, stack_size=0x1000}, 88) = 1234";
         let (_, args, _) = parse_line(line).unwrap().unwrap();
-        assert_eq!(field(&args[0], "flags"), Some("CLONE_VM|CLONE_THREAD|CLONE_SETTLS"));
+        assert_eq!(
+            field(&args[0], "flags"),
+            Some("CLONE_VM|CLONE_THREAD|CLONE_SETTLS")
+        );
         let line = "execve(\"\\x2f\\x62\", [\"\\x61\"...], 0x7ffe /* 12 vars */) = 0";
         let (_, args, ret) = parse_line(line).unwrap().unwrap();
         assert_eq!(args.len(), 3);
         assert_eq!(ret, "0");
-        let (name, _, ret) = parse_line("exit_group(0)                           = ?").unwrap().unwrap();
+        let (name, _, ret) = parse_line("exit_group(0)                           = ?")
+            .unwrap()
+            .unwrap();
         assert_eq!((name.as_str(), ret.as_str()), ("exit_group", "?"));
         assert!(parse_line("+++ exited with 0 +++").unwrap().is_none());
         assert!(parse_line("clone(child_stack=NULL, flags=CLONE_VM").is_err());
@@ -448,7 +500,10 @@ mod tests {
     fn trace_expr_covers_rule_syscalls() {
         let expr = trace_expr();
         for s in RULE_SYSCALLS {
-            assert!(expr.contains(&format!("?{s},")) || expr.ends_with(&format!("?{s}")), "{s} missing from {expr}");
+            assert!(
+                expr.contains(&format!("?{s},")) || expr.ends_with(&format!("?{s}")),
+                "{s} missing from {expr}"
+            );
         }
         for class in ["%process", "%network", "%file", "%desc"] {
             assert!(expr.contains(class));
