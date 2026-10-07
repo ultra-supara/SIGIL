@@ -1,0 +1,528 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    },
+    {
+      "kind": "Profile",
+      "id": "ggml.backend-loader",
+      "version": "2",
+      "sha256": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    },
+    {
+      "kind": "ReferenceManifest",
+      "id": "ollama-official",
+      "version": "2026-10-07",
+      "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [{"id": "install", "path": "/usr/local"}],
+    "audit": ["backend_loader"],
+    "required_checks": ["artifacts.discovery", "loader.identify"],
+    "budgets": {"files": 4096},
+    "observe_env": false
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ]
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:lib/ollama/libggml-cpu-zen4.so",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libggml-cpu-zen4.so",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1002,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    },
+    {
+      "id": "inst:lib/ollama/libggml.so.0.13.1",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libggml.so.0.13.1",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1001,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    }
+  ],
+  "processes": [],
+  "values": [],
+  "components": [
+    {
+      "subject": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "component": "ggml",
+      "assertions": [
+        {
+          "KnownHash": {
+            "reference": "ollama-official",
+            "release": "v0.30.6",
+            "member": "lib/ollama/libggml.so.0.13.1",
+            "matched": true
+          }
+        },
+        {
+          "SelfName": {
+            "kind": "Filename",
+            "value": "libggml.so.0.13.1",
+            "at": {"Instance": {"instance": "inst:lib/ollama/libggml.so.0.13.1"}}
+          }
+        },
+        {"Signature": {"state": "NotChecked"}}
+      ],
+      "status": "ReferenceMatched",
+      "versions": [
+        {
+          "value": "0.13.1",
+          "source": {"SelfName": {"kind": "Filename"}},
+          "at": {"Instance": {"instance": "inst:lib/ollama/libggml.so.0.13.1"}}
+        }
+      ]
+    }
+  ],
+  "releases": [],
+  "hints": [],
+  "code": [
+    {
+      "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "functions": [
+        {"id": "fn:0xc590", "entry": 50576, "end": 58368, "bounds": "EhFrameFde", "names": []},
+        {
+          "id": "fn:0xecb0",
+          "entry": 60592,
+          "end": 60864,
+          "bounds": "EhFrameFde",
+          "names": ["ggml_backend_load_all_from_path"]
+        }
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0xd303",
+          "caller": "fn:0xc590",
+          "addr": 54019,
+          "kind": "Call",
+          "target": {
+            "Import": {"symbol": "_ZNKSt10filesystem7__cxx1118directory_iteratordeEv", "via": "Plt"}
+          },
+          "args": []
+        },
+        {
+          "id": "cs:0xd5a0",
+          "caller": "fn:0xc590",
+          "addr": 54688,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_ZNKSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE4findEPKcmm",
+              "via": "Plt"
+            }
+          },
+          "args": []
+        },
+        {
+          "id": "cs:0xd640",
+          "caller": "fn:0xc590",
+          "addr": 54848,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_ZNKSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE7compareEPKc",
+              "via": "Plt"
+            }
+          },
+          "args": []
+        },
+        {
+          "id": "cs:0xe26d",
+          "caller": "fn:0xc590",
+          "addr": 57965,
+          "kind": "Call",
+          "target": {
+            "OwnExportViaPlt": {
+              "symbol": "_Z15dl_load_libraryRKNSt10filesystem7__cxx114pathE",
+              "entry": 46992
+            }
+          },
+          "args": [{"Unknown": {"reg": "rdi", "reason": "FromMemory"}}]
+        },
+        {
+          "id": "cs:0xe29a",
+          "caller": "fn:0xc590",
+          "addr": 58010,
+          "kind": "Call",
+          "target": {"OwnExportViaPlt": {"symbol": "_Z10dl_get_symPvPKc", "entry": 47088}},
+          "args": [
+            {"ReturnOf": {"reg": "rdi", "call": "cs:0xe26d"}},
+            {"ConstStr": {"reg": "rsi", "addr": 172544, "value": "ggml_backend_score"}}
+          ]
+        },
+        {
+          "id": "cs:0xe2b1",
+          "caller": "fn:0xc590",
+          "addr": 58033,
+          "kind": "Call",
+          "target": {"Indirect": {"value": {"ReturnOf": {"reg": "rax", "call": "cs:0xe29a"}}}},
+          "args": []
+        },
+        {
+          "id": "cs:0xe2ce",
+          "caller": "fn:0xc590",
+          "addr": 58062,
+          "kind": "Call",
+          "target": {"Import": {"symbol": "dlclose", "via": "Plt"}},
+          "args": [{"Unknown": {"reg": "rdi", "reason": "FromMemory"}}]
+        },
+        {
+          "id": "cs:0xecbe",
+          "caller": "fn:0xecb0",
+          "addr": 60606,
+          "kind": "Call",
+          "target": {"Internal": {"entry": 50576, "export_name": null}},
+          "args": [
+            {"ConstStr": {"reg": "rdi", "addr": 172048, "value": "blas"}},
+            {"Param": {"reg": "rsi", "index": 0}}
+          ]
+        },
+        {
+          "id": "cs:0xecce",
+          "caller": "fn:0xecb0",
+          "addr": 60622,
+          "kind": "Call",
+          "target": {"Internal": {"entry": 50576, "export_name": null}},
+          "args": [
+            {"ConstStr": {"reg": "rdi", "addr": 172056, "value": "cuda"}},
+            {"Param": {"reg": "rsi", "index": 0}}
+          ]
+        },
+        {
+          "id": "cs:0xecde",
+          "caller": "fn:0xecb0",
+          "addr": 60638,
+          "kind": "Call",
+          "target": {"Internal": {"entry": 50576, "export_name": null}},
+          "args": [
+            {"ConstStr": {"reg": "rdi", "addr": 172064, "value": "cpu"}},
+            {"Param": {"reg": "rsi", "index": 0}}
+          ]
+        }
+      ],
+      "predicate_checks": [
+        {
+          "function": "fn:0xc590",
+          "iteration_calls": ["cs:0xd303"],
+          "target_calls": ["cs:0xe26d"],
+          "atoms": [
+            {
+              "name": "T",
+              "value": {
+                "Load": {
+                  "reg": "rax",
+                  "base": {"ReturnOf": {"reg": "rax", "call": "cs:0xd303"}},
+                  "offset": 40,
+                  "width": 1,
+                  "site": 54042
+                }
+              }
+            },
+            {"name": "F", "value": {"ReturnOf": {"reg": "rax", "call": "cs:0xd5a0"}}},
+            {"name": "C", "value": {"ReturnOf": {"reg": "rax", "call": "cs:0xd640"}}}
+          ],
+          "expect": {"profile": "ggml.backend-loader@2", "obligation": "filter.reach_predicate"},
+          "assignments": 162,
+          "result": "Match"
+        }
+      ],
+      "close_checks": [
+        {
+          "function": "fn:0xc590",
+          "open_calls": ["cs:0xe26d"],
+          "close_calls": ["cs:0xe2ce"],
+          "iteration_calls": ["cs:0xd303"],
+          "result": "Match"
+        }
+      ],
+      "guard_regions": [],
+      "must_pass": [],
+      "param_mappings": [
+        {
+          "function": "fn:0xecb0",
+          "source": {"function": "ggml_backend_load_all_from_path", "index": 0, "name": "dir_path"},
+          "binary": {"Reg": "rdi"},
+          "evidence": [
+            {
+              "Code": {
+                "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+                "loc": {"CallSite": "cs:0xecbe"}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "ProfileMatch": {
+        "profile": "ggml.backend-loader@2",
+        "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+        "obligations": [
+          {
+            "id": "entry.name_sequence",
+            "result": "Pass",
+            "at": [
+              {"Function": "fn:0xecb0"},
+              {"CallSite": "cs:0xecbe"},
+              {"CallSite": "cs:0xecce"},
+              {"CallSite": "cs:0xecde"}
+            ]
+          },
+          {
+            "id": "filter.reach_predicate",
+            "result": "Pass",
+            "at": [{"Function": "fn:0xc590"}, {"CallSite": "cs:0xd303"}, {"CallSite": "cs:0xe26d"}]
+          },
+          {
+            "id": "evaluate.score_call",
+            "result": "Pass",
+            "at": [{"CallSite": "cs:0xe29a"}, {"CallSite": "cs:0xe2b1"}]
+          },
+          {
+            "id": "evaluate.close_reached",
+            "result": "Pass",
+            "at": [{"CallSite": "cs:0xe26d"}, {"CallSite": "cs:0xe2ce"}]
+          }
+        ]
+      }
+    }
+  ],
+  "rule_support": [
+    {
+      "profile": "ggml.backend-loader@2",
+      "rule": "entry",
+      "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "support": {"TargetVerified": {"obligations": ["entry.name_sequence"]}}
+    },
+    {
+      "profile": "ggml.backend-loader@2",
+      "rule": "evaluate",
+      "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "support": {
+        "TargetVerified": {"obligations": ["evaluate.score_call", "evaluate.close_reached"]}
+      }
+    },
+    {
+      "profile": "ggml.backend-loader@2",
+      "rule": "filter",
+      "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "support": {"TargetVerified": {"obligations": ["filter.reach_predicate"]}}
+    },
+    {
+      "profile": "ggml.backend-loader@2",
+      "rule": "select",
+      "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "support": {"FeatureMatch": {"matched": [], "unverified": ["select"]}}
+    }
+  ],
+  "bindings": [
+    {
+      "process_role": "llama-server (per model)",
+      "site": {
+        "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+        "call": "cs:0xe26d"
+      },
+      "symbol": "_Z15dl_load_libraryRKNSt10filesystem7__cxx114pathE",
+      "analyzed_definer": "inst:lib/ollama/libggml.so.0.13.1",
+      "state": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "LD_PRELOAD of llama-server (per model) is child-derived through an unsupported topology rule"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "loads": [
+    {
+      "instance": "inst:lib/ollama/libggml-cpu-zen4.so",
+      "context": {
+        "process_role": "llama-server (per model)",
+        "rule": "ggml.backend-loader/load_best(cpu)"
+      },
+      "present": true,
+      "candidate": {
+        "Yes": {
+          "why": {"search_path": "exe_dir", "filter": "libggml-cpu-*.so"},
+          "basis": {
+            "Modeled": {
+              "profile": "ggml.backend-loader@2",
+              "rule": "filter",
+              "support": {
+                "FeatureMatch": {
+                  "matched": ["filter.reach_predicate"],
+                  "unverified": ["candidate.operands"]
+                }
+              }
+            }
+          },
+          "unresolved": ["candidate.operands"]
+        }
+      },
+      "would_evaluate": {
+        "Yes": {
+          "why": {"phase": "Evaluate"},
+          "basis": {
+            "Modeled": {
+              "profile": "ggml.backend-loader@2",
+              "rule": "evaluate",
+              "support": {
+                "FeatureMatch": {
+                  "matched": ["evaluate.score_call", "evaluate.close_reached"],
+                  "unverified": ["candidate.operands", "binding:llama-server (per model)"]
+                }
+              }
+            }
+          },
+          "unresolved": ["candidate.operands", "binding:llama-server (per model)"]
+        }
+      },
+      "selectable": {
+        "Unknown": {
+          "reason": {"RunTimeDependent": {"what": "the score depends on run-time CPU features"}}
+        }
+      },
+      "mapped": [],
+      "mapping_observability": {"NotObservable": "ModeDisabled"},
+      "used_for_inference": {
+        "Unknown": {"reason": {"RequiresActive": {"what": "tracing inference calls"}}}
+      }
+    }
+  ],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {"check": "artifacts.discovery", "scope": "Audit", "state": "Complete", "budget": null},
+    {"check": "loader.identify", "scope": "Audit", "state": "Complete", "budget": null}
+  ],
+  "findings": [],
+  "open_questions": [
+    {
+      "id": "oq:loader.search_path_untrusted_creator@exe_dir/llama-server (per model)",
+      "rule": "loader.search_path_untrusted_creator",
+      "subject": {"SearchPath": {"role": "llama-server (per model)", "search_path": "exe_dir"}},
+      "conditions": [
+        {
+          "id": "candidate_evaluated",
+          "state": {
+            "Unknown": {
+              "reason": "InsufficientEvidence",
+              "evidence": {
+                "Behavior": {
+                  "FeatureMatch": {
+                    "matched": ["evaluate.score_call", "evaluate.close_reached"],
+                    "unverified": ["candidate.operands", "binding:llama-server (per model)"]
+                  }
+                }
+              }
+            }
+          },
+          "unresolved": ["candidate.operands", "binding:llama-server (per model)"]
+        }
+      ],
+      "evidence": [{"Instance": {"instance": "inst:lib/ollama/libggml-cpu-zen4.so"}}],
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [],
+        "gaps": ["oq:loader.search_path_untrusted_creator@exe_dir/llama-server (per model)"]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}

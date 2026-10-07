@@ -1,0 +1,106 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [{"id": "install", "path": "/usr/local"}],
+    "audit": ["backend_loader"],
+    "required_checks": ["artifacts.discovery", "loader.identify"],
+    "budgets": {"files": 4096},
+    "observe_env": false
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:4444444444444444444444444444444444444444444444444444444444444444#aarch64@0",
+          "arch": "aarch64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ]
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:lib/ollama/libggml-base.so",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libggml-base.so",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1004,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    }
+  ],
+  "processes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "hints": [],
+  "code": [],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {"check": "artifacts.discovery", "scope": "Audit", "state": "Complete", "budget": null},
+    {
+      "check": "loader.identify",
+      "scope": {
+        "Slice": "sha256:4444444444444444444444444444444444444444444444444444444444444444#aarch64@0"
+      },
+      "state": {"Unsupported": {"what": "aarch64 code analysis (M3)"}},
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {"Incomplete": {"missing_required": ["loader.identify"], "gaps": []}},
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}
