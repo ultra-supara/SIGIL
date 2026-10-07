@@ -172,3 +172,15 @@ SIGIL is analysis-only:
 - It reports evidence rather than hiding uncertainty.
 
 These constraints are central to the project. Future analyzers should preserve them — flag any deviation up-front.
+
+### How the boundaries are checked
+
+The contracts C-1…C-6 cover four things:
+- no child processes;
+- no `dlopen` or `mmap` of inspected files;
+- no network I/O;
+- read-only access, and only documented `/proc` reads.
+
+**SIGIL checks them through build-time API restrictions (`clippy.toml`, `deny.toml`) and syscall tests over the exercised CLI paths (`crates/sigil-cli/tests/safety`, run under strace in the CI `safety` job), including negative controls that prove each detector fires.** These checks are not a runtime sandbox: a code path the tests do not exercise could still violate a contract, and runtime enforcement such as seccomp is a separate future decision.
+
+The legacy Ollama API probe is the current, documented exception to "no network I/O". It runs unless `--no-probe-api` is given, and the safety tests detect it when it is exercised. See [ADR-002](adr/ADR-002-execution-modes.md) for the full contract list, what each check covers, and its limitations.
