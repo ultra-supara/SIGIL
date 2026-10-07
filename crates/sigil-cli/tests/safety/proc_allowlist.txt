@@ -1,0 +1,17 @@
+# SIGIL safety harness: /proc access allowlist (contract C-6, docs/adr/ADR-002-execution-modes.md).
+#
+# Format:  <scope> <pattern>  # <reason>
+# Scopes:  runtime = accesses made by SIGIL's own process runtime, allowed in every mode;
+#          observe = the documented observe-mode inputs (today: `runtime inspect ollama` with
+#                    runtime inspection enabled; PR-3b turns this into `--mode observe`).
+# Pattern: `/`-separated segments; {pid} matches digits, `self` or `thread-self`; {n} matches digits.
+#
+# A traced run fails on any /proc access that matches no entry of its scopes. Adding or widening an
+# entry is an intentional, reviewed change: name the reading code and the plan section it serves.
+runtime  /proc/self/maps        # Rust std reads the main thread's stack bounds at startup
+observe  /proc/net/tcp          # listener table (sigil-core runtime/listeners.rs; plan §4.6.8)
+observe  /proc/net/tcp6         # listener table (sigil-core runtime/listeners.rs; plan §4.6.8)
+observe  /proc                  # enumerate PIDs to attribute listening sockets (listeners.rs)
+observe  /proc/{pid}/fd         # list a process's fds to find socket inodes (listeners.rs)
+observe  /proc/{pid}/fd/{n}     # readlink an fd to read socket:[inode] (listeners.rs)
+observe  /proc/{pid}/comm       # process name, an attribution hint only (listeners.rs)
