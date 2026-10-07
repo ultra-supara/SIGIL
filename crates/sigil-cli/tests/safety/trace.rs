@@ -199,7 +199,10 @@ pub struct Event {
 /// Scans `s` and splits it at top-level commas, respecting quoted strings, fd annotations
 /// (`3<...>`, which may contain `->` inside `[...]`), `/* comments */` and `()`/`[]`/`{}` nesting.
 /// With `stop_at_close`, scanning ends at the first unmatched `)` and its byte index is returned.
-fn scan(s: &str, stop_at_close: bool) -> Result<(Vec<(usize, usize)>, Option<usize>), String> {
+/// Byte ranges of the top-level parts, and the index of the closing `)` when requested.
+type Scan = (Vec<(usize, usize)>, Option<usize>);
+
+fn scan(s: &str, stop_at_close: bool) -> Result<Scan, String> {
     let b = s.as_bytes();
     let (mut depth, mut i, mut start) = (0usize, 0usize, 0usize);
     let mut parts = Vec::new();

@@ -1,0 +1,26 @@
+# SIGIL safety contracts: build-time API bans (docs/adr/ADR-002-execution-modes.md).
+#
+# These bans stop obvious, accidental use of forbidden std APIs in product code. They are checked
+# at build time; they are not a runtime sandbox. FFI calls, raw syscalls, and code inside
+# dependencies are not caught by these names. The syscall tests (crates/sigil-cli/tests/safety)
+# cover the exercised paths at run time.
+#
+# Test code that must spawn processes or open sockets (compiling fixtures, running the CLI, the
+# safety harness and its negative controls) allows these lints at file level, with a reason.
+# Product code needs an ADR before adding an `allow`. The one current exception is the legacy
+# Ollama API probe (C-4), which moves to active mode in PR-3b.
+
+disallowed-types = [
+    { path = "std::process::Command", reason = "C-1: static/observe never execute another program (ADR-002)" },
+    { path = "std::net::TcpStream", reason = "C-4: static/observe perform no network I/O (ADR-002)" },
+    { path = "std::net::TcpListener", reason = "C-4: static/observe perform no network I/O (ADR-002)" },
+    { path = "std::net::UdpSocket", reason = "C-4: static/observe perform no network I/O (ADR-002)" },
+    { path = "std::os::unix::net::UnixStream", reason = "C-4: no socket I/O of any family (ADR-002)" },
+    { path = "std::os::unix::net::UnixListener", reason = "C-4: no socket I/O of any family (ADR-002)" },
+    { path = "std::os::unix::net::UnixDatagram", reason = "C-4: no socket I/O of any family (ADR-002)" },
+]
+
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "C-1: static/observe never execute another program (ADR-002)" },
+    { path = "std::os::unix::process::CommandExt::exec", reason = "C-1: static/observe never execute another program (ADR-002)" },
+]
