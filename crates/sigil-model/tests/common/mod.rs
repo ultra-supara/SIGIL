@@ -691,7 +691,7 @@ fn pass_complete(s: &mut Session) {
 // The examples (brief §25 items 1–12, plus the loader-slice specification example).
 // ---------------------------------------------------------------------------------------------
 
-/// 1. Nothing found and every required check closed.
+/// Example 1: Nothing found and every required check closed.
 pub fn complete_pass() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     add_ggml(&mut s, &hex(0x11));
@@ -699,7 +699,7 @@ pub fn complete_pass() -> Session {
     s
 }
 
-/// 2. A confirmed FAIL with every required check closed.
+/// Example 2: A confirmed FAIL with every required check closed.
 pub fn complete_fail() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     let g = add_ggml(&mut s, &hex(0x11));
@@ -721,7 +721,7 @@ pub fn complete_fail() -> Session {
     s
 }
 
-/// 3. No violation confirmed, but a required check is not closed.
+/// Example 3: No violation confirmed, but a required check is not closed.
 pub fn incomplete_pass() -> Session {
     let mut s = base(&[
         "artifacts.discovery",
@@ -747,7 +747,7 @@ pub fn incomplete_pass() -> Session {
     s
 }
 
-/// 4. A confirmed FAIL (resting on a TargetVerified behavior) and an unrelated required check that
+/// Example 4: A confirmed FAIL (resting on a TargetVerified behavior) and an unrelated required check that
 /// could not run: FAIL and INCOMPLETE.
 pub fn fail_incomplete() -> Session {
     let mut s = complete_fail();
@@ -766,7 +766,7 @@ pub fn fail_incomplete() -> Session {
     s
 }
 
-/// 5. A requested check on an architecture SIGIL does not analyze: unsupported, so incomplete.
+/// Example 5: A requested check on an architecture SIGIL does not analyze: unsupported, so incomplete.
 pub fn unsupported_check() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     let arm = add_binary(
@@ -793,7 +793,7 @@ pub fn unsupported_check() -> Session {
     s
 }
 
-/// 6. A budget hit: the analysis is truncated, not "nothing found".
+/// Example 6: A budget hit: the analysis is truncated, not "nothing found".
 pub fn budget_exceeded() -> Session {
     let mut s = base(&["artifacts.discovery", "identity.strings"]);
     let g = add_ggml(&mut s, &hex(0x11));
@@ -859,7 +859,7 @@ pub fn cwd_open_question() -> OpenQuestion {
     }
 }
 
-/// 7. An open question: some conditions met, one unknown; no finding is fabricated.
+/// Example 7: An open question: some conditions met, one unknown; no finding is fabricated.
 pub fn open_question() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     let g = add_ggml(&mut s, &hex(0x11));
@@ -882,7 +882,7 @@ pub fn open_question() -> Session {
     s
 }
 
-/// 8. A profile mismatch: something loader-like is there, but an obligation fails. A gap, not a pass.
+/// Example 8: A profile mismatch: something loader-like is there, but an obligation fails. A gap, not a pass.
 pub fn profile_mismatch() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     add_profile_knowledge(&mut s);
@@ -1012,7 +1012,7 @@ pub fn add_feature_match_candidate(s: &mut Session, g: &Placed, zen4_hex: &str) 
     zen4
 }
 
-/// 9. A feature-match-only claim: it is recorded, and it cannot support a confirmed finding (the
+/// Example 9: A feature-match-only claim: it is recorded, and it cannot support a confirmed finding (the
 /// rule yields an open question at most).
 pub fn feature_match_only() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
@@ -1069,7 +1069,7 @@ pub fn feature_match_only() -> Session {
     s
 }
 
-/// 10. TargetVerified claims: every obligation decided `Pass` in the target's code, with code facts.
+/// Example 10: TargetVerified claims: every obligation decided `Pass` in the target's code, with code facts.
 pub fn target_verified() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     let g = add_ggml(&mut s, &hex(0x11));
@@ -1078,7 +1078,7 @@ pub fn target_verified() -> Session {
     s
 }
 
-/// 11. A ReferenceVerified claim: the hash equals a reference whose behavior ground truth verified.
+/// Example 11: A ReferenceVerified claim: the hash equals a reference whose behavior ground truth verified.
 pub fn reference_verified() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
     add_profile_knowledge(&mut s);
@@ -1097,7 +1097,7 @@ pub fn reference_verified() -> Session {
     s
 }
 
-/// 12. Conflicting identity: a file name and an embedded value disagree on the version; both
+/// Example 12: Conflicting identity: a file name and an embedded value disagree on the version; both
 /// stay, and the per-file hash still matches the official release.
 pub fn conflicting_identity() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
@@ -1141,7 +1141,7 @@ pub fn conflicting_identity() -> Session {
     s
 }
 
-/// 13. The loader vertical slice of plan §5.8, corrected to the PR-2 types. Specification example
+/// Example 13: The loader vertical slice of plan §5.8, corrected to the PR-2 types. Specification example
 /// (the plan's values), not a SIGIL measurement.
 pub fn loader_slice_spec_example() -> Session {
     let mut s = base(&[
