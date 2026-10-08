@@ -1,7 +1,8 @@
 //! The v2 command line, end to end (plan §4.8, §4.9): `inspect ollama`, `session render`,
 //! `explain` (#21), and `rules`, with their outputs and exit codes.
 
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)] // runs the CLI binary (assert_cmd)
+// Runs the CLI binary (assert_cmd), and serves the API probe on loopback from this process.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::render::markdown::render_session;
-use sigil_model::{Completeness, Mode, Session, Verdict};
+use sigil_model::{Completeness, CoverageState, Mode, ProbeResult, Session, Verdict};
 use tempfile::TempDir;
 
 const MODEL_MEDIA: &str = "application/vnd.ollama.image.model";
@@ -542,5 +543,247 @@ fn the_v0_1_commands_are_gone() {
         "aibom",
     ] {
         assert_eq!(run(&[&command]).code, 2, "{command}");
+    }
+}
+
+// --- the active API probe (PR-3b-2) -----------------------------------------------------------
+
+/// A server on 127.0.0.1 that reads one request and answers `response`, or holds the connection
+/// open for 3 s without answering when `response` is `None`.
+fn api_server(response: Option<&'static str>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = vec![];
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => request.push(byte[0]),
+                _ => break,
+            }
+        }
+        match response {
+            Some(body) => {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+            None => std::thread::sleep(std::time::Duration::from_secs(3)),
+        }
+    });
+    addr.to_string()
+}
+
+/// A loopback address where nothing listens.
+fn refused_addr() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().to_string()
+}
+
+fn version_coverage(s: &Session) -> &CoverageState {
+    &s.coverage
+        .iter()
+        .find(|c| c.check.as_str() == "runtime_api.version")
+        .expect("runtime_api.version coverage")
+        .state
+}
+
+#[test]
+fn the_api_probe_records_the_version() {
+    let d = store(true);
+    let addr = api_server(Some("{\"version\":\"0.12.3\"}"));
+    let r = inspect(d.path(), &[&"--active", &"api-probe", &"--api-addr", &addr]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.active.len(), 1);
+    assert!(s.request.audit.iter().any(|a| a.as_str() == "runtime_api"));
+    assert!(matches!(
+        &s.probes[0].result,
+        ProbeResult::Answered { status: 200, version: Some(v) } if v.as_str() == Some("0.12.3")
+    ));
+    assert_eq!(version_coverage(&s), &CoverageState::Complete);
+    for key in ["api_connect_ms", "api_io_ms", "api_response_bytes"] {
+        assert!(s.request.budgets.contains_key(key), "{key}");
+    }
+    for expected in [
+        "active=api-probe".to_string(),
+        format!("api probe: {addr} → answered (HTTP 200), version 0.12.3"),
+    ] {
+        assert!(
+            r.stderr.contains(&expected),
+            "{expected:?} missing:\n{}",
+            r.stderr
+        );
+    }
+}
+
+#[test]
+fn a_refused_probe_closes_the_check() {
+    let d = store(true);
+    let addr = refused_addr();
+    let r = inspect(
+        d.path(),
+        &[
+            &"--active",
+            &"api-probe",
+            &"--api-addr",
+            &addr,
+            &"--fail-on-incomplete",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(s.probes[0].result, ProbeResult::Refused);
+    assert!(
+        r.stderr.contains(&format!("api probe: {addr} → refused")),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn a_probe_that_times_out_leaves_the_result_incomplete() {
+    let d = store(true);
+    let addr = api_server(None);
+    let r = inspect(
+        d.path(),
+        &[
+            &"--active",
+            &"api-probe",
+            &"--api-addr",
+            &addr,
+            &"--budget",
+            &"api_io_ms=200",
+            &"--fail-on-incomplete",
+        ],
+    );
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.budgets["api_io_ms"], 200);
+    assert!(matches!(version_coverage(&s), CoverageState::Error { .. }));
+    assert!(r.stderr.contains("timed out (read)"), "{}", r.stderr);
+}
+
+#[test]
+fn the_probe_is_shown_in_markdown_and_with_observe_mode() {
+    let d = store(true);
+    let addr = refused_addr();
+    let r = inspect(
+        d.path(),
+        &[
+            &"--active",
+            &"api-probe",
+            &"--api-addr",
+            &addr,
+            &"--format",
+            &"md",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("\n## Runtime API\n"), "{}", r.stdout);
+
+    let r = inspect(
+        d.path(),
+        &[
+            &"--mode",
+            &"observe",
+            &"--active",
+            &"api-probe",
+            &"--api-addr",
+            &addr,
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.mode, Mode::Observe);
+    assert_eq!(s.probes.len(), 1);
+    for check in ["exposure.binds", "runtime_api.version"] {
+        assert!(
+            s.request
+                .required_checks
+                .iter()
+                .any(|c| c.as_str() == check),
+            "{check}"
+        );
+    }
+}
+
+#[test]
+fn the_probe_target_is_checked_before_anything_runs() {
+    let d = store(true);
+    let cases: &[(&[&str], &str)] = &[
+        (&["--api-addr", "127.0.0.1:11434"], "--active"),
+        (&["--allow-remote"], "--active"),
+        (
+            &["--active", "api-probe", "--api-addr", "192.0.2.1"],
+            "--allow-remote",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "[2001:db8::1]:80"],
+            "--allow-remote",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "https://127.0.0.1"],
+            "scheme",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "example.com"],
+            "not an IP address",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "0.0.0.0"],
+            "unspecified",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "127.0.0.1:0"],
+            "port 0",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "127.0.0.1:"],
+            "port",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "127.0.0.1/api"],
+            "path",
+        ),
+        (
+            &[
+                "--active",
+                "api-probe",
+                "--api-addr",
+                "[fe80::1%eth0]:11434",
+            ],
+            "zone",
+        ),
+        (
+            &["--active", "api-probe", "--api-addr", "[127.0.0.1]:11434"],
+            "IPv6",
+        ),
+        (
+            &["--active", "api-probe", "--budget", "api_io_ms=0"],
+            "greater than 0",
+        ),
+        (&["--budget", "api_io_ms=200"], "--active api-probe"),
+    ];
+    for (given, expected) in cases {
+        let extra: Vec<&dyn AsRef<std::ffi::OsStr>> = given
+            .iter()
+            .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+            .collect();
+        let r = inspect(d.path(), &extra);
+        assert_eq!(r.code, 2, "{given:?}: {}", r.stderr);
+        assert!(
+            r.stderr.contains(expected),
+            "{expected:?} for {given:?}:\n{}",
+            r.stderr
+        );
+        assert!(r.stdout.is_empty(), "{}", r.stdout);
     }
 }
