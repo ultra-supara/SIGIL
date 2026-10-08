@@ -380,6 +380,21 @@ fn session_render_gives_the_markdown_of_the_saved_session() {
 }
 
 #[test]
+fn a_session_written_before_the_probe_fields_is_read() {
+    let (dir, path) = saved_warn();
+    let mut old: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    old["request"].as_object_mut().unwrap().remove("active");
+    old.as_object_mut().unwrap().remove("probes");
+    let old_path = write(dir.path(), "old.json", &old.to_string());
+    let r = run(&[&"session", &"render", &old_path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("Runtime API"), "{}", r.stdout);
+    let r = run(&[&"explain", &old_path, &"--verdict"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}
+
+#[test]
 fn a_broken_session_file_is_an_execution_error() {
     let dir = TempDir::new().unwrap();
     for (name, text, says) in [

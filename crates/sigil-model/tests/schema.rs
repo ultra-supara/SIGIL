@@ -151,6 +151,10 @@ fn registered() -> Vec<(&'static str, Probe)> {
     ]
 }
 
+/// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2). They are
+/// optional on read, where a missing one is an empty list, and always written.
+const OPTIONAL_ON_READ: &[(&str, &str)] = &[("RunRequest", "active"), ("Session", "probes")];
+
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
 const MODEL: &str = "model:models/registry.ollama.ai/library/m/latest";
 const LISTENER: &str = "listener:tcp6/:::11434#7001";
@@ -250,9 +254,14 @@ fn rust_field_and_variant_names_equal_the_schema() {
                 .iter()
                 .map(|r| r.as_str().unwrap().to_string())
                 .collect();
-            if required != object_keys(def) {
+            let mut expected = object_keys(def);
+            for (_, field) in OPTIONAL_ON_READ.iter().filter(|(d, _)| *d == name) {
+                expected.remove(*field);
+            }
+            if required != expected {
                 problems.push(format!(
-                    "{name}: every field is serialized, so every field is required"
+                    "{name}: every field is serialized, so every field is required, except those \
+                     added to sigil-session/1 later (OPTIONAL_ON_READ)"
                 ));
             }
         } else {
@@ -326,6 +335,42 @@ fn the_excerpt_has_the_session_fields_and_requires_none() {
     let outcome = serde_json::to_value(&fail_incomplete().outcome).unwrap();
     assert!(excerpt.is_valid(&json!({ "outcome": outcome })));
     assert!(!excerpt.is_valid(&json!({ "outcome": outcome, "extra": 1 })));
+}
+
+#[test]
+fn fields_added_later_are_optional_on_read_and_always_written() {
+    let schema = schema();
+    let session = validator_for(&schema, "Session");
+    // A session written before PR-3b-2: no `request.active`, no `probes`.
+    let mut old = serde_json::to_value(fail_incomplete()).unwrap();
+    old["request"].as_object_mut().unwrap().remove("active");
+    old.as_object_mut().unwrap().remove("probes");
+    assert_valid_against(&session, &old, "a session without the PR-3b-2 fields");
+    let read: Session = serde_json::from_value(old).unwrap();
+    assert!(read.request.active.is_empty() && read.probes.is_empty());
+    assert_valid(&read);
+    assert_eq!(read, fail_incomplete());
+    // Written again, both are explicit.
+    let written = serde_json::to_value(&read).unwrap();
+    assert_eq!(written["request"]["active"], json!([]));
+    assert_eq!(written["probes"], json!([]));
+    // The other fields stay required by both.
+    for (outer, field) in [(Some("request"), "observe_env"), (None, "listeners")] {
+        let mut v = serde_json::to_value(fail_incomplete()).unwrap();
+        let object = match outer {
+            Some(o) => v[o].as_object_mut().unwrap(),
+            None => v.as_object_mut().unwrap(),
+        };
+        object.remove(field);
+        assert!(
+            !session.is_valid(&v),
+            "the schema accepted a session without {field}"
+        );
+        assert!(
+            serde_json::from_value::<Session>(v).is_err(),
+            "serde accepted a session without {field}"
+        );
+    }
 }
 
 // --- types: every variant has a validated sample --------------------------------------------

@@ -43,7 +43,9 @@ pub struct Session {
     pub processes: Vec<ProcessObs>,
     /// Listening sockets in SIGIL's network namespace (observe mode, §4.6.8).
     pub listeners: Vec<Listener>,
-    /// Active probes (`request.active`, ADR-002 active mode).
+    /// Active probes (`request.active`, ADR-002 active mode). Added to `sigil-session/1` in
+    /// PR-3b-2: optional on read (empty when missing), always written.
+    #[serde(default)]
     pub probes: Vec<ApiProbe>,
     pub values: Vec<ProcessValue>,
     /// A: component identification.
@@ -124,7 +126,9 @@ pub struct RunRequest {
     pub observe_env: bool,
     /// Only the model with this display name is inventoried (exact match); `None` for all.
     pub model_filter: Option<String>,
-    /// Active features explicitly requested (`--active`); empty for none.
+    /// Active features explicitly requested (`--active`); empty for none. Added to
+    /// `sigil-session/1` in PR-3b-2: optional on read (empty when missing), always written.
+    #[serde(default)]
     pub active: Vec<ActiveFeature>,
 }
 

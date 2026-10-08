@@ -406,6 +406,17 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
   - a model's layers (manifest order).
 - Timestamps are kept. `ObservationMeta` is recorded but is not part of analysis, and `Outcome.policy_time` is an input that re-analysis reuses.
 
+## Fields added to `sigil-session/1`
+
+A field added after sessions without it were written is optional on read, so those sessions still load. A missing one reads as empty. SIGIL always writes it, so a session it writes has every field.
+
+| Field | Added in | Missing reads as |
+|---|---|---|
+| `request.active` | PR-3b-2 | `[]` (nothing active requested) |
+| `probes` | PR-3b-2 | `[]` (no probe) |
+
+The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
+
 ## Not in the model yet
 
 | Item | Arrives in |

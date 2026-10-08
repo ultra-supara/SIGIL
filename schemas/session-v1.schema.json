@@ -246,7 +246,6 @@
         "models",
         "processes",
         "listeners",
-        "probes",
         "values",
         "components",
         "releases",
@@ -275,7 +274,11 @@
         "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
         "listeners": {"type": "array", "items": {"$ref": "#/$defs/Listener"}},
-        "probes": {"type": "array", "items": {"$ref": "#/$defs/ApiProbe"}},
+        "probes": {
+          "description": "Active probes (request.active). Added to sigil-session/1 in PR-3b-2: optional on read (missing means empty), always written by SIGIL.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/ApiProbe"}
+        },
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
@@ -358,7 +361,7 @@
     "RunRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "roots", "audit", "required_checks", "budgets", "observe_env", "model_filter", "active"],
+      "required": ["mode", "roots", "audit", "required_checks", "budgets", "observe_env", "model_filter"],
       "properties": {
         "mode": {"$ref": "#/$defs/Mode"},
         "roots": {"type": "array", "items": {"$ref": "#/$defs/ScanRoot"}},
@@ -374,7 +377,7 @@
           "anyOf": [{"type": "string"}, {"type": "null"}]
         },
         "active": {
-          "description": "Active features explicitly requested (--active); empty for none.",
+          "description": "Active features explicitly requested (--active); empty for none. Added to sigil-session/1 in PR-3b-2: optional on read (missing means empty), always written by SIGIL.",
           "type": "array",
           "items": {"$ref": "#/$defs/ActiveFeature"}
         }
