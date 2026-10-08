@@ -19,8 +19,9 @@ use sigil_model::{
     ProbeResult, Ref, UntrustedText,
 };
 
-/// Whether the version the runtime's API reports is known.
-pub const VERSION: &str = "runtime_api.version";
+/// Whether the version the runtime's API reports is known (`Session::validate` checks that its
+/// coverage agrees with each probe's outcome).
+pub const VERSION: &str = sigil_model::probe::RUNTIME_API_VERSION;
 
 /// The `runtime_api.version` coverage of each probe.
 pub fn analyze(probes: &[ApiProbe]) -> Vec<Coverage> {

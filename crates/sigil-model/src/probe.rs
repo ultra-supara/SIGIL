@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::id::{ProbeId, Timestamp};
 use crate::text::UntrustedText;
 
+/// The check the API probe answers: whether the version the runtime's API reports is known. The
+/// engine's catalog names it; validation checks that its coverage on a probe agrees with the
+/// probe's outcome.
+pub const RUNTIME_API_VERSION: &str = "runtime_api.version";
+
 /// An active feature the request asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

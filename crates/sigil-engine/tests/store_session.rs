@@ -491,3 +491,58 @@ fn without_an_active_feature_nothing_is_probed() {
     assert!(!s.request.audit.iter().any(|a| a.as_str() == "runtime_api"));
     assert!(!s.request.budgets.keys().any(|k| k.starts_with("api_")));
 }
+
+#[test]
+fn every_probe_outcome_assembles_a_session_its_coverage_agrees_with() {
+    let dir = TempDir::new().unwrap();
+    good_store(dir.path());
+    let results = [
+        ProbeResult::Answered {
+            status: 200,
+            version: Some(UntrustedText::new("0.12.3")),
+        },
+        ProbeResult::Answered {
+            status: 200,
+            version: None,
+        },
+        ProbeResult::Answered {
+            status: 404,
+            version: None,
+        },
+        ProbeResult::Refused,
+        ProbeResult::TimedOut {
+            phase: ProbePhase::Connect,
+        },
+        ProbeResult::TimedOut {
+            phase: ProbePhase::Write,
+        },
+        ProbeResult::TimedOut {
+            phase: ProbePhase::Read,
+        },
+        ProbeResult::TooLarge { limit: 65536 },
+        ProbeResult::Malformed {
+            why: "transfer-encoding not supported".to_string(),
+        },
+        ProbeResult::Failed {
+            message: UntrustedText::new("Connection reset by peer (os error 104)"),
+        },
+    ];
+    for result in results {
+        // `session_with` asserts that the session validates, including the agreement rule.
+        let s = session_with(&request(dir.path(), None), &probed(result.clone()));
+        let closed = s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == "runtime_api.version")
+            .all(|c| c.state.can_close());
+        let expected = matches!(
+            result,
+            ProbeResult::Refused
+                | ProbeResult::Answered {
+                    status: 200,
+                    version: Some(_)
+                }
+        );
+        assert_eq!(closed, expected, "{result:?}");
+    }
+}
