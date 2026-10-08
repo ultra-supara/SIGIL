@@ -274,3 +274,20 @@ fn the_catalogs_are_consistent() {
         ["A-1", "A-2", "A-3", "A-4"]
     );
 }
+
+#[test]
+fn the_documented_example_loads() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/policy.md"),
+    )
+    .unwrap();
+    let block: String = doc
+        .split("```toml\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("docs/policy.md has a ```toml example")
+        .to_string();
+    let policy = Policy::load(&block).unwrap();
+    assert_eq!(policy.rules.len(), 2);
+    assert_eq!(policy.deny.len(), 1);
+}
