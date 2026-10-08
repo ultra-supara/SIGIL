@@ -2,7 +2,7 @@
 //!
 //! [`collect`] records facts only: instances and artifacts read through SafeFs, one [`Model`] per
 //! manifest, and the inventory coverage. Findings and the per-model checks are derived from these
-//! facts by `analyze::model_store`.
+//! facts by [`crate::analyze::model_store`].
 //!
 //! - The model filter applies before a manifest is read (I-05).
 //! - A manifest is read once, with a byte limit (I-04).
