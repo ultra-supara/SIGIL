@@ -379,19 +379,22 @@ fn session_render_gives_the_markdown_of_the_saved_session() {
     assert_eq!(r.stdout, render_session(&s));
 }
 
+/// Real sessions of the PR #75 CLI, without `request.active` and `probes` (see their README).
 #[test]
-fn a_session_written_before_the_probe_fields_is_read() {
-    let (dir, path) = saved_warn();
-    let mut old: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    old["request"].as_object_mut().unwrap().remove("active");
-    old.as_object_mut().unwrap().remove("probes");
-    let old_path = write(dir.path(), "old.json", &old.to_string());
-    let r = run(&[&"session", &"render", &old_path]);
-    assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(!r.stdout.contains("Runtime API"), "{}", r.stdout);
-    let r = run(&[&"explain", &old_path, &"--verdict"]);
-    assert_eq!(r.code, 0, "{}", r.stderr);
+fn sessions_written_before_pr76_are_rendered_and_explained() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sigil-model/tests/fixtures/pre-pr76");
+    for name in ["pass-complete.json", "warn.json", "incomplete.json"] {
+        let path = dir.join(name);
+        let r = run(&[&"session", &"render", &path]);
+        assert_eq!(r.code, 0, "{name}: {}", r.stderr);
+        let s: Session = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(r.stdout, render_session(&s), "{name}");
+        assert!(!r.stdout.contains("Runtime API"), "{name}");
+        for question in ["--verdict", "--coverage"] {
+            let r = run(&[&"explain", &path, &question]);
+            assert_eq!(r.code, 0, "{name} {question}: {}", r.stderr);
+        }
+    }
 }
 
 #[test]
