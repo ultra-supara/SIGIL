@@ -1,6 +1,8 @@
 //! Helpers shared by the model-store tests: writing blobs and manifests into a temporary store.
 #![allow(dead_code)]
 
+pub mod proc;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
