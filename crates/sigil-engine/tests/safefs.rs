@@ -547,3 +547,75 @@ fn a_walk_that_starts_at_a_link_into_another_root_lists_that_root() {
     let w = fs.walk(&ra, &rel("to-b-sub")).unwrap();
     assert_eq!(listed(&w), ["to-b-sub/deeper-in-b"]);
 }
+
+#[test]
+fn a_directory_over_the_entry_limit_is_not_listed() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    fs::create_dir(p.join("big")).unwrap();
+    fs::create_dir(p.join("small")).unwrap();
+    // Entries that are not regular files, so the file budget never moves.
+    for name in ["a", "b", "c", "d"] {
+        symlink("nothing", p.join("big").join(name)).unwrap();
+    }
+    for name in ["x", "y", "z"] {
+        fs::write(p.join("small").join(name), name).unwrap();
+    }
+    let mut fs = SafeFs::new(FsBudgets {
+        max_dir_entries: 3,
+        ..FsBudgets::default()
+    });
+    fs.add_root(root(), p).unwrap();
+    let w = walk(&fs, "");
+    // A directory at the limit is listed. One over it is named as unscanned, and none of its
+    // entries is recorded: they cannot all be held to be sorted.
+    assert_eq!(listed(&w), ["small/x", "small/y", "small/z"]);
+    assert!(w.skipped.is_empty());
+    let unscanned: Vec<String> = w.unscanned.iter().map(RelPath::display).collect();
+    assert_eq!(unscanned, ["big"]);
+    assert_eq!(w.exceeded.len(), 1);
+    assert_eq!(w.exceeded[0].budget, "directory_entries");
+    assert_eq!((w.exceeded[0].used, w.exceeded[0].limit), (4, 3));
+}
+
+#[test]
+fn the_entry_budget_counts_every_entry_and_stops_the_walk() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    // No regular file anywhere: empty directories and dangling links only.
+    for d in ["d1", "d2", "d3"] {
+        fs::create_dir_all(p.join("top").join(d)).unwrap();
+        symlink("nothing", p.join("top").join(d).join("link")).unwrap();
+    }
+    let budget = |max_entries| {
+        let mut fs = SafeFs::new(FsBudgets {
+            max_entries,
+            ..FsBudgets::default()
+        });
+        fs.add_root(root(), p).unwrap();
+        fs
+    };
+    let unscanned =
+        |w: &Walk| -> Vec<String> { w.unscanned.iter().map(RelPath::display).collect() };
+
+    // `top` has 3 entries, then d1 and d2 one each: the budget of 5 is spent before d3.
+    let w = walk(&budget(5), "top");
+    assert!(w.files.is_empty());
+    assert_eq!(
+        skipped(&w),
+        [
+            ("top/d1/link".to_string(), Skip::Dangling),
+            ("top/d2/link".to_string(), Skip::Dangling),
+        ]
+    );
+    assert_eq!(unscanned(&w), ["top/d3"]);
+    assert_eq!(w.exceeded[0].budget, "entries_listed");
+    assert_eq!((w.exceeded[0].used, w.exceeded[0].limit), (5, 5));
+
+    // Spent while `top` is read: `top` itself is unscanned, and nothing from it is recorded.
+    let w = walk(&budget(2), "top");
+    assert!(w.files.is_empty() && w.skipped.is_empty());
+    assert_eq!(unscanned(&w), ["top"]);
+    assert_eq!(w.exceeded[0].budget, "entries_listed");
+    assert_eq!((w.exceeded[0].used, w.exceeded[0].limit), (2, 2));
+}

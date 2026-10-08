@@ -9,7 +9,10 @@
 //!   recorded. A target inside a scan root is followed through that root's anchored walk; a target
 //!   outside every root is recorded and not read.
 //! - **Read-only and bounded.** Files are read with `read(2)` (never `mmap`), hashed as a stream,
-//!   and stopped at a byte limit. Walks have depth and file-count budgets.
+//!   and stopped at a byte limit. Walks have budgets for depth, for files found, for directory
+//!   entries read, and for the entries of one directory. They hold one directory fd per level
+//!   (a subdirectory is opened only when it is listed), so the fds a walk holds are bounded by
+//!   its depth.
 //!
 //! System calls SafeFs makes (the list PR-3b's safety test enforces): `openat2`, `openat`,
 //! `newfstatat`, `fstat`, `readlinkat`, `read`, `getdents64`, `fcntl`, `close`; and, once per scan
@@ -36,6 +39,11 @@ pub use walk::{Skip, Walk, WalkError};
 pub struct FsBudgets {
     /// Files discovered by walks, across all roots.
     pub max_files: u64,
+    /// Directory entries read by walks, of any type, across all roots.
+    pub max_entries: u64,
+    /// Entries in one directory. A larger directory is not listed: its names would all have to be
+    /// held to be sorted. With names of at most 255 bytes, this also bounds that memory.
+    pub max_dir_entries: u64,
     /// Directory depth below the directory a walk starts in.
     pub max_depth: u32,
     /// Symlink hops while resolving one path.
@@ -46,6 +54,8 @@ impl Default for FsBudgets {
     fn default() -> Self {
         FsBudgets {
             max_files: 4096,
+            max_entries: 65_536,
+            max_dir_entries: 16_384,
             max_depth: 32,
             max_link_hops: 40,
         }
@@ -76,6 +86,8 @@ pub struct SafeFs {
     pub(crate) budgets: FsBudgets,
     /// Files discovered by walks so far.
     pub(crate) files_seen: Cell<u64>,
+    /// Directory entries read by walks so far.
+    pub(crate) entries_seen: Cell<u64>,
     /// Cleared when the kernel lacks `openat2`; `openat` with `O_NOFOLLOW` is used instead.
     pub(crate) have_openat2: Cell<bool>,
 }
@@ -86,6 +98,7 @@ impl SafeFs {
             roots: vec![],
             budgets,
             files_seen: Cell::new(0),
+            entries_seen: Cell::new(0),
             have_openat2: Cell::new(true),
         }
     }
