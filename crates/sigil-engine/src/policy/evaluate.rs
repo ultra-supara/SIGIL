@@ -1,14 +1,26 @@
 //! Applying a policy to a session (plan §4.7).
 //!
-//! Evaluation changes only what the policy owns: assumption acceptance, the decision of each
-//! finding and open question, the policy violations, and the outcome. Findings, open questions,
-//! their conditions and evidence, and `default_severity` are never touched; an ignored finding
-//! stays with its reason.
+//! A policy has two kinds of content.
+//! - **Inputs to the analysis:** the required checks (`Policy::scope`) and the accepted
+//!   assumptions (`Policy::acceptance`). Collection runs for the required checks, and acceptance
+//!   decides which conditions an assumption may settle. The session assembler records both in the
+//!   session before the analysis.
+//! - **Decisions over its results:** what evaluation sets. That is the decision of each finding
+//!   and open question, the policy violations, the outcome, and the record of which policy was
+//!   applied.
+//!
+//! [`evaluate`] refuses a policy whose inputs differ from those the session was analyzed with,
+//! because only a new analysis can update the technical conclusions. The same entry point serves
+//! the first evaluation and a later re-evaluation. Findings, open questions, their conditions and
+//! evidence, and `default_severity` are never touched. An ignored finding stays, with its reason.
+
+use std::fmt;
 
 use sigil_model::{
-    Action, AssumptionAcceptance, CheckId, Completeness, CoverageState, Date, EvidenceRef,
-    IdentityStatus, OpenQuestionDecision, OqTreatment, Outcome, PolicyDecision, PolicyRuleRef,
-    PolicyViolation, Ref, RuleId, Session, Severity, Timestamp, Verdict,
+    Action, AssumptionAcceptance, AssumptionId, CheckId, Completeness, CoverageState, Date,
+    EvidenceRef, IdentityStatus, KnowledgeKind, OpenQuestionDecision, OqTreatment, Outcome,
+    PolicyDecision, PolicyRuleRef, PolicyViolation, Ref, RuleId, Session, Severity, Timestamp,
+    Verdict,
 };
 
 use super::Policy;
@@ -20,24 +32,87 @@ pub enum PolicyWarning {
     OverrideExpired { rule: RuleId, expires: Date },
 }
 
-/// Sets assumption acceptance, decisions, policy violations, and the outcome on `session`, with
-/// rule expiry judged at `policy_time` (recorded in the outcome so that a re-evaluation reuses it).
+/// Why a session cannot be evaluated with a policy. The policy would change the analysis itself,
+/// not only the decisions over it, so the session must be analyzed again with this policy.
+/// [`evaluate`] leaves the session unchanged when it returns one of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvaluateError {
+    /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
+    /// resting on one of them could become settled or unsettled.
+    AssumptionsChanged(Vec<AssumptionId>),
+    /// The policy requires other checks than the session's request. Coverage was collected for
+    /// the request's checks.
+    RequiredChecksChanged {
+        request: Vec<CheckId>,
+        policy: Vec<CheckId>,
+    },
+}
+
+impl fmt::Display for EvaluateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let list = |items: Vec<&str>| items.join(", ");
+        match self {
+            EvaluateError::AssumptionsChanged(ids) => write!(
+                f,
+                "the policy changes the acceptance of {}; analyze again with this policy",
+                list(ids.iter().map(AssumptionId::as_str).collect())
+            ),
+            EvaluateError::RequiredChecksChanged { request, policy } => write!(
+                f,
+                "the policy requires [{}] but the session was collected for [{}]; analyze again \
+                 with this policy",
+                list(policy.iter().map(CheckId::as_str).collect()),
+                list(request.iter().map(CheckId::as_str).collect())
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EvaluateError {}
+
+/// Applies `policy` to `session`. It sets the decisions, the policy violations, the outcome, and
+/// the policy's knowledge entry. Rule expiry is judged at `policy_time`, which is recorded in the
+/// outcome so that a re-evaluation reuses it.
+///
+/// Fails, without changing `session`, when the policy's accepted assumptions or required checks
+/// differ from those recorded in the session ([`EvaluateError`]).
 pub fn evaluate(
     session: &mut Session,
     policy: &Policy,
     policy_time: Timestamp,
-) -> Vec<PolicyWarning> {
-    let sources = &policy.sources;
-    for assumption in &mut session.assumptions {
-        assumption.acceptance = if policy.accept.contains(&assumption.id) {
-            AssumptionAcceptance::Accepted {
-                source: sources.assumptions.clone(),
-            }
-        } else {
-            AssumptionAcceptance::NotAccepted
-        };
+) -> Result<Vec<PolicyWarning>, EvaluateError> {
+    let changed: Vec<AssumptionId> = session
+        .assumptions
+        .iter()
+        .filter(|a| {
+            let recorded = matches!(a.acceptance, AssumptionAcceptance::Accepted { .. });
+            recorded != policy.accept.contains(&a.id)
+        })
+        .map(|a| a.id.clone())
+        .collect();
+    if !changed.is_empty() {
+        return Err(EvaluateError::AssumptionsChanged(changed));
+    }
+    let (_, required) = policy.scope(session.request.mode);
+    if required != session.request.required_checks {
+        return Err(EvaluateError::RequiredChecksChanged {
+            request: session.request.required_checks.clone(),
+            policy: required,
+        });
     }
 
+    // The policy's own entry replaces any earlier one, in place.
+    let at = session
+        .knowledge
+        .iter()
+        .position(|k| k.kind == KnowledgeKind::Policy)
+        .unwrap_or(session.knowledge.len());
+    session
+        .knowledge
+        .retain(|k| k.kind != KnowledgeKind::Policy);
+    session.knowledge.insert(at, policy.knowledge());
+
+    let sources = &policy.sources;
     let mut warnings = vec![];
     for finding in &mut session.findings {
         let default = |reason: Option<String>| PolicyDecision {
@@ -116,7 +191,7 @@ pub fn evaluate(
         .collect();
 
     session.outcome = outcome(session, policy_time);
-    warnings
+    Ok(warnings)
 }
 
 /// Whether an override valid through `expires` (a UTC day) has expired at `time`.

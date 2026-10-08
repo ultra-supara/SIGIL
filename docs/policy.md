@@ -87,11 +87,28 @@ so requesting it gives an honest `INCOMPLETE`.
 | A-3 | The runtime was launched by this system-instance unit, so an unset `WorkingDirectory=` means cwd `/` |
 | A-4 | No symbol interposition in the role: each loader PLT call binds to the analyzed definer |
 
+## Inputs to the analysis
+
+Two parts of a policy decide what the analysis concludes, not only what is done with it:
+- **the required checks** (`[scope]`): collection runs for them;
+- **the accepted assumptions** (`[assumptions]`): a condition may rest on an assumption only if it
+  is accepted, so acceptance decides which conditions are settled.
+
+The session records both before the analysis: the request's `required_checks`, and each
+assumption's acceptance (`Accepted`, source `policy:assumptions.accept`, if listed; otherwise
+`NotAccepted`).
+
+Evaluation never changes them. It refuses a policy whose required checks or accepted assumptions
+differ from those recorded, and leaves the session unchanged. Such a policy changes the technical
+conclusions, so the session must be analyzed again with it. A policy that differs only in its
+decisions (rule overrides, open-question treatment, denied components) can re-evaluate a recorded
+session.
+
 ## What evaluation does
 
 Evaluation changes only what the policy owns.
-- **Assumptions:** each one is `Accepted` (source `policy:assumptions.accept`) if listed, otherwise
-  `NotAccepted`.
+- **The applied policy:** the session's policy knowledge entry is replaced with this policy's name
+  and SHA-256.
 - **Findings:**
   - A rule override applies, with source `policy:rules.<rule>`, its reason, and its expiry.
   - Otherwise the rule's default severity applies, with source `default:<rule>`.

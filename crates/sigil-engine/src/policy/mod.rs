@@ -4,22 +4,26 @@
 //! questions count, which assumptions a finding may rest on, how individual rules are treated, who
 //! is trusted, and which components are denied. Loading is strict: an unknown key, rule, scope,
 //! check, or assumption, a malformed date, and `ignore` without a reason are all fatal, so a typo
-//! never silently weakens a policy. [`evaluate`] applies a policy to a session.
+//! never silently weakens a policy.
+//!
+//! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
+//! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy
+//! whose inputs differ from those recorded.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use sha2::{Digest, Sha256};
 use sigil_model::{
-    Action, AssumptionId, AuditScope, CheckId, ComponentKey, Date, KnowledgeKind, KnowledgeRef,
-    Mode, OqTreatment, PolicyRuleRef, RuleId, Sha256Hex,
+    Action, AssumptionAcceptance, AssumptionId, AuditScope, CheckId, ComponentKey, Date,
+    KnowledgeKind, KnowledgeRef, Mode, OqTreatment, PolicyRuleRef, RuleId, Sha256Hex,
 };
 
 pub mod catalog;
 mod evaluate;
 mod raw;
 
-pub use evaluate::{evaluate, outcome, PolicyWarning};
+pub use evaluate::{evaluate, outcome, EvaluateError, PolicyWarning};
 
 /// The schema line every policy starts with.
 pub const SCHEMA: &str = "sigil-policy/1";
@@ -364,6 +368,18 @@ impl Policy {
             }
         }
         (audit, required)
+    }
+
+    /// Whether a condition may rest on `assumption`. The session assembler records this for every
+    /// assumption before the analysis, because acceptance decides which conditions are settled.
+    pub fn acceptance(&self, assumption: &AssumptionId) -> AssumptionAcceptance {
+        if self.accept.contains(assumption) {
+            AssumptionAcceptance::Accepted {
+                source: self.sources.assumptions.clone(),
+            }
+        } else {
+            AssumptionAcceptance::NotAccepted
+        }
     }
 
     /// The knowledge entry that records which policy was applied.
