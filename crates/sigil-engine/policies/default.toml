@@ -1,13 +1,15 @@
 # SIGIL's built-in policy (docs/policy.md).
 #
-# The audit scope holds only what the engine can collect today: the model store, and the
-# runtime's network exposure in observe mode. Each later collector adds its scope here.
+# The audit scope holds only what the engine can collect today: the model store, the runtime's
+# network exposure in observe mode, and the runtime API's version when the API probe is requested
+# (`--active api-probe`). Each later collector adds its scope here.
 schema = "sigil-policy/1"
 name = "default"
 
 [scope]
 audit = ["model_store"]
 observe_audit = ["exposure"]
+active_audit = ["runtime_api"]
 extra_required = []
 
 [open_questions]

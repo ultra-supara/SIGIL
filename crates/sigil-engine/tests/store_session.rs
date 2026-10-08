@@ -7,7 +7,7 @@ use std::path::Path;
 
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
-use sigil_engine::inspect::{store_session, StoreRequest};
+use sigil_engine::inspect::{store_session, ActiveInput, StoreRequest};
 use sigil_engine::policy::{evaluate, Policy};
 use sigil_model::*;
 use tempfile::TempDir;
@@ -56,9 +56,14 @@ fn session(dir: &Path, filter: Option<&str>) -> Session {
 }
 
 fn session_for(req: &StoreRequest) -> Session {
+    session_with(req, &ActiveInput::default())
+}
+
+fn session_with(req: &StoreRequest, active: &ActiveInput) -> Session {
     let policy = Policy::builtin_default().unwrap();
     let s = store_session(
         req,
+        active,
         &policy,
         tool(),
         observation(),
@@ -413,4 +418,76 @@ fn a_session_is_reproducible_and_re_evaluates_after_a_round_trip() {
     let time = reloaded.outcome.policy_time.clone();
     evaluate(&mut reloaded, &policy, time).unwrap();
     assert_eq!(reloaded.to_canonical_json().unwrap(), first);
+}
+
+// --- the active API probe (PR-3b-2) -----------------------------------------------------------
+
+/// A requested probe of 127.0.0.1:11434 that ended with `result`, and its bounds.
+fn probed(result: ProbeResult) -> ActiveInput {
+    let target: std::net::SocketAddr = "127.0.0.1:11434".parse().unwrap();
+    ActiveInput {
+        features: vec![ActiveFeature::ApiProbe {
+            address: "127.0.0.1".to_string(),
+            port: 11434,
+            allow_remote: false,
+        }],
+        probes: vec![ApiProbe {
+            id: ProbeId::api(target),
+            address: "127.0.0.1".to_string(),
+            port: 11434,
+            at: Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+            result,
+        }],
+        budgets: std::collections::BTreeMap::from([
+            ("api_connect_ms".to_string(), 2000),
+            ("api_io_ms".to_string(), 2000),
+            ("api_response_bytes".to_string(), 65536),
+        ]),
+    }
+}
+
+#[test]
+fn a_refused_probe_closes_runtime_api() {
+    let dir = TempDir::new().unwrap();
+    good_store(dir.path());
+    let s = session_with(&request(dir.path(), None), &probed(ProbeResult::Refused));
+    assert_eq!(outcome(&s), (Verdict::Pass, Completeness::Complete));
+    assert!(s.request.audit.iter().any(|a| a.as_str() == "runtime_api"));
+    assert!(s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == "runtime_api.version"));
+    assert_eq!(s.request.active.len(), 1);
+    assert_eq!(s.probes.len(), 1);
+    assert_eq!(s.request.budgets["api_io_ms"], 2000);
+    assert!(s
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == "runtime_api.version"
+            && matches!(c.state, CoverageState::NotPresent { .. })));
+}
+
+#[test]
+fn a_timed_out_probe_leaves_runtime_api_open() {
+    let dir = TempDir::new().unwrap();
+    good_store(dir.path());
+    let timed_out = ProbeResult::TimedOut {
+        phase: ProbePhase::Read,
+    };
+    let s = session_with(&request(dir.path(), None), &probed(timed_out));
+    assert_eq!(
+        outcome(&s),
+        (Verdict::Pass, missing(&["runtime_api.version"]))
+    );
+}
+
+#[test]
+fn without_an_active_feature_nothing_is_probed() {
+    let dir = TempDir::new().unwrap();
+    good_store(dir.path());
+    let s = session(dir.path(), None);
+    assert!(s.request.active.is_empty() && s.probes.is_empty());
+    assert!(!s.request.audit.iter().any(|a| a.as_str() == "runtime_api"));
+    assert!(!s.request.budgets.keys().any(|k| k.starts_with("api_")));
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, ExplainError, Format};
-use sigil_engine::inspect::{observe_session, ObserveRequest, StoreRequest};
+use sigil_engine::inspect::{observe_session, ActiveInput, ObserveRequest, StoreRequest};
 use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::RULES;
 use sigil_engine::policy::Policy;
@@ -55,6 +55,7 @@ fn session(store: &Path, fake: &FakeProc) -> Session {
     };
     observe_session(
         &req,
+        &ActiveInput::default(),
         &Policy::builtin_default().unwrap(),
         ToolInfo {
             name: "sigil".to_string(),

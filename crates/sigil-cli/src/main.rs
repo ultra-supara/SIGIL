@@ -19,7 +19,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, Format as ExplainFormat};
-use sigil_engine::inspect::{observe_session, store_session, ObserveRequest, StoreRequest};
+use sigil_engine::inspect::{
+    observe_session, store_session, ActiveInput, ObserveRequest, StoreRequest,
+};
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::RULES;
@@ -240,14 +242,16 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     };
     let proc_root = Path::new("/proc");
     let observation = host::meta(mode, proc_root, started_at);
+    let active = ActiveInput::default();
     let assembled = match mode {
-        Mode::Static => store_session(&store, &policy, tool, observation, policy_time),
+        Mode::Static => store_session(&store, &active, &policy, tool, observation, policy_time),
         Mode::Observe => observe_session(
             &ObserveRequest {
                 store,
                 proc_root: proc_root.to_path_buf(),
                 proc_budgets,
             },
+            &active,
             &policy,
             tool,
             observation,

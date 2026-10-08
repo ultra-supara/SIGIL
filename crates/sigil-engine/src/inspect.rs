@@ -5,12 +5,12 @@ use std::fmt;
 use std::path::PathBuf;
 
 use sigil_model::{
-    CheckId, Completeness, Coverage, CoverageState, KnowledgeRef, Mode, ObservationMeta, Outcome,
-    Ref, RootId, RunRequest, ScanRoot, SchemaVersion, Session, Timestamp, ToolInfo, Unavailability,
-    UntrustedText, Verdict,
+    ActiveFeature, ApiProbe, CheckId, Completeness, Coverage, CoverageState, KnowledgeRef, Mode,
+    ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion, Session, Timestamp,
+    ToolInfo, Unavailability, UntrustedText, Verdict,
 };
 
-use crate::analyze::{exposure, model_store};
+use crate::analyze::{exposure, model_store, runtime_api};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
 use crate::observe;
@@ -59,6 +59,18 @@ impl fmt::Display for InspectError {
 
 impl std::error::Error for InspectError {}
 
+/// The active features requested and what they observed (ADR-002 active mode). The CLI runs the
+/// probes (`sigil-probe`) and passes their records here: the engine performs no network I/O.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveInput {
+    pub features: Vec<ActiveFeature>,
+    /// One per requested target.
+    pub probes: Vec<ApiProbe>,
+    /// The probe bounds in effect, by the names `request.budgets` records (`api_connect_ms`,
+    /// `api_io_ms`, `api_response_bytes`).
+    pub budgets: BTreeMap<String, u64>,
+}
+
 /// What an observe-mode inspection is asked to do: the model store, and the running system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObserveRequest {
@@ -71,24 +83,19 @@ pub struct ObserveRequest {
 /// Inspects a model store in static mode and evaluates `policy` on the result.
 ///
 /// The request's audit scope and required checks come from `policy`, so evaluation cannot refuse
-/// it. `observation` is recorded as given; `policy_time` judges rule expiry. The session is in
-/// canonical order and passes `Session::validate`.
+/// it. `active` adds the requested active features, their probes, and `runtime_api` coverage;
+/// a probe that does not match its request makes the session invalid. `observation` is recorded
+/// as given; `policy_time` judges rule expiry. The session is in canonical order and passes
+/// `Session::validate`.
 pub fn store_session(
     req: &StoreRequest,
+    active: &ActiveInput,
     policy: &Policy,
     tool: ToolInfo,
     observation: ObservationMeta,
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
-    assemble(
-        Mode::Static,
-        req,
-        None,
-        policy,
-        tool,
-        observation,
-        policy_time,
-    )
+    assemble(req, None, active, policy, tool, observation, policy_time)
 }
 
 /// Inspects the model store and the running system in observe mode (plan §4.6.8), and evaluates
@@ -97,6 +104,7 @@ pub fn store_session(
 /// processes are observed at `observation.started_at`.
 pub fn observe_session(
     req: &ObserveRequest,
+    active: &ActiveInput,
     policy: &Policy,
     tool: ToolInfo,
     mut observation: ObservationMeta,
@@ -111,9 +119,9 @@ pub fn observe_session(
     observation.net_ns = proc.own_net_ns;
     let observed = Some((proc, req.proc_budgets));
     assemble(
-        Mode::Observe,
         &req.store,
         observed,
+        active,
         policy,
         tool,
         observation,
@@ -121,15 +129,21 @@ pub fn observe_session(
     )
 }
 
+/// Assembles the session: observe mode when the running system was `observed`, else static.
 fn assemble(
-    mode: Mode,
     req: &StoreRequest,
     observed: Option<(ProcFacts, ProcBudgets)>,
+    active: &ActiveInput,
     policy: &Policy,
     tool: ToolInfo,
     observation: ObservationMeta,
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
+    let mode = if observed.is_some() {
+        Mode::Observe
+    } else {
+        Mode::Static
+    };
     let root = RootId::new(MODELS_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?;
     let mut fs = SafeFs::new(req.budgets);
     let facts = match fs.add_root(root.clone(), &req.models_dir) {
@@ -141,7 +155,7 @@ fn assemble(
     // The canonical path SafeFs opened, or the path as given when it could not be opened.
     let path = fs.root_path(&root).unwrap_or(&req.models_dir);
     let (mut findings, analysis_coverage) = model_store::analyze(&facts, &root);
-    let (audit, required_checks) = policy.scope(mode);
+    let (audit, required_checks) = policy.scope(mode, !active.features.is_empty());
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
     let mut budgets = budgets(req);
@@ -158,6 +172,8 @@ fn assemble(
             ("tcp_table_bytes".to_string(), proc_budgets.max_table_bytes),
         ]);
     }
+    coverage.extend(runtime_api::analyze(&active.probes));
+    budgets.extend(active.budgets.clone());
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -173,7 +189,7 @@ fn assemble(
             budgets,
             observe_env: false,
             model_filter: req.model_filter.clone(),
-            active: vec![],
+            active: active.features.clone(),
         },
         observation,
         artifacts: facts.artifacts,
@@ -181,7 +197,7 @@ fn assemble(
         models: facts.models,
         processes,
         listeners,
-        probes: vec![],
+        probes: active.probes.clone(),
         values: vec![],
         components: vec![],
         releases: vec![],

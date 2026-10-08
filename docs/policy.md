@@ -19,6 +19,7 @@ name   = "default"             # required; recorded in the session with the file
 [scope]
 audit          = ["model_store"]   # audited in every mode
 observe_audit  = ["exposure"]      # added in observe mode
+active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
 extra_required = []                # checks required beyond those of the scopes
 
 [open_questions]
@@ -61,6 +62,7 @@ so requesting it gives an honest `INCOMPLETE`.
 |---|---|---|
 | `model_store` | `model_store.inventory`, `model_store.integrity`, `model_store.license` | PR-3a-2 |
 | `exposure` | `exposure.binds` | PR-3a-2 (observe mode) |
+| `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
 | `runtime_artifacts` | `artifacts.discovery` | PR-4 (extends the list) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
 
@@ -168,7 +170,8 @@ A typo never silently weakens a policy.
 ## The default policy
 
 `crates/sigil-engine/policies/default.toml`:
-- audits `model_store`, plus `exposure` in observe mode;
+- audits `model_store`, plus `exposure` in observe mode, plus `runtime_api` when the API probe is
+  requested (`--active api-probe`);
 - counts open questions as gaps;
 - accepts no assumption;
 - has no overrides.
