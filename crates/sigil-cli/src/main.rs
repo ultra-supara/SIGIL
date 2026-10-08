@@ -109,8 +109,8 @@ struct OllamaArgs {
     /// An active feature, off by default. api-probe sends one GET /api/version to --api-addr.
     #[arg(long, value_enum, value_name = "FEATURE")]
     active: Vec<ActiveArg>,
-    /// The API probe's target: IP[:PORT], [IPv6][:PORT], or localhost[:PORT]; names are not
-    /// resolved [default: 127.0.0.1:11434].
+    /// The API probe's target: an IP address or localhost, with an optional :PORT (an IPv6
+    /// address with a port in brackets); names are not resolved [default: 127.0.0.1:11434].
     #[arg(long, value_name = "ADDR", requires = "active")]
     api_addr: Option<String>,
     /// Allow --api-addr to name a non-loopback address.
