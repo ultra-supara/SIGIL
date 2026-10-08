@@ -1,0 +1,3291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ultra-supara/SIGIL/main/schemas/session-v1.schema.json",
+  "title": "SIGIL analysis session v1",
+  "description": "Schema for the analysis session (`schema: \"sigil-session/1\"`), SIGIL's source of truth. Self-contained: no external $ref. Strict: additionalProperties: false on every object. Enums are externally tagged with their variant names; struct fields are snake_case. Validation by this schema is necessary but not sufficient: sigil-model's Session::validate checks references and claim invariants the schema cannot express.",
+  "$ref": "#/$defs/Session",
+  "$defs": {
+    "ArtifactId": {
+      "description": "Content identity: sha256 of the whole file. Never a path.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "SliceId": {
+      "description": "One architecture slice of an artifact: <artifact>#<arch>@<offset>.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}#(x86_64|aarch64|other)@(0|[1-9][0-9]*)$"
+    },
+    "InstanceId": {
+      "description": "Placement identity: inst:<scan-root-relative path>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^inst:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "RootId": {
+      "description": "A scan root declared in the request.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "FnId": {
+      "description": "A function, unique within its slice's code facts.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^fn:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "CallId": {
+      "description": "A call site, unique within its slice's code facts.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^cs:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "ValueId": {
+      "description": "A process value (one key, one role, one origin).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "AccessId": {
+      "description": "A write-access analysis record.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "FindingId": {
+      "description": "A technical finding.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "OpenQuestionId": {
+      "description": "An open question.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "CondId": {
+      "description": "A condition of a detection rule.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "CheckId": {
+      "description": "An audit check whose coverage decides completeness.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ObligationId": {
+      "description": "A profile obligation or profile code check.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "PremiseId": {
+      "description": "Something a claim depends on that is not established (shares the ID space of obligations).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "RuleId": {
+      "description": "A detection rule that yields findings or open questions.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ProfileRuleId": {
+      "description": "A rule inside a semantic profile.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ProfileRef": {
+      "description": "A semantic profile at a revision: <id>@<revision>. Its hash is in `knowledge`.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^[^@#\\s\\u0000-\\u001f\\u007f-\\u009f]([^@#\\u0000-\\u001f\\u007f-\\u009f]*[^@#\\s\\u0000-\\u001f\\u007f-\\u009f])?@(0|[1-9][0-9]*)$"
+    },
+    "RefSetId": {
+      "description": "A reference-manifest set.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "AssumptionId": {
+      "description": "An explicit assumption, e.g. A-3.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ComponentKey": {
+      "description": "A component name used by identification.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "FeatureKey": {
+      "description": "A feature-hint key, e.g. posix.network.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ProcessRole": {
+      "description": "A process role from a topology rule. Generic: no runtime-specific meaning.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "AtomName": {
+      "description": "A profile-named operand of a predicate check.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "PolicyRuleRef": {
+      "description": "The policy rule a decision came from.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "AuditScope": {
+      "description": "A requested audit scope.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "AnalyzerRef": {
+      "description": "The analyzer that derived a fact.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "GroundTruthRef": {
+      "description": "A ground-truth record.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Sha256Hex": {
+      "description": "A lowercase hex SHA-256 digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Timestamp": {
+      "description": "An instant, RFC 3339 UTC.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]{1,9})?Z$"
+    },
+    "Date": {
+      "description": "A calendar date.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+    },
+    "UntrustedText": {
+      "description": "Input-derived text. A string when valid UTF-8; otherwise {\"hex\": <lowercase hex of the bytes>}, used only for values that are not valid UTF-8. Consumers must escape it before display.",
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hex"],
+          "properties": {"hex": {"type": "string", "pattern": "^([0-9a-f]{2})*$"}}
+        }
+      ]
+    },
+    "Session": {
+      "description": "One analysis run: the source of truth. Exports are derived from it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "tool",
+        "knowledge",
+        "request",
+        "observation",
+        "artifacts",
+        "instances",
+        "processes",
+        "values",
+        "components",
+        "releases",
+        "hints",
+        "code",
+        "relations",
+        "rule_support",
+        "bindings",
+        "loads",
+        "access",
+        "assumptions",
+        "coverage",
+        "findings",
+        "open_questions",
+        "policy_violations",
+        "outcome"
+      ],
+      "properties": {
+        "schema": {"$ref": "#/$defs/SchemaVersion"},
+        "tool": {"$ref": "#/$defs/ToolInfo"},
+        "knowledge": {"type": "array", "items": {"$ref": "#/$defs/KnowledgeRef"}},
+        "request": {"$ref": "#/$defs/RunRequest"},
+        "observation": {"$ref": "#/$defs/ObservationMeta"},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/Artifact"}},
+        "instances": {"type": "array", "items": {"$ref": "#/$defs/FileInstance"}},
+        "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
+        "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
+        "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
+        "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
+        "hints": {"type": "array", "items": {"$ref": "#/$defs/FeatureHint"}},
+        "code": {"type": "array", "items": {"$ref": "#/$defs/CodeFacts"}},
+        "relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}},
+        "rule_support": {"type": "array", "items": {"$ref": "#/$defs/RuleSupport"}},
+        "bindings": {"type": "array", "items": {"$ref": "#/$defs/BindingPremise"}},
+        "loads": {"type": "array", "items": {"$ref": "#/$defs/LoadFacts"}},
+        "access": {"type": "array", "items": {"$ref": "#/$defs/WriteAccess"}},
+        "assumptions": {"type": "array", "items": {"$ref": "#/$defs/Assumption"}},
+        "coverage": {"type": "array", "items": {"$ref": "#/$defs/Coverage"}},
+        "findings": {"type": "array", "items": {"$ref": "#/$defs/Finding"}},
+        "open_questions": {"type": "array", "items": {"$ref": "#/$defs/OpenQuestion"}},
+        "policy_violations": {"type": "array", "items": {"$ref": "#/$defs/PolicyViolation"}},
+        "outcome": {"$ref": "#/$defs/Outcome"}
+      }
+    },
+    "SessionExcerpt": {
+      "description": "Part of a session, for documentation examples: every top-level field is optional; inner types are complete.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "schema": {"$ref": "#/$defs/SchemaVersion"},
+        "tool": {"$ref": "#/$defs/ToolInfo"},
+        "knowledge": {"type": "array", "items": {"$ref": "#/$defs/KnowledgeRef"}},
+        "request": {"$ref": "#/$defs/RunRequest"},
+        "observation": {"$ref": "#/$defs/ObservationMeta"},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/Artifact"}},
+        "instances": {"type": "array", "items": {"$ref": "#/$defs/FileInstance"}},
+        "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
+        "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
+        "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
+        "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
+        "hints": {"type": "array", "items": {"$ref": "#/$defs/FeatureHint"}},
+        "code": {"type": "array", "items": {"$ref": "#/$defs/CodeFacts"}},
+        "relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}},
+        "rule_support": {"type": "array", "items": {"$ref": "#/$defs/RuleSupport"}},
+        "bindings": {"type": "array", "items": {"$ref": "#/$defs/BindingPremise"}},
+        "loads": {"type": "array", "items": {"$ref": "#/$defs/LoadFacts"}},
+        "access": {"type": "array", "items": {"$ref": "#/$defs/WriteAccess"}},
+        "assumptions": {"type": "array", "items": {"$ref": "#/$defs/Assumption"}},
+        "coverage": {"type": "array", "items": {"$ref": "#/$defs/Coverage"}},
+        "findings": {"type": "array", "items": {"$ref": "#/$defs/Finding"}},
+        "open_questions": {"type": "array", "items": {"$ref": "#/$defs/OpenQuestion"}},
+        "policy_violations": {"type": "array", "items": {"$ref": "#/$defs/PolicyViolation"}},
+        "outcome": {"$ref": "#/$defs/Outcome"}
+      }
+    },
+    "SchemaVersion": {"type": "string", "enum": ["sigil-session/1"]},
+    "ToolInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "git_rev"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"},
+        "git_rev": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "KnowledgeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version", "sha256"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/KnowledgeKind"},
+        "id": {"type": "string"},
+        "version": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/Sha256Hex"}
+      }
+    },
+    "KnowledgeKind": {
+      "type": "string",
+      "enum": ["SignatureDb", "Profile", "RuleSet", "Policy", "ReferenceManifest"]
+    },
+    "RunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "roots", "audit", "required_checks", "budgets", "observe_env"],
+      "properties": {
+        "mode": {"$ref": "#/$defs/Mode"},
+        "roots": {"type": "array", "items": {"$ref": "#/$defs/ScanRoot"}},
+        "audit": {"type": "array", "items": {"$ref": "#/$defs/AuditScope"}},
+        "required_checks": {"type": "array", "items": {"$ref": "#/$defs/CheckId"}},
+        "budgets": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+        },
+        "observe_env": {"type": "boolean"}
+      }
+    },
+    "Mode": {"type": "string", "enum": ["Static", "Observe"]},
+    "ScanRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path"],
+      "properties": {"id": {"$ref": "#/$defs/RootId"}, "path": {"$ref": "#/$defs/UntrustedText"}}
+    },
+    "ObservationMeta": {
+      "description": "When and as whom the run happened. Not part of analysis.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "finished_at",
+        "uid",
+        "gid",
+        "capabilities",
+        "boot_id",
+        "kernel",
+        "net_ns",
+        "mnt_ns"
+      ],
+      "properties": {
+        "started_at": {"$ref": "#/$defs/Timestamp"},
+        "finished_at": {"$ref": "#/$defs/Timestamp"},
+        "uid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "gid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "capabilities": {"type": "array", "items": {"type": "string"}},
+        "boot_id": {"type": "string"},
+        "kernel": {"type": "string"},
+        "net_ns": {
+          "anyOf": [
+            {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+            {"type": "null"}
+          ]
+        },
+        "mnt_ns": {
+          "anyOf": [
+            {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "Artifact": {
+      "description": "File contents. Never a path.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "size", "format", "slices"],
+      "properties": {
+        "id": {"$ref": "#/$defs/ArtifactId"},
+        "size": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "format": {"$ref": "#/$defs/Format"},
+        "slices": {"type": "array", "items": {"$ref": "#/$defs/Slice"}}
+      }
+    },
+    "Format": {
+      "oneOf": [
+        {"type": "string", "enum": ["MachO", "MachOFat", "Other"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Elf"],
+          "properties": {
+            "Elf": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {"kind": {"$ref": "#/$defs/ElfType"}}
+            }
+          }
+        }
+      ]
+    },
+    "ElfType": {"type": "string", "enum": ["Exec", "Dyn", "Rel"]},
+    "Slice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "arch", "offset", "size", "sha256"],
+      "properties": {
+        "id": {"$ref": "#/$defs/SliceId"},
+        "arch": {"$ref": "#/$defs/Arch"},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "size": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "sha256": {"$ref": "#/$defs/Sha256Hex"}
+      }
+    },
+    "Arch": {"type": "string", "enum": ["x86_64", "aarch64", "other"]},
+    "FileInstance": {
+      "description": "A placement of contents at a path, observed once.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "root",
+        "path",
+        "link_chain",
+        "resolved",
+        "content",
+        "stat",
+        "stability",
+        "discovered_by"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/InstanceId"},
+        "root": {"$ref": "#/$defs/RootId"},
+        "path": {"$ref": "#/$defs/UntrustedText"},
+        "link_chain": {"type": "array", "items": {"$ref": "#/$defs/LinkHop"}},
+        "resolved": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "content": {"$ref": "#/$defs/InstanceContent"},
+        "stat": {"$ref": "#/$defs/StatInfo"},
+        "stability": {"$ref": "#/$defs/Stability"},
+        "discovered_by": {"type": "array", "items": {"$ref": "#/$defs/DiscoverySource"}}
+      }
+    },
+    "InstanceContent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Read"],
+          "properties": {
+            "Read": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["artifact"],
+              "properties": {"artifact": {"$ref": "#/$defs/ArtifactId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotRead"],
+          "properties": {
+            "NotRead": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why"],
+              "properties": {"why": {"$ref": "#/$defs/NotReadReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "NotReadReason": {
+      "type": "string",
+      "enum": [
+        "OutsideScanRoots",
+        "PermissionDenied",
+        "NotRegularFile",
+        "Vanished",
+        "BudgetExceeded"
+      ]
+    },
+    "LinkHop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "target", "uid", "mode"],
+      "properties": {
+        "path": {"$ref": "#/$defs/UntrustedText"},
+        "target": {"$ref": "#/$defs/UntrustedText"},
+        "uid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+      }
+    },
+    "StatInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dev", "ino", "mode", "uid", "gid", "size", "mtime_ns", "nlink"],
+      "properties": {
+        "dev": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "ino": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "uid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "gid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "size": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "mtime_ns": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "nlink": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+      }
+    },
+    "Stability": {"type": "string", "enum": ["NoChangeDetected", "ChangedDuringRead", "Vanished"]},
+    "DiscoverySource": {
+      "oneOf": [
+        {"type": "string", "enum": ["Walk"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ServiceUnit"],
+          "properties": {
+            "ServiceUnit": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["config"],
+              "properties": {"config": {"$ref": "#/$defs/ConfigRef"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ProcessExe"],
+          "properties": {
+            "ProcessExe": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["process"],
+              "properties": {"process": {"$ref": "#/$defs/ProcessRef"}}
+            }
+          }
+        }
+      ]
+    },
+    "ProcessRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "start_ticks", "boot_id"],
+      "properties": {
+        "pid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "start_ticks": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "boot_id": {"type": "string"}
+      }
+    },
+    "ProcessObs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["process", "at", "roles", "exe", "mappings"],
+      "properties": {
+        "process": {"$ref": "#/$defs/ProcessRef"},
+        "at": {"$ref": "#/$defs/Timestamp"},
+        "roles": {"type": "array", "items": {"$ref": "#/$defs/ProcessRole"}},
+        "exe": {"$ref": "#/$defs/ProcessExe"},
+        "mappings": {"type": "array", "items": {"$ref": "#/$defs/MappingObs"}}
+      }
+    },
+    "ProcessExe": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Instance"],
+          "properties": {
+            "Instance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["instance"],
+              "properties": {"instance": {"$ref": "#/$defs/InstanceId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Path"],
+          "properties": {
+            "Path": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "deleted"],
+              "properties": {
+                "path": {"$ref": "#/$defs/UntrustedText"},
+                "deleted": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotObservable"],
+          "properties": {"NotObservable": {"$ref": "#/$defs/NotObservable"}}
+        }
+      ]
+    },
+    "MappingObs": {
+      "description": "One mapping in one process at one instant. Says nothing about why it was mapped or whether it was used.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process",
+        "at",
+        "dev",
+        "ino",
+        "path_text",
+        "deleted",
+        "instance",
+        "same_mount_ns"
+      ],
+      "properties": {
+        "process": {"$ref": "#/$defs/ProcessRef"},
+        "at": {"$ref": "#/$defs/Timestamp"},
+        "dev": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "ino": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "path_text": {"$ref": "#/$defs/UntrustedText"},
+        "deleted": {"type": "boolean"},
+        "instance": {"anyOf": [{"$ref": "#/$defs/InstanceId"}, {"type": "null"}]},
+        "same_mount_ns": {"$ref": "#/$defs/Tri_Unit"}
+      }
+    },
+    "Basis": {
+      "description": "How a fact was obtained. Modeled is not 'confirmed in the target': it may assert what the named rule support records, and no more than the fact's own unresolved premises allow.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Observed"],
+          "properties": {
+            "Observed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source"],
+              "properties": {"source": {"$ref": "#/$defs/ObsSource"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Derived"],
+          "properties": {
+            "Derived": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["analyzer", "inputs"],
+              "properties": {
+                "analyzer": {"$ref": "#/$defs/AnalyzerRef"},
+                "inputs": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Modeled"],
+          "properties": {"Modeled": {"$ref": "#/$defs/RuleSupportRef"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Assumed"],
+          "properties": {
+            "Assumed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["assumption"],
+              "properties": {"assumption": {"$ref": "#/$defs/AssumptionId"}}
+            }
+          }
+        }
+      ]
+    },
+    "ObsSource": {"type": "string", "enum": ["File", "Proc", "Config"]},
+    "EvidenceRef": {
+      "description": "A typed pointer to evidence in the session.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Artifact"],
+          "properties": {
+            "Artifact": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["artifact"],
+              "properties": {"artifact": {"$ref": "#/$defs/ArtifactId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Code"],
+          "properties": {
+            "Code": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["slice", "loc"],
+              "properties": {"slice": {"$ref": "#/$defs/SliceId"}, "loc": {"$ref": "#/$defs/Loc"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Instance"],
+          "properties": {
+            "Instance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["instance"],
+              "properties": {"instance": {"$ref": "#/$defs/InstanceId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Config"],
+          "properties": {"Config": {"$ref": "#/$defs/ConfigRef"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Process"],
+          "properties": {
+            "Process": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["process"],
+              "properties": {"process": {"$ref": "#/$defs/ProcessRef"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Value"],
+          "properties": {
+            "Value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value"],
+              "properties": {"value": {"$ref": "#/$defs/ValueId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Access"],
+          "properties": {
+            "Access": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["access"],
+              "properties": {"access": {"$ref": "#/$defs/AccessId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ProfileRule"],
+          "properties": {"ProfileRule": {"$ref": "#/$defs/ProfileRuleRef"}}
+        }
+      ]
+    },
+    "Loc": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["FileOffset"],
+          "properties": {
+            "FileOffset": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["VAddr"],
+          "properties": {
+            "VAddr": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Section"],
+          "properties": {
+            "Section": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "offset"],
+              "properties": {
+                "name": {"$ref": "#/$defs/UntrustedText"},
+                "offset": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Symbol"],
+          "properties": {"Symbol": {"$ref": "#/$defs/UntrustedText"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Function"],
+          "properties": {"Function": {"$ref": "#/$defs/FnId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["CallSite"],
+          "properties": {"CallSite": {"$ref": "#/$defs/CallId"}}
+        }
+      ]
+    },
+    "ConfigRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "key", "line"],
+      "properties": {
+        "file": {"$ref": "#/$defs/InstanceId"},
+        "key": {"$ref": "#/$defs/UntrustedText"},
+        "line": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+      }
+    },
+    "ProfileRuleRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "rule"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/ProfileRef"},
+        "rule": {"$ref": "#/$defs/ProfileRuleId"}
+      }
+    },
+    "Support": {
+      "description": "What supports a behavior claim about a specific artifact. Categories, not ranks. Recorded only in RuleSupport. FeatureMatch never supports a finding condition.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ReferenceVerified"],
+          "properties": {
+            "ReferenceVerified": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reference", "verification", "rule"],
+              "properties": {
+                "reference": {"$ref": "#/$defs/ArtifactId"},
+                "verification": {"$ref": "#/$defs/GroundTruthRef"},
+                "rule": {"$ref": "#/$defs/ProfileRuleId"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["TargetVerified"],
+          "properties": {
+            "TargetVerified": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["obligations"],
+              "properties": {
+                "obligations": {"type": "array", "items": {"$ref": "#/$defs/ObligationId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["FeatureMatch"],
+          "properties": {
+            "FeatureMatch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["matched", "unverified"],
+              "properties": {
+                "matched": {"type": "array", "items": {"$ref": "#/$defs/ObligationId"}},
+                "unverified": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Assumed"],
+          "properties": {
+            "Assumed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["assumption"],
+              "properties": {"assumption": {"$ref": "#/$defs/AssumptionId"}}
+            }
+          }
+        }
+      ]
+    },
+    "Assumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement", "acceptance"],
+      "properties": {
+        "id": {"$ref": "#/$defs/AssumptionId"},
+        "statement": {"type": "string"},
+        "acceptance": {"$ref": "#/$defs/AssumptionAcceptance"}
+      }
+    },
+    "AssumptionAcceptance": {
+      "oneOf": [
+        {"type": "string", "enum": ["NotAccepted"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Accepted"],
+          "properties": {
+            "Accepted": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source"],
+              "properties": {"source": {"$ref": "#/$defs/PolicyRuleRef"}}
+            }
+          }
+        }
+      ]
+    },
+    "Tri_CandidateWhy": {
+      "description": "A fact: established, refuted, or unknown, with its basis and unresolved premises.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Yes"],
+          "properties": {
+            "Yes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why", "basis", "unresolved"],
+              "properties": {
+                "why": {"$ref": "#/$defs/CandidateWhy"},
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["No"],
+          "properties": {
+            "No": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["basis", "unresolved"],
+              "properties": {
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "Tri_EffectWhy": {
+      "description": "A fact: established, refuted, or unknown, with its basis and unresolved premises.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Yes"],
+          "properties": {
+            "Yes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why", "basis", "unresolved"],
+              "properties": {
+                "why": {"$ref": "#/$defs/EffectWhy"},
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["No"],
+          "properties": {
+            "No": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["basis", "unresolved"],
+              "properties": {
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "Tri_Unit": {
+      "description": "A fact: established, refuted, or unknown, with its basis and unresolved premises.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Yes"],
+          "properties": {
+            "Yes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why", "basis", "unresolved"],
+              "properties": {
+                "why": {"type": "null"},
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["No"],
+          "properties": {
+            "No": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["basis", "unresolved"],
+              "properties": {
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "TriState": {"type": "string", "enum": ["Yes", "No", "Unknown"]},
+    "UnknownReason": {
+      "oneOf": [
+        {"type": "string", "enum": ["InsufficientEvidence", "PremiseUnresolved"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotObservable"],
+          "properties": {"NotObservable": {"$ref": "#/$defs/NotObservable"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotModeled"],
+          "properties": {
+            "NotModeled": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["what"],
+              "properties": {"what": {"type": "string"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["RunTimeDependent"],
+          "properties": {
+            "RunTimeDependent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["what"],
+              "properties": {"what": {"type": "string"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["RequiresActive"],
+          "properties": {
+            "RequiresActive": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["what"],
+              "properties": {"what": {"type": "string"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["CheckIncomplete"],
+          "properties": {
+            "CheckIncomplete": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["check"],
+              "properties": {"check": {"$ref": "#/$defs/CheckId"}}
+            }
+          }
+        }
+      ]
+    },
+    "NotObservable": {
+      "type": "string",
+      "enum": ["PermissionDenied", "NoProcess", "ModeDisabled", "NamespaceMismatch"]
+    },
+    "Observability": {
+      "oneOf": [
+        {"type": "string", "enum": ["Observed"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotObservable"],
+          "properties": {"NotObservable": {"$ref": "#/$defs/NotObservable"}}
+        }
+      ]
+    },
+    "Ref": {
+      "oneOf": [
+        {"type": "string", "enum": ["Audit"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Root"],
+          "properties": {"Root": {"$ref": "#/$defs/RootId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Artifact"],
+          "properties": {"Artifact": {"$ref": "#/$defs/ArtifactId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Slice"],
+          "properties": {"Slice": {"$ref": "#/$defs/SliceId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Instance"],
+          "properties": {"Instance": {"$ref": "#/$defs/InstanceId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Component"],
+          "properties": {
+            "Component": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["slice", "component"],
+              "properties": {
+                "slice": {"$ref": "#/$defs/SliceId"},
+                "component": {"$ref": "#/$defs/ComponentKey"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Role"],
+          "properties": {"Role": {"$ref": "#/$defs/ProcessRole"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SearchPath"],
+          "properties": {
+            "SearchPath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["role", "search_path"],
+              "properties": {
+                "role": {"$ref": "#/$defs/ProcessRole"},
+                "search_path": {"type": "string"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Process"],
+          "properties": {"Process": {"$ref": "#/$defs/ProcessRef"}}
+        }
+      ]
+    },
+    "ComponentClaim": {
+      "description": "Level A. Every source of identity is kept; conflicts coexist.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "component", "assertions", "status", "versions"],
+      "properties": {
+        "subject": {"$ref": "#/$defs/SliceId"},
+        "component": {"$ref": "#/$defs/ComponentKey"},
+        "assertions": {"type": "array", "items": {"$ref": "#/$defs/IdentityAssertion"}},
+        "status": {"$ref": "#/$defs/IdentityStatus"},
+        "versions": {"type": "array", "items": {"$ref": "#/$defs/VersionAssertion"}}
+      }
+    },
+    "IdentityAssertion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SelfName"],
+          "properties": {
+            "SelfName": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value", "at"],
+              "properties": {
+                "kind": {"$ref": "#/$defs/NameKind"},
+                "value": {"$ref": "#/$defs/UntrustedText"},
+                "at": {"$ref": "#/$defs/EvidenceRef"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Required"],
+          "properties": {
+            "Required": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["by", "needed"],
+              "properties": {
+                "by": {"$ref": "#/$defs/SliceId"},
+                "needed": {"$ref": "#/$defs/UntrustedText"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Embedded"],
+          "properties": {
+            "Embedded": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["field", "value", "at", "method"],
+              "properties": {
+                "field": {"type": "string"},
+                "value": {"$ref": "#/$defs/UntrustedText"},
+                "at": {"$ref": "#/$defs/EvidenceRef"},
+                "method": {"$ref": "#/$defs/ExtractMethod"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["CodeCheck"],
+          "properties": {
+            "CodeCheck": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["profile", "check", "result", "at"],
+              "properties": {
+                "profile": {"$ref": "#/$defs/ProfileRef"},
+                "check": {"$ref": "#/$defs/ObligationId"},
+                "result": {"$ref": "#/$defs/CheckResult"},
+                "at": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["KnownHash"],
+          "properties": {
+            "KnownHash": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reference", "release", "member", "matched"],
+              "properties": {
+                "reference": {"$ref": "#/$defs/RefSetId"},
+                "release": {"type": "string"},
+                "member": {"type": "string"},
+                "matched": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Signature"],
+          "properties": {
+            "Signature": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["state"],
+              "properties": {"state": {"$ref": "#/$defs/SigState"}}
+            }
+          }
+        }
+      ]
+    },
+    "NameKind": {"type": "string", "enum": ["Filename", "Soname", "InstallName", "VersionString"]},
+    "ExtractMethod": {
+      "oneOf": [
+        {"type": "string", "enum": ["StringScan", "GoBuildInfo"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["DataSymbolPointer"],
+          "properties": {
+            "DataSymbolPointer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["symbol"],
+              "properties": {"symbol": {"$ref": "#/$defs/UntrustedText"}}
+            }
+          }
+        }
+      ]
+    },
+    "SigState": {"type": "string", "enum": ["NotChecked"]},
+    "IdentityStatus": {
+      "type": "string",
+      "enum": ["Conflicting", "ReferenceMatched", "Corroborated", "NameOnly", "Unidentified"]
+    },
+    "VersionAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "at"],
+      "properties": {
+        "value": {"$ref": "#/$defs/UntrustedText"},
+        "source": {"$ref": "#/$defs/VersionSource"},
+        "at": {"$ref": "#/$defs/EvidenceRef"}
+      }
+    },
+    "VersionSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SelfName"],
+          "properties": {
+            "SelfName": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {"kind": {"$ref": "#/$defs/NameKind"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Embedded"],
+          "properties": {
+            "Embedded": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["field"],
+              "properties": {"field": {"type": "string"}}
+            }
+          }
+        }
+      ]
+    },
+    "ReleaseClaim": {
+      "description": "Release identity: always a set; only reference matches close it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "candidates", "basis"],
+      "properties": {
+        "product": {"$ref": "#/$defs/ComponentKey"},
+        "candidates": {"type": "array", "items": {"type": "string"}},
+        "basis": {"$ref": "#/$defs/ReleaseBasis"}
+      }
+    },
+    "ReleaseBasis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ReferenceMatches"],
+          "properties": {
+            "ReferenceMatches": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reference", "files"],
+              "properties": {
+                "reference": {"$ref": "#/$defs/RefSetId"},
+                "files": {"type": "array", "items": {"$ref": "#/$defs/InstanceId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SelfReportedCommit"],
+          "properties": {
+            "SelfReportedCommit": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["field", "value", "at"],
+              "properties": {
+                "field": {"type": "string"},
+                "value": {"$ref": "#/$defs/UntrustedText"},
+                "at": {"$ref": "#/$defs/EvidenceRef"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FeatureHint": {
+      "description": "Level B: a feature signal exists. Never 'it is called'.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "feature", "signal", "value", "at"],
+      "properties": {
+        "subject": {"$ref": "#/$defs/SliceId"},
+        "feature": {"$ref": "#/$defs/FeatureKey"},
+        "signal": {"$ref": "#/$defs/Signal"},
+        "value": {"$ref": "#/$defs/UntrustedText"},
+        "at": {"$ref": "#/$defs/Loc"}
+      }
+    },
+    "Signal": {"type": "string", "enum": ["Export", "Import", "String", "Needed", "GoFunction"]},
+    "CodeFacts": {
+      "description": "Level C: code facts of one slice.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slice",
+        "functions",
+        "call_sites",
+        "predicate_checks",
+        "close_checks",
+        "guard_regions",
+        "param_mappings"
+      ],
+      "properties": {
+        "slice": {"$ref": "#/$defs/SliceId"},
+        "functions": {"type": "array", "items": {"$ref": "#/$defs/Function"}},
+        "call_sites": {"type": "array", "items": {"$ref": "#/$defs/CallSite"}},
+        "predicate_checks": {"type": "array", "items": {"$ref": "#/$defs/PredicateCheck"}},
+        "close_checks": {"type": "array", "items": {"$ref": "#/$defs/CloseCheck"}},
+        "guard_regions": {"type": "array", "items": {"$ref": "#/$defs/GuardRegion"}},
+        "param_mappings": {"type": "array", "items": {"$ref": "#/$defs/ParamMapping"}}
+      }
+    },
+    "CallRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slice", "call"],
+      "properties": {"slice": {"$ref": "#/$defs/SliceId"}, "call": {"$ref": "#/$defs/CallId"}}
+    },
+    "FnRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slice", "function"],
+      "properties": {"slice": {"$ref": "#/$defs/SliceId"}, "function": {"$ref": "#/$defs/FnId"}}
+    },
+    "Function": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "entry", "end", "bounds", "names"],
+      "properties": {
+        "id": {"$ref": "#/$defs/FnId"},
+        "entry": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "end": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "bounds": {"$ref": "#/$defs/BoundsSource"},
+        "names": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}}
+      }
+    },
+    "BoundsSource": {"type": "string", "enum": ["EhFrameFde"]},
+    "CallSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "caller", "addr", "kind", "target", "args"],
+      "properties": {
+        "id": {"$ref": "#/$defs/CallId"},
+        "caller": {"$ref": "#/$defs/FnId"},
+        "addr": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "kind": {"$ref": "#/$defs/CallKind"},
+        "target": {"$ref": "#/$defs/CallTarget"},
+        "args": {"type": "array", "items": {"$ref": "#/$defs/ArgValue"}}
+      }
+    },
+    "CallKind": {"type": "string", "enum": ["Call", "TailJump"]},
+    "CallTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Internal"],
+          "properties": {
+            "Internal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entry", "export_name"],
+              "properties": {
+                "entry": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+                "export_name": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["OwnExportViaPlt"],
+          "properties": {
+            "OwnExportViaPlt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["symbol", "entry"],
+              "properties": {
+                "symbol": {"$ref": "#/$defs/UntrustedText"},
+                "entry": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Import"],
+          "properties": {
+            "Import": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["symbol", "via"],
+              "properties": {
+                "symbol": {"$ref": "#/$defs/UntrustedText"},
+                "via": {"$ref": "#/$defs/ImportVia"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Indirect"],
+          "properties": {
+            "Indirect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value"],
+              "properties": {"value": {"$ref": "#/$defs/ArgValue"}}
+            }
+          }
+        }
+      ]
+    },
+    "ImportVia": {"type": "string", "enum": ["Plt", "PltSec", "Got", "Reloc"]},
+    "Reg": {
+      "type": "string",
+      "enum": [
+        "rax",
+        "rbx",
+        "rcx",
+        "rdx",
+        "rsi",
+        "rdi",
+        "rbp",
+        "rsp",
+        "r8",
+        "r9",
+        "r10",
+        "r11",
+        "r12",
+        "r13",
+        "r14",
+        "r15"
+      ]
+    },
+    "ArgValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ConstStr"],
+          "properties": {
+            "ConstStr": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "addr", "value"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "addr": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+                "value": {"$ref": "#/$defs/UntrustedText"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ConstInt"],
+          "properties": {
+            "ConstInt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "value"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "value": {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ReturnOf"],
+          "properties": {
+            "ReturnOf": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "call"],
+              "properties": {"reg": {"$ref": "#/$defs/Reg"}, "call": {"$ref": "#/$defs/CallId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Param"],
+          "properties": {
+            "Param": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "index"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "index": {"type": "integer", "minimum": 0, "maximum": 255}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Load"],
+          "properties": {
+            "Load": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "base", "offset", "width", "site"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "base": {"$ref": "#/$defs/ArgValue"},
+                "offset": {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                "width": {"type": "integer", "minimum": 0, "maximum": 255},
+                "site": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Low"],
+          "properties": {
+            "Low": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "value", "bits"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "value": {"$ref": "#/$defs/ArgValue"},
+                "bits": {"type": "integer", "minimum": 0, "maximum": 255}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Set"],
+          "properties": {
+            "Set": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "members"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "members": {"type": "array", "items": {"$ref": "#/$defs/ArgValue"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reg", "reason"],
+              "properties": {
+                "reg": {"$ref": "#/$defs/Reg"},
+                "reason": {"$ref": "#/$defs/ValueUnknown"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ValueUnknown": {
+      "type": "string",
+      "enum": ["ClobberedByCall", "MergedDisagreeing", "FromMemory", "NotModeled"]
+    },
+    "ObligationRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "obligation"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/ProfileRef"},
+        "obligation": {"$ref": "#/$defs/ObligationId"}
+      }
+    },
+    "PredicateCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function",
+        "iteration_calls",
+        "target_calls",
+        "atoms",
+        "expect",
+        "assignments",
+        "result"
+      ],
+      "properties": {
+        "function": {"$ref": "#/$defs/FnId"},
+        "iteration_calls": {"type": "array", "items": {"$ref": "#/$defs/CallId"}},
+        "target_calls": {"type": "array", "items": {"$ref": "#/$defs/CallId"}},
+        "atoms": {"type": "array", "items": {"$ref": "#/$defs/Atom"}},
+        "expect": {"$ref": "#/$defs/ObligationRef"},
+        "assignments": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "result": {"$ref": "#/$defs/CheckResult"}
+      }
+    },
+    "Atom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {"name": {"$ref": "#/$defs/AtomName"}, "value": {"$ref": "#/$defs/ArgValue"}}
+    },
+    "CloseCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "open_calls", "close_calls", "iteration_calls", "result"],
+      "properties": {
+        "function": {"$ref": "#/$defs/FnId"},
+        "open_calls": {"type": "array", "items": {"$ref": "#/$defs/CallId"}},
+        "close_calls": {"type": "array", "items": {"$ref": "#/$defs/CallId"}},
+        "iteration_calls": {"type": "array", "items": {"$ref": "#/$defs/CallId"}},
+        "result": {"$ref": "#/$defs/CheckResult"}
+      }
+    },
+    "CheckResult": {
+      "oneOf": [
+        {"type": "string", "enum": ["Match"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Mismatch"],
+          "properties": {
+            "Mismatch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["counterexample", "detail"],
+              "properties": {
+                "counterexample": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "propertyNames": {"$ref": "#/$defs/AtomName"},
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": -9223372036854775808,
+                        "maximum": 9223372036854775807
+                      }
+                    },
+                    {"type": "null"}
+                  ]
+                },
+                "detail": {"type": "string"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/CheckUnknown"}}
+            }
+          }
+        }
+      ]
+    },
+    "CheckUnknown": {
+      "oneOf": [
+        {"type": "string", "enum": ["NoFde"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["DecodeFailure"],
+          "properties": {"DecodeFailure": {"$ref": "#/$defs/Loc"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["UnidentifiedIndirectCall"],
+          "properties": {"UnidentifiedIndirectCall": {"$ref": "#/$defs/CallId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["UnresolvedIndirectJump"],
+          "properties": {"UnresolvedIndirectJump": {"$ref": "#/$defs/Loc"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["DecidedByUnnamedCondition"],
+          "properties": {
+            "DecidedByUnnamedCondition": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["assignment"],
+              "properties": {
+                "assignment": {
+                  "type": "object",
+                  "propertyNames": {"$ref": "#/$defs/AtomName"},
+                  "additionalProperties": {
+                    "type": "integer",
+                    "minimum": -9223372036854775808,
+                    "maximum": 9223372036854775807
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["AtomAliasing"],
+          "properties": {
+            "AtomAliasing": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["atom"],
+              "properties": {"atom": {"$ref": "#/$defs/AtomName"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["AtomInsideLoop"],
+          "properties": {
+            "AtomInsideLoop": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["atom"],
+              "properties": {"atom": {"$ref": "#/$defs/AtomName"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NoZeroTestAfterOpen"],
+          "properties": {"NoZeroTestAfterOpen": {"$ref": "#/$defs/CallId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Budget"],
+          "properties": {
+            "Budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["what", "limit"],
+              "properties": {
+                "what": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "GuardRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function",
+        "from",
+        "to",
+        "region",
+        "guards",
+        "converging",
+        "indirect",
+        "complete"
+      ],
+      "properties": {
+        "function": {"$ref": "#/$defs/FnId"},
+        "from": {"$ref": "#/$defs/Loc"},
+        "to": {"$ref": "#/$defs/CallId"},
+        "region": {"$ref": "#/$defs/RegionKind"},
+        "guards": {"type": "array", "items": {"$ref": "#/$defs/GuardBranch"}},
+        "converging": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "indirect": {"type": "array", "items": {"$ref": "#/$defs/CallId"}},
+        "complete": {"$ref": "#/$defs/TriState"}
+      }
+    },
+    "RegionKind": {"type": "string", "enum": ["PerIteration", "Acyclic"]},
+    "GuardBranch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "cond", "dominates_to", "exit"],
+      "properties": {
+        "at": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "cond": {"$ref": "#/$defs/GuardCond"},
+        "dominates_to": {"type": "boolean"},
+        "exit": {"$ref": "#/$defs/ExitKind"}
+      }
+    },
+    "GuardCond": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Compare"],
+          "properties": {
+            "Compare": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "op", "constant"],
+              "properties": {
+                "value": {"$ref": "#/$defs/ArgValue"},
+                "op": {"$ref": "#/$defs/CmpOp"},
+                "constant": {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unmodeled"],
+          "properties": {
+            "Unmodeled": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["detail"],
+              "properties": {"detail": {"type": "string"}}
+            }
+          }
+        }
+      ]
+    },
+    "CmpOp": {
+      "type": "string",
+      "enum": ["Eq", "Ne", "LtS", "LeS", "GtS", "GeS", "LtU", "LeU", "GtU", "GeU"]
+    },
+    "ExitKind": {
+      "oneOf": [
+        {"type": "string", "enum": ["Skip", "Other"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Terminate"],
+          "properties": {
+            "Terminate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["callees"],
+              "properties": {
+                "callees": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ParamMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "source", "binary", "evidence"],
+      "properties": {
+        "function": {"$ref": "#/$defs/FnId"},
+        "source": {"$ref": "#/$defs/SourceParamRef"},
+        "binary": {"$ref": "#/$defs/BinaryParam"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}}
+      }
+    },
+    "SourceParamRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "index", "name"],
+      "properties": {
+        "function": {"type": "string"},
+        "index": {"type": "integer", "minimum": 0, "maximum": 255},
+        "name": {"type": "string"}
+      }
+    },
+    "BinaryParam": {
+      "oneOf": [
+        {"type": "string", "enum": ["Eliminated"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Reg"],
+          "properties": {"Reg": {"$ref": "#/$defs/Reg"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Stack"],
+          "properties": {
+            "Stack": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["offset"],
+              "properties": {
+                "offset": {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Relation": {
+      "description": "Declared, candidate, and symbol-candidate relations are never resolutions; a binding is a BindingPremise.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Declares"],
+          "properties": {
+            "Declares": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from", "needed", "kind"],
+              "properties": {
+                "from": {"$ref": "#/$defs/SliceId"},
+                "needed": {"$ref": "#/$defs/UntrustedText"},
+                "kind": {"$ref": "#/$defs/DeclKind"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Candidate"],
+          "properties": {
+            "Candidate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from", "needed", "candidate", "via"],
+              "properties": {
+                "from": {"$ref": "#/$defs/SliceId"},
+                "needed": {"$ref": "#/$defs/UntrustedText"},
+                "candidate": {"$ref": "#/$defs/InstanceId"},
+                "via": {"$ref": "#/$defs/SearchRule"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SymbolCandidate"],
+          "properties": {
+            "SymbolCandidate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["site", "symbol", "definer"],
+              "properties": {
+                "site": {"$ref": "#/$defs/CallRef"},
+                "symbol": {"$ref": "#/$defs/UntrustedText"},
+                "definer": {"$ref": "#/$defs/FnRef"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ProfileMatch"],
+          "properties": {
+            "ProfileMatch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["profile", "slice", "obligations"],
+              "properties": {
+                "profile": {"$ref": "#/$defs/ProfileRef"},
+                "slice": {"$ref": "#/$defs/SliceId"},
+                "obligations": {"type": "array", "items": {"$ref": "#/$defs/ObligationResult"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SearchPath"],
+          "properties": {
+            "SearchPath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["role", "search_path", "rule", "dir", "basis", "unresolved"],
+              "properties": {
+                "role": {"$ref": "#/$defs/ProcessRole"},
+                "search_path": {"type": "string"},
+                "rule": {"$ref": "#/$defs/ProfileRuleRef"},
+                "dir": {"$ref": "#/$defs/SearchDir"},
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Spawns"],
+          "properties": {
+            "Spawns": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["parent", "child", "rule", "basis", "unresolved"],
+              "properties": {
+                "parent": {"$ref": "#/$defs/ProcessRole"},
+                "child": {"$ref": "#/$defs/ProcessRole"},
+                "rule": {"$ref": "#/$defs/ProfileRuleRef"},
+                "basis": {"$ref": "#/$defs/Basis"},
+                "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DeclKind": {"type": "string", "enum": ["ElfNeeded", "MachOLoadDylib"]},
+    "SearchRule": {"type": "string", "enum": ["Rpath", "LdLibraryPath", "Runpath", "DefaultDir"]},
+    "SearchDir": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ExeDir"],
+          "properties": {
+            "ExeDir": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["instance"],
+              "properties": {"instance": {"$ref": "#/$defs/InstanceId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Value"],
+          "properties": {
+            "Value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value"],
+              "properties": {"value": {"$ref": "#/$defs/ValueId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "ObligationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "result", "at"],
+      "properties": {
+        "id": {"$ref": "#/$defs/ObligationId"},
+        "result": {"$ref": "#/$defs/ObligationState"},
+        "at": {"type": "array", "items": {"$ref": "#/$defs/Loc"}}
+      }
+    },
+    "ObligationState": {"type": "string", "enum": ["Pass", "Fail", "Unknown"]},
+    "RuleSupport": {
+      "description": "The support of one profile rule on one slice: the only place a Support is recorded. (profile, rule, slice) is unique.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "rule", "slice", "support"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/ProfileRef"},
+        "rule": {"$ref": "#/$defs/ProfileRuleId"},
+        "slice": {"$ref": "#/$defs/SliceId"},
+        "support": {"$ref": "#/$defs/Support"}
+      }
+    },
+    "RuleSupportRef": {
+      "description": "The key of a RuleSupport.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "rule", "slice"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/ProfileRef"},
+        "rule": {"$ref": "#/$defs/ProfileRuleId"},
+        "slice": {"$ref": "#/$defs/SliceId"}
+      }
+    },
+    "BindingPremise": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["process_role", "site", "symbol", "analyzed_definer", "state"],
+      "properties": {
+        "process_role": {"$ref": "#/$defs/ProcessRole"},
+        "site": {"$ref": "#/$defs/CallRef"},
+        "symbol": {"$ref": "#/$defs/UntrustedText"},
+        "analyzed_definer": {"$ref": "#/$defs/InstanceId"},
+        "state": {"$ref": "#/$defs/BindingState"}
+      }
+    },
+    "BindingState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Verified"],
+          "properties": {
+            "Verified": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["scope"],
+              "properties": {"scope": {"type": "array", "items": {"$ref": "#/$defs/InstanceId"}}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Assumed"],
+          "properties": {
+            "Assumed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["assumption"],
+              "properties": {"assumption": {"$ref": "#/$defs/AssumptionId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Mismatch"],
+          "properties": {
+            "Mismatch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["first_definer"],
+              "properties": {"first_definer": {"$ref": "#/$defs/InstanceId"}}
+            }
+          }
+        }
+      ]
+    },
+    "LoadFacts": {
+      "description": "Independent facts, not a state machine. There is no 'loaded' flag; an empty `mapped` never means 'not loaded'.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance",
+        "context",
+        "present",
+        "candidate",
+        "would_evaluate",
+        "selectable",
+        "mapped",
+        "mapping_observability",
+        "used_for_inference"
+      ],
+      "properties": {
+        "instance": {"$ref": "#/$defs/InstanceId"},
+        "context": {"$ref": "#/$defs/LoadContext"},
+        "present": {"type": "boolean"},
+        "candidate": {"$ref": "#/$defs/Tri_CandidateWhy"},
+        "would_evaluate": {"$ref": "#/$defs/Tri_EffectWhy"},
+        "selectable": {"$ref": "#/$defs/Tri_Unit"},
+        "mapped": {"type": "array", "items": {"$ref": "#/$defs/MappingObs"}},
+        "mapping_observability": {"$ref": "#/$defs/Observability"},
+        "used_for_inference": {"$ref": "#/$defs/Tri_Unit"}
+      }
+    },
+    "LoadFact": {
+      "type": "string",
+      "enum": ["Candidate", "WouldEvaluate", "Selectable", "UsedForInference"]
+    },
+    "LoadContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["process_role", "rule"],
+      "properties": {"process_role": {"$ref": "#/$defs/ProcessRole"}, "rule": {"type": "string"}}
+    },
+    "CandidateWhy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["search_path", "filter"],
+      "properties": {"search_path": {"type": "string"}, "filter": {"type": "string"}}
+    },
+    "EffectWhy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase"],
+      "properties": {"phase": {"$ref": "#/$defs/LoaderPhase"}}
+    },
+    "LoaderPhase": {"type": "string", "enum": ["Evaluate", "Select", "Init", "Register"]},
+    "ProcessValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "process_role", "key", "value", "origin", "applies_to"],
+      "properties": {
+        "id": {"$ref": "#/$defs/ValueId"},
+        "process_role": {"$ref": "#/$defs/ProcessRole"},
+        "key": {"$ref": "#/$defs/ValueKey"},
+        "value": {"$ref": "#/$defs/TriValue"},
+        "origin": {"$ref": "#/$defs/ValueOrigin"},
+        "applies_to": {"type": "array", "items": {"$ref": "#/$defs/LoadContext"}}
+      }
+    },
+    "ValueKey": {
+      "oneOf": [
+        {"type": "string", "enum": ["Cwd", "User", "Group"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Env"],
+          "properties": {"Env": {"$ref": "#/$defs/UntrustedText"}}
+        }
+      ]
+    },
+    "TriValue": {
+      "oneOf": [
+        {"type": "string", "enum": ["Absent"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Known"],
+          "properties": {"Known": {"$ref": "#/$defs/UntrustedText"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "ValueOrigin": {
+      "description": "Where a value came from. A configured value is never the effective value.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Configured"],
+          "properties": {
+            "Configured": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["file", "directive"],
+              "properties": {
+                "file": {"$ref": "#/$defs/ConfigRef"},
+                "directive": {"$ref": "#/$defs/UntrustedText"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["PredictedLaunch"],
+          "properties": {
+            "PredictedLaunch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rules", "from"],
+              "properties": {
+                "rules": {"type": "array", "items": {"type": "string"}},
+                "from": {"type": "array", "items": {"$ref": "#/$defs/ValueId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ObservedProcess"],
+          "properties": {
+            "ObservedProcess": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["process", "source"],
+              "properties": {
+                "process": {"$ref": "#/$defs/ProcessRef"},
+                "source": {"$ref": "#/$defs/ObsSource"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ChildDerived"],
+          "properties": {
+            "ChildDerived": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["parent", "child", "by", "from"],
+              "properties": {
+                "parent": {"$ref": "#/$defs/ProcessRole"},
+                "child": {"$ref": "#/$defs/ProcessRole"},
+                "by": {"$ref": "#/$defs/ProfileRuleRef"},
+                "from": {"type": "array", "items": {"$ref": "#/$defs/ValueId"}}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "WriteAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target", "runtime", "chain", "capabilities"],
+      "properties": {
+        "id": {"$ref": "#/$defs/AccessId"},
+        "target": {"$ref": "#/$defs/UntrustedText"},
+        "runtime": {"$ref": "#/$defs/PrincipalClaim"},
+        "chain": {"type": "array", "items": {"$ref": "#/$defs/NodeAccess"}},
+        "capabilities": {"type": "array", "items": {"$ref": "#/$defs/CapabilityAccess"}}
+      }
+    },
+    "PrincipalClaim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Value"],
+          "properties": {
+            "Value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value"],
+              "properties": {"value": {"$ref": "#/$defs/ValueId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/UnknownReason"}}
+            }
+          }
+        }
+      ]
+    },
+    "NodeAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "uid", "gid", "mode", "sticky", "is_symlink", "acl", "read_only_mount"],
+      "properties": {
+        "path": {"$ref": "#/$defs/UntrustedText"},
+        "uid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "gid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "sticky": {"type": "boolean"},
+        "is_symlink": {"type": "boolean"},
+        "acl": {"$ref": "#/$defs/AclState"},
+        "read_only_mount": {"$ref": "#/$defs/TriState"}
+      }
+    },
+    "AclState": {
+      "oneOf": [
+        {"type": "string", "enum": ["Absent", "NotReadable"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Present"],
+          "properties": {
+            "Present": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entries"],
+              "properties": {"entries": {"type": "array", "items": {"$ref": "#/$defs/AclEntry"}}}
+            }
+          }
+        }
+      ]
+    },
+    "AclEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "perms"],
+      "properties": {
+        "tag": {"$ref": "#/$defs/AclTag"},
+        "perms": {"type": "integer", "minimum": 0, "maximum": 255}
+      }
+    },
+    "AclTag": {
+      "oneOf": [
+        {"type": "string", "enum": ["UserObj", "GroupObj", "Mask", "Other"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["User"],
+          "properties": {"User": {"type": "integer", "minimum": 0, "maximum": 4294967295}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Group"],
+          "properties": {"Group": {"type": "integer", "minimum": 0, "maximum": 4294967295}}
+        }
+      ]
+    },
+    "WriteCapability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ModifyContent"],
+          "properties": {
+            "ModifyContent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["file"],
+              "properties": {"file": {"$ref": "#/$defs/UntrustedText"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ReplaceEntry"],
+          "properties": {
+            "ReplaceEntry": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["dir", "entry"],
+              "properties": {
+                "dir": {"$ref": "#/$defs/UntrustedText"},
+                "entry": {"$ref": "#/$defs/UntrustedText"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["CreateEntry"],
+          "properties": {
+            "CreateEntry": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["dir"],
+              "properties": {"dir": {"$ref": "#/$defs/UntrustedText"}}
+            }
+          }
+        }
+      ]
+    },
+    "CapabilityAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "conclusion"],
+      "properties": {
+        "capability": {"$ref": "#/$defs/WriteCapability"},
+        "conclusion": {"$ref": "#/$defs/AccessConclusion"}
+      }
+    },
+    "AccessConclusion": {
+      "oneOf": [
+        {"type": "string", "enum": ["TrustedOnly"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["UntrustedHolder"],
+          "properties": {
+            "UntrustedHolder": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["who", "via", "how"],
+              "properties": {
+                "who": {"$ref": "#/$defs/Principal"},
+                "via": {"$ref": "#/$defs/UntrustedText"},
+                "how": {"$ref": "#/$defs/Grant"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Undetermined"],
+          "properties": {
+            "Undetermined": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["missing"],
+              "properties": {"missing": {"type": "array", "items": {"type": "string"}}}
+            }
+          }
+        }
+      ]
+    },
+    "Principal": {
+      "oneOf": [
+        {"type": "string", "enum": ["Anyone"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["User"],
+          "properties": {
+            "User": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["uid"],
+              "properties": {"uid": {"type": "integer", "minimum": 0, "maximum": 4294967295}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Group"],
+          "properties": {
+            "Group": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["gid"],
+              "properties": {"gid": {"type": "integer", "minimum": 0, "maximum": 4294967295}}
+            }
+          }
+        }
+      ]
+    },
+    "Grant": {"type": "string", "enum": ["ModeOwner", "ModeGroup", "ModeOther", "Acl", "Ownership"]},
+    "Coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "scope", "state", "budget"],
+      "properties": {
+        "check": {"$ref": "#/$defs/CheckId"},
+        "scope": {"$ref": "#/$defs/Ref"},
+        "state": {"$ref": "#/$defs/CoverageState"},
+        "budget": {"anyOf": [{"$ref": "#/$defs/BudgetUse"}, {"type": "null"}]}
+      }
+    },
+    "CoverageState": {
+      "description": "Only Complete, NotPresent, and OutOfScope can close a check; every other state is a gap.",
+      "oneOf": [
+        {"type": "string", "enum": ["Complete"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Partial"],
+          "properties": {
+            "Partial": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["missing"],
+              "properties": {"missing": {"type": "array", "items": {"type": "string"}}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotPresent"],
+          "properties": {
+            "NotPresent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["evidence", "scope", "basis"],
+              "properties": {
+                "evidence": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}},
+                "scope": {"type": "string"},
+                "basis": {"$ref": "#/$defs/AbsenceBasis"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ProfileMismatch"],
+          "properties": {
+            "ProfileMismatch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["profile", "failed"],
+              "properties": {
+                "profile": {"$ref": "#/$defs/ProfileRef"},
+                "failed": {"type": "array", "items": {"$ref": "#/$defs/ObligationId"}}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["OutOfScope"],
+          "properties": {
+            "OutOfScope": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why"],
+              "properties": {"why": {"type": "string"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Skipped"],
+          "properties": {
+            "Skipped": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["by"],
+              "properties": {"by": {"$ref": "#/$defs/SkipReason"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unavailable"],
+          "properties": {
+            "Unavailable": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why"],
+              "properties": {"why": {"$ref": "#/$defs/Unavailability"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unsupported"],
+          "properties": {
+            "Unsupported": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["what"],
+              "properties": {"what": {"type": "string"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["BudgetExceeded"],
+          "properties": {
+            "BudgetExceeded": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["budget", "used", "limit"],
+              "properties": {
+                "budget": {"type": "string"},
+                "used": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+                "limit": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Error"],
+          "properties": {
+            "Error": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["message"],
+              "properties": {"message": {"$ref": "#/$defs/UntrustedText"}}
+            }
+          }
+        }
+      ]
+    },
+    "AbsenceBasis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["SymbolsAbsent"],
+          "properties": {
+            "SymbolsAbsent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["names"],
+              "properties": {"names": {"type": "array", "items": {"type": "string"}}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ReferenceBuild"],
+          "properties": {
+            "ReferenceBuild": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reference"],
+              "properties": {"reference": {"$ref": "#/$defs/ArtifactId"}}
+            }
+          }
+        }
+      ]
+    },
+    "SkipReason": {
+      "oneOf": [
+        {"type": "string", "enum": ["ModeDisabled"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Flag"],
+          "properties": {
+            "Flag": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["flag"],
+              "properties": {"flag": {"type": "string"}}
+            }
+          }
+        }
+      ]
+    },
+    "Unavailability": {
+      "type": "string",
+      "enum": ["PermissionDenied", "NotFound", "PlatformUnsupported"]
+    },
+    "BudgetUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget", "used", "limit"],
+      "properties": {
+        "budget": {"type": "string"},
+        "used": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "limit": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+      }
+    },
+    "Condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "unresolved"],
+      "properties": {
+        "id": {"$ref": "#/$defs/CondId"},
+        "state": {"$ref": "#/$defs/CondState"},
+        "unresolved": {"type": "array", "items": {"$ref": "#/$defs/PremiseId"}}
+      }
+    },
+    "CondState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Met"],
+          "properties": {
+            "Met": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["evidence"],
+              "properties": {"evidence": {"$ref": "#/$defs/CondEvidence"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["NotMet"],
+          "properties": {
+            "NotMet": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["evidence"],
+              "properties": {"evidence": {"$ref": "#/$defs/CondEvidence"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unknown"],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason", "evidence"],
+              "properties": {
+                "reason": {"$ref": "#/$defs/UnknownReason"},
+                "evidence": {"anyOf": [{"$ref": "#/$defs/CondEvidence"}, {"type": "null"}]}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CondEvidence": {
+      "description": "Evidence for a condition: the record that decides it, by kind. Never a copy of the record's conclusion; what it settles is read from the record under its kind's sufficiency rule.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Behavior"],
+          "properties": {"Behavior": {"$ref": "#/$defs/RuleSupportRef"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Load"],
+          "properties": {
+            "Load": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["instance", "context", "fact"],
+              "properties": {
+                "instance": {"$ref": "#/$defs/InstanceId"},
+                "context": {"$ref": "#/$defs/LoadContext"},
+                "fact": {"$ref": "#/$defs/LoadFact"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Access"],
+          "properties": {
+            "Access": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["access", "capability"],
+              "properties": {
+                "access": {"$ref": "#/$defs/AccessId"},
+                "capability": {"$ref": "#/$defs/WriteCapability"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Value"],
+          "properties": {
+            "Value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "needs"],
+              "properties": {
+                "value": {"$ref": "#/$defs/ValueId"},
+                "needs": {"$ref": "#/$defs/ValueNeed"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Binding"],
+          "properties": {
+            "Binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["process_role", "site", "definer"],
+              "properties": {
+                "process_role": {"$ref": "#/$defs/ProcessRole"},
+                "site": {"$ref": "#/$defs/CallRef"},
+                "definer": {"$ref": "#/$defs/InstanceId"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Identity"],
+          "properties": {
+            "Identity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["slice", "component"],
+              "properties": {
+                "slice": {"$ref": "#/$defs/SliceId"},
+                "component": {"$ref": "#/$defs/ComponentKey"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Observed"],
+          "properties": {
+            "Observed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["facts"],
+              "properties": {"facts": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}}}
+            }
+          }
+        }
+      ]
+    },
+    "ValueNeed": {"type": "string", "enum": ["Known", "Absent"]},
+    "Finding": {
+      "description": "Level E: a dangerous configuration established on every condition. Policy never changes it; `decision` is separate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rule",
+        "kind",
+        "subject",
+        "summary",
+        "conditions",
+        "evidence",
+        "limits",
+        "default_severity",
+        "decision"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/FindingId"},
+        "rule": {"$ref": "#/$defs/RuleId"},
+        "kind": {"$ref": "#/$defs/FindingKind"},
+        "subject": {"$ref": "#/$defs/Ref"},
+        "summary": {"type": "string"},
+        "conditions": {"type": "array", "items": {"$ref": "#/$defs/Condition"}},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}},
+        "limits": {"type": "array", "items": {"type": "string"}},
+        "default_severity": {"$ref": "#/$defs/Severity"},
+        "decision": {"$ref": "#/$defs/PolicyDecision"}
+      }
+    },
+    "FindingKind": {"type": "string", "enum": ["Integrity", "Exposure", "Loader", "Precondition"]},
+    "Severity": {"type": "string", "enum": ["Warn", "Fail"]},
+    "OpenQuestion": {
+      "description": "A rule whose conditions are not all established and none refuted. Not a finding.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rule", "subject", "conditions", "evidence", "decision"],
+      "properties": {
+        "id": {"$ref": "#/$defs/OpenQuestionId"},
+        "rule": {"$ref": "#/$defs/RuleId"},
+        "subject": {"$ref": "#/$defs/Ref"},
+        "conditions": {"type": "array", "items": {"$ref": "#/$defs/Condition"}},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}},
+        "decision": {"$ref": "#/$defs/OpenQuestionDecision"}
+      }
+    },
+    "PolicyViolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_rule", "subject", "evidence", "decision"],
+      "properties": {
+        "policy_rule": {"$ref": "#/$defs/PolicyRuleRef"},
+        "subject": {"$ref": "#/$defs/Ref"},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/EvidenceRef"}},
+        "decision": {"$ref": "#/$defs/PolicyDecision"}
+      }
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "source", "reason", "expires"],
+      "properties": {
+        "action": {"$ref": "#/$defs/Action"},
+        "source": {"$ref": "#/$defs/PolicyRuleRef"},
+        "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "expires": {"anyOf": [{"$ref": "#/$defs/Date"}, {"type": "null"}]}
+      }
+    },
+    "Action": {"type": "string", "enum": ["Fail", "Warn", "Ignore"]},
+    "OpenQuestionDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["treatment", "source", "reason"],
+      "properties": {
+        "treatment": {"$ref": "#/$defs/OqTreatment"},
+        "source": {"$ref": "#/$defs/PolicyRuleRef"},
+        "reason": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "OqTreatment": {"type": "string", "enum": ["CountAsGap", "Warn", "Fail", "Ignore"]},
+    "Outcome": {
+      "description": "Verdict and completeness: independent, always reported together.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "completeness",
+        "confirmed_failures",
+        "confirmed_warnings",
+        "policy_time"
+      ],
+      "properties": {
+        "verdict": {"$ref": "#/$defs/Verdict"},
+        "completeness": {"$ref": "#/$defs/Completeness"},
+        "confirmed_failures": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "confirmed_warnings": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "policy_time": {"$ref": "#/$defs/Timestamp"}
+      }
+    },
+    "Verdict": {"type": "string", "enum": ["Pass", "Warn", "Fail"]},
+    "Completeness": {
+      "oneOf": [
+        {"type": "string", "enum": ["Complete"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Incomplete"],
+          "properties": {
+            "Incomplete": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["missing_required", "gaps"],
+              "properties": {
+                "missing_required": {"type": "array", "items": {"$ref": "#/$defs/CheckId"}},
+                "gaps": {"type": "array", "items": {"$ref": "#/$defs/OpenQuestionId"}}
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

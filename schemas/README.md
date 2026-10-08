@@ -10,6 +10,24 @@ Machine-readable contracts for SIGIL outputs.
   field drift fails validation rather than being silently absorbed.
   Validated against every live AI-BOM produced by `sigil-core` in
   `crates/sigil-core/tests/aibom_schema.rs`.
+- `session-v1.schema.json` — the analysis session (`schema: "sigil-session/1"`),
+  the source of truth that later exports (AI-BOM v2, Markdown) are derived
+  from. Defined by `crates/sigil-model`; see `docs/session-model.md`.
+  Same conventions as above. Enums are externally tagged with their variant
+  names; struct fields are snake_case; every field is always serialized, so
+  every property is required. `$defs/SessionExcerpt` has the same fields,
+  all optional, for documentation excerpts.
+  - `crates/sigil-model/tests/schema.rs` checks that the schema's properties
+    and variants equal the Rust model's and that every variant has a sample
+    that validates.
+  - Passing the schema is necessary but not sufficient: `Session::validate`
+    checks references and claim invariants a schema cannot express.
+  - `examples/session-v1/` holds specification examples (labeled
+    `tool.version: "0.0.0-example"`), not SIGIL measurements. Each one is
+    produced by a builder in `crates/sigil-model/tests/common`, validated,
+    and compared with the committed file.
+  - Not emitted by the CLI yet (PR-3b). Until then the schema may still
+    change in place.
 
 ## Versioning
 

@@ -1,0 +1,49 @@
+name: Session model
+
+# crates/sigil-model is the v2 analysis-session model (docs/session-model.md). This job runs its
+# tests (unit, validation invariants, determinism, schema correspondence, golden examples, and the
+# documentation example) and checks that it builds for wasm32, since the viewer will depend on it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/sigil-model/**'
+      - 'schemas/**'
+      - 'docs/session-model.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/model.yml'
+  pull_request:
+    paths:
+      - 'crates/sigil-model/**'
+      - 'schemas/**'
+      - 'docs/session-model.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/model.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    name: Session model tests and wasm32 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+      - name: Tests (invariants, determinism, schema, golden examples, docs example)
+        run: cargo test -p sigil-model
+      - name: Build for wasm32
+        run: cargo build -p sigil-model --target wasm32-unknown-unknown --release
