@@ -2113,6 +2113,25 @@ fn a_probe_is_not_present_only_on_its_own_refusal() {
 }
 
 #[test]
+fn a_probe_is_not_present_on_another_probe_refusal() {
+    // Both probes were refused, but the first one's absence cites only the second.
+    let mut s = with_refused_probe();
+    s.request.active.push(api_feature("::1", 11434, false));
+    s.probes.push(api_probe(
+        "probe:api/[::1]:11434",
+        "::1",
+        11434,
+        ProbeResult::Refused,
+    ));
+    if let CoverageState::NotPresent { evidence, .. } = &mut s.coverage[0].state {
+        *evidence = vec![EvidenceRef::Probe {
+            probe: id("probe:api/[::1]:11434"),
+        }];
+    }
+    assert_rejected(&s, contradicts, "an absence citing another probe");
+}
+
+#[test]
 fn a_requested_probe_is_never_out_of_scope() {
     let mut s = with_refused_probe();
     s.coverage[0].state = CoverageState::OutOfScope {
