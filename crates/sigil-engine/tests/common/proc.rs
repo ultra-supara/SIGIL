@@ -166,6 +166,24 @@ impl FakeProc {
         true
     }
 
+    /// Adds a raw row to `net/tcp`, e.g. one the parser cannot read.
+    pub fn raw_tcp(&mut self, row: &str) {
+        self.tcp.push(row.to_string());
+        self.write_tables();
+    }
+
+    /// Makes a process's directory unreadable. Returns `false` when the process can still read it
+    /// (it runs as root).
+    pub fn deny_dir(&self, pid: u32) -> bool {
+        let dir = self.pid_dir(pid);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&dir).is_ok() {
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+            return false;
+        }
+        true
+    }
+
     /// Removes PID 1, as under `hidepid`.
     pub fn hide_pid1(&self) {
         fs::remove_dir_all(self.pid_dir(1)).unwrap();
@@ -177,8 +195,9 @@ impl Drop for FakeProc {
         // Restore permissions so that the temporary directory can be removed.
         if let Ok(entries) = fs::read_dir(self.path()) {
             for entry in entries.flatten() {
-                let _ =
-                    fs::set_permissions(entry.path().join("fd"), fs::Permissions::from_mode(0o755));
+                let open = || fs::Permissions::from_mode(0o755);
+                let _ = fs::set_permissions(entry.path(), open());
+                let _ = fs::set_permissions(entry.path().join("fd"), open());
             }
         }
     }

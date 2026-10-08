@@ -38,6 +38,13 @@ opened.
   process is not the runtime. `exe` cannot be read for another user's process, so an unprivileged
   run relies on `cmdline`, which the process sets itself. `ProcessObs.exe` records which case
   applied.
+- **Not identified is not absent.** A process whose name (`comm`) or, for an `ollama`, arguments
+  (`cmdline`) cannot be read may be the runtime. The same holds for a process whose directory
+  cannot be opened. Each is a gap, and the listeners such a process holds are recorded with no
+  role, so `exposure.binds` cannot be `Complete`. A process that exited between the listing and
+  the read is skipped: its sockets are gone with it.
+- **Bounded open files.** Processes are read one at a time; each one's directory is closed before
+  the next is opened.
 
 ## Who holds a socket
 
@@ -48,8 +55,9 @@ port (I-08).
 |---|---|
 | held by the runtime | a listener owned by it |
 | held by a fronting process (nginx, caddy, traefik, haproxy, envoy, docker-proxy) | a listener owned by it: a hint, never a finding |
-| held by no readable fd table, while some table could not be read | owner `Unknown(PermissionDenied)` |
-| held by no fd table at all | owner `Unheld` |
+| held by a process that may be the runtime (not identified) | a listener owned by it, no role; a gap |
+| held by no table that was read, while some table could not be listed completely | owner `Unknown` (`PermissionDenied`, or `ReadIncomplete` for a budget or a read error) |
+| held by no fd table, every table having been listed completely | owner `Unheld` |
 | held by any other known process | not recorded |
 
 ## Classes and findings
@@ -76,6 +84,9 @@ IPv4 address (I-09).
 | no runtime process, PID 1 visible | `Complete` on the audit |
 | no runtime process, PID 1 hidden (`hidepid`) | `Unavailable(PermissionDenied)` on the audit |
 | a runtime whose fd table cannot be read | `Unavailable(PermissionDenied)` on it |
+| a runtime whose fd table was listed in part (`ReadIncomplete`) | `Partial` on it; findings for the listeners found stand |
+| a process that may be the runtime could not be identified | `Partial` (a gap) |
+| a LISTEN row that cannot be read | `Partial` (a gap); the other rows stand |
 | a runtime in another network namespace | `Partial` on it: its sockets are not in SIGIL's table |
 | a runtime whose network namespace cannot be read | `Partial` on it; findings for the listeners it holds in SIGIL's table stand |
 | a table or list not read completely | `Partial` |

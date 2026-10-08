@@ -10,19 +10,47 @@ pub struct TcpListen {
     pub inode: u64,
 }
 
-/// The LISTEN row on `line`, or `None` for any other state or a malformed row.
+/// What one line of `/proc/net/tcp{,6}` is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TcpRow {
+    /// A row in another state, the header, or a blank line.
+    NotListen,
+    Listen(TcpListen),
+    /// A line that is neither: a LISTEN row that cannot be read, or an unknown format. It is
+    /// reported, never taken as the absence of a socket.
+    Malformed,
+}
+
+/// Classifies `line`.
 ///
 /// The kernel prints an address as the `%08X` of its 32-bit words in host byte order. Reading each
 /// word back as a host-order integer and taking its native bytes gives the address bytes on any
 /// host (v0.1 swapped bytes, which assumed a little-endian host).
-pub fn tcp_listen_line(line: &str, v6: bool) -> Option<TcpListen> {
+pub fn tcp_row(line: &str, v6: bool) -> TcpRow {
     let mut fields = line.split_whitespace();
-    let _slot = fields.next()?;
-    let local = fields.next()?;
-    let _remote = fields.next()?;
-    if fields.next()? != "0A" {
-        return None;
+    let (Some(_slot), Some(local), Some(_remote), Some(state)) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return if line.trim().is_empty() {
+            TcpRow::NotListen
+        } else {
+            TcpRow::Malformed
+        };
+    };
+    if state != "0A" {
+        return TcpRow::NotListen;
     }
+    match listen_fields(local, fields, v6) {
+        Some(row) => TcpRow::Listen(row),
+        None => TcpRow::Malformed,
+    }
+}
+
+fn listen_fields<'a>(
+    local: &str,
+    mut fields: impl Iterator<Item = &'a str>,
+    v6: bool,
+) -> Option<TcpListen> {
     // After the state: tx:rx, tr:when, retrnsmt, uid, timeout, inode.
     let inode = fields.nth(5)?.parse().ok()?;
     let (address, port) = local.split_once(':')?;
@@ -100,6 +128,13 @@ mod tests {
         text.parse().unwrap()
     }
 
+    fn listen(line: &str, v6: bool) -> TcpListen {
+        match tcp_row(line, v6) {
+            TcpRow::Listen(row) => row,
+            other => panic!("{other:?}: {line}"),
+        }
+    }
+
     /// The kernel's text for an address on this host: each 32-bit word's native bytes printed as
     /// a host-order integer.
     fn row_address(address: IpAddr) -> String {
@@ -122,7 +157,7 @@ mod tests {
             "   1: {}:94F9 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 18568 1 00000000c7521507 100 0 0 10 0",
             row_address(ip("127.0.0.1"))
         );
-        let row = tcp_listen_line(&line, false).unwrap();
+        let row = listen(&line, false);
         assert_eq!(row.address, ip("127.0.0.1"));
         assert_eq!(row.port, 0x94F9);
         assert_eq!(row.inode, 18568);
@@ -131,7 +166,7 @@ mod tests {
     #[test]
     fn parses_ipv4_wildcard_listen_row() {
         let line = "   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8917 1 0000000043890958 100 0 0 10 0";
-        let row = tcp_listen_line(line, false).unwrap();
+        let row = listen(line, false);
         assert_eq!(row.address, ip("0.0.0.0"));
         assert_eq!(row.port, 22);
     }
@@ -140,7 +175,7 @@ mod tests {
     fn skips_non_listen_rows() {
         // 01 is ESTABLISHED.
         let line = "   2: 73014064:BE2C 1A72528C:01BB 01 00000000:00000000 02:00000F26 00000000  1000        0 4442946 2 000000000fbb84c8 45 4 26 10 -1";
-        assert_eq!(tcp_listen_line(line, false), None);
+        assert_eq!(tcp_row(line, false), TcpRow::NotListen);
     }
 
     #[test]
@@ -149,7 +184,7 @@ mod tests {
             "   0: {}:D431 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 99999 1 0 100 0 0 10 0",
             row_address(ip("::1"))
         );
-        let row = tcp_listen_line(&line, true).unwrap();
+        let row = listen(&line, true);
         assert_eq!(row.address, ip("::1"));
         assert_eq!(row.port, 0xD431);
         assert_eq!(row.inode, 99999);
@@ -158,7 +193,7 @@ mod tests {
     #[test]
     fn parses_ipv6_wildcard_listen_row() {
         let line = "   0: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8919 1 0 100 0 0 10 0";
-        assert_eq!(tcp_listen_line(line, true).unwrap().address, ip("::"));
+        assert_eq!(listen(line, true).address, ip("::"));
     }
 
     // --- new in v2 -----------------------------------------------------------------------------
@@ -177,27 +212,29 @@ mod tests {
                 row_address(ip(text)),
                 "0".repeat(if v6 { 32 } else { 8 })
             );
-            assert_eq!(
-                tcp_listen_line(&line, v6).map(|r| r.address),
-                Some(ip(text)),
-                "{text}"
-            );
+            assert_eq!(listen(&line, v6).address, ip(text), "{text}");
         }
     }
 
     #[test]
-    fn malformed_rows_are_skipped() {
+    fn headers_and_blank_lines_are_not_rows_and_the_rest_is_malformed() {
+        for line in [
+            "",
+            "   ",
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+        ] {
+            assert_eq!(tcp_row(line, false), TcpRow::NotListen, "{line:?}");
+        }
         for (line, v6) in [
-            ("", false),
-            ("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode", false),
             ("0: 0100007F 00000000:0000 0A 0:0 0:0 0 0 0 1", false),
             ("0: 0100007G:0016 00000000:0000 0A 0:0 0:0 0 0 0 1", false),
             ("0: 0100007F:FFFFF 00000000:0000 0A 0:0 0:0 0 0 0 1", false),
             ("0: 0100007F:0016 00000000:0000 0A 0:0 0:0 0 0 0 x", false),
             ("0: 0100007F:0016 00000000:0000 0A", false),
             ("0: 0100007F:0016 00000000:0000 0A 0:0 0:0 0 0 0 1", true),
+            ("garbage", false),
         ] {
-            assert_eq!(tcp_listen_line(line, v6), None, "{line:?}");
+            assert_eq!(tcp_row(line, v6), TcpRow::Malformed, "{line:?}");
         }
     }
 

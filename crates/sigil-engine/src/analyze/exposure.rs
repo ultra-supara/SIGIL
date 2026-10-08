@@ -17,6 +17,8 @@
 //! | no runtime process; PID 1 visible | `Complete` on `Audit` |
 //! | no runtime process; PID 1 hidden (`hidepid`) | `Unavailable(PermissionDenied)` on `Audit` |
 //! | a runtime whose fd table is unreadable | `Unavailable(PermissionDenied)` on it (I-08) |
+//! | a runtime whose fd table was listed in part | `Partial` on it; findings for what was listed stand |
+//! | a process that may be the runtime could not be identified | `Partial` (a gap) |
 //! | a runtime in another network namespace, or one that is unreadable | `Partial` on it |
 //! | a table or list not read completely | `Partial` |
 //! | otherwise | `Complete` on it |
@@ -95,19 +97,22 @@ pub fn analyze(facts: &ProcFacts) -> (Vec<Finding>, Vec<Coverage>) {
     }
     for runtime in runtimes {
         let scope = Ref::Process(runtime.process.clone());
-        if let Observability::NotObservable(why) = runtime.fd_table {
-            let state = match why {
-                NotObservable::PermissionDenied => CoverageState::Unavailable {
-                    why: Unavailability::PermissionDenied,
-                },
-                other => CoverageState::Partial {
-                    missing: vec![format!("its fd table is not observable ({other:?})")],
-                },
-            };
-            cover(&mut coverage, scope, state);
-            continue;
-        }
         let mut missing = facts.gaps.clone();
+        match runtime.fd_table {
+            Observability::Observed => {}
+            // Nothing could be attributed to it (I-08).
+            Observability::NotObservable(NotObservable::PermissionDenied) => {
+                let state = CoverageState::Unavailable {
+                    why: Unavailability::PermissionDenied,
+                };
+                cover(&mut coverage, scope, state);
+                continue;
+            }
+            // What was listed stands; what was not leaves its binds open.
+            Observability::NotObservable(why) => {
+                missing.push(format!("its fd table was not listed completely ({why:?})"));
+            }
+        }
         match (&runtime.net_ns, facts.own_net_ns) {
             (NsInode::Inode(theirs), Some(ours)) if *theirs == ours => {}
             (NsInode::Inode(_), Some(_)) => {

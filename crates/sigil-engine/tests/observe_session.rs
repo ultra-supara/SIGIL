@@ -255,3 +255,32 @@ fn a_session_is_reproducible_and_re_evaluates_after_a_round_trip() {
     evaluate(&mut reloaded, &Policy::builtin_default().unwrap(), time).unwrap();
     assert_eq!(reloaded.to_canonical_json().unwrap(), first);
 }
+
+#[test]
+fn a_process_that_may_be_the_runtime_is_incomplete_not_absent() {
+    // Review of #74: `comm` says ollama, `cmdline` is over its limit, and it listens publicly.
+    // Not knowing whether it is the runtime is not knowing that the runtime is absent.
+    let long = "x".repeat(70 << 10);
+    let store = TempDir::new().unwrap();
+    good_store(store.path());
+    let mut fake = FakeProc::new();
+    fake.process(&Proc {
+        pid: 4242,
+        comm: "ollama",
+        argv: &["/usr/local/bin/ollama", "serve", &long],
+        exe: None,
+        sockets: &[7001],
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 11434, 7001);
+    let s = session(store.path(), &fake);
+    assert!(
+        s.findings.is_empty(),
+        "no finding is made up: {:?}",
+        rules(&s)
+    );
+    assert_eq!(
+        (s.outcome.verdict, s.outcome.completeness.clone()),
+        (Verdict::Pass, missing_binds())
+    );
+}

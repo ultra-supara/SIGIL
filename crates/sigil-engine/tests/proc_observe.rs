@@ -308,9 +308,91 @@ fn the_fd_budget_bounds_each_table() {
             ..ProcBudgets::default()
         },
     );
+    // Recorded on the process: what was listed stands, the rest leaves its binds open.
+    assert_eq!(
+        f.processes[0].fd_table,
+        Observability::NotObservable(NotObservable::ReadIncomplete)
+    );
+}
+
+// --- what could not be seen is not absent (review of #74) --------------------------------------
+
+#[test]
+fn a_process_that_cannot_be_identified_is_a_gap_not_absent() {
+    // `comm` says ollama, but `cmdline` is over its limit: it may be the runtime.
+    let long = "x".repeat(70 << 10);
+    let mut fake = FakeProc::new();
+    fake.process(&Proc {
+        pid: 4242,
+        comm: "ollama",
+        argv: &["/usr/local/bin/ollama", "serve", &long],
+        exe: None,
+        sockets: &[7001],
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 11434, 7001);
+    let f = run(&fake);
     assert!(
-        f.gaps.iter().any(|g| g.contains("fd table of 4242")),
-        "{:?}",
+        f.gaps.iter().any(|g| g.contains("4242")),
+        "the unidentified process is a gap: {:?}",
         f.gaps
     );
+    // Its listener is kept, held by it, with no role claimed.
+    assert_eq!(f.listeners.len(), 1);
+    let ListenerOwner::Process { process } = &f.listeners[0].owner else {
+        panic!("{:?}", f.listeners[0].owner);
+    };
+    assert_eq!(process.pid, 4242);
+    assert!(f.processes.iter().all(|p| p.roles.is_empty()));
+}
+
+#[test]
+fn a_partially_listed_fd_table_never_makes_a_listener_unheld() {
+    let mut fake = FakeProc::new();
+    fake.process(&Proc {
+        pid: 100,
+        sockets: &[8001, 8002, 8003],
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 22, 8003);
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_fds: 1,
+            ..ProcBudgets::default()
+        },
+    );
+    assert!(
+        matches!(f.listeners[0].owner, ListenerOwner::Unknown { .. }),
+        "{:?}",
+        f.listeners[0].owner
+    );
+}
+
+#[test]
+fn an_unreadable_process_directory_is_a_gap() {
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    if !fake.deny_dir(4242) {
+        eprintln!("SKIPPED: an unreadable process directory needs an unprivileged user");
+        return;
+    }
+    let f = run(&fake);
+    assert!(f.gaps.iter().any(|g| g.contains("4242")), "{:?}", f.gaps);
+    assert!(matches!(
+        f.listeners[0].owner,
+        ListenerOwner::Unknown { .. }
+    ));
+}
+
+#[test]
+fn a_malformed_listen_row_is_a_gap_and_the_others_stand() {
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    fake.raw_tcp("   9: ZZZZZZZZ:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8917 1 0 100 0 0 10 0");
+    let f = run(&fake);
+    assert!(f.gaps.iter().any(|g| g.contains("net/tcp")), "{:?}", f.gaps);
+    assert_eq!(f.listeners.len(), 1);
 }
