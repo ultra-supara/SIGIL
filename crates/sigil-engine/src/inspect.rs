@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use sigil_model::{
@@ -12,7 +11,7 @@ use sigil_model::{
 };
 
 use crate::analyze::model_store;
-use crate::collect::fs::{FsBudgets, RootError, SafeFs};
+use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
 use crate::policy::{evaluate, EvaluateError, Policy};
 
@@ -39,6 +38,9 @@ pub enum InspectError {
     Evaluate(EvaluateError),
     /// A built-in identifier failed the model's rules (a bug, reported rather than panicking).
     BadId(String),
+    /// The assembled session fails `Session::validate` (a bug, reported rather than returned as
+    /// a result).
+    Invalid(Vec<String>),
 }
 
 impl fmt::Display for InspectError {
@@ -46,6 +48,9 @@ impl fmt::Display for InspectError {
         match self {
             InspectError::Evaluate(e) => write!(f, "{e}"),
             InspectError::BadId(e) => write!(f, "invalid built-in identifier: {e}"),
+            InspectError::Invalid(errors) => {
+                write!(f, "the assembled session is invalid: {}", errors.join("; "))
+            }
         }
     }
 }
@@ -86,7 +91,7 @@ pub fn store_session(
             mode: Mode::Static,
             roots: vec![ScanRoot {
                 id: root,
-                path: UntrustedText::from_bytes(path.as_os_str().as_bytes()),
+                path: recorded(path),
             }],
             audit,
             required_checks,
@@ -125,6 +130,10 @@ pub fn store_session(
     };
     evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
     session.canonicalize();
+    // A successful result always validates.
+    session.validate().map_err(|errors| {
+        InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
+    })?;
     Ok(session)
 }
 

@@ -8,7 +8,10 @@
 //! symlink.
 
 use std::fmt;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
+
+use sigil_model::UntrustedText;
 
 /// A path relative to a scan root: zero or more plain components. It never contains `.`, `..`,
 /// an empty component, a `/` inside a component, or a NUL byte, so it cannot leave its root.
@@ -85,6 +88,12 @@ impl RelPath {
         path
     }
 
+    /// [`RelPath::under`] as recorded: the exact bytes, so that a path that is not UTF-8 stays
+    /// comparable with the root's recorded path. Lossy conversion is only for display.
+    pub fn recorded_under(&self, base: &Path) -> UntrustedText {
+        recorded(&self.under(base))
+    }
+
     /// From components the walker already knows are plain.
     pub(crate) fn from_components(parts: Vec<String>) -> RelPath {
         debug_assert!(parts.iter().all(|p| is_component(p)));
@@ -145,6 +154,11 @@ pub fn link_target(roots: &[PathBuf], target: &str) -> LinkTarget {
         },
         None => LinkTarget::Outside,
     }
+}
+
+/// A path as recorded in the session: its exact bytes.
+pub fn recorded(path: &Path) -> UntrustedText {
+    UntrustedText::from_bytes(path.as_os_str().as_bytes())
 }
 
 #[cfg(test)]

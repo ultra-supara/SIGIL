@@ -370,6 +370,27 @@ fn a_filter_is_not_found_only_after_a_complete_listing() {
     );
 }
 
+#[test]
+fn a_root_path_that_is_not_utf8_keeps_its_bytes() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let dir = TempDir::new().unwrap();
+    let store = dir.path().join(OsStr::from_bytes(b"models-\xff"));
+    fs::create_dir(&store).unwrap();
+    good_store(&store);
+    // `session` fails the test unless the session validates.
+    let s = session(&store, None);
+    assert_eq!(outcome(&s), (Verdict::Pass, Completeness::Complete));
+    let root = s.request.roots[0].path.as_bytes();
+    assert!(root.ends_with(b"/models-\xff"));
+    let weights = s
+        .instances
+        .iter()
+        .find(|i| i.id.as_str().ends_with(&hex(b"weights")))
+        .unwrap();
+    assert!(weights.path.as_bytes().starts_with(root));
+}
+
 // --- determinism -----------------------------------------------------------------------------
 
 #[test]
