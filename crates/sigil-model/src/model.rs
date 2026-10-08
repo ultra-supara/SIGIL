@@ -78,16 +78,7 @@ pub struct LicenseText {
 /// The hex of a well-formed digest: `sha256:` followed by exactly 64 lowercase hex digits.
 /// Anything else (uppercase hex, another algorithm, path characters) is malformed.
 pub fn digest_hex(digest: &str) -> Option<Sha256Hex> {
-    let hex = digest.strip_prefix("sha256:")?;
-    let well_formed = hex.len() == 64
-        && hex
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if well_formed {
-        Sha256Hex::new(hex).ok()
-    } else {
-        None
-    }
+    Sha256Hex::new(digest.strip_prefix("sha256:")?).ok()
 }
 
 impl Model {
