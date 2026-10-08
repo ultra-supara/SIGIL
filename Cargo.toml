@@ -5,6 +5,7 @@ members = [
     "crates/sigil-aibom-wasm",
     "crates/sigil-model",
     "crates/sigil-engine",
+    "crates/sigil-probe",
 ]
 resolver = "2"
 

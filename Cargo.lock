@@ -1159,6 +1159,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigil-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sigil-model",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
