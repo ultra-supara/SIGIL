@@ -74,7 +74,8 @@ manifests are never opened.
   - a blob leaves integrity `Partial`, with no mismatch finding;
   - the license blob leaves the license check `Partial`;
   - a manifest yields no finding about its model, and leaves its inventory, integrity, and license
-    `Partial`.
+    `Partial`;
+  - an unparseable manifest yields no `model.manifest_unparseable`; its inventory stays `Error`.
 
 Each finding has one `Observed` condition naming the files it rests on: the manifest, and for a
 mismatch the blob and what it holds. Findings about one layer carry its index in their ID.

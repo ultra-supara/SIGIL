@@ -456,3 +456,36 @@ fn a_manifest_that_changed_during_the_read_supports_no_claim_about_its_model() {
         );
     }
 }
+
+#[test]
+fn an_unparseable_manifest_that_changed_during_the_read_is_not_a_finding() {
+    let dir = TempDir::new().unwrap();
+    let d = dir.path();
+    let broken = "registry.ollama.ai/library/broken/latest";
+    fs::create_dir_all(d.join("manifests/registry.ollama.ai/library/broken")).unwrap();
+    fs::write(d.join("manifests").join(broken), b"{").unwrap();
+    let broken_inst = inst(&format!("manifests/{broken}"));
+
+    // Stable, the malformed JSON is a WARN.
+    let facts = collected(d);
+    let (findings, _) = analyze(&facts, &root());
+    assert_eq!(
+        rules(&findings),
+        [("model.manifest_unparseable", Severity::Warn)]
+    );
+
+    // Changing while read, the bytes do not show the manifest is malformed: no finding, and
+    // the inventory of that manifest stays open (the collector's `Error`).
+    for stability in [Stability::ChangedDuringRead, Stability::Vanished] {
+        let mut facts = collected(d);
+        unstable(&mut facts, &broken_inst, stability);
+        let (findings, _) = analyze(&facts, &root());
+        assert!(findings.is_empty(), "{stability:?}: {:?}", rules(&findings));
+        assert!(facts
+            .coverage
+            .iter()
+            .any(|c| c.check.as_str() == "model_store.inventory"
+                && c.scope == Ref::Instance(broken_inst.clone())
+                && !c.state.can_close()));
+    }
+}

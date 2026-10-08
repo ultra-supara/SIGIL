@@ -22,7 +22,8 @@
 //! - a blob: integrity `Partial`, and no mismatch finding;
 //! - the license blob: license `Partial`;
 //! - the manifest: no finding about the model, and its inventory, integrity, and license are
-//!   all `Partial`.
+//!   all `Partial`;
+//! - an unparseable manifest: no `model.manifest_unparseable`; its inventory `Error` remains.
 //!
 //! What was read stays in the facts.
 
@@ -51,6 +52,12 @@ pub fn analyze(facts: &StoreFacts, root: &RootId) -> (Vec<Finding>, Vec<Coverage
         out.on_manifest("model.provenance_unknown", manifest, "path_too_shallow");
     }
     for (manifest, _) in &facts.unparseable {
+        // Bytes that were changing do not show that the manifest is malformed. The collector's
+        // inventory `Error` on it keeps the gap.
+        let placed = facts.instances.iter().find(|i| i.id == *manifest);
+        if placed.and_then(not_stable).is_some() {
+            continue;
+        }
         out.on_manifest(
             "model.manifest_unparseable",
             manifest,
