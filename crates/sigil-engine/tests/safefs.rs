@@ -585,9 +585,11 @@ fn a_directory_over_the_entry_limit_is_not_listed() {
 fn the_entry_budget_counts_every_entry_and_stops_the_walk() {
     let dir = TempDir::new().unwrap();
     let p = dir.path();
-    // No regular file anywhere: empty directories and dangling links only.
+    // No regular file anywhere: dangling links and an empty directory only.
     for d in ["d1", "d2", "d3"] {
         fs::create_dir_all(p.join("top").join(d)).unwrap();
+    }
+    for d in ["d1", "d2"] {
         symlink("nothing", p.join("top").join(d).join("link")).unwrap();
     }
     let budget = |max_entries| {
@@ -601,7 +603,8 @@ fn the_entry_budget_counts_every_entry_and_stops_the_walk() {
     let unscanned =
         |w: &Walk| -> Vec<String> { w.unscanned.iter().map(RelPath::display).collect() };
 
-    // `top` has 3 entries, then d1 and d2 one each: the budget of 5 is spent before d3.
+    // `top` has 3 entries, then d1 and d2 one each: the budget of 5 is spent before d3. d3 is
+    // unscanned although it is empty: only reading it would show that.
     let w = walk(&budget(5), "top");
     assert!(w.files.is_empty());
     assert_eq!(
