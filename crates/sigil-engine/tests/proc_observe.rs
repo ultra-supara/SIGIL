@@ -59,6 +59,7 @@ fn the_runtime_and_its_listeners_are_recorded() {
     let f = run(&fake);
     assert_eq!(f.own_net_ns, Some(OWN_NET_NS));
     assert!(f.pid1_visible);
+    assert_eq!(f.process_list, Observability::Observed);
     assert!(f.gaps.is_empty(), "{:?}", f.gaps);
     assert_eq!(
         f.processes,
@@ -433,4 +434,85 @@ fn a_process_whose_name_cannot_be_read_is_a_gap() {
     let f = run(&fake);
     std::fs::set_permissions(&comm, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert!(f.gaps.iter().any(|g| g.contains("4242")), "{:?}", f.gaps);
+}
+
+#[test]
+fn an_incomplete_process_list_never_makes_a_listener_unheld() {
+    // A socket no listed process holds. Which PIDs fit in the budget depends on the listing
+    // order, so the socket is one no process holds at all: whatever was listed, it is unmatched.
+    let mut fake = FakeProc::new();
+    for pid in [100, 200, 300] {
+        fake.process(&Proc {
+            pid,
+            ..Proc::default()
+        });
+    }
+    fake.listen("0.0.0.0", 22, 9001);
+    // No process is listed (the budget is zero): no table was read, so nothing is unheld. The
+    // list was cut short by its budget, which is not a denial: PID 1 not being listed says
+    // nothing about `hidepid` here.
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_processes: 0,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(
+        f.process_list,
+        Observability::NotObservable(NotObservable::ReadIncomplete)
+    );
+    assert_eq!(
+        f.listeners[0].owner,
+        ListenerOwner::Unknown {
+            why: NotObservable::ReadIncomplete
+        }
+    );
+    // The same store, listed completely: unheld.
+    assert_eq!(run(&fake).listeners[0].owner, ListenerOwner::Unheld);
+}
+
+#[test]
+fn a_hidden_process_table_never_makes_a_listener_unheld() {
+    // Under `hidepid`, other users' processes are not listed at all.
+    let mut fake = FakeProc::new();
+    fake.listen("0.0.0.0", 22, 9001);
+    fake.hide_pid1();
+    let f = run(&fake);
+    assert_eq!(
+        f.listeners[0].owner,
+        ListenerOwner::Unknown {
+            why: NotObservable::PermissionDenied
+        }
+    );
+}
+
+#[test]
+fn a_runtime_that_cannot_be_recorded_is_a_gap_and_its_listener_is_unknown() {
+    // `ollama serve`, confirmed, but its `stat` cannot be parsed: it cannot be recorded.
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    std::fs::write(fake.pid_dir(4242).join("stat"), b"garbage").unwrap();
+    let f = run(&fake);
+    assert!(f.processes.is_empty());
+    assert!(f.gaps.iter().any(|g| g.contains("4242")), "{:?}", f.gaps);
+    assert!(
+        matches!(f.listeners[0].owner, ListenerOwner::Unknown { .. }),
+        "{:?}",
+        f.listeners[0].owner
+    );
+}
+
+#[test]
+fn a_runtime_whose_stat_is_gone_has_exited() {
+    // `stat` missing (ENOENT) means the process exited between the listing and the read: its
+    // sockets went with it, so it is skipped, not a gap.
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    std::fs::remove_file(fake.pid_dir(4242).join("stat")).unwrap();
+    let f = run(&fake);
+    assert!(f.processes.is_empty());
+    assert!(f.gaps.is_empty(), "{:?}", f.gaps);
 }

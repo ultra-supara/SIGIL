@@ -43,6 +43,9 @@ opened.
   cannot be opened. Each is a gap, and the listeners such a process holds are recorded with no
   role, so `exposure.binds` cannot be `Complete`. A process that exited between the listing and
   the read is skipped: its sockets are gone with it.
+- **Not recorded is not dropped.** The runtime whose `stat` (its start time, part of its identity)
+  cannot be read or understood cannot be recorded. That is a gap, and the listeners it holds are
+  recorded with owner `Unknown`.
 - **Bounded open files.** Processes are read one at a time; each one's directory is closed before
   the next is opened.
 
@@ -56,8 +59,9 @@ port (I-08).
 | held by the runtime | a listener owned by it |
 | held by a fronting process (nginx, caddy, traefik, haproxy, envoy, docker-proxy) | a listener owned by it: a hint, never a finding |
 | held by a process that may be the runtime (not identified) | a listener owned by it, no role; a gap |
-| held by no table that was read, while some table could not be listed completely | owner `Unknown` (`PermissionDenied`, or `ReadIncomplete` for a budget or a read error) |
-| held by no fd table, every table having been listed completely | owner `Unheld` |
+| held by the runtime, which cannot be recorded | owner `Unknown`; a gap |
+| held by no table that was read, while some table was not read: a process not listed (the list's budget, a read error), a process hidden (`hidepid`), or an fd table not listed completely | owner `Unknown` (`PermissionDenied` when a table was denied or processes are hidden, otherwise `ReadIncomplete`) |
+| held by no fd table, every process having been listed, PID 1 among them, and every table listed completely | owner `Unheld` |
 | held by any other known process | not recorded |
 
 ## Classes and findings
@@ -79,17 +83,24 @@ IPv4 address (I-09).
 
 ## `exposure.binds` coverage
 
+The audit entry says whether every process that may be the runtime was seen. It is always
+recorded, next to each runtime's own entry: a runtime that was found never closes the check for
+those that were not, and its findings stand.
+
 | Situation | State |
 |---|---|
-| no runtime process, PID 1 visible | `Complete` on the audit |
-| no runtime process, PID 1 hidden (`hidepid`) | `Unavailable(PermissionDenied)` on the audit |
+| PID 1 missing from a complete process list (`hidepid`), or the list denied | `Unavailable(PermissionDenied)` on the audit |
+| the process list cut short (its budget, a read error): PID 1 missing from it says nothing | `Partial` on the audit |
+| any other gap | `Partial` on the audit |
+| otherwise | `Complete` on the audit |
 | a runtime whose fd table cannot be read | `Unavailable(PermissionDenied)` on it |
 | a runtime whose fd table was listed in part (`ReadIncomplete`) | `Partial` on it; findings for the listeners found stand |
 | a process that may be the runtime could not be identified | `Partial` (a gap) |
+| the runtime cannot be recorded (its `stat`) | `Partial` (a gap) |
 | a LISTEN row that cannot be read | `Partial` (a gap); the other rows stand |
 | a runtime in another network namespace | `Partial` on it: its sockets are not in SIGIL's table |
 | a runtime whose network namespace cannot be read | `Partial` on it; findings for the listeners it holds in SIGIL's table stand |
-| a table or list not read completely | `Partial` |
+| a table or list not read completely | `Partial` on it |
 | otherwise | `Complete` on it |
 
 An unprivileged SIGIL usually cannot read `ollama serve`'s fd table. The result is then `INCOMPLETE`

@@ -284,3 +284,50 @@ fn a_process_that_may_be_the_runtime_is_incomplete_not_absent() {
         (Verdict::Pass, missing_binds())
     );
 }
+
+#[test]
+fn a_runtime_whose_stat_cannot_be_read_is_incomplete() {
+    // Review of #74: a confirmed runtime that cannot be recorded is not dropped silently.
+    use std::os::unix::fs::PermissionsExt;
+    for unreadable in [false, true] {
+        let store = TempDir::new().unwrap();
+        good_store(store.path());
+        let mut fake = FakeProc::new();
+        fake.process(&serve(&[7001]));
+        fake.listen("0.0.0.0", 11434, 7001);
+        let stat = fake.pid_dir(4242).join("stat");
+        if unreadable {
+            std::fs::set_permissions(&stat, std::fs::Permissions::from_mode(0o000)).unwrap();
+            if std::fs::read(&stat).is_ok() {
+                eprintln!("SKIPPED: an unreadable stat needs an unprivileged user");
+                continue;
+            }
+        } else {
+            std::fs::write(&stat, b"4242 (ollama) S").unwrap();
+        }
+        let s = session(store.path(), &fake);
+        std::fs::set_permissions(&stat, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(s.findings.is_empty(), "{:?}", rules(&s));
+        assert_eq!(
+            (s.outcome.verdict, s.outcome.completeness.clone()),
+            (Verdict::Pass, missing_binds()),
+            "unreadable: {unreadable}"
+        );
+    }
+}
+
+#[test]
+fn hidden_processes_leave_the_audit_incomplete_but_a_visible_finding_stands() {
+    let store = TempDir::new().unwrap();
+    good_store(store.path());
+    let mut fake = FakeProc::new();
+    fake.process(&serve(&[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    fake.hide_pid1();
+    let s = session(store.path(), &fake);
+    assert_eq!(rules(&s), ["exposure.bind_public"]);
+    assert_eq!(
+        (s.outcome.verdict, s.outcome.completeness.clone()),
+        (Verdict::Warn, missing_binds())
+    );
+}

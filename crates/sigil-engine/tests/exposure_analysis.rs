@@ -262,3 +262,73 @@ fn a_runtime_fd_table_listed_in_part_leaves_its_binds_open() {
         "{coverage:?}"
     );
 }
+
+#[test]
+fn a_hidden_process_table_is_kept_on_the_audit_next_to_a_visible_runtime() {
+    // Review of #74: PID 1 hidden, and a runtime that is visible binds publicly.
+    let mut fake = FakeProc::new();
+    fake.process(&serve(&[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    fake.hide_pid1();
+    let f = facts(&fake);
+    let (findings, coverage) = analyze(&f);
+    // The visible runtime's finding stands.
+    assert_eq!(findings.len(), 1);
+    // Other users' processes may be hidden: the audit keeps that.
+    assert_eq!(
+        binds(&coverage, &Ref::Audit),
+        Some(&CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied
+        })
+    );
+}
+
+#[test]
+fn an_incomplete_process_list_is_partial_not_a_denial() {
+    let mut fake = FakeProc::new();
+    fake.process(&serve(&[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    let f = observe(
+        fake.path(),
+        &Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+        BOOT_ID,
+        ProcBudgets {
+            max_processes: 0,
+            ..ProcBudgets::default()
+        },
+    );
+    let (_, coverage) = analyze(&f);
+    assert!(
+        matches!(
+            binds(&coverage, &Ref::Audit),
+            Some(CoverageState::Partial { .. })
+        ),
+        "{coverage:?}"
+    );
+}
+
+#[test]
+fn a_denied_process_list_is_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake = FakeProc::new();
+    let mode = |m| fs::Permissions::from_mode(m);
+    fs::set_permissions(fake.path(), mode(0o000)).unwrap();
+    if fs::read_dir(fake.path()).is_ok() {
+        fs::set_permissions(fake.path(), mode(0o755)).unwrap();
+        eprintln!("SKIPPED: a denied proc root needs an unprivileged user");
+        return;
+    }
+    let f = facts(&fake);
+    fs::set_permissions(fake.path(), mode(0o755)).unwrap();
+    assert_eq!(
+        f.process_list,
+        Observability::NotObservable(NotObservable::PermissionDenied)
+    );
+    let (_, coverage) = analyze(&f);
+    assert_eq!(
+        binds(&coverage, &Ref::Audit),
+        Some(&CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied
+        })
+    );
+}

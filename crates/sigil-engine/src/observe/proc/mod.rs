@@ -10,11 +10,13 @@
 //!   cannot be read is a gap.
 //! - **Ownership.** A socket is attributed to a process only through that process's fd table
 //!   (`fd/<n>` → `socket:[inode]`), never by its port (I-08). A listener no table holds is
-//!   `Unheld` only when every table was listed completely; otherwise its owner is `Unknown`.
+//!   `Unheld` only when every process was listed, PID 1 among them, and every fd table was listed
+//!   completely; otherwise its owner is `Unknown`.
 //! - **The runtime.** `ollama serve`: `argv[0]`'s basename is `ollama` and `argv[1]` is `serve`.
 //!   When `exe` can be read, its basename must also be `ollama`. `cmdline` is read only for
 //!   processes whose `comm` is `ollama`. A process whose name or arguments cannot be read may be
-//!   the runtime: it is a gap, and the listeners it holds are kept.
+//!   the runtime: it is a gap, and the listeners it holds are kept. So is the runtime when it
+//!   cannot be recorded (its `stat`); the listeners it holds are kept with an `Unknown` owner.
 //!
 //! Processes are read one at a time, and each one's directory is closed before the next, so the
 //! number of open files does not grow with the process table.
@@ -71,7 +73,7 @@ impl Default for ProcBudgets {
 }
 
 /// What was observed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcFacts {
     /// The runtime processes, and the processes that hold a recorded listener, by PID.
     pub processes: Vec<ProcessObs>,
@@ -79,7 +81,12 @@ pub struct ProcFacts {
     pub listeners: Vec<Listener>,
     /// SIGIL's own network namespace.
     pub own_net_ns: Option<u64>,
-    /// PID 1 is listed. It is not, under `hidepid`, where other users' processes are hidden.
+    /// Whether the process list was read to its end within its budget, or why not:
+    /// `PermissionDenied` when it could not be read for want of permission, `ReadIncomplete` for
+    /// its budget or another read error. Each case is also a gap.
+    pub process_list: Observability,
+    /// PID 1 is listed. When it is not in a complete list, other users' processes are hidden
+    /// (`hidepid`). A list cut short says nothing about it.
     pub pid1_visible: bool,
     /// What could not be read, and might hide the runtime or its sockets: a table, the process
     /// list, a process that could not be identified.
@@ -103,8 +110,8 @@ struct Scanned {
     listening: Vec<u64>,
     /// How its fd table was read: completely, or why not.
     fd_table: Observability,
-    /// The process as recorded, kept when it may be needed.
-    obs: Option<ProcessObs>,
+    /// The process as recorded, when it may be needed, or why it could not be recorded.
+    obs: Option<Result<ProcessObs, NotObservable>>,
 }
 
 enum Scan {
@@ -117,11 +124,19 @@ enum Scan {
 
 /// Reads the process and listener tables under `proc_root` (`/proc` outside tests).
 pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBudgets) -> ProcFacts {
-    let mut facts = ProcFacts::default();
+    let mut facts = ProcFacts {
+        processes: vec![],
+        listeners: vec![],
+        own_net_ns: None,
+        process_list: Observability::Observed,
+        pid1_visible: false,
+        gaps: vec![],
+    };
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let root = match rustix::fs::openat(rustix::fs::CWD, proc_root, flags, Mode::empty()) {
         Ok(fd) => fd,
         Err(e) => {
+            facts.process_list = Observability::NotObservable(not_observable(e));
             facts
                 .gaps
                 .push(format!("the proc root cannot be opened ({e})"));
@@ -135,11 +150,17 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
     let rows = read_tables(root, budgets, &mut facts.gaps);
     let listening: BTreeSet<u64> = rows.iter().map(|(_, row)| row.inode).collect();
 
-    let pids = list_pids(root, budgets, &mut facts.gaps);
+    let (pids, process_list) = list_pids(root, budgets, &mut facts.gaps);
+    facts.process_list = process_list;
     facts.pid1_visible = pids.contains(&1);
     let mut scanned: Vec<Scanned> = vec![];
-    // Why some fd table could not be listed completely, if one could not.
-    let mut incomplete: Option<NotObservable> = None;
+    // Why some fd table was not listed completely, if one was not. A process that was not listed
+    // is one; under `hidepid` (PID 1 missing from a complete list), other users' processes are.
+    let mut incomplete: Option<NotObservable> = match process_list {
+        Observability::NotObservable(why) => Some(why),
+        Observability::Observed if !facts.pid1_visible => Some(NotObservable::PermissionDenied),
+        Observability::Observed => None,
+    };
     for pid in pids {
         match scan(root, pid, &listening, at, boot_id, budgets) {
             Scan::Gone => {}
@@ -154,6 +175,11 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
                     facts
                         .gaps
                         .push(format!("process {pid} may be the runtime: {why}"));
+                }
+                if let (RuntimeMatch::Confirmed, Some(Err(why))) = (&s.runtime, &s.obs) {
+                    facts.gaps.push(format!(
+                        "process {pid} is the runtime but cannot be recorded ({why:?})"
+                    ));
                 }
                 if let Observability::NotObservable(why) = s.fd_table {
                     incomplete = Some(worse(incomplete, why));
@@ -171,10 +197,8 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
     }
     let mut recorded: BTreeMap<usize, ProcessObs> = BTreeMap::new();
     for (i, s) in scanned.iter().enumerate() {
-        if s.runtime == RuntimeMatch::Confirmed {
-            if let Some(obs) = &s.obs {
-                recorded.insert(i, obs.clone());
-            }
+        if let (RuntimeMatch::Confirmed, Some(Ok(obs))) = (&s.runtime, &s.obs) {
+            recorded.insert(i, obs.clone());
         }
     }
     for (protocol, row) in rows {
@@ -195,15 +219,19 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
             .min()
             .map(|(_, i)| i);
         let owner = match (holder, held.is_empty()) {
-            (Some(i), _) => {
-                let Some(obs) = recorded.get(&i).or(scanned[i].obs.as_ref()).cloned() else {
-                    // It exited meanwhile: nothing to attribute to.
-                    continue;
-                };
-                let process = obs.process.clone();
-                recorded.insert(i, obs);
-                ListenerOwner::Process { process }
-            }
+            // A holder that may own a recorded listener is always kept (`scan`).
+            (Some(i), _) => match scanned[i].obs.clone() {
+                Some(Ok(obs)) => {
+                    let process = obs.process.clone();
+                    recorded.insert(i, obs);
+                    ListenerOwner::Process { process }
+                }
+                // Held, but by a process that cannot be recorded.
+                Some(Err(why)) => ListenerOwner::Unknown { why },
+                None => ListenerOwner::Unknown {
+                    why: NotObservable::ReadIncomplete,
+                },
+            },
             // A known owner that is neither the runtime nor fronting: not recorded.
             (None, false) => continue,
             // No table holds it: unheld only if every table was listed completely.
@@ -281,19 +309,26 @@ fn listener(protocol: Protocol, row: parse::TcpListen, owner: ListenerOwner) -> 
     })
 }
 
-/// The numeric entries of the proc root, ascending, within the budget.
-fn list_pids(root: BorrowedFd<'_>, budgets: ProcBudgets, gaps: &mut Vec<String>) -> Vec<u32> {
+/// The numeric entries of the proc root, ascending, within the budget, and whether the list was
+/// read to its end.
+fn list_pids(
+    root: BorrowedFd<'_>,
+    budgets: ProcBudgets,
+    gaps: &mut Vec<String>,
+) -> (Vec<u32>, Observability) {
     let dir = match rustix::fs::Dir::read_from(root) {
         Ok(dir) => dir,
         Err(e) => {
             gaps.push(format!("the process list cannot be read ({e})"));
-            return vec![];
+            return (vec![], Observability::NotObservable(not_observable(e)));
         }
     };
     let mut pids = vec![];
+    let mut state = Observability::Observed;
     for entry in dir {
         let Ok(entry) = entry else {
             gaps.push("the process list could not be read to the end".into());
+            state = Observability::NotObservable(NotObservable::ReadIncomplete);
             break;
         };
         let Some(pid) = entry
@@ -306,12 +341,13 @@ fn list_pids(root: BorrowedFd<'_>, budgets: ProcBudgets, gaps: &mut Vec<String>)
         };
         if pids.len() as u64 >= budgets.max_processes {
             gaps.push(format!("more than {} processes", budgets.max_processes));
+            state = Observability::NotObservable(NotObservable::ReadIncomplete);
             break;
         }
         pids.push(pid);
     }
     pids.sort_unstable();
-    pids
+    (pids, state)
 }
 
 /// Reads one process and closes its directory.
@@ -356,7 +392,10 @@ fn scan(
         || (!listening_held.is_empty()
             && (fronting || matches!(runtime, RuntimeMatch::Unknown(_))));
     let obs = if keep {
-        observation(dir, pid, comm, &runtime, fd_table, at, boot_id)
+        match observation(dir, pid, comm, &runtime, fd_table, at, boot_id) {
+            Err(NotObservable::NoProcess) => return Scan::Gone,
+            recorded => Some(recorded),
+        }
     } else {
         None
     };
@@ -398,7 +437,9 @@ fn exe(dir: BorrowedFd<'_>) -> Result<(Vec<u8>, bool), NotObservable> {
     }
 }
 
-/// The process as recorded; `None` when it exited meanwhile. `argv` only for the runtime.
+/// The process as recorded, or why it cannot be: its `stat` (its start time, part of its
+/// identity) could not be read or understood. `NoProcess` when it exited meanwhile. `argv` only
+/// for the runtime.
 fn observation(
     dir: BorrowedFd<'_>,
     pid: u32,
@@ -407,10 +448,12 @@ fn observation(
     fd_table: Observability,
     at: &Timestamp,
     boot_id: &str,
-) -> Option<ProcessObs> {
+) -> Result<ProcessObs, NotObservable> {
     let start_ticks = match read_limited(dir, "stat", 4096) {
-        Ok(Read::Whole(bytes)) => parse::stat_start_ticks(&String::from_utf8_lossy(&bytes))?,
-        _ => return None,
+        Ok(Read::Whole(bytes)) => parse::stat_start_ticks(&String::from_utf8_lossy(&bytes))
+            .ok_or(NotObservable::ReadIncomplete)?,
+        Ok(Read::OverLimit) => return Err(NotObservable::ReadIncomplete),
+        Err(e) => return Err(not_observable(e)),
     };
     let net_ns = match rustix::fs::readlinkat(dir, "ns/net", Vec::new()) {
         Ok(link) => match parse::link_inode(link.as_bytes(), "net") {
@@ -436,7 +479,7 @@ fn observation(
         ),
         _ => None,
     };
-    Some(ProcessObs {
+    Ok(ProcessObs {
         process: ProcessRef {
             pid,
             start_ticks,

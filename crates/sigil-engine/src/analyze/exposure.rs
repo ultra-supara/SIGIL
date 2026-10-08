@@ -10,17 +10,22 @@
 //! The class describes the bind address, not reachability, which also depends on firewalls, NAT,
 //! and routing that SIGIL does not see.
 //!
-//! **`exposure.binds` coverage:**
+//! **`exposure.binds` coverage.** `Audit` says whether every process that may be the runtime was
+//! seen; it is kept next to each runtime's own entry, so a runtime that was found never closes
+//! the check for those that were not.
 //!
 //! | Situation | State |
 //! |---|---|
-//! | no runtime process; PID 1 visible | `Complete` on `Audit` |
-//! | no runtime process; PID 1 hidden (`hidepid`) | `Unavailable(PermissionDenied)` on `Audit` |
+//! | PID 1 missing from a complete process list (`hidepid`), or the list denied | `Unavailable(PermissionDenied)` on `Audit` |
+//! | the process list cut short (its budget, a read error) | `Partial` on `Audit` |
+//! | any other gap | `Partial` on `Audit` |
+//! | otherwise | `Complete` on `Audit` |
 //! | a runtime whose fd table is unreadable | `Unavailable(PermissionDenied)` on it (I-08) |
 //! | a runtime whose fd table was listed in part | `Partial` on it; findings for what was listed stand |
 //! | a process that may be the runtime could not be identified | `Partial` (a gap) |
+//! | the runtime cannot be recorded (its `stat`) | `Partial` (a gap) |
 //! | a runtime in another network namespace, or one that is unreadable | `Partial` on it |
-//! | a table or list not read completely | `Partial` |
+//! | a table or list not read completely | `Partial` on it |
 //! | otherwise | `Complete` on it |
 
 use std::net::IpAddr;
@@ -80,21 +85,24 @@ pub fn analyze(facts: &ProcFacts) -> (Vec<Finding>, Vec<Coverage>) {
         .iter()
         .filter(|p| p.roles.iter().any(|r| r.as_str() == RUNTIME_ROLE))
         .collect();
-    if runtimes.is_empty() {
-        let state = if !facts.pid1_visible {
-            CoverageState::Unavailable {
-                why: Unavailability::PermissionDenied,
-            }
-        } else if facts.gaps.is_empty() {
-            CoverageState::Complete
-        } else {
-            CoverageState::Partial {
-                missing: facts.gaps.clone(),
-            }
-        };
-        cover(&mut coverage, Ref::Audit, state);
-        return (findings, coverage);
-    }
+    // A process not seen may be a runtime, whether or not another one was found. A list cut short
+    // is a budget or a read error, not a denial, and PID 1 missing from it says nothing.
+    let hidden = match facts.process_list {
+        Observability::Observed => !facts.pid1_visible,
+        Observability::NotObservable(why) => why == NotObservable::PermissionDenied,
+    };
+    let audit = if hidden {
+        CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied,
+        }
+    } else if facts.gaps.is_empty() {
+        CoverageState::Complete
+    } else {
+        CoverageState::Partial {
+            missing: facts.gaps.clone(),
+        }
+    };
+    cover(&mut coverage, Ref::Audit, audit);
     for runtime in runtimes {
         let scope = Ref::Process(runtime.process.clone());
         let mut missing = facts.gaps.clone();
