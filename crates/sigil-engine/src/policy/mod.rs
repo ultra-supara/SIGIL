@@ -12,7 +12,7 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 use sigil_model::{
     Action, AssumptionId, AuditScope, CheckId, ComponentKey, Date, KnowledgeKind, KnowledgeRef,
-    Mode, OqTreatment, RuleId, Sha256Hex,
+    Mode, OqTreatment, PolicyRuleRef, RuleId, Sha256Hex,
 };
 
 pub mod catalog;
@@ -44,6 +44,21 @@ pub struct Policy {
     pub rules: BTreeMap<RuleId, RuleOverride>,
     pub trust: Trust,
     pub deny: Vec<ComponentDeny>,
+    /// The decision sources, validated when the policy is loaded so that evaluation cannot fail.
+    pub(crate) sources: Sources,
+}
+
+/// The `source` of each decision the policy can make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sources {
+    /// `policy:assumptions.accept`
+    pub assumptions: PolicyRuleRef,
+    /// `policy:open_questions.default`
+    pub open_questions: PolicyRuleRef,
+    /// `default`: used when `default:<rule>` would not be a valid reference.
+    pub default: PolicyRuleRef,
+    /// `policy:rules.<rule>` for each override.
+    pub rules: BTreeMap<RuleId, PolicyRuleRef>,
 }
 
 /// How open questions are treated.
@@ -87,6 +102,8 @@ pub struct ComponentDeny {
     /// `Warn` or `Fail`.
     pub action: Action,
     pub reason: String,
+    /// `policy:components.deny.<component>`
+    pub(crate) source: PolicyRuleRef,
 }
 
 /// Why a policy did not load. Every variant is fatal (exit code 1 in the CLI).
@@ -276,12 +293,30 @@ impl Policy {
                     component: entry.component,
                 });
             }
+            let source = id(PolicyRuleRef::new(format!(
+                "policy:components.deny.{component}"
+            )))?;
             deny.push(ComponentDeny {
                 component,
                 action,
                 reason: entry.reason,
+                source,
             });
         }
+        let sources = Sources {
+            assumptions: id(PolicyRuleRef::new("policy:assumptions.accept"))?,
+            open_questions: id(PolicyRuleRef::new("policy:open_questions.default"))?,
+            default: id(PolicyRuleRef::new("default"))?,
+            rules: rules
+                .keys()
+                .map(|rule| {
+                    Ok((
+                        rule.clone(),
+                        id(PolicyRuleRef::new(format!("policy:rules.{rule}")))?,
+                    ))
+                })
+                .collect::<Result<_, PolicyError>>()?,
+        };
         Ok(Policy {
             name: raw.name,
             sha256: sha256_hex(text)?,
@@ -296,6 +331,7 @@ impl Policy {
                 extra_groups,
             },
             deny,
+            sources,
         })
     }
 
