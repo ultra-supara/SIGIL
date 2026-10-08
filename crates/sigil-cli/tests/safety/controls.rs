@@ -253,6 +253,19 @@ fn run_control(
     name: &str,
     target_file: impl FnOnce(&Path) -> Option<PathBuf>,
 ) -> Option<(TracedRun, Vec<Violation>)> {
+    let (run, policy) = run_control_traced(name, name, target_file)?;
+    let v = check(&run, &policy);
+    Some((run, v))
+}
+
+/// Runs control body `name` under strace as case `control-<case>` (a case name of its own, since
+/// tests run in parallel and each case has one trace directory), and the policy of a compliant
+/// run (no network).
+fn run_control_traced(
+    name: &str,
+    case: &str,
+    target_file: impl FnOnce(&Path) -> Option<PathBuf>,
+) -> Option<(TracedRun, Policy)> {
     if !require_tracer(name) {
         return None;
     }
@@ -265,7 +278,7 @@ fn run_control(
     let raw = ["--exact", filter.as_str(), "--ignored", "--test-threads=1"];
     let args: Vec<&std::ffi::OsStr> = raw.into_iter().map(std::ffi::OsStr::new).collect();
     let run = run_traced(
-        &format!("control-{name}"),
+        &format!("control-{case}"),
         &exe,
         &args,
         tmp.path(),
@@ -285,9 +298,9 @@ fn run_control(
         allowed_writes: vec![],
         proc_scopes: vec!["runtime"],
         cwd: tmp.path().to_path_buf(),
+        network: None,
     };
-    let v = check(&run, &policy);
-    Some((run, v))
+    Some((run, policy))
 }
 
 fn plain_target(root: &Path) -> Option<PathBuf> {
@@ -384,6 +397,41 @@ fn control_tcp_connect_is_detected() {
             (Contract::C4NoNetwork, &["connect"]),
         ],
     );
+}
+
+/// The `tcp_connect` body connects to 127.0.0.1:9. Allowed exactly there (the active API probe's
+/// rule), it is no violation; allowed anywhere else, its socket and connect are.
+#[test]
+fn control_tcp_connect_elsewhere_than_the_probe_destination_is_detected() {
+    let Some((run, policy)) =
+        run_control_traced("tcp_connect", "tcp_connect_elsewhere", plain_target)
+    else {
+        return;
+    };
+    let there = Policy {
+        network: Some("127.0.0.1:9".parse().unwrap()),
+        ..policy.clone()
+    };
+    let v = check(&run, &there);
+    assert!(
+        !v.iter().any(|x| x.contract == Contract::C4NoNetwork),
+        "the allowed destination was flagged:\n{}",
+        report(&run, &v)
+    );
+    for elsewhere in ["127.0.0.1:10", "[::1]:9"] {
+        let p = Policy {
+            network: Some(elsewhere.parse().unwrap()),
+            ..policy.clone()
+        };
+        let v = check(&run, &p);
+        assert!(
+            v.iter()
+                .any(|x| x.contract == Contract::C4NoNetwork
+                    && ["socket", "connect"].contains(&x.syscall.as_str())),
+            "a connection to 127.0.0.1:9 was NOT detected under {elsewhere}; the detector is broken.\n{}",
+            report(&run, &v)
+        );
+    }
 }
 
 #[test]

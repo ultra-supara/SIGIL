@@ -1,6 +1,6 @@
 # ADR-002: Execution modes and safety contracts
 
-- **Status:** Accepted. PR-1 implemented the checks for C-1…C-6. PR-3b-1 replaced the v0.1 CLI with the v2 commands and the static / observe split; PR-3b-2 adds the active mode.
+- **Status:** Accepted. PR-1 implemented the checks for C-1…C-6. PR-3b-1 replaced the v0.1 CLI with the v2 commands and the static / observe split. PR-3b-2 added the active mode: the API probe (`--active api-probe`) and its C-4 rule.
 - **Date:** 2026-10-07
 - **Scope:** the SIGIL CLI and its engine crates on Linux.
 
@@ -26,7 +26,7 @@ This ADR turns the promises into named contracts and states **exactly how each i
 |---|---|---|
 | **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `explain`, and `rules`, which read only a saved session or nothing |
 | **observe** | static, plus reads of the documented `/proc` entries | `inspect ollama --mode observe` |
-| **active** | Explicitly requested features that contact something | None yet. The v0.1 API probe was removed with the v0.1 CLI (PR-3b-1); PR-3b-2 adds it back as `--active api-probe`, off by default |
+| **active** | Explicitly requested features that contact something | `inspect ollama --active api-probe`, with `--mode static` or `--mode observe`. Off by default |
 
 PR-1 made the contracts below checkable for the v0.1 CLI. Since PR-3b-1 they are checked over the v2 commands.
 
@@ -40,6 +40,14 @@ PR-1 made the contracts below checkable for the v0.1 CLI. Since PR-3b-1 they are
 | C-4 | **No network I/O.** No socket-family syscall of any address family (`AF_INET`, `AF_INET6`, `AF_UNIX`, `AF_NETLINK`, …) | static, observe |
 | C-5 | **Read-only.** No write-capable open (`O_WRONLY`/`O_RDWR`/`O_CREAT`/`O_TRUNC`/`O_APPEND`/`O_TMPFILE`) and no file-system mutation (`rename*`, `unlink*`, `rmdir`, `mkdir*`, `symlink*`, `link*`, `truncate`, `ch{mod,own}*`, `*xattr`, `utime*`, `mknod*`) except on the output files the user named. Creating the missing parent directories of those outputs is allowed | static, observe |
 | C-6 | **`/proc` access stays within its documented scope.** Every path-taking access under `/proc`, and every directory listing there, must match the allowlist in `crates/sigil-cli/tests/safety/proc_allowlist.txt` for the run's scope. `ptrace` and `process_vm_*` are violations | static (runtime entries only), observe (plus observe entries) |
+
+**Active mode.** This completes the active mode defined in §1. It changes none of C-1…C-6 for static and observe runs. An active feature is added to a static or observe run; it does not replace the mode. Every contract of the mode applies, except that C-4 allows the feature's own connection:
+
+| # | Contract | Applies to |
+|---|---|---|
+| C-4 (active) | **Only the API probe's one connection.** At most one `socket(AF_INET\|AF_INET6, SOCK_STREAM)`, of the destination's family; a `connect` of that socket to the requested destination; and option, send (with no destination address), receive, name, and shutdown calls on it. Any other family, a second socket, `bind`, `listen`, `accept`, `socketpair`, `sendmsg`, a call on another socket, or another destination is a violation | runs with `--active api-probe` |
+
+The destination is a literal IP address and port: SIGIL resolves no name, so no resolver, NSS module, or DNS query is involved. It is loopback (`127.0.0.0/8`, `::1`, IPv4-mapped loopback) unless `--allow-remote` is given. The probe is bounded by a connect timeout, one deadline for the request and the response, and a response byte limit, each recorded in the session as a budget.
 
 Two further contracts from the v2 plan are checked by the PRs that introduce the code they govern:
 - C-7 (bounded resource use, PR-3a/PR-4);
@@ -63,7 +71,9 @@ These stop obvious, accidental use of forbidden APIs in **product code**. They a
 - Only crates whose **purpose** is a forbidden operation are banned. General-purpose crates such as `libc` are not banned. No product crate depends on them directly today; adding such a dependency to a product crate needs review against this ADR.
 - **Exceptions:**
   - Test code that must spawn processes (compiling fixtures, running the CLI, the safety harness) allows the C-1/C-4 lints at file level, with a reason.
-  - The only product exception is the legacy API probe (C-4): a scoped `#[allow]` on `probe_ollama_version` in `sigil-core`. No command reaches it since PR-3b-1, and it is removed with `sigil-core` in PR-3b-3.
+  - Product exceptions (C-4):
+    - the active API probe: a scoped `#[allow]` on `exchange` in `sigil-probe`, the one function that holds the `TcpStream`. Only the CLI depends on `sigil-probe`; `sigil-engine` and `sigil-model` keep the ban, so the engine cannot perform network I/O;
+    - the legacy API probe: a scoped `#[allow]` on `probe_ollama_version` in `sigil-core`. No command reaches it since PR-3b-1, and it is removed with `sigil-core` in PR-3b-3.
   - Any new product exception needs an ADR.
 
 #### 3b. Checked by syscall tests over exercised paths
@@ -92,12 +102,15 @@ The filter is the `%process`, `%network`, `%file`, and `%desc` classes plus ever
 | `session render --out <new dir>/…` | Writes only the named file |
 | `explain --verdict` | Clean |
 | `rules` | Clean |
+| `inspect ollama --active api-probe --api-addr <loopback server>` (answered) | Clean with that destination allowed; without it, the same trace breaks C-4 (the case really connects) |
+| `inspect ollama --active api-probe --api-addr <loopback port with no listener>` (refused) | As above |
 
 **Negative controls** prove the detectors work. Each re-runs the test binary under strace to perform a forbidden operation, and the test fails unless the expected contract is reported:
 - exec a child (C-1);
 - a real `dlopen` of a compiled shared object in the inspected root (C-2, C-3);
 - `mmap` of a target with `PROT_READ` (C-3 only) and with `PROT_READ|PROT_EXEC` (C-2, C-3);
 - TCP connect, UDP bind, and `AF_UNIX` connect (C-4);
+- the same TCP connect with another destination allowed (C-4 active), and with exactly its own destination allowed (no violation);
 - append to a target, create a file in the target root, rename a target, and an `openat2` write (C-5);
 - read `/proc/self/environ`, `openat2` on `/proc/self/status`, and `process_vm_readv` (C-6);
 - `io_uring_setup` (harness integrity).
@@ -128,7 +141,7 @@ They also show the command, the working directory, the exit status, and the trac
 
 ## Consequences
 
-- The safety promises in the README and the docs are stated as **checked**, not as guaranteed. Until PR-3b-1, "no network" held only with `--no-probe-api`; since then no command performs network I/O.
+- The safety promises in the README and the docs are stated as **checked**, not as guaranteed. Until PR-3b-1, "no network" held only with `--no-probe-api`. Since PR-3b-2, network I/O happens only with `--active api-probe`, and only to its one destination.
 - CI has a dedicated `safety` job that cannot pass by skipping.
 - New I/O code in an exercised path is caught by the tests. New code in an unexercised path is not; PR authors add the path to the harness.
 
