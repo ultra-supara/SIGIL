@@ -21,6 +21,12 @@
       "maxLength": 1024,
       "pattern": "^inst:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
     },
+    "ListenerId": {
+      "description": "A listening socket: listener:<protocol>/<address>:<port>#<socket inode>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^listener:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
     "ModelId": {
       "description": "A model in a model store: model:<root id>/<manifest path under manifests/>.",
       "type": "string",
@@ -233,6 +239,7 @@
         "instances",
         "models",
         "processes",
+        "listeners",
         "values",
         "components",
         "releases",
@@ -260,6 +267,7 @@
         "instances": {"type": "array", "items": {"$ref": "#/$defs/FileInstance"}},
         "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
+        "listeners": {"type": "array", "items": {"$ref": "#/$defs/Listener"}},
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
@@ -293,6 +301,7 @@
         "instances": {"type": "array", "items": {"$ref": "#/$defs/FileInstance"}},
         "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
+        "listeners": {"type": "array", "items": {"$ref": "#/$defs/Listener"}},
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
@@ -682,14 +691,48 @@
     "ProcessObs": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["process", "at", "roles", "exe", "mappings"],
+      "required": ["process", "at", "roles", "exe", "mappings", "name", "argv", "net_ns", "fd_table"],
       "properties": {
         "process": {"$ref": "#/$defs/ProcessRef"},
         "at": {"$ref": "#/$defs/Timestamp"},
         "roles": {"type": "array", "items": {"$ref": "#/$defs/ProcessRole"}},
         "exe": {"$ref": "#/$defs/ProcessExe"},
-        "mappings": {"type": "array", "items": {"$ref": "#/$defs/MappingObs"}}
+        "mappings": {"type": "array", "items": {"$ref": "#/$defs/MappingObs"}},
+        "name": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "argv": {"anyOf": [{"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}}, {"type": "null"}]},
+        "net_ns": {"$ref": "#/$defs/NsInode"},
+        "fd_table": {"$ref": "#/$defs/Observability"}
       }
+    },
+    "NsInode": {
+      "description": "A namespace's inode, or why it could not be read.",
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["Inode"], "properties": {"Inode": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}},
+        {"type": "object", "additionalProperties": false, "required": ["NotObservable"], "properties": {"NotObservable": {"$ref": "#/$defs/NotObservable"}}}
+      ]
+    },
+    "Listener": {
+      "description": "A listening socket in SIGIL's network namespace. Its bind class is derived from the address, never stored.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "protocol", "address", "port", "socket_inode", "owner"],
+      "properties": {
+        "id": {"$ref": "#/$defs/ListenerId"},
+        "protocol": {"$ref": "#/$defs/Protocol"},
+        "address": {"type": "string"},
+        "port": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "socket_inode": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "owner": {"$ref": "#/$defs/ListenerOwner"}
+      }
+    },
+    "Protocol": {"type": "string", "enum": ["Tcp", "Tcp6"]},
+    "ListenerOwner": {
+      "description": "Who holds the socket, as far as the readable fd tables show. Never by port.",
+      "oneOf": [
+        {"type": "string", "enum": ["Unheld"]},
+        {"type": "object", "additionalProperties": false, "required": ["Process"], "properties": {"Process": {"type": "object", "additionalProperties": false, "required": ["process"], "properties": {"process": {"$ref": "#/$defs/ProcessRef"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["Unknown"], "properties": {"Unknown": {"type": "object", "additionalProperties": false, "required": ["why"], "properties": {"why": {"$ref": "#/$defs/NotObservable"}}}}}
+      ]
     },
     "ProcessExe": {
       "oneOf": [
@@ -912,6 +955,19 @@
               "additionalProperties": false,
               "required": ["model"],
               "properties": {"model": {"$ref": "#/$defs/ModelId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Listener"],
+          "properties": {
+            "Listener": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["listener"],
+              "properties": {"listener": {"$ref": "#/$defs/ListenerId"}}
             }
           }
         }
@@ -1392,6 +1448,12 @@
           "additionalProperties": false,
           "required": ["Model"],
           "properties": {"Model": {"$ref": "#/$defs/ModelId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Listener"],
+          "properties": {"Listener": {"$ref": "#/$defs/ListenerId"}}
         }
       ]
     },

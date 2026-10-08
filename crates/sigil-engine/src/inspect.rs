@@ -104,6 +104,7 @@ pub fn store_session(
         instances: facts.instances,
         models: facts.models,
         processes: vec![],
+        listeners: vec![],
         values: vec![],
         components: vec![],
         releases: vec![],

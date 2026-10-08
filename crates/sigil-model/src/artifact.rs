@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::evidence::{ConfigRef, NotObservable, Tri};
+use crate::evidence::{ConfigRef, NotObservable, Observability, Tri};
 use crate::id::{ArtifactId, InstanceId, ProcessRole, RootId, Sha256Hex, SliceId, Timestamp};
 use crate::text::UntrustedText;
 
@@ -201,6 +201,23 @@ pub struct ProcessObs {
     pub exe: ProcessExe,
     /// Mappings observed in this process at `at`.
     pub mappings: Vec<MappingObs>,
+    /// Its name (`comm`), as the process set it; `None` when it could not be read.
+    pub name: Option<UntrustedText>,
+    /// Its arguments (`cmdline`), as the process set them; `None` when not read. Read only for
+    /// processes whose role rests on them.
+    pub argv: Option<Vec<UntrustedText>>,
+    /// Its network namespace.
+    pub net_ns: NsInode,
+    /// Whether its file descriptors could be listed (needed to attribute sockets to it).
+    pub fd_table: Observability,
+}
+
+/// A namespace's inode, or why it could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum NsInode {
+    Inode(u64),
+    NotObservable(NotObservable),
 }
 
 /// The executable of an observed process.

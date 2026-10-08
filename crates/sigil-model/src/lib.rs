@@ -32,6 +32,7 @@ pub mod finding;
 pub mod hint;
 pub mod id;
 pub mod identity;
+pub mod listener;
 pub mod load;
 pub mod model;
 pub mod relation;
@@ -45,7 +46,8 @@ pub use access::{
 };
 pub use artifact::{
     Arch, Artifact, DiscoverySource, ElfType, FileInstance, Format, InstanceContent, LinkHop,
-    MappingObs, NotReadReason, ProcessExe, ProcessObs, ProcessRef, Slice, Stability, StatInfo,
+    MappingObs, NotReadReason, NsInode, ProcessExe, ProcessObs, ProcessRef, Slice, Stability,
+    StatInfo,
 };
 pub use code::{
     ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,
@@ -67,13 +69,15 @@ pub use hint::{FeatureHint, Signal};
 pub use id::{
     AccessId, AnalyzerRef, ArtifactId, AssumptionId, AtomName, AuditScope, CallId, CheckId,
     ComponentKey, CondId, Date, FeatureKey, FindingId, FnId, GroundTruthRef, IdError, IdProblem,
-    InstanceId, ModelId, ObligationId, OpenQuestionId, PolicyRuleRef, PremiseId, ProcessRole,
-    ProfileRef, ProfileRuleId, RefSetId, RootId, RuleId, Sha256Hex, SliceId, Timestamp, ValueId,
+    InstanceId, ListenerId, ModelId, ObligationId, OpenQuestionId, PolicyRuleRef, PremiseId,
+    ProcessRole, ProfileRef, ProfileRuleId, RefSetId, RootId, RuleId, Sha256Hex, SliceId,
+    Timestamp, ValueId,
 };
 pub use identity::{
     ComponentClaim, ExtractMethod, IdentityAssertion, IdentityStatus, NameKind, ReleaseBasis,
     ReleaseClaim, SigState, VersionAssertion, VersionSource,
 };
+pub use listener::{Listener, ListenerOwner, Protocol};
 pub use load::{
     CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase, ProcessValue, TriValue,
     ValueKey, ValueOrigin,

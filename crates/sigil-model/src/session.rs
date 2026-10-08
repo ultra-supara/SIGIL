@@ -17,6 +17,7 @@ use crate::finding::{Finding, OpenQuestion, Outcome, PolicyViolation};
 use crate::hint::FeatureHint;
 use crate::id::{AuditScope, CheckId, RootId, Sha256Hex, Timestamp};
 use crate::identity::{ComponentClaim, ReleaseClaim};
+use crate::listener::Listener;
 use crate::load::{LoadFacts, ProcessValue};
 use crate::model::Model;
 use crate::relation::{BindingPremise, Relation, RuleSupport};
@@ -39,6 +40,8 @@ pub struct Session {
     /// Models in a model store (§4.6.7).
     pub models: Vec<Model>,
     pub processes: Vec<ProcessObs>,
+    /// Listening sockets in SIGIL's network namespace (observe mode, §4.6.8).
+    pub listeners: Vec<Listener>,
     pub values: Vec<ProcessValue>,
     /// A: component identification.
     pub components: Vec<ComponentClaim>,

@@ -156,6 +156,7 @@
   ],
   "models": [],
   "processes": [],
+  "listeners": [],
   "values": [
     {
       "id": "val:llama-server (per model)/user/predicted",

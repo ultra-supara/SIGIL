@@ -317,6 +317,10 @@ fn a_mapping_must_belong_to_its_process() {
         roles: vec![],
         exe: ProcessExe::NotObservable(NotObservable::PermissionDenied),
         mappings: vec![mapping],
+        name: None,
+        argv: None,
+        net_ns: NsInode::NotObservable(NotObservable::PermissionDenied),
+        fd_table: Observability::NotObservable(NotObservable::PermissionDenied),
     });
     assert_rejected(
         &s,
@@ -1571,4 +1575,149 @@ fn only_sha256_with_64_lowercase_hex_digits_is_a_digest() {
     ] {
         assert_eq!(digest_hex(&bad), None, "{bad}");
     }
+}
+
+// --- Listeners and process facts (PR-3a-3) ----------------------------------------------------
+
+fn runtime_process() -> ProcessRef {
+    ProcessRef {
+        pid: 4242,
+        start_ticks: 1000,
+        boot_id: "00000000-0000-4000-8000-000000000000".to_string(),
+    }
+}
+
+/// `ollama serve` listening on 0.0.0.0:11434, its fd table read, its exe not readable.
+fn with_listener() -> Session {
+    let mut s = base(&[]);
+    s.processes.push(ProcessObs {
+        process: runtime_process(),
+        at: ts("2026-10-07T07:00:01Z"),
+        roles: ids(&["ollama serve"]),
+        exe: ProcessExe::NotObservable(NotObservable::PermissionDenied),
+        mappings: vec![],
+        name: Some(t("ollama")),
+        argv: Some(vec![t("/usr/local/bin/ollama"), t("serve")]),
+        net_ns: NsInode::Inode(4026531840),
+        fd_table: Observability::Observed,
+    });
+    s.listeners.push(Listener {
+        id: id("listener:tcp/0.0.0.0:11434#7001"),
+        protocol: Protocol::Tcp,
+        address: "0.0.0.0".to_string(),
+        port: 11434,
+        socket_inode: 7001,
+        owner: ListenerOwner::Process {
+            process: runtime_process(),
+        },
+    });
+    s
+}
+
+#[test]
+fn a_listener_records_its_owner_as_observed() {
+    let s = round_trip(&with_listener());
+    assert_valid(&s);
+    // Owners that are not known are facts too.
+    let mut s = with_listener();
+    s.listeners.push(Listener {
+        id: id("listener:tcp6/::ffff:127.0.0.1:8080#7002"),
+        protocol: Protocol::Tcp6,
+        address: "::ffff:127.0.0.1".to_string(),
+        port: 8080,
+        socket_inode: 7002,
+        owner: ListenerOwner::Unknown {
+            why: NotObservable::PermissionDenied,
+        },
+    });
+    s.listeners.push(Listener {
+        id: id("listener:tcp/10.0.0.5:22#7003"),
+        protocol: Protocol::Tcp,
+        address: "10.0.0.5".to_string(),
+        port: 22,
+        socket_inode: 7003,
+        owner: ListenerOwner::Unheld,
+    });
+    assert_valid(&s);
+}
+
+#[test]
+fn listener_ids_are_unique_and_owners_are_recorded_processes() {
+    let mut s = with_listener();
+    let copy = s.listeners[0].clone();
+    s.listeners.push(copy);
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::DuplicateId {
+                    kind: "listener",
+                    ..
+                }
+            )
+        },
+        "a duplicate listener ID",
+    );
+
+    let mut s = with_listener();
+    s.processes.clear();
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::Dangling {
+                    kind: "process",
+                    ..
+                }
+            )
+        },
+        "an owner that is not a recorded process",
+    );
+
+    let mut s = with_listener();
+    s.listeners[0].address = "localhost".to_string();
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ListenerAddressInvalid { .. }),
+        "an address that is not an IP",
+    );
+
+    let mut s = with_listener();
+    s.coverage.push(coverage(
+        "exposure.binds",
+        Ref::Listener(id("listener:tcp/127.0.0.1:1#1")),
+        CoverageState::Complete,
+    ));
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::Dangling {
+                    kind: "listener",
+                    ..
+                }
+            )
+        },
+        "a scope naming an unknown listener",
+    );
+}
+
+#[test]
+fn a_listener_is_an_observation() {
+    let s = with_listener();
+    let listener = EvidenceRef::Listener {
+        listener: s.listeners[0].id.clone(),
+    };
+    let process = EvidenceRef::Process {
+        process: runtime_process(),
+    };
+    assert_eq!(
+        s.settles(&CondEvidence::Observed {
+            facts: vec![listener, process]
+        }),
+        Some(Settles::Either)
+    );
 }

@@ -248,6 +248,7 @@ impl Session {
                                 | EvidenceRef::Instance { .. }
                                 | EvidenceRef::Config(_)
                                 | EvidenceRef::Process { .. }
+                                | EvidenceRef::Listener { .. }
                         )
                     });
                 Ok(if observations {
