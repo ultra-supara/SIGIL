@@ -79,6 +79,7 @@ impl FakeProc {
             exe: Some("/usr/lib/systemd/systemd"),
             ..Proc::default()
         });
+        fake.write_tables();
         fake
     }
 
