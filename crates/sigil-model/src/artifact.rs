@@ -186,6 +186,8 @@ pub enum DiscoverySource {
 pub struct ProcessRef {
     pub pid: u32,
     pub start_ticks: u64,
+    /// Empty when the boot ID could not be read: the PID and start time then do not identify
+    /// the process across boots (see `ObservationMeta::boot_id`).
     pub boot_id: String,
 }
 

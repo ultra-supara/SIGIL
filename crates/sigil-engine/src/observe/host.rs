@@ -47,7 +47,9 @@ fn capabilities() -> Vec<String> {
     }
 }
 
-/// The boot ID in its UUID form (lowercase hex, `8-4-4-4-12`), or `None`.
+/// The boot ID in its UUID form (lowercase hex, `8-4-4-4-12`), or `None`. `None` is recorded as
+/// an empty boot ID, which leaves the checks that rest on a process's identity open
+/// (`analyze::exposure`).
 fn boot_id(proc_root: &Path) -> Option<String> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let root = rustix::fs::openat(rustix::fs::CWD, proc_root, flags, FileMode::empty()).ok()?;

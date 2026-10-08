@@ -25,6 +25,7 @@ All reads are under the proc root (`/proc`), and every entry is on the C-6 allow
 | `<pid>/exe` | Confirms the runtime's executable | `readlinkat` |
 | `<pid>/stat` | The start time, part of a process's identity | read |
 | `<pid>/ns/net` | The process's network namespace | `readlinkat` |
+| `sys/kernel/random/boot_id` | The boot, part of each process's identity (observe mode only). Recorded only in UUID form; otherwise empty, and the runtime's binds stay open | read |
 
 Magic links (`exe`, `fd/<n>`, `ns/net`) are read with `readlinkat` and are never followed or
 opened.
@@ -99,6 +100,7 @@ those that were not, and its findings stand.
 | a LISTEN row that cannot be read | `Partial` (a gap); the other rows stand |
 | a runtime in another network namespace | `Partial` on it: its sockets are not in SIGIL's table |
 | a runtime whose network namespace cannot be read | `Partial` on it; findings for the listeners it holds in SIGIL's table stand |
+| a runtime recorded without a boot ID (unreadable, or not a UUID) | `Partial` on it: a PID and start time do not identify it across boots; its findings stand |
 | a table or list not read completely | `Partial` on it |
 | otherwise | `Complete` on it |
 

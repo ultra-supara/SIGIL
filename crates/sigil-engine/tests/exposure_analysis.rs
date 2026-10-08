@@ -332,3 +332,31 @@ fn a_denied_process_list_is_unavailable() {
         })
     );
 }
+
+#[test]
+fn an_unknown_boot_leaves_the_runtimes_binds_open() {
+    // Review of #75: without the boot ID, a process is known by PID and start time only, which
+    // do not identify it across boots.
+    let mut fake = FakeProc::new();
+    fake.process(&serve(&[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    let f = observe(
+        fake.path(),
+        &Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+        "",
+        ProcBudgets::default(),
+    );
+    let (findings, coverage) = analyze(&f);
+    assert_eq!(findings.len(), 1, "the bind observed in this run stands");
+    match binds(&coverage, &runtime_scope(&f)) {
+        Some(CoverageState::Partial { missing }) => {
+            assert!(missing.iter().any(|m| m.contains("boot ID")), "{missing:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    // Which processes were seen does not depend on it.
+    assert_eq!(
+        binds(&coverage, &Ref::Audit),
+        Some(&CoverageState::Complete)
+    );
+}
