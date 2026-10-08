@@ -21,7 +21,10 @@ use super::SafeFs;
 pub struct ReadSpec {
     /// Bytes kept in memory from the start of the file (e.g. a manifest, a license excerpt).
     pub keep: usize,
-    /// The most bytes read; a larger file is not hashed. `None` reads the whole file.
+    /// The largest file that is hashed; a larger one is not. At most `limit + 1` bytes are read:
+    /// the extra byte shows that a file is over the limit, also when its size from `fstat` is
+    /// smaller than its contents (procfs) or it grows during the read. `None` reads the whole
+    /// file.
     pub limit: Option<u64>,
 }
 
@@ -43,6 +46,8 @@ pub enum ReadOutcome {
     /// Larger than the limit: not hashed; the instance is `NotRead { BudgetExceeded }`.
     LimitExceeded {
         limit: u64,
+        /// The size from `fstat`, or the bytes read (`limit + 1`) when that is larger: a lower
+        /// bound for a file that outgrew its `fstat` size.
         size: u64,
     },
     NotFound,
@@ -237,7 +242,12 @@ impl SafeFs {
         let mut total: u64 = 0;
         let mut buffer = vec![0u8; 1 << 20];
         loop {
-            let n = match file.read(&mut buffer) {
+            // With a limit, read at most one byte past it: that byte shows the file is over it.
+            let want = spec.limit.map_or(buffer.len(), |limit| {
+                let left = limit.saturating_sub(total).saturating_add(1);
+                usize::try_from(left).map_or(buffer.len(), |left| left.min(buffer.len()))
+            });
+            let n = match file.read(&mut buffer[..want]) {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,

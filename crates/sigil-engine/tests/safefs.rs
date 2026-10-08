@@ -166,10 +166,13 @@ fn a_file_larger_than_its_stat_size_still_stops_at_the_limit() {
         },
         vec![],
     );
-    assert!(
-        matches!(read.outcome, ReadOutcome::LimitExceeded { limit: 16, size } if size > 16),
-        "{:?}",
-        read.outcome
+    // At most one byte past the limit is read: the byte that shows the file is over it.
+    assert_eq!(
+        read.outcome,
+        ReadOutcome::LimitExceeded {
+            limit: 16,
+            size: 17
+        }
     );
     assert!(read.artifact.is_none());
 }
