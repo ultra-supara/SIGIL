@@ -1,26 +1,38 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+//! `sigil`: the v2 command line (plan §4.8).
+//!
+//! - `inspect ollama` inspects an Ollama installation: its model store, and, in observe mode,
+//!   the runtime's listening sockets. It writes the session (or its Markdown) and a summary.
+//! - `session render` renders a saved session.
+//! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
+//! - `rules` lists the detection rules.
+//!
+//! Exit codes: 0 normal, 1 execution error, 2 usage error, 3 `--fail-on` reached by the verdict,
+//! 4 `--fail-on-incomplete` with an incomplete result (when 3 does not apply).
 
-use anyhow::Result;
-use clap::{ArgAction, Parser, Subcommand};
-use sigil_core::aibom::{render_ai_bom, AiBom};
-use sigil_core::assess::{
-    capability_for_symbol, evaluate_policy, load_policy, severity_for_rule, PolicyViolation,
-    Verdict,
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use sigil_engine::collect::fs::FsBudgets;
+use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
+use sigil_engine::explain::{self, Format as ExplainFormat};
+use sigil_engine::inspect::{observe_session, store_session, ObserveRequest, StoreRequest};
+use sigil_engine::observe::host;
+use sigil_engine::observe::proc::ProcBudgets;
+use sigil_engine::policy::catalog::RULES;
+use sigil_engine::policy::Policy;
+use sigil_model::render::markdown::render_session;
+use sigil_model::render::{
+    action, completeness, coverage_state, mode as mode_name, severity, subject, verdict,
 };
-use sigil_core::evidence::{
-    CapabilityEvidence, Evidence, EvidenceItem, ExternalCall, UnsupportedInstruction,
-};
-use sigil_core::ir::Function;
-use sigil_core::ollama::{inspect_ollama, OllamaInspectOptions};
-use sigil_core::report::render_report;
-use sigil_core::runtime::RuntimeListeners;
-use sigil_core::safeisa::{emit_safeisa, render_safeisa, Program};
-use sigil_core::x86::{decode_x86_64, lift_instructions, load_function};
+use sigil_model::{Completeness, Mode, Session, Timestamp, ToolInfo, UntrustedText, Verdict};
 
 #[derive(Debug, Parser)]
-#[command(name = "sigil")]
-#[command(about = "Local-first security assessment for AI-native binaries")]
+#[command(name = "sigil", version)]
+#[command(about = "Local-first, read-only security inspection of local AI runtimes")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -28,421 +40,595 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Lift {
-        binary: PathBuf,
-        #[arg(long)]
-        entry: String,
-        #[arg(long)]
-        emit_ir: PathBuf,
-        #[arg(long)]
-        emit_safeisa: PathBuf,
-    },
-    Assess {
-        binary: PathBuf,
-        #[arg(long)]
-        entry: String,
-        #[arg(long)]
-        policy: PathBuf,
-        #[arg(long)]
-        out: Option<PathBuf>,
-        #[arg(long)]
-        emit_evidence: Option<PathBuf>,
-        #[arg(long = "external-call")]
-        external_call: Vec<String>,
-    },
-    Trace,
-    PolicyFromSource,
-    Explain,
-    Runtime {
-        #[command(subcommand)]
-        command: RuntimeCommand,
-    },
-    Aibom {
-        #[command(subcommand)]
-        command: AiBomCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum RuntimeCommand {
+    /// Inspect a runtime installation.
     Inspect {
         #[command(subcommand)]
-        target: RuntimeInspectTarget,
+        target: InspectTarget,
     },
+    /// Work with a saved session.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+    /// Explain a finding, the verdict, or the coverage of a saved session. Deterministic: the
+    /// same session gives the same text.
+    Explain(ExplainArgs),
+    /// List the detection rules.
+    Rules,
 }
 
 #[derive(Debug, Subcommand)]
-enum RuntimeInspectTarget {
+enum InspectTarget {
+    /// Ollama: its model store, and in observe mode the runtime's listening sockets.
     Ollama(OllamaArgs),
 }
 
-#[derive(Debug, Subcommand)]
-enum AiBomCommand {
-    Generate(AiBomGenerateArgs),
-}
-
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct OllamaArgs {
-    #[arg(long)]
-    model: Option<String>,
-    #[arg(long)]
-    host: Option<String>,
-    #[arg(long)]
+    /// static reads files only; observe also reads the allowed /proc entries.
+    #[arg(long, value_enum, default_value = "static")]
+    mode: ModeArg,
+    /// The model store [default: $OLLAMA_MODELS, else ~/.ollama/models].
+    #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
-    #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
-    probe_api: bool,
-    #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
-    inspect_runtime: bool,
-    #[arg(long)]
+    /// Inventory only the model with this display name (e.g. llama3.2:latest).
+    #[arg(long, value_name = "NAME")]
+    model: Option<String>,
+    /// A policy file (TOML) [default: the built-in policy].
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
+    /// A read budget, by the name the session records (e.g. files_discovered=4096).
+    #[arg(long = "budget", value_name = "KEY=VALUE")]
+    budgets: Vec<String>,
+    /// The instant that policy expiry is judged at: now, or RFC 3339 UTC.
+    #[arg(long, value_name = "now|RFC3339", default_value = "now")]
+    policy_time: String,
+    /// The document written.
+    #[arg(long, value_enum, default_value = "session")]
+    format: DocFormat,
+    /// Write the document here instead of stdout (outside the models directory).
+    #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
+    /// Exit with 3 when the verdict reaches this level.
+    #[arg(long, value_enum)]
+    fail_on: Option<FailOn>,
+    /// Exit with 4 when the result is incomplete (and 3 does not apply).
+    #[arg(long)]
+    fail_on_incomplete: bool,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum AiBomFormat {
-    Json,
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ModeArg {
+    Static,
+    Observe,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DocFormat {
+    /// The session (canonical JSON).
+    Session,
+    /// The session as Markdown.
     Md,
 }
 
-#[derive(Debug, Parser)]
-struct AiBomGenerateArgs {
-    #[arg(long)]
-    runtime: String,
-    #[arg(long)]
-    model: Option<String>,
-    #[arg(long)]
-    host: Option<String>,
-    #[arg(long)]
-    models_dir: Option<PathBuf>,
-    #[arg(long = "no-probe-api", action = ArgAction::SetFalse, default_value_t = true)]
-    probe_api: bool,
-    #[arg(long = "no-inspect-runtime", action = ArgAction::SetFalse, default_value_t = true)]
-    inspect_runtime: bool,
-    #[arg(long, default_value = "json")]
-    format: AiBomFormat,
-    #[arg(long)]
-    out: PathBuf,
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum FailOn {
+    Warn,
+    Fail,
 }
 
-fn main() -> Result<()> {
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    /// Render a saved session.
+    Render(RenderArgs),
+}
+
+#[derive(Debug, Args)]
+struct RenderArgs {
+    /// The session (JSON).
+    session: PathBuf,
+    #[arg(long, value_enum, default_value = "md")]
+    format: RenderFormat,
+    /// Write here instead of stdout.
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RenderFormat {
+    /// Markdown.
+    Md,
+}
+
+#[derive(Debug, Args)]
+struct ExplainArgs {
+    /// The session (JSON).
+    session: PathBuf,
+    #[command(flatten)]
+    question: Question,
+    /// text for a terminal, md for a review ticket.
+    #[arg(long, value_enum, default_value = "text")]
+    format: TextFormat,
+    /// Write here instead of stdout.
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+#[group(required = true, multiple = false)]
+struct Question {
+    /// Explain this finding: its rule, decision, evidence, and remediation.
+    #[arg(long, value_name = "ID")]
+    finding: Option<String>,
+    /// Explain the verdict and completeness.
+    #[arg(long)]
+    verdict: bool,
+    /// Explain the coverage of every check.
+    #[arg(long)]
+    coverage: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum TextFormat {
+    Text,
+    Md,
+}
+
+/// Why a command did not complete.
+enum Failure {
+    /// Exit 2.
+    Usage(String),
+    /// Exit 1.
+    Run(String),
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
-        Command::Lift {
-            binary,
-            entry,
-            emit_ir,
-            emit_safeisa,
-        } => cmd_lift(binary, entry, emit_ir, emit_safeisa),
-        Command::Assess {
-            binary,
-            entry,
-            policy,
-            out,
-            emit_evidence,
-            external_call,
-        } => assess_external_calls(binary, entry, policy, out, emit_evidence, external_call),
-        Command::Trace => placeholder("trace"),
-        Command::PolicyFromSource => placeholder("policy-from-source"),
-        Command::Explain => placeholder("explain"),
-        Command::Runtime { command } => cmd_runtime(command),
-        Command::Aibom { command } => cmd_aibom(command),
-    }
-}
-
-fn placeholder(name: &str) -> Result<()> {
-    println!("{name} is not implemented yet");
-    Ok(())
-}
-
-fn assess_external_calls(
-    binary: PathBuf,
-    entry: String,
-    policy_path: PathBuf,
-    out: Option<PathBuf>,
-    emit_evidence: Option<PathBuf>,
-    external_calls: Vec<String>,
-) -> Result<()> {
-    let policy = load_policy(&policy_path)?;
-    let mut capabilities = vec!["arithmetic".to_string()];
-    let mut calls = Vec::new();
-    let mut capability_evidence: BTreeMap<String, Vec<_>> = BTreeMap::new();
-
-    for symbol in &external_calls {
-        let capability = capability_for_symbol(symbol).map(str::to_string);
-        if let Some(capability_name) = &capability {
-            capabilities.push(capability_name.clone());
-            capability_evidence
-                .entry(capability_name.clone())
-                .or_default();
-        }
-        calls.push(ExternalCall {
-            symbol: symbol.clone(),
-            capability,
-            address: "unknown".to_string(),
-        });
-    }
-
-    if external_calls.is_empty() {
-        return assess_binary(binary, entry, policy_path, out, emit_evidence);
-    }
-
-    let result = evaluate_policy(&policy, capabilities.iter().map(String::as_str));
-    let unique_capabilities: BTreeSet<String> = capabilities.into_iter().collect();
-    let evidence = Evidence {
-        binary: binary.display().to_string(),
-        entry,
-        verdict: result.verdict,
-        capabilities: unique_capabilities
-            .into_iter()
-            .map(|name| CapabilityEvidence {
-                evidence: capability_evidence.remove(&name).unwrap_or_default(),
-                name,
-            })
-            .collect(),
-        external_calls: calls,
-        unsupported_instructions: vec![],
-        policy_violations: result.violations,
+    let result = match cli.command {
+        Command::Inspect {
+            target: InspectTarget::Ollama(args),
+        } => inspect_ollama(&args),
+        Command::Session {
+            command: SessionCommand::Render(args),
+        } => render(&args).map(|()| 0),
+        Command::Explain(args) => explain_session(&args).map(|()| 0),
+        Command::Rules => rules().map(|()| 0),
     };
-
-    if let Some(path) = emit_evidence {
-        std::fs::write(path, evidence.to_json()?)?;
-    }
-    if let Some(path) = out {
-        std::fs::write(path, render_report(&evidence, None))?;
-    }
-    println!("SIGIL Verdict: [{}]", verdict_text(evidence.verdict));
-    Ok(())
-}
-
-fn verdict_text(verdict: Verdict) -> &'static str {
-    verdict.as_str()
-}
-
-fn cmd_runtime(command: RuntimeCommand) -> Result<()> {
-    match command {
-        RuntimeCommand::Inspect { target } => match target {
-            RuntimeInspectTarget::Ollama(args) => {
-                let out = args.out.clone();
-                let report = inspect_ollama(ollama_options(args))?;
-                if let Some(path) = out {
-                    ensure_parent_dir(&path)?;
-                    std::fs::write(path, AiBom::from(&report).to_json()?)?;
-                }
-                println!("SIGIL Runtime Verdict: [{}]", report.verdict);
-                Ok(())
-            }
-        },
-    }
-}
-
-fn cmd_aibom(command: AiBomCommand) -> Result<()> {
-    match command {
-        AiBomCommand::Generate(args) => {
-            if args.runtime != "ollama" {
-                anyhow::bail!("unsupported AI-BOM runtime: {}", args.runtime);
-            }
-            let format = args.format;
-            let out = args.out.clone();
-            let options = OllamaInspectOptions {
-                model: args.model,
-                models_dir: args
-                    .models_dir
-                    .unwrap_or_else(OllamaInspectOptions::default_models_dir),
-                host: resolve_host(args.host),
-                probe_api: args.probe_api,
-                runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
-            };
-            let report = inspect_ollama(options)?;
-            let bom = AiBom::from(&report);
-            let contents = match format {
-                AiBomFormat::Json => bom.to_json()?,
-                AiBomFormat::Md => render_ai_bom(&bom),
-            };
-            ensure_parent_dir(&out)?;
-            std::fs::write(&out, contents)?;
-            println!("SIGIL AI-BOM: {}", out.display());
-            Ok(())
+    match result {
+        Ok(code) => ExitCode::from(code),
+        Err(Failure::Usage(message)) => {
+            eprintln!("error: {message}");
+            ExitCode::from(2)
+        }
+        Err(Failure::Run(message)) => {
+            eprintln!("error: {message}");
+            ExitCode::from(1)
         }
     }
 }
 
-fn resolve_runtime_listeners(inspect_runtime: bool) -> RuntimeListeners {
-    if inspect_runtime {
-        RuntimeListeners::Inspect
-    } else {
-        RuntimeListeners::Disabled
-    }
-}
+// --- inspect ollama ---------------------------------------------------------------------------
 
-// Resolution order: explicit --host -> OLLAMA_HOST env -> loopback default.
-// The flag has no clap default so an omitted --host can defer to OLLAMA_HOST.
-fn resolve_host(flag: Option<String>) -> String {
-    flag.or_else(|| {
-        std::env::var("OLLAMA_HOST")
-            .ok()
-            .filter(|value| !value.is_empty())
-    })
-    .unwrap_or_else(|| "http://127.0.0.1:11434".to_string())
-}
-
-fn ollama_options(args: OllamaArgs) -> OllamaInspectOptions {
-    OllamaInspectOptions {
-        model: args.model,
-        models_dir: args
-            .models_dir
-            .unwrap_or_else(OllamaInspectOptions::default_models_dir),
-        host: resolve_host(args.host),
-        probe_api: args.probe_api,
-        runtime_listeners: resolve_runtime_listeners(args.inspect_runtime),
-    }
-}
-
-fn ensure_parent_dir(path: &std::path::Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    Ok(())
-}
-
-fn cmd_lift(
-    binary: PathBuf,
-    entry: String,
-    emit_ir: PathBuf,
-    emit_safeisa_path: PathBuf,
-) -> Result<()> {
-    let (ir, safeisa) = analyze_binary(&binary, &entry)?;
-    std::fs::write(emit_ir, render_ir(&ir))?;
-    std::fs::write(emit_safeisa_path, render_safeisa(&safeisa, &entry))?;
-    Ok(())
-}
-
-fn assess_binary(
-    binary: PathBuf,
-    entry: String,
-    policy_path: PathBuf,
-    out: Option<PathBuf>,
-    emit_evidence: Option<PathBuf>,
-) -> Result<()> {
-    let policy = load_policy(policy_path)?;
-    let (ir, safeisa) = analyze_binary(&binary, &entry)?;
-    let mut capabilities = Vec::new();
-    let mut capability_evidence: BTreeMap<String, Vec<EvidenceItem>> = BTreeMap::new();
-    let mut external_calls = Vec::new();
-    let mut unsupported = Vec::new();
-    let mut extra_violations = Vec::new();
-
-    for block in &ir.blocks {
-        for op in &block.ops {
-            let address = format!("{:#x}", op.source_address.unwrap_or_default());
-            match op.op.as_str() {
-                "Add" | "Sub" | "Mul" | "And" | "Or" | "Xor" => {
-                    capabilities.push("arithmetic".to_string());
-                    capability_evidence
-                        .entry("arithmetic".to_string())
-                        .or_default()
-                        .push(EvidenceItem {
-                            address,
-                            instruction: op.text.clone(),
-                            symbol: None,
-                        });
-                }
-                "ExternalCall" => {
-                    let symbol = op.symbol.clone().unwrap_or_else(|| "unknown".to_string());
-                    let capability = capability_for_symbol(&symbol).map(str::to_string);
-                    if let Some(capability_name) = &capability {
-                        capabilities.push(capability_name.clone());
-                        capability_evidence
-                            .entry(capability_name.clone())
-                            .or_default()
-                            .push(EvidenceItem {
-                                address: address.clone(),
-                                instruction: op.text.clone(),
-                                symbol: Some(symbol.clone()),
-                            });
-                    }
-                    external_calls.push(ExternalCall {
-                        symbol,
-                        capability,
-                        address,
-                    });
-                }
-                "Unsupported" => {
-                    capabilities.push("unsupported_instruction".to_string());
-                    unsupported.push(UnsupportedInstruction {
-                        address: address.clone(),
-                        instruction: op.text.clone(),
-                    });
-                    let severity =
-                        severity_for_rule(&policy, "unsupported_instruction", Verdict::Warn);
-                    extra_violations.push(
-                        PolicyViolation::with_address(
-                            "unsupported_instruction",
-                            "unsupported_instruction",
-                            address,
-                        )
-                        .with_severity(severity),
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let mut result = evaluate_policy(&policy, capabilities.iter().map(String::as_str));
-    result.violations.extend(extra_violations);
-    let unique_capabilities: BTreeSet<String> = capabilities.into_iter().collect();
-    let evidence = Evidence {
-        binary: binary.display().to_string(),
-        entry,
-        verdict: result.verdict,
-        capabilities: unique_capabilities
-            .into_iter()
-            .map(|name| CapabilityEvidence {
-                evidence: capability_evidence.remove(&name).unwrap_or_default(),
-                name,
-            })
-            .collect(),
-        external_calls,
-        unsupported_instructions: unsupported,
-        policy_violations: result.violations,
+fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
+    let started_at = now()?;
+    let mode = match args.mode {
+        ModeArg::Static => Mode::Static,
+        ModeArg::Observe => Mode::Observe,
     };
-
-    if let Some(path) = emit_evidence {
-        std::fs::write(path, evidence.to_json()?)?;
+    let policy_time = match args.policy_time.as_str() {
+        "now" => started_at.clone(),
+        given => Timestamp::new(given)
+            .map_err(|e| Failure::Usage(format!("--policy-time: {}", shown(&e.to_string()))))?,
+    };
+    let models_dir = args.models_dir.clone().unwrap_or_else(default_models_dir);
+    let (fs_budgets, manifest_limit, proc_budgets) = budgets(&args.budgets, mode)?;
+    if let Some(out) = &args.out {
+        check_out(out, &models_dir)?;
     }
-    if let Some(path) = out {
-        std::fs::write(path, render_report(&evidence, Some(&safeisa)))?;
-    }
-    println!("SIGIL Verdict: [{}]", verdict_text(evidence.verdict));
-    Ok(())
-}
+    let policy = load_policy(args.policy.as_deref())?;
 
-fn analyze_binary(binary: &PathBuf, entry: &str) -> Result<(Function, Program)> {
-    let loaded = load_function(binary, entry)?;
-    let decoded = decode_x86_64(&loaded.code, loaded.address)?;
-    let ir = lift_instructions(
-        entry,
-        &decoded,
-        &loaded.call_symbols,
-        &loaded.target_symbols,
+    let store = StoreRequest {
+        models_dir,
+        model_filter: args.model.clone(),
+        budgets: fs_budgets,
+        manifest_limit,
+    };
+    let tool = ToolInfo {
+        name: "sigil".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_rev: None,
+    };
+    let proc_root = Path::new("/proc");
+    let observation = host::meta(mode, proc_root, started_at);
+    let assembled = match mode {
+        Mode::Static => store_session(&store, &policy, tool, observation, policy_time),
+        Mode::Observe => observe_session(
+            &ObserveRequest {
+                store,
+                proc_root: proc_root.to_path_buf(),
+                proc_budgets,
+            },
+            &policy,
+            tool,
+            observation,
+            policy_time,
+        ),
+    };
+    let mut session = assembled.map_err(|e| Failure::Run(shown(&e.to_string())))?;
+    let finished = now()?;
+    if finished > session.observation.started_at {
+        session.observation.finished_at = finished;
+    }
+
+    let document = match args.format {
+        DocFormat::Session => session
+            .to_canonical_json()
+            .map_err(|e| Failure::Run(format!("the session cannot be serialized: {e}")))?,
+        DocFormat::Md => render_session(&session),
+    };
+    emit(&document, args.out.as_deref())?;
+    summary(&session, args.out.as_deref());
+
+    let failed = match args.fail_on {
+        Some(FailOn::Warn) => session.outcome.verdict >= Verdict::Warn,
+        Some(FailOn::Fail) => session.outcome.verdict == Verdict::Fail,
+        None => false,
+    };
+    let incomplete = matches!(
+        session.outcome.completeness,
+        Completeness::Incomplete { .. }
     );
-    let safeisa = emit_safeisa(&ir);
-    Ok((ir, safeisa))
+    Ok(if failed {
+        3
+    } else if args.fail_on_incomplete && incomplete {
+        4
+    } else {
+        0
+    })
 }
 
-fn render_ir(ir: &Function) -> String {
-    let mut lines = vec![format!("func {}:", ir.name)];
-    for block in &ir.blocks {
-        lines.push(format!("  block {}:", block.name));
-        for op in &block.ops {
-            lines.push(format!(
-                "    {:#x} {} {}",
-                op.source_address.unwrap_or_default(),
-                op.op,
-                op.text
-            ));
+/// `$OLLAMA_MODELS`, else `$HOME/.ollama/models`, as Ollama itself.
+fn default_models_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("OLLAMA_MODELS") {
+        return PathBuf::from(dir);
+    }
+    let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
+    PathBuf::from(home).join(".ollama/models")
+}
+
+/// The budgets, by the names the session records in `request.budgets`.
+fn budgets(given: &[String], mode: Mode) -> Result<(FsBudgets, u64, ProcBudgets), Failure> {
+    let mut fs_budgets = FsBudgets::default();
+    let mut manifest_limit = DEFAULT_MANIFEST_LIMIT;
+    let mut proc_budgets = ProcBudgets::default();
+    for entry in given {
+        let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
+        let Some((key, value)) = entry.split_once('=') else {
+            return Err(usage("expected KEY=VALUE"));
+        };
+        let value: u64 = value
+            .parse()
+            .map_err(|_| usage("the value is not a whole number"))?;
+        let small = |v: u64| u32::try_from(v).map_err(|_| usage("the value is too large"));
+        match key {
+            "files_discovered" => fs_budgets.max_files = value,
+            "entries_listed" => fs_budgets.max_entries = value,
+            "directory_entries" => fs_budgets.max_dir_entries = value,
+            "walk_depth" => fs_budgets.max_depth = small(value)?,
+            "link_hops" => fs_budgets.max_link_hops = small(value)?,
+            "manifest_bytes" => manifest_limit = value,
+            "processes_listed" | "fds_per_process" | "tcp_table_bytes" if mode == Mode::Static => {
+                return Err(usage("this budget applies to --mode observe only"));
+            }
+            "processes_listed" => proc_budgets.max_processes = value,
+            "fds_per_process" => proc_budgets.max_fds = value,
+            "tcp_table_bytes" => proc_budgets.max_table_bytes = value,
+            _ => {
+                return Err(usage(
+                    "unknown budget; known: files_discovered, entries_listed, directory_entries, \
+                     walk_depth, link_hops, manifest_bytes, and in observe mode processes_listed, \
+                     fds_per_process, tcp_table_bytes",
+                ))
+            }
         }
     }
-    lines.join("\n") + "\n"
+    Ok((fs_budgets, manifest_limit, proc_budgets))
+}
+
+/// `--out` must not lie inside the models directory (C-5): SIGIL never writes under a scan root.
+/// Symlinks are resolved as far as the paths exist.
+fn check_out(out: &Path, models_dir: &Path) -> Result<(), Failure> {
+    let models =
+        resolved(models_dir).map_err(|e| Failure::Usage(format!("the models directory: {e}")))?;
+    let out = resolved(out).map_err(|e| Failure::Usage(format!("--out: {e}")))?;
+    if out.starts_with(&models) {
+        return Err(Failure::Usage(format!(
+            "--out {} is inside the models directory {}; SIGIL never writes under a scan root",
+            shown_path(&out),
+            shown_path(&models)
+        )));
+    }
+    Ok(())
+}
+
+/// `path` made absolute, with its longest existing prefix resolved through symlinks.
+fn resolved(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let mut base = absolute.as_path();
+    let mut rest = vec![];
+    loop {
+        if let Ok(real) = fs::canonicalize(base) {
+            return Ok(rest.iter().rev().fold(real, |p, c| p.join(c)));
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return Ok(absolute),
+        }
+    }
+}
+
+fn load_policy(path: Option<&Path>) -> Result<Policy, Failure> {
+    let Some(path) = path else {
+        return Policy::builtin_default()
+            .map_err(|e| Failure::Run(format!("the built-in policy: {e}")));
+    };
+    let text = fs::read_to_string(path)
+        .map_err(|e| Failure::Run(format!("--policy {} cannot be read: {e}", shown_path(path))))?;
+    Policy::load(&text).map_err(|e| {
+        Failure::Run(format!(
+            "--policy {} is invalid: {}",
+            shown_path(path),
+            shown(&e.to_string())
+        ))
+    })
+}
+
+/// The header and summary, to stderr (plan §4.8).
+fn summary(s: &Session, out: Option<&Path>) {
+    let r = &s.request;
+    let audit: Vec<&str> = r.audit.iter().map(|a| a.as_str()).collect();
+    let mut lines = vec![format!(
+        "SIGIL {}  mode={}  audit={}",
+        s.tool.version,
+        mode_name(r.mode),
+        audit.join(",")
+    )];
+    let roots: Vec<String> = r
+        .roots
+        .iter()
+        .map(|root| format!("{} ({})", root.path.terminal_line(), root.id))
+        .collect();
+    lines.push(format!("roots: {}", roots.join(", ")));
+    let o = &s.outcome;
+    lines.push(format!(
+        "verdict: {:<15}confirmed: {} fail · {} warn · {} policy violations",
+        verdict(o.verdict),
+        o.confirmed_failures,
+        o.confirmed_warnings,
+        s.policy_violations.len()
+    ));
+    match &o.completeness {
+        Completeness::Complete => {
+            lines.push(format!("completeness: {}", completeness(&o.completeness)));
+        }
+        Completeness::Incomplete {
+            missing_required,
+            gaps,
+        } => {
+            lines.push(format!(
+                "completeness: {}  {} required check(s) not closed, {} open question(s) counted as gaps",
+                completeness(&o.completeness),
+                missing_required.len(),
+                gaps.len()
+            ));
+            for check in missing_required {
+                let states: Vec<String> = s
+                    .coverage
+                    .iter()
+                    .filter(|c| c.check == *check)
+                    .map(|c| {
+                        format!(
+                            "{}: {}",
+                            shown(&subject(&c.scope)),
+                            coverage_state(&c.state).terminal()
+                        )
+                    })
+                    .collect();
+                let states = if states.is_empty() {
+                    "no coverage entry".to_string()
+                } else {
+                    states.join("; ")
+                };
+                lines.push(format!("  missing  {}  {states}", shown(check.as_str())));
+            }
+            for gap in gaps {
+                lines.push(format!("  gap      {}", shown(gap.as_str())));
+            }
+        }
+    }
+    for f in &s.findings {
+        lines.push(format!(
+            "  {:<8} {}",
+            action(f.decision.action),
+            shown(f.id.as_str())
+        ));
+    }
+    lines.push(
+        "note: model blob hashing is unbounded by default (its I/O grows with model size)"
+            .to_string(),
+    );
+    if let Some(out) = out {
+        lines.push(format!("wrote {}", shown_path(out)));
+    }
+    eprintln!("{}", lines.join("\n"));
+}
+
+// --- session render, explain, rules -----------------------------------------------------------
+
+fn render(args: &RenderArgs) -> Result<(), Failure> {
+    let session = load_session(&args.session)?;
+    let document = match args.format {
+        RenderFormat::Md => render_session(&session),
+    };
+    emit(&document, args.out.as_deref())
+}
+
+fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
+    let session = load_session(&args.session)?;
+    let format = match args.format {
+        TextFormat::Text => ExplainFormat::Text,
+        TextFormat::Md => ExplainFormat::Markdown,
+    };
+    let q = &args.question;
+    let mut text = if let Some(id) = &q.finding {
+        explain::finding(&session, id, format).map_err(|e| Failure::Run(e.to_string()))?
+    } else if q.verdict {
+        explain::verdict(&session, format)
+    } else {
+        explain::coverage(&session, format)
+    };
+    text.push('\n');
+    emit(&text, args.out.as_deref())
+}
+
+fn rules() -> Result<(), Failure> {
+    let mut text = String::new();
+    for r in RULES {
+        text.push_str(&format!(
+            "{:<34} {:<5} {}\n",
+            r.id,
+            severity(r.default),
+            r.summary
+        ));
+    }
+    emit(&text, None)
+}
+
+/// A saved session: JSON, schema `sigil-session/1`, and valid.
+fn load_session(path: &Path) -> Result<Session, Failure> {
+    let name = shown_path(path);
+    let text = fs::read_to_string(path)
+        .map_err(|e| Failure::Run(format!("{name} cannot be read: {e}")))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| Failure::Run(format!("{name} is not valid JSON: {e}")))?;
+    match value.get("schema").and_then(serde_json::Value::as_str) {
+        Some("sigil-session/1") => {}
+        Some(other) => {
+            return Err(Failure::Run(format!(
+                "{name} has schema {}; this SIGIL reads sigil-session/1",
+                shown(other)
+            )))
+        }
+        None => {
+            return Err(Failure::Run(format!(
+                "{name} is not a SIGIL session (no \"schema\": \"sigil-session/1\"); \
+                 an AI-BOM v1 report of SIGIL 0.1 cannot be read by this version"
+            )))
+        }
+    }
+    let session: Session = serde_json::from_value(value).map_err(|e| {
+        Failure::Run(format!(
+            "{name} is not a valid session: {}",
+            shown(&e.to_string())
+        ))
+    })?;
+    session.validate().map_err(|errors| {
+        let first: Vec<String> = errors
+            .iter()
+            .take(5)
+            .map(|e| shown(&e.to_string()))
+            .collect();
+        Failure::Run(format!(
+            "{name} is not a valid session ({} errors): {}",
+            errors.len(),
+            first.join("; ")
+        ))
+    })?;
+    Ok(session)
+}
+
+// --- output -----------------------------------------------------------------------------------
+
+/// Writes `document` to `out` (creating its directories) or to stdout.
+fn emit(document: &str, out: Option<&Path>) -> Result<(), Failure> {
+    match out {
+        Some(path) => {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent).map_err(|e| {
+                    Failure::Run(format!("--out {} cannot be created: {e}", shown_path(path)))
+                })?;
+            }
+            fs::write(path, document).map_err(|e| {
+                Failure::Run(format!("--out {} cannot be written: {e}", shown_path(path)))
+            })
+        }
+        None => {
+            let mut stdout = std::io::stdout().lock();
+            stdout
+                .write_all(document.as_bytes())
+                .and_then(|()| stdout.flush())
+                .map_err(|e| Failure::Run(format!("stdout: {e}")))
+        }
+    }
+}
+
+/// Text for a terminal line: control and bidirectional characters escaped.
+fn shown(text: &str) -> String {
+    UntrustedText::new(text).terminal_line()
+}
+
+fn shown_path(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    UntrustedText::from_bytes(path.as_os_str().as_bytes()).terminal_line()
+}
+
+/// The current instant, RFC 3339 UTC to the second.
+fn now() -> Result<Timestamp, Failure> {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Failure::Run("the system clock is before 1970".to_string()))?
+        .as_secs();
+    let days = i64::try_from(secs / 86_400)
+        .map_err(|_| Failure::Run("the system clock is out of range".to_string()))?;
+    let rem = secs % 86_400;
+    let (y, m, d) = civil_from_days(days);
+    Timestamp::new(format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem / 60 % 60,
+        rem % 60
+    ))
+    .map_err(|e| Failure::Run(format!("the system clock: {e}")))
+}
+
+/// The proleptic Gregorian date of a day count since 1970-01-01 (H. Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (y, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::civil_from_days;
+
+    #[test]
+    fn civil_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
+        assert_eq!(civil_from_days(10_957), (2000, 1, 1));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(20_734), (2026, 10, 8));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
 }
