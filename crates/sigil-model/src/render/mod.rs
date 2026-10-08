@@ -86,6 +86,7 @@ pub fn subject(r: &Ref) -> String {
         Ref::Process(p) => format!("process {} (start {})", p.pid, p.start_ticks),
         Ref::Model(id) => id.to_string(),
         Ref::Listener(id) => id.to_string(),
+        Ref::Probe(id) => id.to_string(),
     }
 }
 

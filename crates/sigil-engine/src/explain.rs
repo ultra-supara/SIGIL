@@ -328,6 +328,7 @@ fn cond_evidence(e: &CondEvidence) -> String {
 /// One evidence reference, resolved to the session's facts where they are recorded.
 fn evidence(s: &Session, e: &EvidenceRef) -> Shown {
     match e {
+        EvidenceRef::Probe { probe } => Shown::own(format!("probe {probe}")),
         EvidenceRef::Listener { listener } => {
             match s.listeners.iter().find(|l| l.id == *listener) {
                 Some(l) => {

@@ -100,6 +100,11 @@ The rule then yields an open question at most.
   - its address is an IP address;
   - a listener owned by a process names a recorded process;
   - a listener counts as an `Observed` fact for a condition.
+- **An active probe matches the request (ADR-002 active mode):**
+  - each requested target is the canonical text of a specified IP address with a non-zero port, and is loopback unless `allow_remote` is set;
+  - each requested target has exactly one probe, and each probe was requested;
+  - a probe's ID is `probe:api/<address>:<port>`, with an IPv6 address in brackets;
+  - a probe is not an `Observed` fact for a condition: no finding rests on it.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -373,6 +378,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Model store | `Model`, `ModelProvenance`, `ModelLayer`, `LayerRole`, `BlobLookup`, `LicenseText` | One manifest, what its path says, its layers as written with how each blob lookup ended, and the license text read |
 | Process observation | `ProcessObs`, `ProcessRef`, `MappingObs`, `NsInode` | What was seen in a process at an instant: its name, arguments, executable, network namespace, whether its fds could be listed, and its mappings |
 | Listeners | `Listener`, `Protocol`, `ListenerOwner` | Listening sockets in SIGIL's network namespace, and who holds each one as far as the readable fd tables show. Never attributed by port |
+| Active probes | `ActiveFeature`, `ApiProbe`, `ProbeResult`, `ProbePhase` | What `--active` asked for (`request.active`) and how each probe ended. A refused connection is an observation (`NotPresent` with basis `ConnectionRefused`); a timeout is not |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
 | B: presence | `FeatureHint`, `Signal` | A feature signal exists |

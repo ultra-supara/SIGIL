@@ -87,6 +87,8 @@ pub enum AbsenceBasis {
     SymbolsAbsent { names: Vec<String> },
     /// A verified reference build lacks the feature.
     ReferenceBuild { reference: ArtifactId },
+    /// A connection to the target was refused: nothing answers there from this host.
+    ConnectionRefused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

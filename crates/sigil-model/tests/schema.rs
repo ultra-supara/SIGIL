@@ -146,12 +146,15 @@ fn registered() -> Vec<(&'static str, Probe)> {
         LayerRole => "LayerRole", LicenseText => "LicenseText", BlobLookup => "BlobLookup",
         Listener => "Listener", ListenerOwner => "ListenerOwner", NsInode => "NsInode",
         Protocol => "Protocol",
+        ActiveFeature => "ActiveFeature", ApiProbe => "ApiProbe", ProbeResult => "ProbeResult",
+        ProbePhase => "ProbePhase",
     ]
 }
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
 const MODEL: &str = "model:models/registry.ollama.ai/library/m/latest";
 const LISTENER: &str = "listener:tcp6/:::11434#7001";
+const PROBE: &str = "probe:api/[::1]:11434";
 
 const SCALAR_DEFS: &[&str] = &[
     "ArtifactId",
@@ -160,6 +163,7 @@ const SCALAR_DEFS: &[&str] = &[
     "RootId",
     "ModelId",
     "ListenerId",
+    "ProbeId",
     "FnId",
     "CallId",
     "ValueId",
@@ -610,6 +614,62 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample(
             "NsInode",
             NsInode::NotObservable(NotObservable::PermissionDenied),
+        ),
+        sample("Ref", Ref::Probe(id(PROBE))),
+        sample("EvidenceRef", EvidenceRef::Probe { probe: id(PROBE) }),
+        sample("AbsenceBasis", AbsenceBasis::ConnectionRefused),
+        sample(
+            "ActiveFeature",
+            ActiveFeature::ApiProbe {
+                address: "::1".to_string(),
+                port: 11434,
+                allow_remote: false,
+            },
+        ),
+        sample(
+            "ApiProbe",
+            ApiProbe {
+                id: id(PROBE),
+                address: "::1".to_string(),
+                port: 11434,
+                at: ts("2026-10-07T07:00:01Z"),
+                result: ProbeResult::Refused,
+            },
+        ),
+        sample(
+            "ProbeResult",
+            ProbeResult::Answered {
+                status: 200,
+                version: Some(t("0.12.3")),
+            },
+        ),
+        sample(
+            "ProbeResult",
+            ProbeResult::Answered {
+                status: 404,
+                version: None,
+            },
+        ),
+        sample(
+            "ProbeResult",
+            ProbeResult::TimedOut {
+                phase: ProbePhase::Connect,
+            },
+        ),
+        sample("ProbePhase", ProbePhase::Write),
+        sample("ProbePhase", ProbePhase::Read),
+        sample("ProbeResult", ProbeResult::TooLarge { limit: 65536 }),
+        sample(
+            "ProbeResult",
+            ProbeResult::Malformed {
+                why: "transfer-encoding not supported".to_string(),
+            },
+        ),
+        sample(
+            "ProbeResult",
+            ProbeResult::Failed {
+                message: t("Connection reset by peer (os error 104)"),
+            },
         ),
         sample("BlobLookup", BlobLookup::Absent),
         sample(

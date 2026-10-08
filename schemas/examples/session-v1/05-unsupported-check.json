@@ -16,7 +16,8 @@
     "required_checks": ["artifacts.discovery", "loader.identify"],
     "budgets": {"files": 4096},
     "observe_env": false,
-    "model_filter": null
+    "model_filter": null,
+    "active": []
   },
   "observation": {
     "started_at": "2026-10-07T07:00:00Z",
@@ -74,6 +75,7 @@
   "models": [],
   "processes": [],
   "listeners": [],
+  "probes": [],
   "values": [],
   "components": [],
   "releases": [],
