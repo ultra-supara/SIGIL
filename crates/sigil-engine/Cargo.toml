@@ -1,0 +1,18 @@
+[package]
+name = "sigil-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SIGIL v2 engine: anchored read-only file access (SafeFs), collectors, and policy evaluation."
+
+[dependencies]
+sigil-model = { path = "../sigil-model" }
+serde.workspace = true
+sha2.workspace = true
+rustix.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
