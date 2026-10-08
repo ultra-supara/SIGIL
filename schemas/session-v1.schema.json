@@ -621,6 +621,19 @@
               "properties": {"process": {"$ref": "#/$defs/ProcessRef"}}
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Manifest"],
+          "properties": {
+            "Manifest": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["manifest"],
+              "properties": {"manifest": {"$ref": "#/$defs/InstanceId"}}
+            }
+          }
         }
       ]
     },

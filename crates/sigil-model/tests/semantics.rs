@@ -1387,6 +1387,38 @@ fn a_model_records_facts_that_resolve() {
 }
 
 #[test]
+fn a_blob_is_discovered_through_its_manifest() {
+    let mut s = with_model();
+    let manifest = s.models[0].manifest.clone();
+    for inst in s
+        .instances
+        .iter_mut()
+        .filter(|i| i.path.as_str().is_some_and(|p| p.starts_with("blobs/")))
+    {
+        inst.discovered_by = vec![DiscoverySource::Manifest {
+            manifest: manifest.clone(),
+        }];
+    }
+    assert_valid(&s);
+    s.instances[1].discovered_by = vec![DiscoverySource::Manifest {
+        manifest: id("inst:models/manifests/elsewhere"),
+    }];
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::Dangling {
+                    kind: "instance",
+                    ..
+                }
+            )
+        },
+        "a blob discovered through an unknown manifest",
+    );
+}
+
+#[test]
 fn model_ids_are_unique_and_references_resolve() {
     let mut s = with_model();
     let copy = s.models[0].clone();

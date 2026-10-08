@@ -176,6 +176,8 @@ pub enum DiscoverySource {
     ServiceUnit { config: ConfigRef },
     /// The executable of an observed process.
     ProcessExe { process: ProcessRef },
+    /// Named by a model manifest (a blob of the model store).
+    Manifest { manifest: InstanceId },
 }
 
 /// A process, guarded against PID reuse by its start time and boot ID.

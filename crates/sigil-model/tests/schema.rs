@@ -431,6 +431,12 @@ fn gallery() -> Vec<(&'static str, Value)> {
             },
         ),
         sample(
+            "DiscoverySource",
+            DiscoverySource::Manifest {
+                manifest: id("inst:models/manifests/registry.ollama.ai/library/m/latest"),
+            },
+        ),
+        sample(
             "ProcessExe",
             ProcessExe::Instance {
                 instance: id("inst:bin/ollama"),

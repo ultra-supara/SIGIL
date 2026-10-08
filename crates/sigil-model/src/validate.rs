@@ -781,6 +781,9 @@ impl<'a> Validator<'a> {
                     crate::artifact::DiscoverySource::ProcessExe { process } => {
                         self.process(process, &at)
                     }
+                    crate::artifact::DiscoverySource::Manifest { manifest } => {
+                        self.instance(manifest, &at)
+                    }
                 }
             }
         }
