@@ -561,6 +561,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("UnknownReason", reason.clone()),
         sample("NotObservable", NotObservable::NoProcess),
         sample("NotObservable", NotObservable::NamespaceMismatch),
+        sample("NotObservable", NotObservable::ReadIncomplete),
         sample("Ref", Ref::Root(id("install"))),
         sample(
             "Ref",

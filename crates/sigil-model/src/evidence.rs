@@ -223,6 +223,9 @@ pub enum NotObservable {
     NoProcess,
     ModeDisabled,
     NamespaceMismatch,
+    /// A listing or read ended before it was complete (a budget, or an error): what it found is
+    /// kept, but it is not all there is.
+    ReadIncomplete,
 }
 
 /// Whether process mappings could be observed at all. An empty mapping list means "not mapped

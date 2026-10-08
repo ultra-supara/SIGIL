@@ -1359,7 +1359,7 @@
     },
     "NotObservable": {
       "type": "string",
-      "enum": ["PermissionDenied", "NoProcess", "ModeDisabled", "NamespaceMismatch"]
+      "enum": ["PermissionDenied", "NoProcess", "ModeDisabled", "NamespaceMismatch", "ReadIncomplete"]
     },
     "Observability": {
       "oneOf": [
