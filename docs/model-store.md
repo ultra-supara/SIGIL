@@ -68,6 +68,13 @@ manifests are never opened.
 - **`model_store.integrity`** and **`model_store.license`** are recorded per model. With no models,
   they have no entry, so they stay open.
 - A missing models directory therefore gives `PASS` + `INCOMPLETE`, never a clean `PASS` (I-01).
+- **A file that changed while it was read supports no claim.** SafeFs records `ChangedDuringRead`
+  or `Vanished` when the file's metadata or identity changed across the read. What was read is
+  kept, but:
+  - a blob leaves integrity `Partial`, with no mismatch finding;
+  - the license blob leaves the license check `Partial`;
+  - a manifest yields no finding about its model, and leaves its inventory, integrity, and license
+    `Partial`.
 
 Each finding has one `Observed` condition naming the files it rests on: the manifest, and for a
 mismatch the blob and what it holds. Findings about one layer carry its index in their ID.

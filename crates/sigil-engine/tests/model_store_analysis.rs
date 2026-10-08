@@ -342,3 +342,117 @@ fn a_blob_that_cannot_be_resolved_is_a_gap_not_missing() {
         "{missing:?}"
     );
 }
+
+// --- stability: a read that saw the file change ---------------------------------------------
+// SafeFs records whether a file changed while it was read. These tests set that state on
+// collected facts, rather than racing a writer.
+
+fn unstable(facts: &mut StoreFacts, id: &InstanceId, stability: Stability) {
+    facts
+        .instances
+        .iter_mut()
+        .find(|i| i.id == *id)
+        .unwrap()
+        .stability = stability;
+}
+
+fn blob_inst(bytes: &[u8]) -> InstanceId {
+    inst(&format!("blobs/sha256-{}", hex(bytes)))
+}
+
+fn collected(dir: &Path) -> StoreFacts {
+    let mut fs = SafeFs::new(FsBudgets::default());
+    fs.add_root(root(), dir).unwrap();
+    collect(&fs, &root(), None, DEFAULT_MANIFEST_LIMIT)
+}
+
+#[test]
+fn a_blob_that_changed_during_the_read_leaves_integrity_open() {
+    for stability in [Stability::ChangedDuringRead, Stability::Vanished] {
+        let dir = TempDir::new().unwrap();
+        good_store(dir.path());
+        let mut facts = collected(dir.path());
+        unstable(&mut facts, &blob_inst(b"weights"), stability);
+        let (findings, coverage) = analyze(&facts, &root());
+        assert!(findings.is_empty(), "{:?}", rules(&findings));
+        let Some(CoverageState::Partial { missing }) =
+            state(&coverage, INTEGRITY, &model_ref(&facts))
+        else {
+            panic!("{stability:?}: integrity must stay open");
+        };
+        assert_eq!(missing.len(), 1);
+        assert!(
+            missing[0].starts_with("layer 1: blob not stable"),
+            "{missing:?}"
+        );
+    }
+
+    // The bytes read differ from the digest, but the file was changing: no confirmed FAIL.
+    let dir = TempDir::new().unwrap();
+    let d = dir.path();
+    good_store(d);
+    fs::write(
+        d.join(format!("blobs/sha256-{}", hex(b"weights"))),
+        b"tampered",
+    )
+    .unwrap();
+    let mut facts = collected(d);
+    unstable(
+        &mut facts,
+        &blob_inst(b"weights"),
+        Stability::ChangedDuringRead,
+    );
+    let (findings, _) = analyze(&facts, &root());
+    assert!(findings.is_empty(), "{:?}", rules(&findings));
+}
+
+#[test]
+fn a_license_blob_that_changed_during_the_read_leaves_the_license_check_open() {
+    let dir = TempDir::new().unwrap();
+    good_store(dir.path());
+    let mut facts = collected(dir.path());
+    unstable(&mut facts, &blob_inst(b"MIT"), Stability::ChangedDuringRead);
+    let (_, coverage) = analyze(&facts, &root());
+    let m = model_ref(&facts);
+    assert!(matches!(
+        state(&coverage, LICENSE, &m),
+        Some(CoverageState::Partial { .. })
+    ));
+    // The text that was read is kept as evidence.
+    assert!(facts.models[0].license.is_some());
+}
+
+#[test]
+fn a_manifest_that_changed_during_the_read_supports_no_claim_about_its_model() {
+    let dir = TempDir::new().unwrap();
+    let d = dir.path();
+    // Read alone, this manifest would give `blob_missing` and `license_missing`.
+    manifest(
+        d,
+        LIB,
+        None,
+        &[(MODEL_MEDIA, &format!("sha256:{}", hex(b"never written")))],
+    );
+    let mut facts = collected(d);
+    let manifest_inst = inst(&format!("manifests/{LIB}"));
+    unstable(&mut facts, &manifest_inst, Stability::ChangedDuringRead);
+    let (findings, coverage) = analyze(&facts, &root());
+    assert!(findings.is_empty(), "{:?}", rules(&findings));
+    let m = model_ref(&facts);
+    for (check, scope) in [
+        (INTEGRITY, &m),
+        (LICENSE, &m),
+        (
+            "model_store.inventory",
+            &Ref::Instance(manifest_inst.clone()),
+        ),
+    ] {
+        assert!(
+            matches!(
+                state(&coverage, check, scope),
+                Some(CoverageState::Partial { .. })
+            ),
+            "{check}"
+        );
+    }
+}

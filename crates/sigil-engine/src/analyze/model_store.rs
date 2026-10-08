@@ -16,16 +16,24 @@
 //! | — | the license layer's blob exists but was not read, or could not be resolved | license `Error` |
 //! | `model.provenance_unknown` | a manifest path too shallow to name a model | — |
 //! | `model.manifest_unparseable` | a manifest that is not valid JSON or lacks a digest | (inventory `Error`, by the collector) |
-//! | `model.not_found` | a filter matched no manifest | — |
+//! | `model.not_found` | a filter matched no manifest (after a complete listing) | — |
+//!
+//! A file that SafeFs saw change or vanish while it was read (`Stability`) supports no claim:
+//! - a blob: integrity `Partial`, and no mismatch finding;
+//! - the license blob: license `Partial`;
+//! - the manifest: no finding about the model, and its inventory, integrity, and license are
+//!   all `Partial`.
+//!
+//! What was read stays in the facts.
 
 use sigil_model::{
     digest_hex, Action, BlobLookup, CheckId, CondEvidence, CondId, CondState, Condition, Coverage,
     CoverageState, EvidenceRef, FileInstance, Finding, FindingId, InstanceContent, InstanceId,
-    Model, PolicyDecision, PolicyRuleRef, Ref, RootId, RuleId, Severity, UntrustedText,
+    Model, PolicyDecision, PolicyRuleRef, Ref, RootId, RuleId, Severity, Stability, UntrustedText,
     LICENSE_MEDIA_TYPE,
 };
 
-use crate::collect::ollama_store::StoreFacts;
+use crate::collect::ollama_store::{StoreFacts, INVENTORY};
 use crate::policy::catalog;
 
 /// Whether every blob of a model was read and compared with its digest.
@@ -65,6 +73,14 @@ pub fn analyze(facts: &StoreFacts, root: &RootId) -> (Vec<Finding>, Vec<Coverage
     (out.findings, out.coverage)
 }
 
+/// How a read file was not stable, when SafeFs saw it change or vanish.
+fn not_stable(instance: &FileInstance) -> Option<String> {
+    match instance.stability {
+        Stability::NoChangeDetected => None,
+        other => Some(format!("{other:?}")),
+    }
+}
+
 #[derive(Default)]
 struct Out {
     findings: Vec<Finding>,
@@ -78,6 +94,20 @@ impl Out {
             instance: model.manifest.clone(),
         };
         let subject = Ref::Model(model.id.clone());
+        // A manifest that changed while it was read supports no claim about its model: the
+        // layers read may not be the manifest's. What was read stays in the facts.
+        if let Some(how) = placed(&model.manifest).and_then(not_stable) {
+            let why = vec![format!(
+                "the manifest was not stable during the read ({how})"
+            )];
+            let gap = || CoverageState::Partial {
+                missing: why.clone(),
+            };
+            self.cover(INVENTORY, Ref::Instance(model.manifest.clone()), gap());
+            self.cover(INTEGRITY, subject.clone(), gap());
+            self.cover(LICENSE, subject, gap());
+            return;
+        }
         let mut open = vec![];
         for (i, layer) in model.layers.iter().enumerate() {
             let at = format!("#{i}");
@@ -118,7 +148,16 @@ impl Out {
                     continue;
                 }
             };
-            match placed(blob).map(|b: &FileInstance| &b.content) {
+            let placed_blob = placed(blob);
+            // Bytes read from a file that changed meanwhile are kept as evidence, but they
+            // neither confirm the digest nor contradict it.
+            if let Some(how) = placed_blob.and_then(not_stable) {
+                open.push(format!(
+                    "layer {i}: blob not stable during the read ({how})"
+                ));
+                continue;
+            }
+            match placed_blob.map(|b: &FileInstance| &b.content) {
                 Some(InstanceContent::Read { artifact }) => {
                     if artifact.as_str() != format!("sha256:{}", hex.as_str()) {
                         let facts = vec![
@@ -176,7 +215,16 @@ impl Out {
             }
             Some(layer) => match &layer.blob {
                 BlobLookup::Found { instance } => match placed(instance).map(|b| &b.content) {
-                    Some(InstanceContent::Read { .. }) => CoverageState::Complete,
+                    Some(InstanceContent::Read { .. }) => {
+                        match placed(instance).and_then(not_stable) {
+                            None => CoverageState::Complete,
+                            Some(how) => CoverageState::Partial {
+                                missing: vec![format!(
+                                    "license blob not stable during the read ({how})"
+                                )],
+                            },
+                        }
+                    }
                     Some(InstanceContent::NotRead { why }) => CoverageState::Error {
                         message: UntrustedText::new(format!("license blob not read ({why:?})")),
                     },
