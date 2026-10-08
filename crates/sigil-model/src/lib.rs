@@ -33,6 +33,7 @@ pub mod hint;
 pub mod id;
 pub mod identity;
 pub mod load;
+pub mod model;
 pub mod relation;
 pub mod session;
 pub mod text;
@@ -66,8 +67,8 @@ pub use hint::{FeatureHint, Signal};
 pub use id::{
     AccessId, AnalyzerRef, ArtifactId, AssumptionId, AtomName, AuditScope, CallId, CheckId,
     ComponentKey, CondId, Date, FeatureKey, FindingId, FnId, GroundTruthRef, IdError, IdProblem,
-    InstanceId, ObligationId, OpenQuestionId, PolicyRuleRef, PremiseId, ProcessRole, ProfileRef,
-    ProfileRuleId, RefSetId, RootId, RuleId, Sha256Hex, SliceId, Timestamp, ValueId,
+    InstanceId, ModelId, ObligationId, OpenQuestionId, PolicyRuleRef, PremiseId, ProcessRole,
+    ProfileRef, ProfileRuleId, RefSetId, RootId, RuleId, Sha256Hex, SliceId, Timestamp, ValueId,
 };
 pub use identity::{
     ComponentClaim, ExtractMethod, IdentityAssertion, IdentityStatus, NameKind, ReleaseBasis,
@@ -76,6 +77,10 @@ pub use identity::{
 pub use load::{
     CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase, ProcessValue, TriValue,
     ValueKey, ValueOrigin,
+};
+pub use model::{
+    digest_hex, BlobLookup, LayerRole, LicenseText, Model, ModelLayer, ModelProvenance,
+    LICENSE_MEDIA_TYPE,
 };
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,

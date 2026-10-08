@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ProcessRef;
 use crate::id::{
     AccessId, AnalyzerRef, ArtifactId, AssumptionId, CallId, CheckId, ComponentKey, FnId,
-    GroundTruthRef, InstanceId, ObligationId, PolicyRuleRef, PremiseId, ProcessRole, ProfileRef,
-    ProfileRuleId, RootId, SliceId, ValueId,
+    GroundTruthRef, InstanceId, ModelId, ObligationId, PolicyRuleRef, PremiseId, ProcessRole,
+    ProfileRef, ProfileRuleId, RootId, SliceId, ValueId,
 };
 use crate::relation::RuleSupportRef;
 use crate::text::UntrustedText;
@@ -72,6 +72,8 @@ pub enum EvidenceRef {
     Access { access: AccessId },
     /// A semantic profile rule at a revision (its hash is in the session's `knowledge`).
     ProfileRule(ProfileRuleRef),
+    /// A model: its manifest, layers, and the blobs found for them.
+    Model { model: ModelId },
 }
 
 /// A location inside a binary slice.
@@ -254,4 +256,6 @@ pub enum Ref {
     },
     /// An observed process.
     Process(ProcessRef),
+    /// A model in a model store.
+    Model(ModelId),
 }

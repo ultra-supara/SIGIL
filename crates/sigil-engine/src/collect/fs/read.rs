@@ -149,7 +149,7 @@ impl SafeFs {
         let place = Placement {
             id,
             root: root.clone(),
-            path: UntrustedText::new(rel.under(&self.roots[index].path).to_string_lossy()),
+            path: rel.recorded_under(&self.roots[index].path),
             link_chain: resolved.hops,
             resolved: None,
             discovered_by,
@@ -311,7 +311,7 @@ impl Placement {
     /// Records the final path, when symlinks were followed to get there.
     fn resolved_to(mut self, path: &std::path::Path) -> Placement {
         if !self.link_chain.is_empty() {
-            self.resolved = Some(UntrustedText::new(path.to_string_lossy()));
+            self.resolved = Some(super::path::recorded(path));
         }
         self
     }

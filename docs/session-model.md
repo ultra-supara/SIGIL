@@ -23,6 +23,7 @@ that looks like this feature" must not quietly become "this dangerous behavior i
 | Call ≠ behavior | `CallSite` (C) vs `RuleSupport` / `Support` (D) | Behavior is a profile rule applied with a stated support |
 | Behavior ≠ finding | `Support` vs `Finding` with its `Condition`s (E) | A finding also needs environment facts (access, values, binding) |
 | Condition ≠ a copy of a conclusion | `CondEvidence` names the record that decides it: a `RuleSupportRef`, an access record and capability, a value and the state needed, … | A condition cannot claim more than its record, and a changed record changes what the condition may claim |
+| A model's facts ≠ its state | `Model` records each layer's digest as written and the blob instance found for it. Missing, malformed, unread, and mismatched are derived from those facts and the instance's content | A stored status could disagree with the facts it summarizes |
 | Finding ≠ policy | `Finding.default_severity` vs `Finding.decision` | Policy never edits the technical result. An ignored finding stays, with its reason |
 | Verdict ≠ completeness | `Outcome.verdict` and `Outcome.completeness`, always together | `FAIL` with gaps is still `FAIL`. `PASS` + `INCOMPLETE` is not a clean pass |
 | Unknown ≠ pass | `Tri::Unknown`, `CondState::Unknown`, `ObligationState::Unknown`, `TriValue::Unknown`, each with a reason | Unknown is a result. It is never `false`, an empty list, or a missing field |
@@ -89,6 +90,11 @@ The rule then yields an open question at most.
     component and slice; one entry per binding premise, load-facts context, coverage scope, and
     write capability. A duplicate is rejected, never resolved by picking one entry;
   - slice IDs agree with their artifact.
+- **A model's blobs are its digests' blobs:**
+  - a layer's lookup is `NotLookedUp` exactly when its digest is malformed (a well-formed digest
+    is `sha256:` + 64 lowercase hex digits);
+  - a found blob is the instance at `blobs/sha256-<hex>` in the manifest's root;
+  - a license is the text read from the license layer's blob.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -359,6 +365,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 |---|---|---|
 | Session root | `Session`, `SchemaVersion`, `ToolInfo`, `KnowledgeRef`, `RunRequest`, `ObservationMeta` | One run. Knowledge hashes, the request (deterministic), and observation metadata (not analysis) |
 | Content and placement | `Artifact`, `Slice`, `FileInstance`, `InstanceContent`, `StatInfo`, `Stability` | What was read and where it was found, with change detection |
+| Model store | `Model`, `ModelProvenance`, `ModelLayer`, `LayerRole`, `BlobLookup`, `LicenseText` | One manifest, what its path says, its layers as written with how each blob lookup ended, and the license text read |
 | Process observation | `ProcessObs`, `ProcessRef`, `MappingObs` | What was seen in a process at an instant |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
@@ -383,14 +390,15 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
   - predicate atoms;
   - guard branches;
   - link chains and ancestor chains;
-  - unresolved premises.
+  - unresolved premises;
+  - a model's layers (manifest order).
 - Timestamps are kept. `ObservationMeta` is recorded but is not part of analysis, and `Outcome.policy_time` is an input that re-analysis reuses.
 
 ## Not in the model yet
 
 | Item | Arrives in |
 |---|---|
-| Model-store and exposure facts | PR-3a, with their collectors |
+| Exposure facts (listeners) | PR-3a-3, with their collector |
 | AI-BOM v2 and Markdown renderers | PR-3b, with the CLI and viewer that consume them |
 | Patch assertions | M2 |
 | Active-mode traces | M4 |

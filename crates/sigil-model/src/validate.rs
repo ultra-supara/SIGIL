@@ -36,11 +36,12 @@ use crate::finding::{
     PolicyDecision, Settles, Verdict,
 };
 use crate::id::{
-    ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ObligationId,
-    OpenQuestionId, PremiseId, ProcessRole, ProfileRef, SliceId,
+    ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ModelId,
+    ObligationId, OpenQuestionId, PremiseId, ProcessRole, ProfileRef, SliceId,
 };
 use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
+use crate::model::{digest_hex, BlobLookup};
 use crate::relation::{
     BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
 };
@@ -63,6 +64,12 @@ pub enum ValidationError {
     SliceMismatch { slice: SliceId },
     /// `resolved` must be present exactly when `link_chain` is not empty.
     LinkChainInconsistent { instance: InstanceId },
+    /// A model layer's lookup disagrees with its digest: a malformed digest must be
+    /// `NotLookedUp`, a well-formed one must not be, and a found blob must be the instance at
+    /// `blobs/sha256-<hex>` in the manifest's root.
+    LayerBlobInconsistent { model: ModelId, digest: String },
+    /// A model's license is not what was read from its license layer's blob.
+    LicenseInconsistent { model: ModelId },
     /// A mapping recorded under a process it does not belong to.
     MappingOfAnotherProcess { pid: u32, at: String },
     /// An identity status stronger than the assertions support.
@@ -166,6 +173,12 @@ impl fmt::Display for ValidationError {
             LinkChainInconsistent { instance } => {
                 write!(f, "instance {instance}: `resolved` must be set exactly when `link_chain` is not empty")
             }
+            LayerBlobInconsistent { model, digest } => {
+                write!(f, "models[{model}]: the lookup of {digest:?} must be NotLookedUp exactly when the digest is malformed, and a found blob must be blobs/sha256-<hex> in the manifest's root")
+            }
+            LicenseInconsistent { model } => {
+                write!(f, "models[{model}]: the license must be the text read from the license layer's blob")
+            }
             MappingOfAnotherProcess { pid, at } => write!(f, "{at}: mapping of process {pid} recorded under another process"),
             StatusUnsupported { subject, component, status } => {
                 write!(f, "component {component} of {subject}: status {status:?} is stronger than its assertions")
@@ -266,6 +279,7 @@ struct Validator<'a> {
     artifacts: BTreeSet<&'a str>,
     slices: BTreeSet<&'a str>,
     instances: BTreeSet<&'a str>,
+    models: BTreeSet<&'a str>,
     values: BTreeSet<&'a str>,
     access: BTreeSet<&'a str>,
     assumptions: BTreeSet<&'a str>,
@@ -334,6 +348,7 @@ impl<'a> Validator<'a> {
             "instance",
             s.instances.iter().map(|i| i.id.as_str()),
         );
+        let models = unique(&mut errors, "model", s.models.iter().map(|m| m.id.as_str()));
         let values = unique(&mut errors, "value", s.values.iter().map(|v| v.id.as_str()));
         let access = unique(
             &mut errors,
@@ -397,6 +412,7 @@ impl<'a> Validator<'a> {
             artifacts,
             slices,
             instances,
+            models,
             values,
             access,
             assumptions,
@@ -491,6 +507,7 @@ impl<'a> Validator<'a> {
     fn run(&mut self) {
         let s = self.s;
         self.artifacts_and_instances();
+        self.models();
         self.processes();
         for value in &s.values {
             let at = format!("values[{}]", value.id);
@@ -614,6 +631,12 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn model(&mut self, id: &ModelId, at: &str) {
+        if !self.models.contains(id.as_str()) {
+            self.dangling("model", id.as_str(), at);
+        }
+    }
+
     fn value(&mut self, id: &str, at: &str) {
         if !self.values.contains(id) {
             self.dangling("value", id, at);
@@ -698,6 +721,7 @@ impl<'a> Validator<'a> {
                 }
             }
             EvidenceRef::ProfileRule(rule) => self.profile_rule(rule, at),
+            EvidenceRef::Model { model } => self.model(model, at),
         }
     }
 
@@ -713,6 +737,7 @@ impl<'a> Validator<'a> {
             Ref::Slice(sl) | Ref::Component { slice: sl, .. } => self.slice(sl, at),
             Ref::Instance(i) => self.instance(i, at),
             Ref::Process(p) => self.process(p, at),
+            Ref::Model(m) => self.model(m, at),
         }
     }
 
@@ -757,6 +782,77 @@ impl<'a> Validator<'a> {
                     crate::artifact::DiscoverySource::ProcessExe { process } => {
                         self.process(process, &at)
                     }
+                    crate::artifact::DiscoverySource::Manifest { manifest } => {
+                        self.instance(manifest, &at)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A model's manifest and blobs exist; each blob is the one its well-formed digest names;
+    /// a license is the text read from the license layer's blob.
+    fn models(&mut self) {
+        let s = self.s;
+        let placed = |id: &InstanceId| s.instances.iter().find(|i| i.id == *id);
+        for model in &s.models {
+            let at = format!("models[{}]", model.id);
+            self.instance(&model.manifest, &at);
+            let manifest_root = placed(&model.manifest).map(|i| &i.root);
+            for layer in &model.layers {
+                let hex = layer.digest.as_str().and_then(digest_hex);
+                let BlobLookup::Found { instance: blob } = &layer.blob else {
+                    // Only a malformed digest is not looked up.
+                    let not_looked_up = matches!(layer.blob, BlobLookup::NotLookedUp);
+                    if not_looked_up != hex.is_none() {
+                        self.errors.push(ValidationError::LayerBlobInconsistent {
+                            model: model.id.clone(),
+                            digest: String::from_utf8_lossy(layer.digest.as_bytes()).into_owned(),
+                        });
+                    }
+                    continue;
+                };
+                self.instance(blob, &at);
+                let consistent = match (hex, placed(blob)) {
+                    (None, _) => false,
+                    // Dangling: reported above.
+                    (Some(_), None) => true,
+                    (Some(hex), Some(inst)) => {
+                        // The path as discovered: the root's path, then `blobs/sha256-<hex>`.
+                        let root_path = s.request.roots.iter().find(|r| r.id == inst.root);
+                        let at_its_path = root_path.is_none_or(|root| {
+                            let mut expected = root.path.as_bytes().to_vec();
+                            while expected.last() == Some(&b'/') {
+                                expected.pop();
+                            }
+                            expected.extend_from_slice(b"/blobs/sha256-");
+                            expected.extend_from_slice(hex.as_str().as_bytes());
+                            inst.path.as_bytes() == expected.as_slice()
+                        });
+                        at_its_path && manifest_root.is_none_or(|root| *root == inst.root)
+                    }
+                };
+                if !consistent {
+                    self.errors.push(ValidationError::LayerBlobInconsistent {
+                        model: model.id.clone(),
+                        digest: String::from_utf8_lossy(layer.digest.as_bytes()).into_owned(),
+                    });
+                }
+            }
+            if let Some(license) = &model.license {
+                self.artifact(&license.artifact, &at);
+                let read = model
+                    .license_layer()
+                    .and_then(|l| l.blob.instance())
+                    .and_then(placed)
+                    .and_then(|i| match &i.content {
+                        InstanceContent::Read { artifact } => Some(artifact),
+                        InstanceContent::NotRead { .. } => None,
+                    });
+                if read != Some(&license.artifact) {
+                    self.errors.push(ValidationError::LicenseInconsistent {
+                        model: model.id.clone(),
+                    });
                 }
             }
         }

@@ -9,10 +9,10 @@ description = "SIGIL v2 engine: anchored read-only file access (SafeFs), collect
 [dependencies]
 sigil-model = { path = "../sigil-model" }
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 rustix.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true

@@ -15,7 +15,8 @@
     "audit": ["backend_loader"],
     "required_checks": ["artifacts.discovery", "loader.identify"],
     "budgets": {"files": 4096},
-    "observe_env": false
+    "observe_env": false,
+    "model_filter": null
   },
   "observation": {
     "started_at": "2026-10-07T07:00:00Z",
@@ -70,6 +71,7 @@
       "discovered_by": ["Walk"]
     }
   ],
+  "models": [],
   "processes": [],
   "values": [],
   "components": [],

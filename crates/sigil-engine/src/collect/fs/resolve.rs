@@ -148,7 +148,7 @@ impl SafeFs {
                     let text = UntrustedText::from_bytes(target.clone());
                     last_link = Some(lstat);
                     hops.push(LinkHop {
-                        path: UntrustedText::new(link_path(&roots[current], &stack, &name)),
+                        path: link_path(&roots[current], &stack, &name),
                         target: text.clone(),
                         uid: lstat.st_uid,
                         mode: mode(&lstat),
@@ -214,11 +214,11 @@ fn prepend(queue: &mut VecDeque<String>, parts: Vec<String>) {
 }
 
 /// The absolute path of a link, for display.
-fn link_path(root: &std::path::Path, stack: &[(String, OwnedFd)], name: &str) -> String {
+fn link_path(root: &std::path::Path, stack: &[(String, OwnedFd)], name: &str) -> UntrustedText {
     let mut path = root.to_path_buf();
     path.extend(stack.iter().map(|(n, _)| n.as_str()));
     path.push(name);
-    path.to_string_lossy().into_owned()
+    super::path::recorded(&path)
 }
 
 /// `st_mode` as `u32` (its width differs between targets).

@@ -30,7 +30,7 @@ mod read;
 mod resolve;
 mod walk;
 
-pub use path::{link_target, LinkTarget, PathError, RelPath};
+pub use path::{link_target, recorded, LinkTarget, PathError, RelPath};
 pub use read::{FileRead, ReadOutcome, ReadSpec};
 pub use walk::{Skip, Walk, WalkError};
 

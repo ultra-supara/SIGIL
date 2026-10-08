@@ -270,6 +270,11 @@ string_id!(
     check_plain
 );
 string_id!(
+    /// A model in a model store: `model:<root id>/<manifest path under manifests/>`.
+    ModelId,
+    |k, v| check_prefixed(k, v, "model:")
+);
+string_id!(
     /// A function inside one slice's [`crate::CodeFacts`], e.g. `fn:0xecb0`.
     FnId,
     |k, v| check_prefixed(k, v, "fn:")

@@ -78,6 +78,8 @@ so requesting it gives an honest `INCOMPLETE`.
 | `exposure.bind_public` | Exposure | WARN |
 | `exposure.bind_lan` | Exposure | WARN |
 
+When each `model.*` rule applies, and which coverage it affects: [`docs/model-store.md`](model-store.md).
+
 **Assumptions** a finding condition may rest on, only if accepted:
 
 | ID | Assumption |

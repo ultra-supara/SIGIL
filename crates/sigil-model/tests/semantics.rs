@@ -1268,3 +1268,307 @@ fn the_ten_sentences_are_representable_without_message_strings() {
         (Severity::Warn, Action::Fail)
     );
 }
+
+// --- Models: facts only, every status derived (PR-3a-2) ---------------------------------------
+
+const LICENSE_MEDIA: &str = "application/vnd.ollama.image.license";
+const MODELS_DIR: &str = "/usr/share/ollama/.ollama/models";
+
+/// Adds a blob read from `blobs/sha256-<hex>` under the models root; returns its digest, instance,
+/// and artifact.
+fn add_blob(s: &mut Session, byte: u8, ino: u64) -> (String, InstanceId, ArtifactId) {
+    let h = hex(byte);
+    let artifact: ArtifactId = id(&format!("sha256:{h}"));
+    let inst: InstanceId = id(&format!("inst:models/blobs/sha256-{h}"));
+    s.artifacts.push(Artifact {
+        id: artifact.clone(),
+        size: 5,
+        format: Format::Other,
+        slices: vec![],
+    });
+    let path = format!("{MODELS_DIR}/blobs/sha256-{h}");
+    s.instances
+        .push(instance(&inst, "models", &path, &artifact, ino));
+    (format!("sha256:{h}"), inst, artifact)
+}
+
+fn layer(role: LayerRole, media: Option<&str>, digest: &str, blob: BlobLookup) -> ModelLayer {
+    ModelLayer {
+        role,
+        media_type: media.map(t),
+        digest: t(digest),
+        blob,
+    }
+}
+
+fn found(instance: &InstanceId) -> BlobLookup {
+    BlobLookup::Found {
+        instance: instance.clone(),
+    }
+}
+
+/// One model under a `models` root: a config, the weights, and an MIT license layer, all read.
+fn with_model() -> Session {
+    let mut s = base(&[]);
+    s.request.roots.push(ScanRoot {
+        id: id("models"),
+        path: t(MODELS_DIR),
+    });
+    let manifest_art: ArtifactId = id(&format!("sha256:{}", hex(0x10)));
+    s.artifacts.push(Artifact {
+        id: manifest_art.clone(),
+        size: 400,
+        format: Format::Other,
+        slices: vec![],
+    });
+    let manifest: InstanceId = id("inst:models/manifests/registry.ollama.ai/library/m/latest");
+    s.instances.push(instance(
+        &manifest,
+        "models",
+        &format!("{MODELS_DIR}/manifests/registry.ollama.ai/library/m/latest"),
+        &manifest_art,
+        10,
+    ));
+    let (config, config_blob, _) = add_blob(&mut s, 0x11, 11);
+    let (weights, weights_blob, _) = add_blob(&mut s, 0x12, 12);
+    let (license, license_blob, license_art) = add_blob(&mut s, 0x13, 13);
+    s.models.push(Model {
+        id: id("model:models/registry.ollama.ai/library/m/latest"),
+        name: t("m:latest"),
+        manifest,
+        provenance: ModelProvenance {
+            registry: t("registry.ollama.ai"),
+            namespace: Some(t("library")),
+            model: t("m"),
+            tag: t("latest"),
+        },
+        layers: vec![
+            layer(LayerRole::Config, None, &config, found(&config_blob)),
+            layer(
+                LayerRole::Layer,
+                Some("application/vnd.ollama.image.model"),
+                &weights,
+                found(&weights_blob),
+            ),
+            layer(
+                LayerRole::Layer,
+                Some(LICENSE_MEDIA),
+                &license,
+                found(&license_blob),
+            ),
+        ],
+        license: Some(LicenseText {
+            artifact: license_art,
+            spdx: Some("MIT".to_string()),
+            excerpt: t("MIT"),
+        }),
+    });
+    s
+}
+
+#[test]
+fn a_model_records_facts_that_resolve() {
+    let s = round_trip(&with_model());
+    assert_valid(&s);
+
+    // How each lookup ended is a fact: absent, unresolved, or not looked up (malformed).
+    let mut s = with_model();
+    let well_formed = format!("sha256:{}", hex(0x14));
+    s.models[0].layers.push(layer(
+        LayerRole::Layer,
+        None,
+        &well_formed,
+        BlobLookup::Absent,
+    ));
+    s.models[0].layers.push(layer(
+        LayerRole::Layer,
+        None,
+        &well_formed,
+        BlobLookup::Unresolved {
+            why: t("more than 40 symlink hops"),
+        },
+    ));
+    s.models[0].layers.push(layer(
+        LayerRole::Layer,
+        None,
+        "sha256:foo/../../secret",
+        BlobLookup::NotLookedUp,
+    ));
+    assert_valid(&s);
+}
+
+#[test]
+fn only_a_malformed_digest_is_not_looked_up() {
+    let well_formed = format!("sha256:{}", hex(0x14));
+    for (digest, lookup) in [
+        (well_formed.as_str(), BlobLookup::NotLookedUp),
+        ("sha256:foo/../../secret", BlobLookup::Absent),
+        (
+            "sha256:foo/../../secret",
+            BlobLookup::Unresolved { why: t("denied") },
+        ),
+    ] {
+        let mut s = with_model();
+        s.models[0]
+            .layers
+            .push(layer(LayerRole::Layer, None, digest, lookup));
+        assert_rejected(
+            &s,
+            |e| matches!(e, ValidationError::LayerBlobInconsistent { .. }),
+            "a lookup that disagrees with its digest",
+        );
+    }
+}
+
+#[test]
+fn a_blob_is_discovered_through_its_manifest() {
+    let mut s = with_model();
+    let manifest = s.models[0].manifest.clone();
+    for inst in s
+        .instances
+        .iter_mut()
+        .filter(|i| i.path.as_str().is_some_and(|p| p.starts_with("blobs/")))
+    {
+        inst.discovered_by = vec![DiscoverySource::Manifest {
+            manifest: manifest.clone(),
+        }];
+    }
+    assert_valid(&s);
+    s.instances[1].discovered_by = vec![DiscoverySource::Manifest {
+        manifest: id("inst:models/manifests/elsewhere"),
+    }];
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::Dangling {
+                    kind: "instance",
+                    ..
+                }
+            )
+        },
+        "a blob discovered through an unknown manifest",
+    );
+}
+
+#[test]
+fn model_ids_are_unique_and_references_resolve() {
+    let mut s = with_model();
+    let copy = s.models[0].clone();
+    s.models.push(copy);
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::DuplicateId { kind: "model", .. }),
+        "a duplicate model ID",
+    );
+
+    let mut s = with_model();
+    s.models[0].manifest = id("inst:models/manifests/elsewhere");
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::Dangling {
+                    kind: "instance",
+                    ..
+                }
+            )
+        },
+        "an unknown manifest instance",
+    );
+
+    let mut s = with_model();
+    s.coverage.push(coverage(
+        "model_store.integrity",
+        Ref::Model(id("model:models/nowhere")),
+        CoverageState::Complete,
+    ));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::Dangling { kind: "model", .. }),
+        "a coverage scope naming an unknown model",
+    );
+}
+
+#[test]
+fn a_blob_belongs_to_a_well_formed_digest_at_its_path() {
+    // Uppercase hex is malformed: no blob may be recorded for it.
+    let mut s = with_model();
+    s.models[0].layers[1].digest = t(&format!("sha256:{}", hex(0xab).to_uppercase()));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::LayerBlobInconsistent { .. }),
+        "a blob for a malformed digest",
+    );
+
+    // A blob instance at another path is not the digest's blob.
+    let mut s = with_model();
+    let weights = s.models[0].layers[1].blob.clone();
+    s.models[0].layers[0].blob = weights;
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::LayerBlobInconsistent { .. }),
+        "the config naming the weights blob",
+    );
+}
+
+#[test]
+fn a_license_is_the_text_of_the_license_layers_blob() {
+    // Not the license layer's artifact.
+    let mut s = with_model();
+    if let Some(license) = &mut s.models[0].license {
+        license.artifact = id(&format!("sha256:{}", hex(0x12)));
+    }
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::LicenseInconsistent { .. }),
+        "a license from another blob",
+    );
+
+    // No license layer at all.
+    let mut s = with_model();
+    s.models[0].layers.pop();
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::LicenseInconsistent { .. }),
+        "a license without a license layer",
+    );
+
+    // The license layer's blob was not read.
+    let mut s = with_model();
+    let blob = s.models[0].layers[2].blob.instance().unwrap().clone();
+    for inst in &mut s.instances {
+        if inst.id == blob {
+            inst.content = InstanceContent::NotRead {
+                why: NotReadReason::PermissionDenied,
+            };
+        }
+    }
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::LicenseInconsistent { .. }),
+        "a license whose blob was not read",
+    );
+}
+
+#[test]
+fn only_sha256_with_64_lowercase_hex_digits_is_a_digest() {
+    let ok = format!("sha256:{}", hex(0xab));
+    assert_eq!(
+        digest_hex(&ok).map(|h| h.as_str().to_string()),
+        Some(hex(0xab))
+    );
+    for bad in [
+        ok.to_uppercase(),
+        format!("sha256:{}", &hex(0xab)[..63]),
+        format!("sha256:{}0", hex(0xab)),
+        "sha256:foo/../../secret".to_string(),
+        format!("sha512:{}", hex(0xab)),
+        format!("sha256-{}", hex(0xab)),
+        String::new(),
+    ] {
+        assert_eq!(digest_hex(&bad), None, "{bad}");
+    }
+}
