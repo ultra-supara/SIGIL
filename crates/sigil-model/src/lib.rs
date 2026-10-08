@@ -36,6 +36,7 @@ pub mod listener;
 pub mod load;
 pub mod model;
 pub mod relation;
+pub mod render;
 pub mod session;
 pub mod text;
 pub mod validate;

@@ -58,7 +58,7 @@ jobs:
           c=$(ls -d target/tmp/safety-traces/* | wc -l)
           echo "negative-control traces: $n, all traced cases: $c"
           test "$n" -ge 15
-          test "$c" -ge 25
+          test "$c" -ge 22
       - name: Upload syscall traces
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

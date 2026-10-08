@@ -145,6 +145,9 @@ pub struct ObservationMeta {
     pub uid: u32,
     pub gid: u32,
     pub capabilities: Vec<String>,
+    /// The boot this run observed (`/proc/sys/kernel/random/boot_id`, a UUID). Empty when it was
+    /// not read (static mode) or could not be read (observe mode); processes recorded then carry
+    /// an empty boot ID too, and the checks that rest on their identity stay open.
     pub boot_id: String,
     pub kernel: String,
     /// SIGIL's own network namespace inode; `None` when not read in this mode.

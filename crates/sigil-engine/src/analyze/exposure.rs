@@ -25,6 +25,7 @@
 //! | a process that may be the runtime could not be identified | `Partial` (a gap) |
 //! | the runtime cannot be recorded (its `stat`) | `Partial` (a gap) |
 //! | a runtime in another network namespace, or one that is unreadable | `Partial` on it |
+//! | a runtime recorded without a boot ID (observe mode could not read it) | `Partial` on it; its findings stand |
 //! | a table or list not read completely | `Partial` on it |
 //! | otherwise | `Complete` on it |
 
@@ -120,6 +121,15 @@ pub fn analyze(facts: &ProcFacts) -> (Vec<Finding>, Vec<Coverage>) {
             Observability::NotObservable(why) => {
                 missing.push(format!("its fd table was not listed completely ({why:?})"));
             }
+        }
+        // A process is identified by its PID and start time within a boot. Without the boot ID
+        // (unreadable, or not a UUID), that identity does not tell this process from another one
+        // in a different boot, so what is recorded of it is not fully identified.
+        if runtime.process.boot_id.is_empty() {
+            missing.push(
+                "the boot ID is unknown, so the process is identified by PID and start time only"
+                    .to_string(),
+            );
         }
         match (&runtime.net_ns, facts.own_net_ns) {
             (NsInode::Inode(theirs), Some(ours)) if *theirs == ours => {}

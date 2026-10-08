@@ -11,7 +11,7 @@ sigil-model = { path = "../sigil-model" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["process", "thread", "system"] }
 toml.workspace = true
 
 [dev-dependencies]

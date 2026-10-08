@@ -3,8 +3,8 @@
 SIGIL inventories an Ollama-format model store and checks each model's blobs against the digests
 its manifest names.
 
-- **Status:** `sigil_engine::inspect::store_session` builds a static-mode session. The CLI uses it
-  from PR-3b; until then the v0.1 `runtime inspect ollama` is unchanged.
+- **Status:** `sigil_engine::inspect::store_session` builds a static-mode session.
+  `sigil inspect ollama` runs it (`--mode static`, the default).
 - **Source:** plan §4.6.7 and the migration table (§6.3). The session types are described in
   [`docs/session-model.md`](session-model.md); policy and outcome in [`docs/policy.md`](policy.md).
 
@@ -82,7 +82,7 @@ mismatch the blob and what it holds. Findings about one layer carry its index in
 
 ## From v0.1
 
-v0.1's tests stay until PR-3b removes `sigil-core`. Each v0.1 case maps to a v2 test as follows.
+v0.1's tests stay until PR-3b-3 removes `sigil-core`. Each v0.1 case maps to a v2 test as follows.
 
 **`crates/sigil-core/tests/ollama.rs`**
 
@@ -98,13 +98,14 @@ v0.1's tests stay until PR-3b removes `sigil-core`. Each v0.1 case maps to a v2 
 | the 10 display-name and filter cases | `layout` unit tests, `store_session::the_filter_round_trips_display_names` |
 | `runtime_public_bind_listener_warns`, `runtime_localhost_listener_keeps_pass`, `runtime_lan_listener_warns` | [`docs/exposure.md`](exposure.md) (PR-3a-3) |
 | `flags_public_bind_host_as_warn_without_network_probe`, `treats_scheme_less_loopback_host_as_local`, `flags_non_local_network_host_as_warn_without_probe` | PR-4 (configured host, E4) |
-| `renders_ai_bom_with_model_runtime_and_files`, `ai_bom_includes_runtime_exposure_and_binds`, `ai_bom_runtime_exposure_unknown_when_disabled` | PR-3b (AI-BOM v2) |
+| `renders_ai_bom_with_model_runtime_and_files`, `ai_bom_includes_runtime_exposure_and_binds`, `ai_bom_runtime_exposure_unknown_when_disabled` | PR-3b-3 (AI-BOM v2) |
 
 **Other v0.1 tests**
 
 - **The 18 SPDX unit tests** in `sigil-core/src/ollama.rs` are ported unchanged to `license`.
 - **The 21 listener unit tests** are mapped in [`docs/exposure.md`](exposure.md).
-- **The 4 CLI tests** in `sigil-cli/tests/ollama_cli.rs` move to PR-3b.
+- **The 4 CLI tests** in `sigil-cli/tests/ollama_cli.rs` were replaced by the v2 CLI tests
+  (`sigil-cli/tests/cli.rs`).
 
 **New in v2:** each migration row has a test, stated on the outcome (`store_session`). The
 adversarial store cases are in `ollama_store`:

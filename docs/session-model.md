@@ -7,7 +7,8 @@ run, and the source of truth that exports (AI-BOM v2, Markdown) are derived from
   - a pure data crate: no I/O, no parsing, no policy or profile evaluation, no analysis;
   - `wasm32`-safe;
   - its JSON contract is `schemas/session-v1.schema.json`.
-- **Status:** the CLI does not emit sessions yet (PR-3b).
+- **Status:** `sigil inspect ollama` emits sessions. `sigil session render` renders a saved one as
+  Markdown (`sigil_model::render::markdown`), and `sigil explain` explains it.
 
 The model exists to make wrong security statements hard to write by accident. "I saw something
 that looks like this feature" must not quietly become "this dangerous behavior is confirmed".
@@ -403,6 +404,6 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 
 | Item | Arrives in |
 |---|---|
-| AI-BOM v2 and Markdown renderers | PR-3b, with the CLI and viewer that consume them |
+| AI-BOM v2 renderer | PR-3b-3, with the viewer that consumes it |
 | Patch assertions | M2 |
 | Active-mode traces | M4 |

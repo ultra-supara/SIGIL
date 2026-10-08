@@ -12,6 +12,8 @@ pub struct RuleInfo {
     pub kind: FindingKind,
     pub default: Severity,
     pub summary: &'static str,
+    /// What removes the finding: fixed text that ships with SIGIL (#21), never generated.
+    pub remediation: &'static str,
 }
 
 /// The rules of the model store and exposure (the migration table, plan §6.3).
@@ -21,54 +23,63 @@ pub const RULES: &[RuleInfo] = &[
         kind: FindingKind::Integrity,
         default: Severity::Warn,
         summary: "A manifest references a blob that is not in the store",
+        remediation: "Pull the model again (`ollama pull <name>`) so that every blob its manifest names is present, or remove the manifest of a model that is no longer wanted.",
     },
     RuleInfo {
         id: "model.blob_digest_mismatch",
         kind: FindingKind::Integrity,
         default: Severity::Fail,
         summary: "A blob's SHA-256 differs from the digest its manifest names",
+        remediation: "Treat the blob as corrupted or tampered with: remove the model, pull it again from a registry you trust, and check that the digests match.",
     },
     RuleInfo {
         id: "model.manifest_digest_malformed",
         kind: FindingKind::Integrity,
         default: Severity::Fail,
         summary: "A manifest names a digest that is not sha256 with 64 lowercase hex digits",
+        remediation: "Treat the manifest as corrupted or tampered with: remove the model and pull it again. A digest is `sha256:` followed by 64 lowercase hex digits.",
     },
     RuleInfo {
         id: "model.manifest_unparseable",
         kind: FindingKind::Integrity,
         default: Severity::Warn,
         summary: "A manifest is not valid JSON of the expected shape",
+        remediation: "Remove the damaged manifest and pull the model again. A manifest written by hand must follow Ollama's manifest format.",
     },
     RuleInfo {
         id: "model.license_missing",
         kind: FindingKind::Integrity,
         default: Severity::Warn,
         summary: "A manifest has no license layer",
+        remediation: "Get the model's license from its publisher before use, and keep it with the model: a manifest without a license layer states no terms.",
     },
     RuleInfo {
         id: "model.provenance_unknown",
         kind: FindingKind::Integrity,
         default: Severity::Warn,
         summary: "A manifest path is too shallow to name registry, model, and tag",
+        remediation: "Keep manifests where Ollama writes them, under `manifests/<registry>/<namespace>/<model>/<tag>`, so that each model's registry, name, and tag are known.",
     },
     RuleInfo {
         id: "model.not_found",
         kind: FindingKind::Integrity,
         default: Severity::Warn,
         summary: "The requested model is not in the store",
+        remediation: "Check the model's exact display name (e.g. `llama3.2:latest`) and the models directory, and pull the model if it should be there.",
     },
     RuleInfo {
         id: "exposure.bind_public",
         kind: FindingKind::Exposure,
         default: Severity::Warn,
         summary: "The runtime listens on a wildcard or globally routable address",
+        remediation: "Bind the runtime to loopback (e.g. `OLLAMA_HOST=127.0.0.1:11434`). If remote access is needed, put an authenticating reverse proxy in front of it. SIGIL does not see firewalls, which may already block access.",
     },
     RuleInfo {
         id: "exposure.bind_lan",
         kind: FindingKind::Exposure,
         default: Severity::Warn,
         summary: "The runtime listens on a private or link-local address",
+        remediation: "Bind the runtime to loopback unless other hosts need it. If they do, limit access with a firewall or an authenticating reverse proxy.",
     },
 ];
 

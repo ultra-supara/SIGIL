@@ -1,0 +1,46 @@
+name: CLI
+
+# crates/sigil-cli is the v2 command line: `inspect ollama`, `session render`, `explain`, and
+# `rules`. This job runs its end-to-end tests (the real binary, its outputs, and its exit codes)
+# on Linux; observe mode reads the runner's own /proc. The syscall contracts are the `safety` job.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/sigil-cli/**'
+      - 'crates/sigil-engine/**'
+      - 'crates/sigil-model/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cli.yml'
+  pull_request:
+    paths:
+      - 'crates/sigil-cli/**'
+      - 'crates/sigil-engine/**'
+      - 'crates/sigil-model/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cli.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    name: CLI tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+      - name: End-to-end tests (inspect, render, explain, rules, exit codes)
+        run: cargo test -p sigil-cli --bin sigil --test cli

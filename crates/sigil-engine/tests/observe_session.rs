@@ -45,6 +45,10 @@ fn good_store(d: &Path) {
 }
 
 fn session(store: &Path, fake: &FakeProc) -> Session {
+    session_with(store, fake, observation())
+}
+
+fn session_with(store: &Path, fake: &FakeProc, observation: ObservationMeta) -> Session {
     let req = ObserveRequest {
         store: StoreRequest {
             models_dir: store.to_path_buf(),
@@ -63,8 +67,8 @@ fn session(store: &Path, fake: &FakeProc) -> Session {
             version: "0.0.0-test".to_string(),
             git_rev: None,
         },
-        observation(),
-        observation().started_at,
+        observation.clone(),
+        observation.started_at,
     )
     .unwrap();
     if let Err(errors) = s.validate() {
@@ -330,4 +334,35 @@ fn hidden_processes_leave_the_audit_incomplete_but_a_visible_finding_stands() {
         (s.outcome.verdict, s.outcome.completeness.clone()),
         (Verdict::Warn, missing_binds())
     );
+}
+
+#[test]
+fn an_unavailable_boot_id_leaves_a_visible_runtime_incomplete() {
+    // Review of #75: the boot ID cannot be read, or is not a UUID. The runtime is visible and
+    // binds publicly: the finding stands, but its identity is not tied to a boot.
+    for boot_id in [None, Some("not-a-uuid\n")] {
+        let store = TempDir::new().unwrap();
+        good_store(store.path());
+        let mut fake = FakeProc::new();
+        fake.process(&serve(&[7001]));
+        fake.listen("0.0.0.0", 11434, 7001);
+        if let Some(text) = boot_id {
+            let dir = fake.path().join("sys/kernel/random");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("boot_id"), text).unwrap();
+        }
+        let meta = sigil_engine::observe::host::meta(
+            Mode::Observe,
+            fake.path(),
+            Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+        );
+        assert_eq!(meta.boot_id, "", "{boot_id:?}");
+        let s = session_with(store.path(), &fake, meta);
+        assert_eq!(rules(&s), ["exposure.bind_public"], "{boot_id:?}");
+        assert_eq!(
+            (s.outcome.verdict, s.outcome.completeness.clone()),
+            (Verdict::Warn, missing_binds()),
+            "{boot_id:?}"
+        );
+    }
 }

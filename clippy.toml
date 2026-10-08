@@ -8,7 +8,8 @@
 # Test code that must spawn processes or open sockets (compiling fixtures, running the CLI, the
 # safety harness and its negative controls) allows these lints at file level, with a reason.
 # Product code needs an ADR before adding an `allow`. The one current exception is the legacy
-# Ollama API probe (C-4), which moves to active mode in PR-3b.
+# Ollama API probe in `sigil-core` (C-4). No command reaches it since the v2 CLI, and the crate is
+# removed in PR-3b-3; the API probe returns in active mode only (`sigil-probe`, PR-3b-2).
 
 disallowed-types = [
     { path = "std::process::Command", reason = "C-1: static/observe never execute another program (ADR-002)" },

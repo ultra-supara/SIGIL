@@ -10,11 +10,13 @@ name = "sigil"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
-sigil-core = { path = "../sigil-core" }
+serde_json.workspace = true
+sigil-engine = { path = "../sigil-engine" }
+sigil-model = { path = "../sigil-model" }
 
 [dev-dependencies]
 assert_cmd.workspace = true
-predicates.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tempfile.workspace = true

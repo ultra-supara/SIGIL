@@ -5,8 +5,8 @@ was found: technical findings, their conditions and evidence, and their default 
 from the analysis. The policy decides only what is done with them, and which checks must be
 closed for the result to be complete.
 
-- **Status:** `crates/sigil-engine` loads and evaluates policies. The CLI uses them from PR-3b
-  (`--policy FILE`); until then the v0.1 CLI is unchanged.
+- **Status:** `crates/sigil-engine` loads and evaluates policies. `sigil inspect ollama --policy
+  FILE` loads one; without `--policy`, the built-in default applies.
 - **Source:** plan §4.7. The session it applies to is described in
   [`docs/session-model.md`](session-model.md).
 

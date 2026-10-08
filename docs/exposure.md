@@ -4,8 +4,7 @@ In observe mode, SIGIL reads the running system to find the runtime's listening 
 classifies each one by its bind address.
 
 - **Status:** `sigil_engine::inspect::observe_session` builds an observe-mode session: the model
-  store plus exposure. The CLI uses it from PR-3b (`--mode observe`). Until then, the v0.1
-  `runtime inspect ollama` is unchanged.
+  store plus exposure. `sigil inspect ollama --mode observe` runs it on `/proc`.
 - **Source:** plan §4.6.8 and the migration table (§6.3). The session types are in
   [`docs/session-model.md`](session-model.md); the model store is in
   [`docs/model-store.md`](model-store.md).
@@ -26,6 +25,7 @@ All reads are under the proc root (`/proc`), and every entry is on the C-6 allow
 | `<pid>/exe` | Confirms the runtime's executable | `readlinkat` |
 | `<pid>/stat` | The start time, part of a process's identity | read |
 | `<pid>/ns/net` | The process's network namespace | `readlinkat` |
+| `sys/kernel/random/boot_id` | The boot, part of each process's identity (observe mode only). Recorded only in UUID form; otherwise empty, and the runtime's binds stay open | read |
 
 Magic links (`exe`, `fd/<n>`, `ns/net`) are read with `readlinkat` and are never followed or
 opened.
@@ -100,6 +100,7 @@ those that were not, and its findings stand.
 | a LISTEN row that cannot be read | `Partial` (a gap); the other rows stand |
 | a runtime in another network namespace | `Partial` on it: its sockets are not in SIGIL's table |
 | a runtime whose network namespace cannot be read | `Partial` on it; findings for the listeners it holds in SIGIL's table stand |
+| a runtime recorded without a boot ID (unreadable, or not a UUID) | `Partial` on it: a PID and start time do not identify it across boots; its findings stand |
 | a table or list not read completely | `Partial` on it |
 | otherwise | `Complete` on it |
 
@@ -108,7 +109,7 @@ for `exposure.binds`, never a guess.
 
 ## From v0.1
 
-v0.1's tests stay until PR-3b removes `sigil-core`.
+v0.1's tests stay until PR-3b-3 removes `sigil-core`.
 
 | v0.1 test | v2 |
 |---|---|
@@ -122,4 +123,4 @@ v0.1's tests stay until PR-3b removes `sigil-core`.
 | `picks_most_exposed_when_multiple_listeners` | replaced: one finding per runtime-held listener |
 | `proc_snapshot_does_not_panic` | replaced by fixture tests of the collector (`proc_observe`) |
 | `exposure_as_str_*`, `exposure_serializes_*` | not applicable (v0.1's output enum) |
-| `ai_bom_includes_runtime_exposure_and_binds`, `ai_bom_runtime_exposure_unknown_when_disabled` | PR-3b (AI-BOM v2) |
+| `ai_bom_includes_runtime_exposure_and_binds`, `ai_bom_runtime_exposure_unknown_when_disabled` | PR-3b-3 (AI-BOM v2) |

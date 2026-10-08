@@ -4,14 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root")
-        .to_path_buf()
-}
-
 fn compiler() -> Result<PathBuf, String> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     for name in ["cc", "clang", "gcc"] {
@@ -22,7 +14,10 @@ fn compiler() -> Result<PathBuf, String> {
             }
         }
     }
-    Err("no C compiler (cc, clang or gcc) in PATH; fixtures are compiled from examples/src".into())
+    Err(
+        "no C compiler (cc, clang or gcc) in PATH; the dlopen control compiles a shared object"
+            .into(),
+    )
 }
 
 fn compile(args: &[&str], source: &Path, output: &Path) -> Result<PathBuf, String> {
@@ -44,15 +39,6 @@ fn compile(args: &[&str], source: &Path, output: &Path) -> Result<PathBuf, Strin
     Ok(output.to_path_buf())
 }
 
-/// `examples/src/clean_kernel.c` compiled to an x86-64 relocatable object in `dir`.
-pub fn kernel_object(dir: &Path) -> Result<PathBuf, String> {
-    compile(
-        &["-O0", "-c"],
-        &workspace_root().join("examples/src/clean_kernel.c"),
-        &dir.join("kernel.o"),
-    )
-}
-
 /// A small shared object for the dlopen negative control.
 pub fn shared_object(dir: &Path) -> Result<PathBuf, String> {
     let src = dir.join("plugin.c");
@@ -65,21 +51,6 @@ pub fn shared_object(dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// Malformed inputs: random bytes and a truncated ELF header.
-pub fn malformed_inputs(dir: &Path, object: &Path) -> (PathBuf, PathBuf) {
-    let garbage = dir.join("garbage.o");
-    fs::write(
-        &garbage,
-        (0u32..4096)
-            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let truncated = dir.join("truncated.o");
-    let bytes = fs::read(object).unwrap();
-    fs::write(&truncated, &bytes[..bytes.len().min(80)]).unwrap();
-    (garbage, truncated)
-}
-
 pub const CONFIG_DIGEST: &str =
     "sha256:e67d23e7820c49a8051dac2831f38290f5e72f66c8db5079eeb60d82f14894c0";
 pub const MODEL_DIGEST: &str =
@@ -87,7 +58,8 @@ pub const MODEL_DIGEST: &str =
 pub const LICENSE_DIGEST: &str =
     "sha256:2af71558e438db0b73a20beab92dc278a94e1bbe974c00c1a33e3ab62d53a608";
 
-/// A minimal Ollama model store (same layout as sigil-core's `tests/common`). Returns `models/`.
+/// A minimal Ollama model store: one model with a config, a model layer, and a license. Returns
+/// `models/`.
 pub fn ollama_store(root: &Path) -> PathBuf {
     let models = root.join("models");
     let manifest_dir = models.join("manifests/registry.ollama.ai/library/gemma4");
