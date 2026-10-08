@@ -202,3 +202,48 @@ impl Drop for FakeProc {
         }
     }
 }
+
+/// Counts the opens of files (inotify `IN_OPEN`), to pin which files the collector reads and how
+/// often. Closes are watched too: inotify merges an event identical to the last one queued, so two
+/// opens in a row would count once.
+pub struct Opens {
+    fd: std::os::fd::OwnedFd,
+    watches: Vec<i32>,
+}
+
+impl Opens {
+    pub fn watch(paths: &[PathBuf]) -> Opens {
+        use rustix::fs::inotify;
+        let fd =
+            inotify::init(inotify::CreateFlags::NONBLOCK | inotify::CreateFlags::CLOEXEC).unwrap();
+        let watches = paths
+            .iter()
+            .map(|p| {
+                let flags = inotify::WatchFlags::OPEN | inotify::WatchFlags::CLOSE_NOWRITE;
+                inotify::add_watch(&fd, p, flags).unwrap()
+            })
+            .collect();
+        Opens { fd, watches }
+    }
+
+    /// How often each watched file was opened, in the order given.
+    pub fn counts(&self) -> Vec<usize> {
+        use rustix::fs::inotify;
+        let mut counts = vec![0; self.watches.len()];
+        let mut buffer = [std::mem::MaybeUninit::uninit(); 4096];
+        let mut reader = inotify::Reader::new(&self.fd, &mut buffer);
+        loop {
+            match reader.next() {
+                Ok(event) => {
+                    if event.events().contains(inotify::ReadFlags::OPEN) {
+                        if let Some(i) = self.watches.iter().position(|w| *w == event.wd()) {
+                            counts[i] += 1;
+                        }
+                    }
+                }
+                Err(rustix::io::Errno::AGAIN) => return counts,
+                Err(e) => panic!("inotify: {e}"),
+            }
+        }
+    }
+}

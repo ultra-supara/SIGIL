@@ -22,7 +22,7 @@ All reads are under the proc root (`/proc`), and every entry is on the C-6 allow
 | the proc root | The PIDs (PID 1 hidden means `hidepid`) | `getdents64`, bounded (32,768) |
 | `<pid>/comm` | The process name: selects `ollama` candidates and fronting processes | read |
 | `<pid>/fd`, `<pid>/fd/<n>` | Which sockets a process holds (`socket:[inode]`) | `getdents64` and `readlinkat`, bounded (65,536 per process) |
-| `<pid>/cmdline` | `argv` of an `ollama` process (only those) | read |
+| `<pid>/cmdline` | `argv` of an `ollama` process (only those): the runtime role rests on it, and the same read is recorded as its `argv` | read, once |
 | `<pid>/exe` | Confirms the runtime's executable | `readlinkat` |
 | `<pid>/stat` | The start time, part of a process's identity | read |
 | `<pid>/ns/net` | The process's network namespace | `readlinkat` |

@@ -1,7 +1,7 @@
 //! The `/proc` collector on a fake proc root (plan §4.6.8): which processes are the runtime, who
 //! holds each listening socket, and what is recorded when something cannot be read.
 
-use sigil_engine::observe::proc::{observe, ProcBudgets, ProcFacts};
+use sigil_engine::observe::proc::{observe, ProcBudgets, ProcFacts, RUNTIME_ROLE};
 use sigil_model::*;
 
 mod common;
@@ -515,4 +515,45 @@ fn a_runtime_whose_stat_is_gone_has_exited() {
     let f = run(&fake);
     assert!(f.processes.is_empty());
     assert!(f.gaps.is_empty(), "{:?}", f.gaps);
+}
+
+#[test]
+fn the_runtimes_role_and_its_argv_are_one_read_of_cmdline() {
+    // Re-review of #74: the role rests on `cmdline`, and the argv recorded must be that same
+    // evidence, so `cmdline` is read once. It is never opened for a process whose `comm` is not
+    // `ollama`, even one that is recorded (nginx, fronting).
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    fake.process(&Proc {
+        pid: 200,
+        comm: "nginx",
+        argv: &["nginx"],
+        exe: Some("/usr/sbin/nginx"),
+        sockets: &[9001],
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 443, 9001);
+    fake.process(&Proc::default());
+    let opens = Opens::watch(&[
+        fake.pid_dir(4242).join("cmdline"),
+        fake.pid_dir(200).join("cmdline"),
+        fake.pid_dir(100).join("cmdline"),
+        fake.pid_dir(1).join("cmdline"),
+    ]);
+    let f = run(&fake);
+    assert_eq!(opens.counts(), [1, 0, 0, 0]);
+
+    let runtime = f.processes.iter().find(|p| p.process.pid == 4242).unwrap();
+    assert_eq!(runtime.roles, [ProcessRole::new(RUNTIME_ROLE).unwrap()]);
+    let argv: Vec<&[u8]> = runtime
+        .argv
+        .as_ref()
+        .expect("the runtime's argv is recorded")
+        .iter()
+        .map(UntrustedText::as_bytes)
+        .collect();
+    assert_eq!(argv, [&b"/usr/local/bin/ollama"[..], b"serve"]);
+    let nginx = f.processes.iter().find(|p| p.process.pid == 200).unwrap();
+    assert_eq!(nginx.argv, None);
 }

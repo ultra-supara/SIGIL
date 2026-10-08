@@ -14,7 +14,8 @@
 //!   completely; otherwise its owner is `Unknown`.
 //! - **The runtime.** `ollama serve`: `argv[0]`'s basename is `ollama` and `argv[1]` is `serve`.
 //!   When `exe` can be read, its basename must also be `ollama`. `cmdline` is read only for
-//!   processes whose `comm` is `ollama`. A process whose name or arguments cannot be read may be
+//!   processes whose `comm` is `ollama`, and only once: the argv recorded for the runtime is the
+//!   one its role rests on. A process whose name or arguments cannot be read may be
 //!   the runtime: it is a gap, and the listeners it holds are kept. So is the runtime when it
 //!   cannot be recorded (its `stat`); the listeners it holds are kept with an `Unknown` owner.
 //!
@@ -96,7 +97,8 @@ pub struct ProcFacts {
 /// Whether a process is the runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RuntimeMatch {
-    Confirmed,
+    /// With the `argv` the role rests on, recorded as it was read.
+    Confirmed(Vec<Vec<u8>>),
     Rejected,
     /// Its name or arguments could not be read, so it may be.
     Unknown(String),
@@ -176,7 +178,7 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
                         .gaps
                         .push(format!("process {pid} may be the runtime: {why}"));
                 }
-                if let (RuntimeMatch::Confirmed, Some(Err(why))) = (&s.runtime, &s.obs) {
+                if let (RuntimeMatch::Confirmed(_), Some(Err(why))) = (&s.runtime, &s.obs) {
                     facts.gaps.push(format!(
                         "process {pid} is the runtime but cannot be recorded ({why:?})"
                     ));
@@ -197,7 +199,7 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
     }
     let mut recorded: BTreeMap<usize, ProcessObs> = BTreeMap::new();
     for (i, s) in scanned.iter().enumerate() {
-        if let (RuntimeMatch::Confirmed, Some(Ok(obs))) = (&s.runtime, &s.obs) {
+        if let (RuntimeMatch::Confirmed(_), Some(Ok(obs))) = (&s.runtime, &s.obs) {
             recorded.insert(i, obs.clone());
         }
     }
@@ -208,7 +210,7 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
             .unwrap_or_default();
         // The runtime first, then a process that may be the runtime, then a fronting one.
         let rank = |i: &usize| match (&scanned[*i].runtime, scanned[*i].fronting) {
-            (RuntimeMatch::Confirmed, _) => Some(0),
+            (RuntimeMatch::Confirmed(_), _) => Some(0),
             (RuntimeMatch::Unknown(_), _) => Some(1),
             (RuntimeMatch::Rejected, true) => Some(2),
             (RuntimeMatch::Rejected, false) => None,
@@ -388,7 +390,7 @@ fn scan(
         .as_deref()
         .is_some_and(|c| FRONTING.iter().any(|f| f.as_bytes() == c));
     // Kept for the runtime, and for a process that may own a recorded listener.
-    let keep = runtime == RuntimeMatch::Confirmed
+    let keep = matches!(runtime, RuntimeMatch::Confirmed(_))
         || (!listening_held.is_empty()
             && (fronting || matches!(runtime, RuntimeMatch::Unknown(_))));
     let obs = if keep {
@@ -423,7 +425,7 @@ fn runtime_match(dir: BorrowedFd<'_>) -> RuntimeMatch {
     }
     match exe(dir) {
         Ok((path, _)) if basename(&path) != b"ollama" => RuntimeMatch::Rejected,
-        _ => RuntimeMatch::Confirmed,
+        _ => RuntimeMatch::Confirmed(argv),
     }
 }
 
@@ -439,7 +441,7 @@ fn exe(dir: BorrowedFd<'_>) -> Result<(Vec<u8>, bool), NotObservable> {
 
 /// The process as recorded, or why it cannot be: its `stat` (its start time, part of its
 /// identity) could not be read or understood. `NoProcess` when it exited meanwhile. `argv` only
-/// for the runtime.
+/// for the runtime: the one its role rests on, never read again.
 fn observation(
     dir: BorrowedFd<'_>,
     pid: u32,
@@ -469,15 +471,18 @@ fn observation(
         },
         Err(why) => ProcessExe::NotObservable(why),
     };
-    let confirmed = *runtime == RuntimeMatch::Confirmed;
-    let argv = match read_limited(dir, "cmdline", 64 << 10) {
-        Ok(Read::Whole(bytes)) if confirmed => Some(
-            parse::cmdline(&bytes)
-                .into_iter()
-                .map(UntrustedText::from_bytes)
-                .collect(),
+    // One piece of evidence: the `cmdline` read that confirmed the role.
+    let (roles, argv) = match runtime {
+        RuntimeMatch::Confirmed(argv) => (
+            ProcessRole::new(RUNTIME_ROLE).ok().into_iter().collect(),
+            Some(
+                argv.iter()
+                    .cloned()
+                    .map(UntrustedText::from_bytes)
+                    .collect(),
+            ),
         ),
-        _ => None,
+        _ => (vec![], None),
     };
     Ok(ProcessObs {
         process: ProcessRef {
@@ -486,11 +491,7 @@ fn observation(
             boot_id: boot_id.to_string(),
         },
         at: at.clone(),
-        roles: if confirmed {
-            ProcessRole::new(RUNTIME_ROLE).ok().into_iter().collect()
-        } else {
-            vec![]
-        },
+        roles,
         exe,
         mappings: vec![],
         name: comm.map(UntrustedText::from_bytes),
