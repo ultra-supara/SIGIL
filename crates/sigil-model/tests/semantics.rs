@@ -1272,6 +1272,7 @@ fn the_ten_sentences_are_representable_without_message_strings() {
 // --- Models: facts only, every status derived (PR-3a-2) ---------------------------------------
 
 const LICENSE_MEDIA: &str = "application/vnd.ollama.image.license";
+const MODELS_DIR: &str = "/usr/share/ollama/.ollama/models";
 
 /// Adds a blob read from `blobs/sha256-<hex>` under the models root; returns its digest, instance,
 /// and artifact.
@@ -1285,7 +1286,7 @@ fn add_blob(s: &mut Session, byte: u8, ino: u64) -> (String, InstanceId, Artifac
         format: Format::Other,
         slices: vec![],
     });
-    let path = format!("blobs/sha256-{h}");
+    let path = format!("{MODELS_DIR}/blobs/sha256-{h}");
     s.instances
         .push(instance(&inst, "models", &path, &artifact, ino));
     (format!("sha256:{h}"), inst, artifact)
@@ -1310,7 +1311,7 @@ fn with_model() -> Session {
     let mut s = base(&[]);
     s.request.roots.push(ScanRoot {
         id: id("models"),
-        path: t("/usr/share/ollama/.ollama/models"),
+        path: t(MODELS_DIR),
     });
     let manifest_art: ArtifactId = id(&format!("sha256:{}", hex(0x10)));
     s.artifacts.push(Artifact {
@@ -1323,7 +1324,7 @@ fn with_model() -> Session {
     s.instances.push(instance(
         &manifest,
         "models",
-        "manifests/registry.ollama.ai/library/m/latest",
+        &format!("{MODELS_DIR}/manifests/registry.ollama.ai/library/m/latest"),
         &manifest_art,
         10,
     ));

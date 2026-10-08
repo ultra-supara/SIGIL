@@ -803,18 +803,24 @@ impl<'a> Validator<'a> {
                     continue;
                 };
                 self.instance(blob, &at);
-                let path = layer
-                    .digest
-                    .as_str()
-                    .and_then(digest_hex)
-                    .map(|hex| format!("blobs/sha256-{}", hex.as_str()));
-                let consistent = match (path, placed(blob)) {
+                let hex = layer.digest.as_str().and_then(digest_hex);
+                let consistent = match (hex, placed(blob)) {
                     (None, _) => false,
                     // Dangling: reported above.
                     (Some(_), None) => true,
-                    (Some(path), Some(inst)) => {
-                        inst.path.as_str() == Some(path.as_str())
-                            && manifest_root.is_none_or(|root| *root == inst.root)
+                    (Some(hex), Some(inst)) => {
+                        // The path as discovered: the root's path, then `blobs/sha256-<hex>`.
+                        let root_path = s.request.roots.iter().find(|r| r.id == inst.root);
+                        let at_its_path = root_path.is_none_or(|root| {
+                            let mut expected = root.path.as_bytes().to_vec();
+                            while expected.last() == Some(&b'/') {
+                                expected.pop();
+                            }
+                            expected.extend_from_slice(b"/blobs/sha256-");
+                            expected.extend_from_slice(hex.as_str().as_bytes());
+                            inst.path.as_bytes() == expected.as_slice()
+                        });
+                        at_its_path && manifest_root.is_none_or(|root| *root == inst.root)
                     }
                 };
                 if !consistent {
