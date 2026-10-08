@@ -598,6 +598,29 @@ fn api_server(response: Option<&'static str>) -> String {
     addr.to_string()
 }
 
+/// A server on 127.0.0.1 that sends 404 headers announcing a long body, and never sends it.
+fn not_found_server() -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = vec![];
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => request.push(byte[0]),
+                _ => break,
+            }
+        }
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 1000000\r\n\r\n");
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    });
+    addr.to_string()
+}
+
 /// A loopback address where nothing listens.
 fn refused_addr() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -687,6 +710,48 @@ fn a_probe_that_times_out_leaves_the_result_incomplete() {
     assert_eq!(s.request.budgets["api_io_ms"], 200);
     assert!(matches!(version_coverage(&s), CoverageState::Error { .. }));
     assert!(r.stderr.contains("timed out (read)"), "{}", r.stderr);
+}
+
+#[test]
+fn a_non_200_answer_is_unsupported_without_waiting_for_its_body() {
+    let d = store(true);
+    let addr = not_found_server();
+    let started = std::time::Instant::now();
+    let r = inspect(
+        d.path(),
+        &[
+            &"--active",
+            &"api-probe",
+            &"--api-addr",
+            &addr,
+            &"--budget",
+            &"api_io_ms=4000",
+        ],
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "waited {:?}",
+        started.elapsed()
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(
+        s.probes[0].result,
+        ProbeResult::Answered {
+            status: 404,
+            version: None
+        }
+    );
+    assert!(
+        matches!(version_coverage(&s), CoverageState::Unsupported { what } if what.contains("HTTP 404")),
+        "{:?}",
+        version_coverage(&s)
+    );
+    assert!(
+        r.stderr.contains("answered (HTTP 404), no version"),
+        "{}",
+        r.stderr
+    );
 }
 
 #[test]

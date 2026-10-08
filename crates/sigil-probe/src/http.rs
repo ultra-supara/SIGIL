@@ -2,7 +2,9 @@
 //! (HTTP/1.x, only as far as `GET /api/version` needs).
 //!
 //! - The request is fixed: no body, no keep-alive, no redirects followed.
-//! - A response is read only with `Content-Length` or to the end of the stream. Any transfer
+//! - A response other than 200 is complete with its head: its status is the answer, and its body
+//!   is never waited for.
+//! - A 200 body is read only with `Content-Length` or to the end of the stream. Any transfer
 //!   coding is refused rather than decoded.
 //! - The version is taken only from a 200 response whose body is a JSON object with a short
 //!   string `version`. Nothing else from the response is kept.
@@ -26,8 +28,9 @@ pub fn request(target: SocketAddr) -> Vec<u8> {
 pub enum Parse {
     /// More bytes are needed. Never returned once the stream has ended.
     NeedMore,
-    /// The response is complete. `version` is set only for status 200 with a JSON object whose
-    /// `version` is a string of at most [`MAX_VERSION_BYTES`].
+    /// The response is complete: for status 200 with its body, otherwise with its head.
+    /// `version` is set only for status 200 with a JSON object whose `version` is a string of at
+    /// most [`MAX_VERSION_BYTES`].
     Done {
         status: u16,
         version: Option<String>,
@@ -52,6 +55,14 @@ pub fn parse(bytes: &[u8], eof: bool) -> Parse {
     let Some(status) = lines.next().and_then(status) else {
         return Parse::Malformed("not an HTTP/1.x status line");
     };
+    // Only a 200 body can hold the version: any other status is the answer, whatever body or
+    // framing it announces.
+    if status != 200 {
+        return Parse::Done {
+            status,
+            version: None,
+        };
+    }
     let mut length: Option<usize> = None;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
@@ -83,8 +94,10 @@ pub fn parse(bytes: &[u8], eof: bool) -> Parse {
         None if eof => rest,
         _ => return Parse::NeedMore,
     };
-    let version = if status == 200 { version(body) } else { None };
-    Parse::Done { status, version }
+    Parse::Done {
+        status,
+        version: version(body),
+    }
 }
 
 /// The status code of `HTTP/1.0` or `HTTP/1.1`, three digits, then the end or a space.
@@ -185,6 +198,27 @@ mod tests {
         let r = b"HTTP/1.1 200 OK\r\n\r\n{\"version\":\"0.12.3\"}";
         assert_eq!(parse(r, false), Parse::NeedMore);
         assert_eq!(parse(r, true), done(200, Some("0.12.3")));
+    }
+
+    #[test]
+    fn a_non_200_answer_does_not_wait_for_its_body() {
+        // The head alone is the answer, whatever body it announces.
+        let head = b"HTTP/1.1 404 Not Found\r\nContent-Length: 1000000\r\n\r\n";
+        assert_eq!(parse(head, false), done(404, None));
+        let mut partial = head.to_vec();
+        partial.extend_from_slice(b"404 page");
+        assert_eq!(parse(&partial, false), done(404, None));
+        // Its framing is not read either.
+        for r in [
+            &b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\n\r\n"[..],
+            b"HTTP/1.0 301 Moved Permanently\r\nLocation: http://x/\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\n\r\n",
+        ] {
+            let status = std::str::from_utf8(&r[9..12]).unwrap().parse().unwrap();
+            assert_eq!(parse(r, false), done(status, None), "{status}");
+        }
+        // The head itself must still be complete.
+        assert_eq!(parse(&head[..20], false), Parse::NeedMore);
     }
 
     #[test]

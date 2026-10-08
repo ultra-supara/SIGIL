@@ -224,6 +224,29 @@ fn another_service_is_answered_without_a_version() {
 }
 
 #[test]
+fn a_non_200_answer_is_returned_without_waiting_for_its_body() {
+    // 404 headers announcing a long body that never comes.
+    let target = serve(|mut stream| {
+        read_request(&mut stream);
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 1000000\r\n\r\n");
+        thread::sleep(Duration::from_secs(3));
+    });
+    let started = Instant::now();
+    assert_eq!(
+        probe(target, &ProbeOptions::default()),
+        ProbeResult::Answered {
+            status: 404,
+            version: None
+        }
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "waited {:?} for a body",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn a_remote_target_is_refused_before_any_connection() {
     let target: SocketAddr = "192.0.2.1:11434".parse().unwrap();
     let started = Instant::now();
