@@ -142,15 +142,20 @@ fn registered() -> Vec<(&'static str, Probe)> {
         PolicyViolation => "PolicyViolation", PolicyDecision => "PolicyDecision", Action => "Action",
         OpenQuestionDecision => "OpenQuestionDecision", OqTreatment => "OqTreatment", Outcome => "Outcome",
         Verdict => "Verdict", Completeness => "Completeness",
+        Model => "Model", ModelProvenance => "ModelProvenance", ModelLayer => "ModelLayer",
+        LayerRole => "LayerRole", LicenseText => "LicenseText",
     ]
 }
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
+const MODEL: &str = "model:models/registry.ollama.ai/library/m/latest";
+
 const SCALAR_DEFS: &[&str] = &[
     "ArtifactId",
     "SliceId",
     "InstanceId",
     "RootId",
+    "ModelId",
     "FnId",
     "CallId",
     "ValueId",
@@ -484,6 +489,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 rule: id("filter"),
             }),
         ),
+        sample("EvidenceRef", EvidenceRef::Model { model: id(MODEL) }),
         sample("Loc", Loc::FileOffset(64)),
         sample("Loc", Loc::Symbol(t("ggml_backend_load_all"))),
         sample(
@@ -554,6 +560,40 @@ fn gallery() -> Vec<(&'static str, Value)> {
             },
         ),
         sample("Ref", Ref::Process(process.clone())),
+        sample("Ref", Ref::Model(id(MODEL))),
+        sample(
+            "Model",
+            Model {
+                id: id(MODEL),
+                name: t("m:latest"),
+                manifest: id("inst:models/manifests/registry.ollama.ai/library/m/latest"),
+                provenance: ModelProvenance {
+                    registry: t("registry.ollama.ai"),
+                    namespace: Some(t("library")),
+                    model: t("m"),
+                    tag: t("latest"),
+                },
+                layers: vec![
+                    ModelLayer {
+                        role: LayerRole::Config,
+                        media_type: None,
+                        digest: t(&format!("sha256:{}", hex(0x11))),
+                        blob: Some(id(&format!("inst:models/blobs/sha256-{}", hex(0x11)))),
+                    },
+                    ModelLayer {
+                        role: LayerRole::Layer,
+                        media_type: Some(t(LICENSE_MEDIA_TYPE)),
+                        digest: t("sha256:FOO"),
+                        blob: None,
+                    },
+                ],
+                license: Some(LicenseText {
+                    artifact: id(&format!("sha256:{}", hex(0x13))),
+                    spdx: Some("MIT".to_string()),
+                    excerpt: t("MIT"),
+                }),
+            },
+        ),
         sample(
             "IdentityAssertion",
             IdentityAssertion::Required {

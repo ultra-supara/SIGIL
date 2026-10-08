@@ -109,6 +109,7 @@ pub fn base(required: &[&str]) -> Session {
             required_checks: ids(required),
             budgets: BTreeMap::from([("files".to_string(), 4096)]),
             observe_env: false,
+            model_filter: None,
         },
         observation: ObservationMeta {
             started_at: ts("2026-10-07T07:00:00Z"),
@@ -123,6 +124,7 @@ pub fn base(required: &[&str]) -> Session {
         },
         artifacts: vec![],
         instances: vec![],
+        models: vec![],
         processes: vec![],
         values: vec![],
         components: vec![],

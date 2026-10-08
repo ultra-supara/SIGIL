@@ -21,6 +21,12 @@
       "maxLength": 1024,
       "pattern": "^inst:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
     },
+    "ModelId": {
+      "description": "A model in a model store: model:<root id>/<manifest path under manifests/>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^model:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
     "RootId": {
       "description": "A scan root declared in the request.",
       "type": "string",
@@ -225,6 +231,7 @@
         "observation",
         "artifacts",
         "instances",
+        "models",
         "processes",
         "values",
         "components",
@@ -251,6 +258,7 @@
         "observation": {"$ref": "#/$defs/ObservationMeta"},
         "artifacts": {"type": "array", "items": {"$ref": "#/$defs/Artifact"}},
         "instances": {"type": "array", "items": {"$ref": "#/$defs/FileInstance"}},
+        "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
@@ -283,6 +291,7 @@
         "observation": {"$ref": "#/$defs/ObservationMeta"},
         "artifacts": {"type": "array", "items": {"$ref": "#/$defs/Artifact"}},
         "instances": {"type": "array", "items": {"$ref": "#/$defs/FileInstance"}},
+        "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
@@ -331,7 +340,7 @@
     "RunRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "roots", "audit", "required_checks", "budgets", "observe_env"],
+      "required": ["mode", "roots", "audit", "required_checks", "budgets", "observe_env", "model_filter"],
       "properties": {
         "mode": {"$ref": "#/$defs/Mode"},
         "roots": {"type": "array", "items": {"$ref": "#/$defs/ScanRoot"}},
@@ -341,7 +350,11 @@
           "type": "object",
           "additionalProperties": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
         },
-        "observe_env": {"type": "boolean"}
+        "observe_env": {"type": "boolean"},
+        "model_filter": {
+          "description": "Only the model with this display name is inventoried (exact match); null for all.",
+          "anyOf": [{"type": "string"}, {"type": "null"}]
+        }
       }
     },
     "Mode": {"type": "string", "enum": ["Static", "Observe"]},
@@ -432,6 +445,56 @@
       }
     },
     "Arch": {"type": "string", "enum": ["x86_64", "aarch64", "other"]},
+    "Model": {
+      "description": "One model in a model store: facts only. Whether a blob is missing, malformed, unread, or mismatched is derived from the layers and the blob instances.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "manifest", "provenance", "layers", "license"],
+      "properties": {
+        "id": {"$ref": "#/$defs/ModelId"},
+        "name": {"$ref": "#/$defs/UntrustedText"},
+        "manifest": {"$ref": "#/$defs/InstanceId"},
+        "provenance": {"$ref": "#/$defs/ModelProvenance"},
+        "layers": {"type": "array", "items": {"$ref": "#/$defs/ModelLayer"}},
+        "license": {"anyOf": [{"$ref": "#/$defs/LicenseText"}, {"type": "null"}]}
+      }
+    },
+    "ModelProvenance": {
+      "description": "What the manifest path says: <registry>/<namespace...>/<model>/<tag>.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "namespace", "model", "tag"],
+      "properties": {
+        "registry": {"$ref": "#/$defs/UntrustedText"},
+        "namespace": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "model": {"$ref": "#/$defs/UntrustedText"},
+        "tag": {"$ref": "#/$defs/UntrustedText"}
+      }
+    },
+    "ModelLayer": {
+      "description": "One manifest entry as written, with the blob instance found for a well-formed digest.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "media_type", "digest", "blob"],
+      "properties": {
+        "role": {"$ref": "#/$defs/LayerRole"},
+        "media_type": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "digest": {"$ref": "#/$defs/UntrustedText"},
+        "blob": {"anyOf": [{"$ref": "#/$defs/InstanceId"}, {"type": "null"}]}
+      }
+    },
+    "LayerRole": {"type": "string", "enum": ["Config", "Layer"]},
+    "LicenseText": {
+      "description": "What was read from the license layer's blob.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "spdx", "excerpt"],
+      "properties": {
+        "artifact": {"$ref": "#/$defs/ArtifactId"},
+        "spdx": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "excerpt": {"$ref": "#/$defs/UntrustedText"}
+      }
+    },
     "FileInstance": {
       "description": "A placement of contents at a path, observed once.",
       "type": "object",
@@ -793,6 +856,19 @@
           "additionalProperties": false,
           "required": ["ProfileRule"],
           "properties": {"ProfileRule": {"$ref": "#/$defs/ProfileRuleRef"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Model"],
+          "properties": {
+            "Model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model"],
+              "properties": {"model": {"$ref": "#/$defs/ModelId"}}
+            }
+          }
         }
       ]
     },
@@ -1265,6 +1341,12 @@
           "additionalProperties": false,
           "required": ["Process"],
           "properties": {"Process": {"$ref": "#/$defs/ProcessRef"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Model"],
+          "properties": {"Model": {"$ref": "#/$defs/ModelId"}}
         }
       ]
     },

@@ -18,6 +18,7 @@ use crate::hint::FeatureHint;
 use crate::id::{AuditScope, CheckId, RootId, Sha256Hex, Timestamp};
 use crate::identity::{ComponentClaim, ReleaseClaim};
 use crate::load::{LoadFacts, ProcessValue};
+use crate::model::Model;
 use crate::relation::{BindingPremise, Relation, RuleSupport};
 use crate::text::UntrustedText;
 
@@ -35,6 +36,8 @@ pub struct Session {
     pub observation: ObservationMeta,
     pub artifacts: Vec<Artifact>,
     pub instances: Vec<FileInstance>,
+    /// Models in a model store (§4.6.7).
+    pub models: Vec<Model>,
     pub processes: Vec<ProcessObs>,
     pub values: Vec<ProcessValue>,
     /// A: component identification.
@@ -113,6 +116,8 @@ pub struct RunRequest {
     pub budgets: BTreeMap<String, u64>,
     /// Whether allowlisted environment keys were read from processes (`--observe-env`).
     pub observe_env: bool,
+    /// Only the model with this display name is inventoried (exact match); `None` for all.
+    pub model_filter: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

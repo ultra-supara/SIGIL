@@ -34,6 +34,8 @@ impl Session {
             sort_json(&mut instance.discovered_by);
         }
         sort_json(&mut self.instances);
+        // A model's layers keep manifest order.
+        sort_json(&mut self.models);
         for process in &mut self.processes {
             process.roles.sort();
             sort_json(&mut process.mappings);
