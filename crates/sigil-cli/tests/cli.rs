@@ -365,6 +365,30 @@ fn a_broken_session_file_is_an_execution_error() {
 }
 
 #[test]
+fn a_session_that_fails_validation_is_refused() {
+    // Well-formed JSON of the right schema, but its outcome no longer matches its findings.
+    let (dir, path) = saved_warn();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"confirmed_warnings\": 1"), "{text}");
+    let edited = write(
+        dir.path(),
+        "edited.json",
+        &text.replace("\"confirmed_warnings\": 1", "\"confirmed_warnings\": 7"),
+    );
+    for command in [&["session", "render"][..], &["explain", "--verdict"][..]] {
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = command
+            .iter()
+            .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+            .collect();
+        args.push(&edited);
+        let r = run(&args);
+        assert_eq!(r.code, 1, "{command:?}: {}", r.stderr);
+        assert!(r.stderr.contains("is not a valid session"), "{}", r.stderr);
+        assert!(r.stdout.is_empty());
+    }
+}
+
+#[test]
 fn explain_a_known_finding() {
     // #21: the finding, its evidence, the rule that fired, and the remediation.
     let (_dir, path) = saved_warn();
