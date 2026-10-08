@@ -25,9 +25,11 @@ use sigil_model::RootId;
 mod path;
 mod read;
 mod resolve;
+mod walk;
 
 pub use path::{link_target, LinkTarget, PathError, RelPath};
 pub use read::{FileRead, ReadOutcome, ReadSpec};
+pub use walk::{Skip, Walk, WalkError};
 
 /// Budgets that bound a scan (plan §4.9). Exceeding one is recorded, never fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +75,7 @@ pub struct SafeFs {
     pub(crate) roots: Vec<Root>,
     pub(crate) budgets: FsBudgets,
     /// Files discovered by walks so far.
-    pub(crate) files_seen: u64,
+    pub(crate) files_seen: Cell<u64>,
     /// Cleared when the kernel lacks `openat2`; `openat` with `O_NOFOLLOW` is used instead.
     pub(crate) have_openat2: Cell<bool>,
 }
@@ -83,7 +85,7 @@ impl SafeFs {
         SafeFs {
             roots: vec![],
             budgets,
-            files_seen: 0,
+            files_seen: Cell::new(0),
             have_openat2: Cell::new(true),
         }
     }

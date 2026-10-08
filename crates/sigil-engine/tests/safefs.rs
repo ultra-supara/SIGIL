@@ -288,3 +288,185 @@ fn missing_paths_and_loops_have_no_instance() {
     let unknown = fs.read_file(&RootId::new("other").unwrap(), &rel("x"), ALL, vec![]);
     assert!(matches!(unknown.outcome, ReadOutcome::Failed(_)));
 }
+
+// --- walk -------------------------------------------------------------------------------------
+
+use sigil_engine::collect::fs::{Skip, Walk, WalkError};
+
+fn walk(fs: &SafeFs, dir: &str) -> Walk {
+    let dir = if dir.is_empty() {
+        RelPath::root()
+    } else {
+        rel(dir)
+    };
+    fs.walk(&root(), &dir).unwrap()
+}
+
+fn listed(w: &Walk) -> Vec<String> {
+    w.files.iter().map(RelPath::display).collect()
+}
+
+fn skipped(w: &Walk) -> Vec<(String, Skip)> {
+    w.skipped
+        .iter()
+        .map(|(p, s)| (p.display(), s.clone()))
+        .collect()
+}
+
+#[test]
+fn a_walk_lists_regular_files_in_a_stable_order() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("a/c")).unwrap();
+    for f in ["z", "a/b", "a/c/d", "a/.hidden"] {
+        fs::write(p.join(f), f).unwrap();
+    }
+    let fs = safefs(p);
+    let w = walk(&fs, "");
+    assert_eq!(listed(&w), ["a/.hidden", "a/b", "a/c/d", "z"]);
+    assert!(w.skipped.is_empty() && w.unscanned.is_empty() && w.exceeded.is_empty());
+    assert_eq!(listed(&walk(&fs, "a/c")), ["a/c/d"]);
+}
+
+#[test]
+fn directory_links_are_followed_once_and_loops_end() {
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("real")).unwrap();
+    fs::create_dir_all(p.join("a")).unwrap();
+    fs::create_dir_all(p.join("b")).unwrap();
+    fs::write(p.join("real/x"), b"x").unwrap();
+    fs::write(p.join("b/y"), b"y").unwrap();
+    symlink("real", p.join("alias")).unwrap();
+    symlink(".", p.join("real/self")).unwrap();
+    symlink("..", p.join("real/up")).unwrap();
+    symlink("../b", p.join("a/link")).unwrap();
+    symlink(outside.path(), p.join("away")).unwrap();
+    let fs = safefs(p);
+
+    // The physical tree first; a link to a directory already walked is recorded, not re-walked.
+    let w = walk(&fs, "");
+    assert_eq!(listed(&w), ["b/y", "real/x"]);
+    assert_eq!(
+        skipped(&w),
+        [
+            ("a/link".to_string(), Skip::AlreadyVisited),
+            ("alias".to_string(), Skip::AlreadyVisited),
+            ("away".to_string(), Skip::OutsideScanRoots),
+            ("real/self".to_string(), Skip::AlreadyVisited),
+            ("real/up".to_string(), Skip::AlreadyVisited),
+        ]
+    );
+
+    // A link to a directory not under the walked one is followed under the link's own path.
+    let w = walk(&fs, "a");
+    assert_eq!(listed(&w), ["a/link/y"]);
+}
+
+#[test]
+fn special_files_dangling_links_and_unreadable_directories_are_recorded() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        p.join("pipe"),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        0,
+    )
+    .unwrap();
+    symlink("nothing", p.join("dangling")).unwrap();
+    fs::write(p.join("ok"), b"ok").unwrap();
+    let locked = !privileged(p);
+    if locked {
+        fs::create_dir(p.join("locked")).unwrap();
+        fs::write(p.join("locked/f"), b"f").unwrap();
+        fs::set_permissions(p.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let fs = safefs(p);
+    let w = walk(&fs, "");
+    if locked {
+        fs::set_permissions(p.join("locked"), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert_eq!(listed(&w), ["ok"]);
+    let mut expected = vec![
+        ("dangling".to_string(), Skip::Dangling),
+        ("pipe".to_string(), Skip::NotRegularFile),
+    ];
+    if locked {
+        expected.insert(1, ("locked".to_string(), Skip::PermissionDenied));
+    } else {
+        eprintln!("SKIPPED: the unreadable-directory case needs an unprivileged user");
+    }
+    assert_eq!(skipped(&w), expected);
+}
+
+#[test]
+fn the_file_budget_stops_the_walk_and_names_what_was_not_scanned() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("d/sub")).unwrap();
+    for f in ["d/1", "d/2", "d/3", "d/4", "d/sub/5"] {
+        fs::write(p.join(f), f).unwrap();
+    }
+    let mut fs = SafeFs::new(FsBudgets {
+        max_files: 3,
+        ..FsBudgets::default()
+    });
+    fs.add_root(root(), p).unwrap();
+    let w = walk(&fs, "d");
+    assert_eq!(listed(&w), ["d/1", "d/2", "d/3"]);
+    assert_eq!(w.exceeded.len(), 1);
+    assert_eq!(w.exceeded[0].budget, "files_discovered");
+    assert_eq!((w.exceeded[0].used, w.exceeded[0].limit), (3, 3));
+    let unscanned: Vec<String> = w.unscanned.iter().map(RelPath::display).collect();
+    assert_eq!(unscanned, ["d"]);
+
+    // The budget is shared by every walk of this SafeFs.
+    let again = walk(&fs, "d/sub");
+    assert!(again.files.is_empty());
+    assert_eq!(again.exceeded[0].budget, "files_discovered");
+}
+
+#[test]
+fn the_depth_budget_leaves_deeper_directories_unscanned() {
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("a/b/c")).unwrap();
+    for f in ["top", "a/one", "a/b/two", "a/b/c/three"] {
+        fs::write(p.join(f), f).unwrap();
+    }
+    let mut fs = SafeFs::new(FsBudgets {
+        max_depth: 1,
+        ..FsBudgets::default()
+    });
+    fs.add_root(root(), p).unwrap();
+    let w = walk(&fs, "");
+    assert_eq!(listed(&w), ["a/one", "top"]);
+    let unscanned: Vec<String> = w.unscanned.iter().map(RelPath::display).collect();
+    assert_eq!(unscanned, ["a/b"]);
+    assert_eq!(w.exceeded[0].budget, "walk_depth");
+    assert_eq!(w.exceeded[0].limit, 1);
+}
+
+#[test]
+fn walking_something_that_is_not_a_directory_is_an_error() {
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    fs::write(dir.path().join("file"), b"f").unwrap();
+    symlink(outside.path(), dir.path().join("away")).unwrap();
+    let fs = safefs(dir.path());
+    assert_eq!(
+        fs.walk(&root(), &rel("missing")).unwrap_err(),
+        WalkError::NotFound
+    );
+    assert_eq!(
+        fs.walk(&root(), &rel("file")).unwrap_err(),
+        WalkError::NotADirectory
+    );
+    assert_eq!(
+        fs.walk(&root(), &rel("away")).unwrap_err(),
+        WalkError::OutsideRoots
+    );
+}
