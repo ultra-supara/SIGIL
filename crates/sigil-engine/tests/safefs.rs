@@ -151,6 +151,30 @@ fn a_file_over_the_limit_is_not_hashed() {
 }
 
 #[test]
+fn a_file_larger_than_its_stat_size_still_stops_at_the_limit() {
+    // procfs reports `st_size` 0 for files with content, so only the check while streaming can
+    // stop this read. It stands in for a file that grows while it is read.
+    let proc = RootId::new("proc").unwrap();
+    let mut fs = SafeFs::new(FsBudgets::default());
+    fs.add_root(proc.clone(), Path::new("/proc/self")).unwrap();
+    let read = fs.read_file(
+        &proc,
+        &rel("status"),
+        ReadSpec {
+            keep: 0,
+            limit: Some(16),
+        },
+        vec![],
+    );
+    assert!(
+        matches!(read.outcome, ReadOutcome::LimitExceeded { limit: 16, size } if size > 16),
+        "{:?}",
+        read.outcome
+    );
+    assert!(read.artifact.is_none());
+}
+
+#[test]
 fn a_symlink_inside_the_root_is_followed_and_recorded() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join("blobs")).unwrap();
@@ -362,6 +386,12 @@ fn directory_links_are_followed_once_and_loops_end() {
     // A link to a directory not under the walked one is followed under the link's own path.
     let w = walk(&fs, "a");
     assert_eq!(listed(&w), ["a/link/y"]);
+
+    // A link up to an ancestor walks the ancestor once; the walked directory, met again below
+    // it, is not walked twice.
+    let w = walk(&fs, "real");
+    assert_eq!(listed(&w), ["real/up/b/y", "real/x"]);
+    assert!(skipped(&w).contains(&("real/up/real".to_string(), Skip::AlreadyVisited)));
 }
 
 #[test]
@@ -427,6 +457,24 @@ fn the_file_budget_stops_the_walk_and_names_what_was_not_scanned() {
     let again = walk(&fs, "d/sub");
     assert!(again.files.is_empty());
     assert_eq!(again.exceeded[0].budget, "files_discovered");
+
+    // The budget runs out exactly at the end of a directory: the next directory is named as
+    // unscanned, and none of its subdirectories is entered.
+    let dir = TempDir::new().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("a")).unwrap();
+    fs::create_dir_all(p.join("b/c")).unwrap();
+    fs::write(p.join("a/f"), b"f").unwrap();
+    fs::write(p.join("b/c/g"), b"g").unwrap();
+    let mut fs = SafeFs::new(FsBudgets {
+        max_files: 1,
+        ..FsBudgets::default()
+    });
+    fs.add_root(root(), p).unwrap();
+    let w = walk(&fs, "");
+    assert_eq!(listed(&w), ["a/f"]);
+    let unscanned: Vec<String> = w.unscanned.iter().map(RelPath::display).collect();
+    assert_eq!(unscanned, ["b"]);
 }
 
 #[test]
@@ -437,6 +485,8 @@ fn the_depth_budget_leaves_deeper_directories_unscanned() {
     for f in ["top", "a/one", "a/b/two", "a/b/c/three"] {
         fs::write(p.join(f), f).unwrap();
     }
+    // A directory link counts at the depth where the link is, not where it points.
+    symlink("b/c", p.join("a/deep")).unwrap();
     let mut fs = SafeFs::new(FsBudgets {
         max_depth: 1,
         ..FsBudgets::default()
@@ -445,7 +495,7 @@ fn the_depth_budget_leaves_deeper_directories_unscanned() {
     let w = walk(&fs, "");
     assert_eq!(listed(&w), ["a/one", "top"]);
     let unscanned: Vec<String> = w.unscanned.iter().map(RelPath::display).collect();
-    assert_eq!(unscanned, ["a/b"]);
+    assert_eq!(unscanned, ["a/b", "a/deep"]);
     assert_eq!(w.exceeded[0].budget, "walk_depth");
     assert_eq!(w.exceeded[0].limit, 1);
 }

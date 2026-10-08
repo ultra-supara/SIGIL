@@ -135,6 +135,21 @@ fn verdict_and_completeness_are_independent() {
             .retain(|c| c.check.as_str() != "loader.identify")),
         (Verdict::Pass, missing(&["loader.identify"]))
     );
+    // A check is closed only when every coverage entry for it closes it.
+    assert_eq!(
+        outcome("01-complete-pass", &|s| {
+            let instance = s.instances[0].id.clone();
+            s.coverage.push(Coverage {
+                check: CheckId::new("loader.identify").unwrap(),
+                scope: Ref::Instance(instance),
+                state: CoverageState::Partial {
+                    missing: vec!["one symbol".into()],
+                },
+                budget: None,
+            });
+        }),
+        (Verdict::Pass, missing(&["loader.identify"]))
+    );
     // An open question counted as a gap.
     let (verdict, completeness) = outcome("07-open-question", &|_| {});
     assert_eq!(verdict, Verdict::Pass);
@@ -278,6 +293,13 @@ fn open_question_treatment_comes_from_the_policy() {
     );
 
     let mut s = example("07-open-question");
+    run(&mut s, &policy("[open_questions]\ndefault = \"fail\"\n"));
+    assert_eq!(
+        (s.outcome.verdict, &s.outcome.completeness),
+        (Verdict::Fail, &Completeness::Complete)
+    );
+
+    let mut s = example("07-open-question");
     run(
         &mut s,
         &policy("[open_questions]\ndefault = \"ignore\"\nreason = \"reviewed manually\"\n"),
@@ -345,4 +367,32 @@ fn denied_components_become_policy_violations() {
     run(&mut s, &deny);
     assert!(s.policy_violations.is_empty());
     assert_eq!(s.outcome.verdict, Verdict::Pass);
+
+    // Only claims for the denied component match.
+    let mut s = example("01-complete-pass");
+    run(
+        &mut s,
+        &policy("[[components.deny]]\ncomponent = \"ggml-backend/rpc\"\naction = \"fail\"\nreason = \"not approved\"\n"),
+    );
+    assert!(s.policy_violations.is_empty());
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+}
+
+#[test]
+fn the_verdict_is_the_highest_action_whatever_its_source() {
+    let deny = |action: &str| {
+        format!("[[components.deny]]\ncomponent = \"ggml\"\naction = \"{action}\"\nreason = \"not approved\"\n")
+    };
+    // A Warn finding, then a Fail policy violation.
+    let mut s = with_license_finding();
+    run(&mut s, &policy(&deny("fail")));
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
+    // A Fail finding, then a Warn policy violation.
+    let mut s = with_license_finding();
+    let body = format!(
+        "[rules.\"model.license_missing\"]\naction = \"fail\"\n{}",
+        deny("warn")
+    );
+    run(&mut s, &policy(&body));
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
 }
