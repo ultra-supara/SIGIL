@@ -125,8 +125,9 @@ fn registered() -> Vec<(&'static str, Probe)> {
         ParamMapping => "ParamMapping", SourceParamRef => "SourceParamRef", BinaryParam => "BinaryParam",
         Relation => "Relation", DeclKind => "DeclKind", SearchRule => "SearchRule", SearchDir => "SearchDir",
         ObligationResult => "ObligationResult", ObligationState => "ObligationState", RuleSupport => "RuleSupport",
+        RuleSupportRef => "RuleSupportRef",
         BindingPremise => "BindingPremise", BindingState => "BindingState",
-        LoadFacts => "LoadFacts", LoadContext => "LoadContext", CandidateWhy => "CandidateWhy",
+        LoadFacts => "LoadFacts", LoadFact => "LoadFact", LoadContext => "LoadContext", CandidateWhy => "CandidateWhy",
         EffectWhy => "EffectWhy", LoaderPhase => "LoaderPhase", ProcessValue => "ProcessValue",
         ValueKey => "ValueKey", TriValue => "TriValue", ValueOrigin => "ValueOrigin",
         WriteAccess => "WriteAccess", PrincipalClaim => "PrincipalClaim", NodeAccess => "NodeAccess",
@@ -135,7 +136,8 @@ fn registered() -> Vec<(&'static str, Probe)> {
         Grant => "Grant",
         Coverage => "Coverage", CoverageState => "CoverageState", AbsenceBasis => "AbsenceBasis",
         SkipReason => "SkipReason", Unavailability => "Unavailability", BudgetUse => "BudgetUse",
-        Condition => "Condition", CondState => "CondState", CondEvidence => "CondEvidence", Finding => "Finding",
+        Condition => "Condition", CondState => "CondState", CondEvidence => "CondEvidence", ValueNeed => "ValueNeed",
+        Finding => "Finding",
         FindingKind => "FindingKind", Severity => "Severity", OpenQuestion => "OpenQuestion",
         PolicyViolation => "PolicyViolation", PolicyDecision => "PolicyDecision", Action => "Action",
         OpenQuestionDecision => "OpenQuestionDecision", OqTreatment => "OqTreatment", Outcome => "Outcome",
@@ -993,18 +995,25 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample(
             "CondState",
             CondState::NotMet {
-                evidence: CondEvidence::Identity(IdentityStatus::ReferenceMatched),
+                evidence: CondEvidence::Observed {
+                    facts: vec![EvidenceRef::Artifact { artifact }],
+                },
             },
         ),
         sample(
             "CondEvidence",
+            CondEvidence::Identity {
+                slice: slice.clone(),
+                component: id("ggml"),
+            },
+        ),
+        sample("ValueNeed", ValueNeed::Absent),
+        sample(
+            "LoadFact",
             [
-                CondEvidence::Observed {
-                    facts: vec![EvidenceRef::Artifact { artifact }],
-                },
-                CondEvidence::Binding(BindingState::Mismatch {
-                    first_definer: id("inst:x"),
-                }),
+                LoadFact::Candidate,
+                LoadFact::Selectable,
+                LoadFact::UsedForInference,
             ],
         ),
         sample(

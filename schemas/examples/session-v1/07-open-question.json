@@ -439,9 +439,9 @@
             "Met": {
               "evidence": {
                 "Behavior": {
-                  "TargetVerified": {
-                    "obligations": ["evaluate.score_call", "evaluate.close_reached"]
-                  }
+                  "profile": "ggml.backend-loader@2",
+                  "rule": "evaluate",
+                  "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0"
                 }
               }
             }
@@ -453,12 +453,7 @@
           "state": {
             "Met": {
               "evidence": {
-                "Value": {
-                  "PredictedLaunch": {
-                    "rules": ["systemd.User", "topology.user_inherited"],
-                    "from": ["val:ollama serve/user/configured"]
-                  }
-                }
+                "Value": {"value": "val:llama-server (per model)/user/predicted", "needs": "Known"}
               }
             }
           },

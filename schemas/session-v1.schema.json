@@ -648,7 +648,7 @@
       }
     },
     "Basis": {
-      "description": "How a fact was obtained. Modeled is not 'confirmed in the target': its support says what it may assert.",
+      "description": "How a fact was obtained. Modeled is not 'confirmed in the target': it may assert what the named rule support records, and no more than the fact's own unresolved premises allow.",
       "oneOf": [
         {
           "type": "object",
@@ -683,18 +683,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["Modeled"],
-          "properties": {
-            "Modeled": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["profile", "rule", "support"],
-              "properties": {
-                "profile": {"$ref": "#/$defs/ProfileRef"},
-                "rule": {"$ref": "#/$defs/ProfileRuleId"},
-                "support": {"$ref": "#/$defs/Support"}
-              }
-            }
-          }
+          "properties": {"Modeled": {"$ref": "#/$defs/RuleSupportRef"}}
         },
         {
           "type": "object",
@@ -881,7 +870,7 @@
       }
     },
     "Support": {
-      "description": "What supports a behavior claim about a specific artifact. Categories, not ranks. FeatureMatch never supports a finding condition.",
+      "description": "What supports a behavior claim about a specific artifact. Categories, not ranks. Recorded only in RuleSupport. FeatureMatch never supports a finding condition.",
       "oneOf": [
         {
           "type": "object",
@@ -2326,6 +2315,7 @@
     },
     "ObligationState": {"type": "string", "enum": ["Pass", "Fail", "Unknown"]},
     "RuleSupport": {
+      "description": "The support of one profile rule on one slice: the only place a Support is recorded. (profile, rule, slice) is unique.",
       "type": "object",
       "additionalProperties": false,
       "required": ["profile", "rule", "slice", "support"],
@@ -2334,6 +2324,17 @@
         "rule": {"$ref": "#/$defs/ProfileRuleId"},
         "slice": {"$ref": "#/$defs/SliceId"},
         "support": {"$ref": "#/$defs/Support"}
+      }
+    },
+    "RuleSupportRef": {
+      "description": "The key of a RuleSupport.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "rule", "slice"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/ProfileRef"},
+        "rule": {"$ref": "#/$defs/ProfileRuleId"},
+        "slice": {"$ref": "#/$defs/SliceId"}
       }
     },
     "BindingPremise": {
@@ -2430,6 +2431,10 @@
         "mapping_observability": {"$ref": "#/$defs/Observability"},
         "used_for_inference": {"$ref": "#/$defs/Tri_Unit"}
       }
+    },
+    "LoadFact": {
+      "type": "string",
+      "enum": ["Candidate", "WouldEvaluate", "Selectable", "UsedForInference"]
     },
     "LoadContext": {
       "type": "object",
@@ -3056,37 +3061,95 @@
       ]
     },
     "CondEvidence": {
-      "description": "Evidence for a condition, by kind; each kind has its own sufficiency rule.",
+      "description": "Evidence for a condition: the record that decides it, by kind. Never a copy of the record's conclusion; what it settles is read from the record under its kind's sufficiency rule.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
           "required": ["Behavior"],
-          "properties": {"Behavior": {"$ref": "#/$defs/Support"}}
+          "properties": {"Behavior": {"$ref": "#/$defs/RuleSupportRef"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Load"],
+          "properties": {
+            "Load": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["instance", "context", "fact"],
+              "properties": {
+                "instance": {"$ref": "#/$defs/InstanceId"},
+                "context": {"$ref": "#/$defs/LoadContext"},
+                "fact": {"$ref": "#/$defs/LoadFact"}
+              }
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
           "required": ["Access"],
-          "properties": {"Access": {"$ref": "#/$defs/AccessConclusion"}}
+          "properties": {
+            "Access": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["access", "capability"],
+              "properties": {
+                "access": {"$ref": "#/$defs/AccessId"},
+                "capability": {"$ref": "#/$defs/WriteCapability"}
+              }
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
           "required": ["Value"],
-          "properties": {"Value": {"$ref": "#/$defs/ValueOrigin"}}
+          "properties": {
+            "Value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "needs"],
+              "properties": {
+                "value": {"$ref": "#/$defs/ValueId"},
+                "needs": {"$ref": "#/$defs/ValueNeed"}
+              }
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
           "required": ["Binding"],
-          "properties": {"Binding": {"$ref": "#/$defs/BindingState"}}
+          "properties": {
+            "Binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["process_role", "site", "definer"],
+              "properties": {
+                "process_role": {"$ref": "#/$defs/ProcessRole"},
+                "site": {"$ref": "#/$defs/CallRef"},
+                "definer": {"$ref": "#/$defs/InstanceId"}
+              }
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
           "required": ["Identity"],
-          "properties": {"Identity": {"$ref": "#/$defs/IdentityStatus"}}
+          "properties": {
+            "Identity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["slice", "component"],
+              "properties": {
+                "slice": {"$ref": "#/$defs/SliceId"},
+                "component": {"$ref": "#/$defs/ComponentKey"}
+              }
+            }
+          }
         },
         {
           "type": "object",
@@ -3103,6 +3166,7 @@
         }
       ]
     },
+    "ValueNeed": {"type": "string", "enum": ["Known", "Absent"]},
     "Finding": {
       "description": "Level E: a dangerous configuration established on every condition. Policy never changes it; `decision` is separate.",
       "type": "object",

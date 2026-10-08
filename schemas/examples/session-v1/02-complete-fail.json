@@ -513,9 +513,9 @@
             "Met": {
               "evidence": {
                 "Behavior": {
-                  "TargetVerified": {
-                    "obligations": ["evaluate.score_call", "evaluate.close_reached"]
-                  }
+                  "profile": "ggml.backend-loader@2",
+                  "rule": "evaluate",
+                  "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0"
                 }
               }
             }
@@ -528,10 +528,9 @@
             "Met": {
               "evidence": {
                 "Access": {
-                  "UntrustedHolder": {
-                    "who": "Anyone",
-                    "via": "/usr/local/lib/ollama",
-                    "how": "ModeOther"
+                  "access": "access:lib/ollama",
+                  "capability": {
+                    "ReplaceEntry": {"dir": "/usr/local/lib/ollama", "entry": "libggml.so.0.13.1"}
                   }
                 }
               }
@@ -544,12 +543,7 @@
           "state": {
             "Met": {
               "evidence": {
-                "Value": {
-                  "PredictedLaunch": {
-                    "rules": ["systemd.User", "topology.user_inherited"],
-                    "from": ["val:ollama serve/user/configured"]
-                  }
-                }
+                "Value": {"value": "val:llama-server (per model)/user/predicted", "needs": "Known"}
               }
             }
           },
@@ -560,7 +554,14 @@
           "state": {
             "Met": {
               "evidence": {
-                "Binding": {"Verified": {"scope": ["inst:lib/ollama/libggml.so.0.13.1"]}}
+                "Binding": {
+                  "process_role": "llama-server (per model)",
+                  "site": {
+                    "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+                    "call": "cs:0xe26d"
+                  },
+                  "definer": "inst:lib/ollama/libggml.so.0.13.1"
+                }
               }
             }
           },

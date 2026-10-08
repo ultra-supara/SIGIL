@@ -11,11 +11,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::{MappingObs, ProcessRef};
-use crate::evidence::{ConfigRef, ObsSource, Observability, ProfileRuleRef, Tri, UnknownReason};
-use crate::id::{InstanceId, ProcessRole, ValueId};
+use crate::evidence::{
+    Basis, ConfigRef, ObsSource, Observability, ProfileRuleRef, Tri, UnknownReason,
+};
+use crate::id::{InstanceId, PremiseId, ProcessRole, ValueId};
 use crate::text::UntrustedText;
 
-/// What is known about one file for one loader in one process role.
+/// What is known about one file for one loader in one process role. `(instance, context)` is
+/// unique in a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoadFacts {
@@ -31,11 +34,42 @@ pub struct LoadFacts {
     pub would_evaluate: Tri<EffectWhy>,
     /// Can be selected (unknown when it depends on run-time scores).
     pub selectable: Tri<()>,
-    /// Observations, each with time and process. Empty does not mean "not loaded".
+    /// Observations of this file, each one recorded under its process in `processes`. Empty does
+    /// not mean "not loaded".
     pub mapped: Vec<MappingObs>,
     pub mapping_observability: Observability,
     /// Whether the file was used for inference. Needs active tracing; unknown in M1.
     pub used_for_inference: Tri<()>,
+}
+
+/// One of the independent facts of a [`LoadFacts`] entry, for a condition to rest on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LoadFact {
+    Candidate,
+    WouldEvaluate,
+    Selectable,
+    UsedForInference,
+}
+
+impl LoadFacts {
+    /// The claim recorded for `fact`, as `(holds, basis, unresolved)`; `None` while unknown.
+    pub fn fact(&self, fact: LoadFact) -> Option<(bool, &Basis, &[PremiseId])> {
+        fn decided<T>(tri: &Tri<T>) -> Option<(bool, &Basis, &[PremiseId])> {
+            match tri {
+                Tri::Yes {
+                    basis, unresolved, ..
+                } => Some((true, basis, unresolved)),
+                Tri::No { basis, unresolved } => Some((false, basis, unresolved)),
+                Tri::Unknown { .. } => None,
+            }
+        }
+        match fact {
+            LoadFact::Candidate => decided(&self.candidate),
+            LoadFact::WouldEvaluate => decided(&self.would_evaluate),
+            LoadFact::Selectable => decided(&self.selectable),
+            LoadFact::UsedForInference => decided(&self.used_for_inference),
+        }
+    }
 }
 
 /// A process role and the loader rule instance that applies in it.

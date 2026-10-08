@@ -36,6 +36,7 @@ pub enum CoverageState {
         basis: AbsenceBasis,
     },
     /// Something is there, but not the implementation this profile describes. A gap, not a pass.
+    /// Scoped to the slice; `failed` names obligations whose result there is `Fail`.
     ProfileMismatch {
         profile: ProfileRef,
         failed: Vec<ObligationId>,

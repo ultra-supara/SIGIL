@@ -431,12 +431,7 @@
             "Modeled": {
               "profile": "ggml.backend-loader@2",
               "rule": "filter",
-              "support": {
-                "FeatureMatch": {
-                  "matched": ["filter.reach_predicate"],
-                  "unverified": ["candidate.operands"]
-                }
-              }
+              "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0"
             }
           },
           "unresolved": ["candidate.operands"]
@@ -449,12 +444,7 @@
             "Modeled": {
               "profile": "ggml.backend-loader@2",
               "rule": "evaluate",
-              "support": {
-                "FeatureMatch": {
-                  "matched": ["evaluate.score_call", "evaluate.close_reached"],
-                  "unverified": ["candidate.operands", "binding:llama-server (per model)"]
-                }
-              }
+              "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0"
             }
           },
           "unresolved": ["candidate.operands", "binding:llama-server (per model)"]
@@ -491,16 +481,34 @@
             "Unknown": {
               "reason": "InsufficientEvidence",
               "evidence": {
-                "Behavior": {
-                  "FeatureMatch": {
-                    "matched": ["evaluate.score_call", "evaluate.close_reached"],
-                    "unverified": ["candidate.operands", "binding:llama-server (per model)"]
-                  }
+                "Load": {
+                  "instance": "inst:lib/ollama/libggml-cpu-zen4.so",
+                  "context": {
+                    "process_role": "llama-server (per model)",
+                    "rule": "ggml.backend-loader/load_best(cpu)"
+                  },
+                  "fact": "WouldEvaluate"
                 }
               }
             }
           },
           "unresolved": ["candidate.operands", "binding:llama-server (per model)"]
+        },
+        {
+          "id": "rule_supported:select",
+          "state": {
+            "Unknown": {
+              "reason": "InsufficientEvidence",
+              "evidence": {
+                "Behavior": {
+                  "profile": "ggml.backend-loader@2",
+                  "rule": "select",
+                  "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0"
+                }
+              }
+            }
+          },
+          "unresolved": ["select"]
         }
       ],
       "evidence": [{"Instance": {"instance": "inst:lib/ollama/libggml-cpu-zen4.so"}}],

@@ -213,6 +213,7 @@ pub struct PredicateCheck {
     /// Profile-named operands, in the profile's order.
     pub atoms: Vec<Atom>,
     /// The obligation that defines the expected predicate (the predicate itself is profile data).
+    /// `result` agrees with that obligation's result when the slice's `ProfileMatch` records one.
     pub expect: ObligationRef,
     /// Number of atom assignments evaluated.
     pub assignments: u32,

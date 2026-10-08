@@ -44,7 +44,8 @@ pub enum IdentityAssertion {
         at: EvidenceRef,
         method: ExtractMethod,
     },
-    /// A profile's identification check decided in this slice's code.
+    /// A profile's identification check decided in this slice's code. Agrees with the result
+    /// of obligation `check` when the slice's `ProfileMatch` records one.
     CodeCheck {
         profile: ProfileRef,
         check: ObligationId,

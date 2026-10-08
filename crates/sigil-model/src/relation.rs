@@ -45,7 +45,8 @@ pub enum Relation {
         definer: FnRef,
     },
     /// Which obligations of a profile hold in a slice, with locations. Matching is not
-    /// verification: it never upgrades a claim's support by itself.
+    /// verification: it never upgrades a claim's support by itself. An obligation has one result
+    /// per profile and slice.
     ProfileMatch {
         profile: ProfileRef,
         slice: SliceId,
@@ -122,7 +123,9 @@ pub enum ObligationState {
     Unknown,
 }
 
-/// The support of one profile rule for one slice (plan §4.4.7).
+/// The support of one profile rule for one slice (plan §4.4.7). The only place a [`Support`] is
+/// recorded: modeled facts and conditions refer to it by [`RuleSupportRef`], so they cannot claim
+/// more than it says. `(profile, rule, slice)` is unique in a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleSupport {
@@ -132,7 +135,24 @@ pub struct RuleSupport {
     pub support: Support,
 }
 
+/// The key of a [`RuleSupport`]: one rule of one profile on one slice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuleSupportRef {
+    pub profile: ProfileRef,
+    pub rule: ProfileRuleId,
+    pub slice: SliceId,
+}
+
+impl RuleSupport {
+    /// Whether this record is the one `key` names.
+    pub fn is(&self, key: &RuleSupportRef) -> bool {
+        self.profile == key.profile && self.rule == key.rule && self.slice == key.slice
+    }
+}
+
 /// Does this process role bind the call at `site` to the definition that was analyzed?
+/// `(process_role, site, analyzed_definer)` is unique in a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingPremise {

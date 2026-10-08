@@ -6,29 +6,6 @@ mod common;
 use common::*;
 use sigil_model::*;
 
-fn errors(s: &Session) -> Vec<ValidationError> {
-    s.validate().err().unwrap_or_default()
-}
-
-fn assert_valid(s: &Session) {
-    if let Err(errors) = s.validate() {
-        panic!("expected a valid session, got:\n{}", render(&errors));
-    }
-}
-
-fn render(errors: &[ValidationError]) -> String {
-    errors.iter().map(|e| format!("  - {e}\n")).collect()
-}
-
-fn assert_rejected(s: &Session, matches: impl Fn(&ValidationError) -> bool, what: &str) {
-    let errors = errors(s);
-    assert!(
-        errors.iter().any(matches),
-        "expected {what}, got:\n{}",
-        render(&errors)
-    );
-}
-
 fn round_trip(s: &Session) -> Session {
     serde_json::from_str(&serde_json::to_string(s).unwrap()).unwrap()
 }
@@ -199,12 +176,16 @@ fn b_feature_match_stays_distinct_after_a_round_trip() {
 
 #[test]
 fn b_a_feature_match_cannot_make_a_finding_condition_met() {
+    // The condition names the rule support; weakening the record weakens the condition.
     let mut s = complete_fail();
-    s.findings[0].conditions[0].state = CondState::Met {
-        evidence: CondEvidence::Behavior(Support::FeatureMatch {
-            matched: ids(&["evaluate.score_call"]),
-            unverified: ids(&["candidate.operands"]),
-        }),
+    let evaluate = s
+        .rule_support
+        .iter_mut()
+        .find(|r| r.rule.as_str() == "evaluate")
+        .unwrap();
+    evaluate.support = Support::FeatureMatch {
+        matched: ids(&["evaluate.score_call"]),
+        unverified: ids(&["candidate.operands"]),
     };
     assert_rejected(
         &s,
@@ -295,42 +276,7 @@ fn an_identity_status_cannot_exceed_its_assertions() {
 #[test]
 fn d_present_and_mapped_but_use_unknown() {
     let mut s = feature_match_only();
-    s.request.mode = Mode::Observe;
-    let process = ProcessRef {
-        pid: 4242,
-        start_ticks: 987_654,
-        boot_id: "00000000-0000-4000-8000-000000000000".to_string(),
-    };
-    let zen4: InstanceId = id("inst:lib/ollama/libggml-cpu-zen4.so");
-    let mapping = MappingObs {
-        process: process.clone(),
-        at: ts("2026-10-07T07:00:01Z"),
-        dev: 2049,
-        ino: 1002,
-        path_text: t("/usr/local/lib/ollama/libggml-cpu-zen4.so"),
-        deleted: false,
-        instance: Some(zen4.clone()),
-        same_mount_ns: Tri::Yes {
-            why: (),
-            basis: Basis::Observed {
-                source: ObsSource::Proc,
-            },
-            unresolved: vec![],
-        },
-    };
-    s.processes.push(ProcessObs {
-        process,
-        at: ts("2026-10-07T07:00:01Z"),
-        roles: ids(&[ROLE]),
-        exe: ProcessExe::Path {
-            path: t("/usr/local/lib/ollama/llama-server"),
-            deleted: false,
-        },
-        mappings: vec![mapping.clone()],
-    });
-    let load = s.loads.iter_mut().find(|l| l.instance == zen4).unwrap();
-    load.mapped = vec![mapping];
-    load.mapping_observability = Observability::Observed;
+    add_observed_zen4_mapping(&mut s);
     let s = round_trip(&s);
     assert_valid(&s);
     let load = &s.loads[0];
@@ -499,8 +445,12 @@ fn an_open_question_with_every_condition_established_is_rejected() {
 #[test]
 fn an_open_question_with_a_refuted_condition_is_rejected() {
     let mut s = open_question();
+    // The runtime user is known, so "the runtime user is absent" is refuted.
     s.open_questions[0].conditions[1].state = CondState::NotMet {
-        evidence: CondEvidence::Access(AccessConclusion::TrustedOnly),
+        evidence: CondEvidence::Value {
+            value: id("val:llama-server (per model)/user/predicted"),
+            needs: ValueNeed::Absent,
+        },
     };
     assert_rejected(
         &s,
@@ -631,117 +581,232 @@ fn j_one_path_with_different_contents_in_two_sessions() {
 
 #[test]
 fn sufficiency_follows_the_per_kind_table() {
-    let accepted = |a: &AssumptionId| a.as_str() == "A-4";
-    let yes = |e: CondEvidence| {
-        assert!(
-            e.sufficient_for_met(&accepted),
-            "{e:?} should be sufficient"
-        )
-    };
-    let no = |e: CondEvidence| {
-        assert!(
-            !e.sufficient_for_met(&accepted),
-            "{e:?} should be insufficient"
-        )
-    };
-    let g: ArtifactId = id(&format!("sha256:{}", hex(0x11)));
-
-    yes(CondEvidence::Behavior(Support::TargetVerified {
-        obligations: ids(&["o"]),
-    }));
-    yes(CondEvidence::Behavior(Support::ReferenceVerified {
-        reference: g.clone(),
-        verification: id("gt"),
-        rule: id("r"),
-    }));
-    yes(CondEvidence::Behavior(Support::Assumed {
-        assumption: id("A-4"),
-    }));
-    no(CondEvidence::Behavior(Support::Assumed {
-        assumption: id("A-3"),
-    }));
-    no(CondEvidence::Behavior(Support::FeatureMatch {
-        matched: ids(&["o"]),
-        unverified: ids(&["p"]),
-    }));
-
-    yes(CondEvidence::Access(AccessConclusion::TrustedOnly));
-    yes(CondEvidence::Access(anyone_via_libdir()));
-    no(CondEvidence::Access(AccessConclusion::Undetermined {
-        missing: vec!["ACL".to_string()],
-    }));
-
-    let process = ProcessRef {
-        pid: 1,
-        start_ticks: 1,
-        boot_id: "b".to_string(),
-    };
-    yes(CondEvidence::Value(ValueOrigin::ObservedProcess {
-        process: process.clone(),
-        source: ObsSource::Proc,
-    }));
-    yes(CondEvidence::Value(ValueOrigin::PredictedLaunch {
-        rules: vec![],
-        from: vec![],
-    }));
-    no(CondEvidence::Value(ValueOrigin::Configured {
-        file: ConfigRef {
-            file: id("inst:ollama.service"),
-            key: t("Environment"),
-            line: 3,
+    let mut s = complete_fail();
+    let g = placed(&s, GGML);
+    s.assumptions.extend([
+        Assumption {
+            id: id("A-3"),
+            statement: "not accepted".to_string(),
+            acceptance: AssumptionAcceptance::NotAccepted,
         },
-        directive: t("Environment="),
-    }));
+        Assumption {
+            id: id("A-4"),
+            statement: "accepted".to_string(),
+            acceptance: AssumptionAcceptance::Accepted {
+                source: id("policy:assumptions.accept"),
+            },
+        },
+    ]);
+    let check = |s: &Session, e: &CondEvidence, expected: Option<Settles>| {
+        assert_eq!(s.settles(e), expected, "{e:?}")
+    };
 
-    yes(CondEvidence::Binding(BindingState::Verified {
-        scope: vec![],
-    }));
-    yes(CondEvidence::Binding(BindingState::Assumed {
-        assumption: id("A-4"),
-    }));
-    no(CondEvidence::Binding(BindingState::Unknown {
-        reason: UnknownReason::PremiseUnresolved,
-    }));
-    no(CondEvidence::Binding(BindingState::Mismatch {
-        first_definer: id("inst:x"),
-    }));
-    assert!(CondEvidence::Binding(BindingState::Mismatch {
-        first_definer: id("inst:x")
-    })
-    .sufficient_for_not_met(&accepted));
-    assert!(
-        !CondEvidence::Binding(BindingState::Verified { scope: vec![] })
-            .sufficient_for_not_met(&accepted)
+    // Behavior: the support recorded for the rule on the slice.
+    let behavior = CondEvidence::Behavior(loader_rule(&g, "evaluate"));
+    let set_support = |s: &mut Session, support: Support| {
+        let record = s
+            .rule_support
+            .iter_mut()
+            .find(|r| r.rule.as_str() == "evaluate")
+            .unwrap();
+        record.support = support;
+    };
+    check(&s, &behavior, Some(Settles::Met));
+    for (support, expected) in [
+        (
+            Support::ReferenceVerified {
+                reference: g.artifact.clone(),
+                verification: id("gt"),
+                rule: id("evaluate"),
+            },
+            Settles::Met,
+        ),
+        (
+            Support::Assumed {
+                assumption: id("A-4"),
+            },
+            Settles::Met,
+        ),
+        (
+            Support::Assumed {
+                assumption: id("A-3"),
+            },
+            Settles::Neither,
+        ),
+        (
+            Support::FeatureMatch {
+                matched: vec![],
+                unverified: ids(&["p"]),
+            },
+            Settles::Neither,
+        ),
+    ] {
+        set_support(&mut s, support);
+        check(&s, &behavior, Some(expected));
+    }
+    check(
+        &s,
+        &CondEvidence::Behavior(loader_rule(&g, "not_applied")),
+        None,
     );
 
-    yes(CondEvidence::Identity(IdentityStatus::ReferenceMatched));
+    // Access: the conclusion for the named capability.
+    let access = CondEvidence::Access {
+        access: s.access[0].id.clone(),
+        capability: replace_libggml(),
+    };
+    for (conclusion, expected) in [
+        (anyone_via_libdir(), Settles::Met),
+        (AccessConclusion::TrustedOnly, Settles::NotMet),
+        (
+            AccessConclusion::Undetermined {
+                missing: vec!["ACL".to_string()],
+            },
+            Settles::Neither,
+        ),
+    ] {
+        s.access[0].capabilities[0].conclusion = conclusion;
+        check(&s, &access, Some(expected));
+    }
+    check(
+        &s,
+        &CondEvidence::Access {
+            access: s.access[0].id.clone(),
+            capability: WriteCapability::CreateEntry {
+                dir: t("/usr/local/lib/ollama"),
+            },
+        },
+        None,
+    );
+
+    // Value: the needed state of an effective (not configured) value.
+    let predicted = |needs| CondEvidence::Value {
+        value: id("val:llama-server (per model)/user/predicted"),
+        needs,
+    };
+    check(&s, &predicted(ValueNeed::Known), Some(Settles::Met));
+    check(&s, &predicted(ValueNeed::Absent), Some(Settles::NotMet));
+    check(
+        &s,
+        &CondEvidence::Value {
+            value: id("val:ollama serve/user/configured"),
+            needs: ValueNeed::Known,
+        },
+        Some(Settles::Neither),
+    );
+    s.values[1].value = TriValue::Absent;
+    check(&s, &predicted(ValueNeed::Absent), Some(Settles::Met));
+    s.values[1].value = TriValue::Unknown {
+        reason: UnknownReason::InsufficientEvidence,
+    };
+    check(&s, &predicted(ValueNeed::Known), Some(Settles::Neither));
+    check(&s, &predicted(ValueNeed::Absent), Some(Settles::Neither));
+
+    // Binding: the state of the binding premise.
+    let binding = binding_of_loader(&g);
+    for (state, expected) in [
+        (
+            BindingState::Verified {
+                scope: vec![g.inst.clone()],
+            },
+            Settles::Met,
+        ),
+        (
+            BindingState::Assumed {
+                assumption: id("A-4"),
+            },
+            Settles::Met,
+        ),
+        (
+            BindingState::Assumed {
+                assumption: id("A-3"),
+            },
+            Settles::Neither,
+        ),
+        (
+            BindingState::Unknown {
+                reason: UnknownReason::PremiseUnresolved,
+            },
+            Settles::Neither,
+        ),
+        (
+            BindingState::Mismatch {
+                first_definer: id("inst:x"),
+            },
+            Settles::NotMet,
+        ),
+    ] {
+        s.bindings[0].state = state;
+        check(&s, &binding, Some(expected));
+    }
+
+    // Identity: only a reference match.
+    let identity = CondEvidence::Identity {
+        slice: g.slice.clone(),
+        component: id("ggml"),
+    };
+    check(&s, &identity, Some(Settles::Met));
     for status in [
         IdentityStatus::Conflicting,
         IdentityStatus::Corroborated,
         IdentityStatus::NameOnly,
         IdentityStatus::Unidentified,
     ] {
-        no(CondEvidence::Identity(status));
+        s.components[0].status = status;
+        check(&s, &identity, Some(Settles::Neither));
     }
 
-    yes(CondEvidence::Observed {
-        facts: vec![
-            EvidenceRef::Artifact {
-                artifact: g.clone(),
-            },
-            EvidenceRef::Process { process },
-        ],
-    });
-    no(CondEvidence::Observed { facts: vec![] });
-    no(CondEvidence::Observed {
-        facts: vec![EvidenceRef::Code {
-            slice: SliceId::from_parts(&g, Arch::X86_64, 0),
+    // Observed: either way, from observations only.
+    check(
+        &s,
+        &CondEvidence::Observed {
+            facts: vec![EvidenceRef::Artifact {
+                artifact: g.artifact.clone(),
+            }],
+        },
+        Some(Settles::Either),
+    );
+    for facts in [
+        vec![],
+        vec![EvidenceRef::Code {
+            slice: g.slice.clone(),
             loc: Loc::VAddr(1),
         }],
-    });
-    no(CondEvidence::Observed {
-        facts: vec![EvidenceRef::Value { value: id("v") }],
-    });
+        vec![EvidenceRef::Value { value: id("v") }],
+    ] {
+        check(
+            &s,
+            &CondEvidence::Observed { facts },
+            Some(Settles::Neither),
+        );
+    }
+
+    // Load: a decided fact with a sufficient basis and no unresolved premise.
+    let mut s = feature_match_only();
+    let zen4 = |fact| CondEvidence::Load {
+        instance: s.loads[0].instance.clone(),
+        context: s.loads[0].context.clone(),
+        fact,
+    };
+    let (would_evaluate, selectable) = (zen4(LoadFact::WouldEvaluate), zen4(LoadFact::Selectable));
+    check(&s, &would_evaluate, Some(Settles::Neither));
+    check(&s, &selectable, Some(Settles::Neither));
+    if let Tri::Yes { unresolved, .. } = &mut s.loads[0].would_evaluate {
+        unresolved.clear();
+    }
+    check(&s, &would_evaluate, Some(Settles::Met));
+    s.loads[0].would_evaluate = Tri::No {
+        basis: Basis::Observed {
+            source: ObsSource::File,
+        },
+        unresolved: vec![],
+    };
+    check(&s, &would_evaluate, Some(Settles::NotMet));
+    s.loads[0].would_evaluate = Tri::No {
+        basis: Basis::Modeled(loader_rule(&g, "select")),
+        unresolved: vec![],
+    };
+    check(&s, &would_evaluate, Some(Settles::Neither));
 }
 
 #[test]
@@ -752,10 +817,8 @@ fn an_assumption_supports_a_condition_only_once_accepted() {
         statement: "the binding scope prefix is resolved".to_string(),
         acceptance: AssumptionAcceptance::NotAccepted,
     });
-    s.findings[0].conditions[3].state = CondState::Met {
-        evidence: CondEvidence::Binding(BindingState::Assumed {
-            assumption: id("A-4"),
-        }),
+    s.bindings[0].state = BindingState::Assumed {
+        assumption: id("A-4"),
     };
     assert_rejected(
         &s,
@@ -771,9 +834,15 @@ fn an_assumption_supports_a_condition_only_once_accepted() {
 #[test]
 fn an_unknown_reason_must_match_its_evidence() {
     let mut s = open_question();
+    let evaluate = &s.rule_support[2];
+    assert_eq!(evaluate.rule.as_str(), "evaluate");
     s.open_questions[0].conditions[2].state = CondState::Unknown {
         reason: UnknownReason::InsufficientEvidence,
-        evidence: Some(CondEvidence::Access(AccessConclusion::TrustedOnly)),
+        evidence: Some(CondEvidence::Behavior(RuleSupportRef {
+            profile: evaluate.profile.clone(),
+            rule: evaluate.rule.clone(),
+            slice: evaluate.slice.clone(),
+        })),
     };
     assert_rejected(
         &s,
@@ -794,62 +863,80 @@ fn an_unknown_reason_must_match_its_evidence() {
 // --- Premises are carried (plan §4.4.7, AC-12) -----------------------------------------------
 
 #[test]
-fn a_verified_claim_cannot_have_unresolved_premises() {
+fn a_fact_with_unresolved_premises_cannot_settle_a_condition() {
+    // The loader's evaluate rule is TargetVerified, but this file's would_evaluate fact rests on
+    // unresolved premises (weakest link), so a condition on it stays open.
     let mut s = feature_match_only();
-    if let Tri::Yes {
-        basis: Basis::Modeled { support, .. },
-        ..
-    } = &mut s.loads[0].candidate
-    {
-        *support = Support::TargetVerified {
-            obligations: ids(&["filter.reach_predicate"]),
-        };
-    }
+    let candidate_evaluated = &mut s.open_questions[0].conditions[0];
+    assert_eq!(candidate_evaluated.id.as_str(), "candidate_evaluated");
+    let evidence = match &candidate_evaluated.state {
+        CondState::Unknown {
+            evidence: Some(e), ..
+        } => e.clone(),
+        other => panic!("{other:?}"),
+    };
+    candidate_evaluated.state = CondState::Met {
+        evidence: evidence.clone(),
+    };
+    candidate_evaluated.unresolved.clear();
     assert_rejected(
         &s,
-        |e| matches!(e, ValidationError::VerifiedWithUnresolved { .. }),
-        "TargetVerified with an unresolved premise",
+        |e| matches!(e, ValidationError::InsufficientEvidence { condition, .. } if condition.as_str() == "candidate_evaluated"),
+        "a Met condition on a fact with unresolved premises",
     );
+
+    // Once the premises of the fact (and of the candidate fact it rests on) are resolved, it does.
+    if let Tri::Yes { unresolved, .. } = &mut s.loads[0].candidate {
+        unresolved.clear();
+    }
+    if let Tri::Yes { unresolved, .. } = &mut s.loads[0].would_evaluate {
+        unresolved.clear();
+    }
+    assert_eq!(s.settles(&evidence), Some(Settles::Met));
+    assert_valid(&s);
 }
 
 #[test]
-fn a_premise_is_never_dropped_from_the_support() {
+fn a_premise_is_never_dropped() {
+    // A fact resting on a FeatureMatch carries its unverified premises.
     let mut s = feature_match_only();
-    if let Tri::Yes {
-        basis:
-            Basis::Modeled {
-                support: Support::FeatureMatch { unverified, .. },
-                ..
-            },
-        ..
-    } = &mut s.loads[0].would_evaluate
-    {
-        unverified.retain(|p| p.as_str() == "candidate.operands");
+    let g = placed(&s, GGML);
+    if let Tri::Yes { basis, .. } = &mut s.loads[0].candidate {
+        *basis = Basis::Modeled(loader_rule(&g, "select"));
     }
     assert_rejected(
         &s,
+        |e| matches!(e, ValidationError::PremiseDropped { premise, .. } if premise.as_str() == "select"),
+        "a fact that drops the premise of its FeatureMatch",
+    );
+
+    // A condition resting on a fact carries the fact's premises.
+    let mut s = feature_match_only();
+    s.open_questions[0].conditions[0]
+        .unresolved
+        .retain(|p| p.as_str() == "candidate.operands");
+    assert_rejected(
+        &s,
         |e| matches!(e, ValidationError::PremiseDropped { premise, .. } if premise.as_str().starts_with("binding:")),
-        "a premise dropped from FeatureMatch",
+        "a condition that drops a premise of its fact",
+    );
+
+    // A condition resting on a FeatureMatch carries its unverified premises.
+    let mut s = feature_match_only();
+    s.open_questions[0].conditions[1].unresolved.clear();
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::PremiseDropped { premise, .. } if premise.as_str() == "select"),
+        "a condition that drops the premise of its FeatureMatch",
     );
 }
 
 #[test]
 fn would_evaluate_is_never_stronger_than_candidate() {
     let mut s = feature_match_only();
-    let profile: ProfileRef = id(PROFILE);
-    s.loads[0].would_evaluate = Tri::Yes {
-        why: EffectWhy {
-            phase: LoaderPhase::Evaluate,
-        },
-        basis: Basis::Modeled {
-            profile,
-            rule: id("evaluate"),
-            support: Support::TargetVerified {
-                obligations: ids(&["evaluate.score_call"]),
-            },
-        },
-        unresolved: vec![],
-    };
+    if let Tri::Yes { unresolved, .. } = &mut s.loads[0].would_evaluate {
+        unresolved.clear();
+    }
     assert_rejected(
         &s,
         |e| {
@@ -858,7 +945,34 @@ fn would_evaluate_is_never_stronger_than_candidate() {
                 ValidationError::WouldEvaluateStrongerThanCandidate { .. }
             )
         },
-        "a verified would_evaluate on a FeatureMatch candidate",
+        "a would_evaluate without the candidate's premises",
+    );
+
+    let mut s = feature_match_only();
+    let select = RuleSupportRef {
+        profile: id(PROFILE),
+        rule: id("select"),
+        slice: s.artifacts[0].slices[0].id.clone(),
+    };
+    if let Tri::Yes {
+        basis, unresolved, ..
+    } = &mut s.loads[0].candidate
+    {
+        *basis = Basis::Modeled(select);
+        unresolved.push(id("select"));
+    }
+    if let Tri::Yes { unresolved, .. } = &mut s.loads[0].would_evaluate {
+        unresolved.push(id("select"));
+    }
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::WouldEvaluateStrongerThanCandidate { .. }
+            )
+        },
+        "a verified would_evaluate on a feature-matched candidate",
     );
 
     let mut s = feature_match_only();
@@ -1082,23 +1196,33 @@ fn the_ten_sentences_are_representable_without_message_strings() {
 
     // 5. "The feature only matches heuristically and cannot support a confirmed finding."
     let s = feature_match_only();
+    let CondState::Unknown {
+        reason: UnknownReason::InsufficientEvidence,
+        evidence: Some(evidence @ CondEvidence::Behavior(key)),
+    } = &s.open_questions[0].conditions[1].state
+    else {
+        panic!("expected an open condition on a rule support");
+    };
     assert!(matches!(
-        &s.open_questions[0].conditions[0].state,
-        CondState::Unknown {
-            reason: UnknownReason::InsufficientEvidence,
-            evidence: Some(CondEvidence::Behavior(Support::FeatureMatch { .. }))
-        }
+        s.rule_support.iter().find(|r| r.is(key)).unwrap().support,
+        Support::FeatureMatch { .. }
     ));
+    assert_eq!(s.settles(evidence), Some(Settles::Neither));
 
     // 6. "A directory permission condition is directly observed."
     let s = complete_fail();
+    let CondState::Met {
+        evidence: evidence @ CondEvidence::Access { .. },
+    } = &s.findings[0].conditions[1].state
+    else {
+        panic!("expected a Met access condition");
+    };
+    assert_eq!(s.settles(evidence), Some(Settles::Met));
     assert!(matches!(
-        &s.findings[0].conditions[1].state,
-        CondState::Met {
-            evidence: CondEvidence::Access(AccessConclusion::UntrustedHolder {
-                who: Principal::Anyone,
-                ..
-            })
+        s.access[0].capabilities[0].conclusion,
+        AccessConclusion::UntrustedHolder {
+            who: Principal::Anyone,
+            ..
         }
     ));
     assert!(s.access[0].chain.iter().any(|n| n.mode & 0o002 != 0));

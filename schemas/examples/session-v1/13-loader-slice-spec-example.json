@@ -491,12 +491,7 @@
             "Modeled": {
               "profile": "ggml.backend-loader@2",
               "rule": "filter",
-              "support": {
-                "FeatureMatch": {
-                  "matched": ["filter.reach_predicate"],
-                  "unverified": ["candidate.operands"]
-                }
-              }
+              "slice": "sha256:40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f#x86_64@0"
             }
           },
           "unresolved": ["candidate.operands"]
@@ -509,12 +504,7 @@
             "Modeled": {
               "profile": "ggml.backend-loader@2",
               "rule": "evaluate",
-              "support": {
-                "FeatureMatch": {
-                  "matched": ["evaluate.score_call", "evaluate.close_reached"],
-                  "unverified": ["candidate.operands", "binding:llama-server (per model)"]
-                }
-              }
+              "slice": "sha256:40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f#x86_64@0"
             }
           },
           "unresolved": ["candidate.operands", "binding:llama-server (per model)"]
@@ -558,9 +548,9 @@
             "Met": {
               "evidence": {
                 "Behavior": {
-                  "TargetVerified": {
-                    "obligations": ["evaluate.score_call", "evaluate.close_reached"]
-                  }
+                  "profile": "ggml.backend-loader@2",
+                  "rule": "evaluate",
+                  "slice": "sha256:40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f#x86_64@0"
                 }
               }
             }
@@ -572,12 +562,7 @@
           "state": {
             "Met": {
               "evidence": {
-                "Value": {
-                  "PredictedLaunch": {
-                    "rules": ["systemd.User", "topology.user_inherited"],
-                    "from": ["val:ollama serve/user/configured"]
-                  }
-                }
+                "Value": {"value": "val:llama-server (per model)/user/predicted", "needs": "Known"}
               }
             }
           },

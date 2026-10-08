@@ -19,6 +19,7 @@ use crate::id::{
     GroundTruthRef, InstanceId, ObligationId, PolicyRuleRef, PremiseId, ProcessRole, ProfileRef,
     ProfileRuleId, RootId, SliceId, ValueId,
 };
+use crate::relation::RuleSupportRef;
 use crate::text::UntrustedText;
 
 /// How a fact was obtained.
@@ -32,13 +33,11 @@ pub enum Basis {
         analyzer: AnalyzerRef,
         inputs: Vec<EvidenceRef>,
     },
-    /// Knowledge from a semantic profile rule. **Not** "confirmed in the target": what it may
-    /// assert about this target is exactly its `support`.
-    Modeled {
-        profile: ProfileRef,
-        rule: ProfileRuleId,
-        support: Support,
-    },
+    /// Knowledge from a semantic profile rule applied to one slice. **Not** "confirmed in the
+    /// target": what it may assert is the support recorded for that rule and slice
+    /// ([`crate::RuleSupport`]), and a fact resting on it is no stronger than its own unresolved
+    /// premises (weakest link, plan §4.4.7).
+    Modeled(RuleSupportRef),
     /// An explicit, named assumption (e.g. the systemd default working directory).
     Assumed { assumption: AssumptionId },
 }
@@ -106,8 +105,9 @@ pub struct ProfileRuleRef {
 
 /// What supports a behavior claim (level D) about a specific artifact (plan §4.4.7).
 ///
-/// Only behavior claims carry a `Support`. File attributes, configuration, and process state
-/// carry evidence of their own kind ([`crate::CondEvidence`]).
+/// Recorded once per profile rule and slice, in [`crate::RuleSupport`]; facts and conditions refer
+/// to it by [`RuleSupportRef`]. File attributes, configuration, and process state have evidence
+/// of their own kind ([`crate::CondEvidence`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Support {
@@ -121,7 +121,9 @@ pub enum Support {
     /// The rule's obligations were decided `Pass` in the target's own code. Never empty.
     TargetVerified { obligations: Vec<ObligationId> },
     /// Only symbols, strings, or part of the structure match: the behavior is **expected**, not
-    /// established. Can never make a finding condition `Met`. `unverified` is never empty.
+    /// established. Can never make a finding condition `Met`. `matched` obligations passed in
+    /// the slice; `unverified` is never empty, and every fact or condition resting on this
+    /// support carries these premises as unresolved.
     FeatureMatch {
         matched: Vec<ObligationId>,
         unverified: Vec<PremiseId>,

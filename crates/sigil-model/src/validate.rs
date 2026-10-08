@@ -1,14 +1,21 @@
 //! [`Session::validate`]: invariants the types alone cannot express.
 //!
-//! - **References resolve.** Every ID a fact, claim, finding, or evidence pointer names exists in
-//!   the session, and IDs are unique in their domain.
-//! - **Claims do not exceed their evidence.** A `Met`/`NotMet` condition meets the sufficiency
-//!   rule of its kind (plan §4.4.9); a finding has every condition established; an identity status
-//!   is not stronger than its assertions; `TargetVerified` names obligations that passed, with
-//!   locations; `ReferenceVerified` is about the reference artifact itself.
-//! - **Premises are carried** (plan §4.4.7, AC-12). A claim with unresolved premises is never
-//!   verified, a `FeatureMatch` lists every unresolved premise, and `would_evaluate` is never
-//!   stronger than `candidate`.
+//! - **References resolve and keys are unique.** Every ID or key a fact, claim, condition, or
+//!   evidence pointer names exists in the session. IDs are unique in their domain, and so are the
+//!   keys records are referred to by: one result per obligation, profile, and slice; one support
+//!   per rule and slice; one knowledge entry per kind, ID, and version; one claim per component
+//!   and slice; one binding premise, load-facts entry, coverage entry, and capability per key.
+//! - **Records that describe the same thing agree.** A check result agrees with the obligation
+//!   result it decides; a `ProfileMismatch` names obligations that failed; a mapping listed in
+//!   load facts is one recorded for its process.
+//! - **Claims do not exceed their evidence.** A condition names the record that decides it and is
+//!   `Met` or `NotMet` only as that record settles (plan §4.4.9, [`Session::settles`]); a finding
+//!   has every condition established; an identity status is not stronger than its assertions;
+//!   `TargetVerified` and `FeatureMatch` name obligations that passed, with locations;
+//!   `ReferenceVerified` is about the reference artifact itself.
+//! - **Premises are carried** (plan §4.4.7, AC-12). A fact or condition resting on a
+//!   `FeatureMatch` carries its unverified premises as unresolved, a decided condition has no
+//!   unresolved premise, and `would_evaluate` is never stronger than `candidate`.
 //! - **The recorded outcome is consistent** with the recorded decisions and coverage. This does
 //!   not evaluate policy: it never decides an action, a treatment, or which checks are required.
 //!   It only refuses a session whose verdict, counts, or completeness contradict what it records.
@@ -21,11 +28,12 @@ use crate::artifact::{InstanceContent, ProcessExe, ProcessRef};
 use crate::code::{ArgValue, CallTarget, CheckResult, CheckUnknown, CodeFacts};
 use crate::coverage::CoverageState;
 use crate::evidence::{
-    AssumptionAcceptance, Basis, ConfigRef, EvidenceRef, Loc, ProfileRuleRef, Ref, Support, Tri,
+    Basis, ConfigRef, EvidenceRef, Loc, Observability, ProfileRuleRef, Ref, Support, Tri,
     UnknownReason,
 };
 use crate::finding::{
-    Action, Completeness, CondEvidence, CondState, Condition, OqTreatment, PolicyDecision, Verdict,
+    rule_support_key, Action, Completeness, CondEvidence, CondState, Condition, OqTreatment,
+    PolicyDecision, Settles, Verdict,
 };
 use crate::id::{
     ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ObligationId,
@@ -33,7 +41,9 @@ use crate::id::{
 };
 use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
-use crate::relation::{BindingState, ObligationState, Relation, SearchDir};
+use crate::relation::{
+    BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
+};
 use crate::session::{KnowledgeKind, Session};
 
 /// A specific reason a session is invalid. `at` names where, by list and ID.
@@ -67,22 +77,43 @@ pub enum ValidationError {
         slice: SliceId,
         obligation: ObligationId,
     },
+    /// A check result, or a `ProfileMismatch`, that disagrees with the obligation result recorded
+    /// for that profile and slice.
+    ObligationResultDisagrees {
+        at: String,
+        profile: ProfileRef,
+        slice: SliceId,
+        obligation: ObligationId,
+    },
     /// `ReferenceVerified` for a slice whose artifact is not the reference.
     NotTheReference {
         slice: SliceId,
         reference: ArtifactId,
     },
-    /// A verified support or claim that still has unresolved premises.
-    VerifiedWithUnresolved { at: String },
-    /// An unresolved premise missing from the `FeatureMatch` it rests on.
+    /// A rule named twice that disagrees: `ReferenceVerified.rule` and its record's rule, or a
+    /// relation's rule and the rule of its modeled basis.
+    RuleMismatch { at: String },
+    /// A coverage state that is about one slice (`ProfileMismatch`) with a scope that is not a
+    /// slice.
+    ScopeNotASlice { check: CheckId },
+    /// A mapping listed in load facts that is about another file.
+    MappingOfAnotherFile { instance: InstanceId },
+    /// Load facts that list mappings but say mappings were not observable.
+    MappedButNotObservable { instance: InstanceId },
+    /// An unverified premise of the `FeatureMatch` (or the fact) a claim or condition rests on,
+    /// missing from its unresolved premises.
     PremiseDropped { at: String, premise: PremiseId },
     /// `would_evaluate` claims more than `candidate` (plan §4.4.4).
     WouldEvaluateStrongerThanCandidate {
         instance: InstanceId,
         role: ProcessRole,
     },
-    /// `Met`/`NotMet` with evidence that does not meet its kind's sufficiency rule.
+    /// `Met`/`NotMet` with evidence that settles neither.
     InsufficientEvidence { at: String, condition: CondId },
+    /// `Met` with evidence that settles `NotMet`, or the reverse.
+    ContradictedByEvidence { at: String, condition: CondId },
+    /// `Met`/`NotMet` with unresolved premises (it is `Unknown` until they are resolved).
+    DecidedWithUnresolved { at: String, condition: CondId },
     /// An `Unknown` whose reason contradicts its evidence or premises.
     UnknownReasonInconsistent { at: String, condition: CondId },
     /// A finding with a condition that is not `Met` or still has unresolved premises.
@@ -143,18 +174,35 @@ impl fmt::Display for ValidationError {
                 f,
                 "TargetVerified for {profile} on {slice} names obligation {obligation}, which did not pass there"
             ),
+            ObligationResultDisagrees { at, profile, slice, obligation } => write!(
+                f,
+                "{at}: disagrees with the result of obligation {obligation} recorded for {profile} on {slice}"
+            ),
             NotTheReference { slice, reference } => {
                 write!(f, "ReferenceVerified on {slice}, whose artifact is not the reference {reference}")
             }
-            VerifiedWithUnresolved { at } => write!(f, "{at}: verified support with unresolved premises"),
+            RuleMismatch { at } => write!(f, "{at}: names two different rules for the same claim"),
+            ScopeNotASlice { check } => write!(f, "coverage[{check}]: a ProfileMismatch must be scoped to a slice"),
+            MappingOfAnotherFile { instance } => {
+                write!(f, "loads[{instance}]: lists a mapping of another file")
+            }
+            MappedButNotObservable { instance } => {
+                write!(f, "loads[{instance}]: lists mappings but says mappings were not observable")
+            }
             PremiseDropped { at, premise } => {
-                write!(f, "{at}: unresolved premise {premise} is missing from the FeatureMatch it rests on")
+                write!(f, "{at}: does not carry the unresolved premise {premise} of what it rests on")
             }
             WouldEvaluateStrongerThanCandidate { instance, role } => {
                 write!(f, "loads[{instance} @ {role}]: would_evaluate is stronger than candidate")
             }
             InsufficientEvidence { at, condition } => {
-                write!(f, "{at}: condition {condition} is decided on evidence its kind does not accept")
+                write!(f, "{at}: condition {condition} is decided on evidence that settles neither way")
+            }
+            ContradictedByEvidence { at, condition } => {
+                write!(f, "{at}: condition {condition} is the opposite of what its evidence settles")
+            }
+            DecidedWithUnresolved { at, condition } => {
+                write!(f, "{at}: condition {condition} is decided but has unresolved premises")
             }
             UnknownReasonInconsistent { at, condition } => {
                 write!(f, "{at}: condition {condition} has an Unknown reason that contradicts its evidence or premises")
@@ -220,7 +268,7 @@ struct Validator<'a> {
     instances: BTreeSet<&'a str>,
     values: BTreeSet<&'a str>,
     access: BTreeSet<&'a str>,
-    assumptions: BTreeMap<&'a str, &'a AssumptionAcceptance>,
+    assumptions: BTreeSet<&'a str>,
     profiles: BTreeSet<String>,
     refsets: BTreeSet<&'a str>,
     processes: Vec<&'a ProcessRef>,
@@ -243,6 +291,22 @@ fn unique<'a>(
         }
     }
     seen
+}
+
+/// Checks that composite keys are unique, reporting duplicates.
+fn unique_keys(
+    errors: &mut Vec<ValidationError>,
+    kind: &'static str,
+    keys: impl Iterator<Item = String>,
+) {
+    let mut seen = BTreeSet::new();
+    for key in keys {
+        if seen.contains(&key) {
+            errors.push(ValidationError::DuplicateId { kind, id: key });
+        } else {
+            seen.insert(key);
+        }
+    }
 }
 
 impl<'a> Validator<'a> {
@@ -276,7 +340,7 @@ impl<'a> Validator<'a> {
             "access",
             s.access.iter().map(|a| a.id.as_str()),
         );
-        unique(
+        let assumptions = unique(
             &mut errors,
             "assumption",
             s.assumptions.iter().map(|a| a.id.as_str()),
@@ -296,11 +360,7 @@ impl<'a> Validator<'a> {
             "code facts of slice",
             s.code.iter().map(|c| c.slice.as_str()),
         );
-        let assumptions = s
-            .assumptions
-            .iter()
-            .map(|a| (a.id.as_str(), &a.acceptance))
-            .collect();
+        Self::unique_record_keys(s, &mut errors);
         let profiles = s
             .knowledge
             .iter()
@@ -347,6 +407,87 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// The keys other records are referred to by, or that must have one entry each.
+    fn unique_record_keys(s: &Session, errors: &mut Vec<ValidationError>) {
+        unique_keys(
+            errors,
+            "knowledge",
+            s.knowledge
+                .iter()
+                .map(|k| format!("{:?} {}@{}", k.kind, k.id, k.version)),
+        );
+        unique_keys(
+            errors,
+            "obligation result",
+            s.relations.iter().flat_map(|r| match r {
+                Relation::ProfileMatch {
+                    profile,
+                    slice,
+                    obligations,
+                } => obligations
+                    .iter()
+                    .map(|o| format!("{} on {profile} {slice}", o.id))
+                    .collect(),
+                _ => vec![],
+            }),
+        );
+        unique_keys(
+            errors,
+            "rule support",
+            s.rule_support.iter().map(|r| {
+                rule_support_key(&RuleSupportRef {
+                    profile: r.profile.clone(),
+                    rule: r.rule.clone(),
+                    slice: r.slice.clone(),
+                })
+            }),
+        );
+        unique_keys(
+            errors,
+            "component claim",
+            s.components
+                .iter()
+                .map(|c| format!("{} on {}", c.component, c.subject)),
+        );
+        unique_keys(
+            errors,
+            "binding premise",
+            s.bindings.iter().map(|b| {
+                format!(
+                    "{} {} @ {} -> {}",
+                    b.site.slice, b.site.call, b.process_role, b.analyzed_definer
+                )
+            }),
+        );
+        unique_keys(
+            errors,
+            "load facts",
+            s.loads.iter().map(|l| {
+                format!(
+                    "{} @ {} ({})",
+                    l.instance, l.context.process_role, l.context.rule
+                )
+            }),
+        );
+        unique_keys(
+            errors,
+            "coverage",
+            s.coverage
+                .iter()
+                .map(|c| format!("{} on {:?}", c.check, c.scope)),
+        );
+        for record in &s.access {
+            unique_keys(
+                errors,
+                "write capability",
+                record
+                    .capabilities
+                    .iter()
+                    .map(|c| format!("{}: {:?}", record.id, c.capability)),
+            );
+        }
+    }
+
     fn run(&mut self) {
         let s = self.s;
         self.artifacts_and_instances();
@@ -390,36 +531,8 @@ impl<'a> Validator<'a> {
         for relation in &s.relations {
             self.relation(relation);
         }
-        for support in &s.rule_support {
-            let at = format!(
-                "rule_support[{} {} on {}]",
-                support.profile, support.rule, support.slice
-            );
-            self.profile(&support.profile, &at);
-            self.slice(&support.slice, &at);
-            self.support(&support.support, &at);
-            match &support.support {
-                Support::TargetVerified { obligations } => {
-                    for obligation in obligations {
-                        if !self.passed(&support.profile, &support.slice, obligation) {
-                            self.errors.push(ValidationError::ObligationNotPassed {
-                                profile: support.profile.clone(),
-                                slice: support.slice.clone(),
-                                obligation: obligation.clone(),
-                            });
-                        }
-                    }
-                }
-                Support::ReferenceVerified { reference, .. }
-                    if support.slice.artifact() != *reference =>
-                {
-                    self.errors.push(ValidationError::NotTheReference {
-                        slice: support.slice.clone(),
-                        reference: reference.clone(),
-                    });
-                }
-                _ => {}
-            }
+        for record in &s.rule_support {
+            self.rule_support(record);
         }
         for binding in &s.bindings {
             let at = format!("bindings[{} @ {}]", binding.site.call, binding.process_role);
@@ -444,7 +557,21 @@ impl<'a> Validator<'a> {
                         self.evidence(e, &at);
                     }
                 }
-                CoverageState::ProfileMismatch { profile, .. } => self.profile(profile, &at),
+                CoverageState::ProfileMismatch { profile, failed } => {
+                    self.profile(profile, &at);
+                    if failed.is_empty() {
+                        self.empty("ProfileMismatch.failed", &at);
+                    }
+                    let Ref::Slice(slice) = &coverage.scope else {
+                        self.errors.push(ValidationError::ScopeNotASlice {
+                            check: coverage.check.clone(),
+                        });
+                        continue;
+                    };
+                    for obligation in failed {
+                        self.agrees(profile, slice, obligation, ObligationState::Fail, &at);
+                    }
+                }
                 _ => {}
             }
         }
@@ -506,7 +633,7 @@ impl<'a> Validator<'a> {
     }
 
     fn assumption(&mut self, id: &AssumptionId, at: &str) {
-        if !self.assumptions.contains_key(id.as_str()) {
+        if !self.assumptions.contains(id.as_str()) {
             self.dangling("assumption", id.as_str(), at);
         }
     }
@@ -593,13 +720,6 @@ impl<'a> Validator<'a> {
         // Every UnknownReason is self-contained; `CheckIncomplete` may name any check, required
         // or not, so there is nothing to resolve.
         let _ = reason;
-    }
-
-    fn accepted(&self, assumption: &AssumptionId) -> bool {
-        matches!(
-            self.assumptions.get(assumption.as_str()),
-            Some(AssumptionAcceptance::Accepted { .. })
-        )
     }
 
     // --- facts --------------------------------------------------------------------------------
@@ -707,12 +827,13 @@ impl<'a> Validator<'a> {
                     }
                     IdentityAssertion::CodeCheck {
                         profile,
+                        check,
                         result,
                         at: evidence,
-                        ..
                     } => {
                         self.profile(profile, &at);
                         self.check_result(&claim.subject, result, &at);
+                        self.check_agrees(profile, &claim.subject, check, result, &at);
                         for e in evidence {
                             self.evidence(e, &at);
                         }
@@ -812,6 +933,13 @@ impl<'a> Validator<'a> {
             }
             self.profile(&check.expect.profile, &at);
             self.check_result(slice, &check.result, &at);
+            self.check_agrees(
+                &check.expect.profile,
+                slice,
+                &check.expect.obligation,
+                &check.result,
+                &at,
+            );
         }
         for check in &facts.close_checks {
             let at = format!("code[{slice}].close_checks[{}]", check.function);
@@ -899,6 +1027,7 @@ impl<'a> Validator<'a> {
             } => {
                 let at = format!("relations[SearchPath {search_path} @ {role}]");
                 self.profile_rule(rule, &at);
+                self.same_rule(rule, basis, &at);
                 match dir {
                     SearchDir::ExeDir { instance } => self.instance(instance, &at),
                     SearchDir::Value { value } => self.value(value.as_str(), &at),
@@ -915,42 +1044,149 @@ impl<'a> Validator<'a> {
             } => {
                 let at = format!("relations[Spawns {parent} -> {child}]");
                 self.profile_rule(rule, &at);
+                self.same_rule(rule, basis, &at);
                 self.premises(basis, unresolved, &at);
             }
         }
     }
 
-    /// Whether `obligation` passed for `profile` on `slice`.
-    fn passed(&self, profile: &ProfileRef, slice: &SliceId, obligation: &ObligationId) -> bool {
-        self.s.relations.iter().any(|r| match r {
+    /// The result recorded for `obligation` of `profile` on `slice`. Results are unique per key
+    /// (duplicates are reported), so the first is the only one.
+    fn obligation_state(
+        &self,
+        profile: &ProfileRef,
+        slice: &SliceId,
+        obligation: &ObligationId,
+    ) -> Option<ObligationState> {
+        self.s.relations.iter().find_map(|r| match r {
             Relation::ProfileMatch {
                 profile: p,
                 slice: sl,
                 obligations,
-            } => {
-                p == profile
-                    && sl == slice
-                    && obligations
-                        .iter()
-                        .any(|o| o.id == *obligation && o.result == ObligationState::Pass)
-            }
-            _ => false,
+            } if p == profile && sl == slice => obligations
+                .iter()
+                .find(|o| o.id == *obligation)
+                .map(|o| o.result),
+            _ => None,
         })
+    }
+
+    fn passed(&self, profile: &ProfileRef, slice: &SliceId, obligation: &ObligationId) -> bool {
+        self.obligation_state(profile, slice, obligation) == Some(ObligationState::Pass)
+    }
+
+    /// `obligation` is recorded with `expected` for `profile` on `slice`.
+    fn agrees(
+        &mut self,
+        profile: &ProfileRef,
+        slice: &SliceId,
+        obligation: &ObligationId,
+        expected: ObligationState,
+        at: &str,
+    ) {
+        if self.obligation_state(profile, slice, obligation) != Some(expected) {
+            self.errors
+                .push(ValidationError::ObligationResultDisagrees {
+                    at: at.to_string(),
+                    profile: profile.clone(),
+                    slice: slice.clone(),
+                    obligation: obligation.clone(),
+                });
+        }
+    }
+
+    /// A check that decides `obligation` agrees with the obligation's result, if one is recorded.
+    fn check_agrees(
+        &mut self,
+        profile: &ProfileRef,
+        slice: &SliceId,
+        obligation: &ObligationId,
+        result: &CheckResult,
+        at: &str,
+    ) {
+        let expected = match result {
+            CheckResult::Match => ObligationState::Pass,
+            CheckResult::Mismatch { .. } => ObligationState::Fail,
+            CheckResult::Unknown { .. } => ObligationState::Unknown,
+        };
+        if self
+            .obligation_state(profile, slice, obligation)
+            .is_some_and(|state| state != expected)
+        {
+            self.agrees(profile, slice, obligation, expected, at);
+        }
     }
 
     // --- claims -------------------------------------------------------------------------------
 
-    fn support(&mut self, support: &Support, at: &str) {
-        match support {
-            Support::TargetVerified { obligations } if obligations.is_empty() => {
-                self.empty("TargetVerified.obligations", at)
+    /// The only place a `Support` is recorded, so the only place its claims are checked.
+    fn rule_support(&mut self, record: &RuleSupport) {
+        let RuleSupport {
+            profile,
+            rule,
+            slice,
+            support,
+        } = record;
+        let at = format!("rule_support[{profile} {rule} on {slice}]");
+        self.profile(profile, &at);
+        self.slice(slice, &at);
+        let must_pass: &[ObligationId] = match support {
+            Support::TargetVerified { obligations } => {
+                if obligations.is_empty() {
+                    self.empty("TargetVerified.obligations", &at);
+                }
+                obligations
             }
-            Support::FeatureMatch { unverified, .. } if unverified.is_empty() => {
-                self.empty("FeatureMatch.unverified", at)
+            Support::FeatureMatch {
+                matched,
+                unverified,
+            } => {
+                if unverified.is_empty() {
+                    self.empty("FeatureMatch.unverified", &at);
+                }
+                matched
             }
-            Support::Assumed { assumption } => self.assumption(assumption, at),
-            _ => {}
+            Support::ReferenceVerified {
+                reference,
+                rule: verified_rule,
+                ..
+            } => {
+                if slice.artifact() != *reference {
+                    self.errors.push(ValidationError::NotTheReference {
+                        slice: slice.clone(),
+                        reference: reference.clone(),
+                    });
+                }
+                if verified_rule != rule {
+                    self.errors
+                        .push(ValidationError::RuleMismatch { at: at.clone() });
+                }
+                &[]
+            }
+            Support::Assumed { assumption } => {
+                self.assumption(assumption, &at);
+                &[]
+            }
+        };
+        for obligation in must_pass {
+            if !self.passed(profile, slice, obligation) {
+                self.errors.push(ValidationError::ObligationNotPassed {
+                    profile: profile.clone(),
+                    slice: slice.clone(),
+                    obligation: obligation.clone(),
+                });
+            }
         }
+    }
+
+    /// The rule support `key` names.
+    fn rule_support_of(&mut self, key: &RuleSupportRef, at: &str) -> Option<&'a RuleSupport> {
+        let s = self.s;
+        let record = s.rule_support_of(key);
+        if record.is_none() {
+            self.dangling("rule support", &rule_support_key(key), at);
+        }
+        record
     }
 
     fn basis(&mut self, basis: &Basis, at: &str) {
@@ -964,35 +1200,62 @@ impl<'a> Validator<'a> {
                     self.evidence(input, at);
                 }
             }
-            Basis::Modeled {
-                profile, support, ..
-            } => {
-                self.profile(profile, at);
-                self.support(support, at);
+            Basis::Modeled(key) => {
+                self.rule_support_of(key, at);
             }
             Basis::Assumed { assumption } => self.assumption(assumption, at),
         }
     }
 
-    /// Weakest link: a claim with unresolved premises is not verified, and a `FeatureMatch` lists
-    /// every unresolved premise.
+    /// Weakest link (plan §4.4.7, AC-12): a fact resting on a `FeatureMatch` carries its
+    /// unverified premises as unresolved, so it is never stronger than the support.
     fn premises(&mut self, basis: &Basis, unresolved: &[PremiseId], at: &str) {
         self.basis(basis, at);
-        if let Basis::Modeled { support, .. } = basis {
-            if support.is_verified() && !unresolved.is_empty() {
+        if let Basis::Modeled(key) = basis {
+            if let Some(record) = self.s.rule_support_of(key) {
+                self.carried(&record.support, unresolved, at);
+            }
+        }
+    }
+
+    /// Every unverified premise of a `FeatureMatch` is among `unresolved`.
+    fn carried(&mut self, support: &Support, unresolved: &[PremiseId], at: &str) {
+        if let Support::FeatureMatch { unverified, .. } = support {
+            self.all_carried(unverified, unresolved, at);
+        }
+    }
+
+    fn all_carried(&mut self, premises: &[PremiseId], unresolved: &[PremiseId], at: &str) {
+        for premise in premises {
+            if !unresolved.contains(premise) {
+                self.errors.push(ValidationError::PremiseDropped {
+                    at: at.to_string(),
+                    premise: premise.clone(),
+                });
+            }
+        }
+    }
+
+    /// A relation that names a profile rule and rests on a modeled basis names one rule.
+    fn same_rule(&mut self, rule: &ProfileRuleRef, basis: &Basis, at: &str) {
+        if let Basis::Modeled(key) = basis {
+            if key.profile != rule.profile || key.rule != rule.rule {
                 self.errors
-                    .push(ValidationError::VerifiedWithUnresolved { at: at.to_string() });
+                    .push(ValidationError::RuleMismatch { at: at.to_string() });
             }
-            if let Support::FeatureMatch { unverified, .. } = support {
-                for premise in unresolved {
-                    if !unverified.contains(premise) {
-                        self.errors.push(ValidationError::PremiseDropped {
-                            at: at.to_string(),
-                            premise: premise.clone(),
-                        });
-                    }
-                }
-            }
+        }
+    }
+
+    /// Whether a basis is verified, for the "never stronger than" rule: observed, derived, or a
+    /// verified rule support. Acceptance of an assumption does not make it verified.
+    fn verified(&self, basis: &Basis) -> bool {
+        match basis {
+            Basis::Observed { .. } | Basis::Derived { .. } => true,
+            Basis::Modeled(key) => self
+                .s
+                .rule_support_of(key)
+                .is_some_and(|r| r.support.is_verified()),
+            Basis::Assumed { .. } => false,
         }
     }
 
@@ -1032,9 +1295,29 @@ impl<'a> Validator<'a> {
                 &format!("{at}.used_for_inference"),
             );
             for mapping in &load.mapped {
-                if let Some(instance) = &mapping.instance {
-                    self.instance(instance, &at);
+                if mapping.instance.as_ref() != Some(&load.instance) {
+                    self.errors.push(ValidationError::MappingOfAnotherFile {
+                        instance: load.instance.clone(),
+                    });
                 }
+                let recorded = s
+                    .processes
+                    .iter()
+                    .any(|p| p.process == mapping.process && p.mappings.contains(mapping));
+                if !recorded {
+                    self.dangling(
+                        "mapping observation",
+                        &format!("pid {} at {}", mapping.process.pid, mapping.at),
+                        &at,
+                    );
+                }
+            }
+            if !load.mapped.is_empty()
+                && matches!(load.mapping_observability, Observability::NotObservable(_))
+            {
+                self.errors.push(ValidationError::MappedButNotObservable {
+                    instance: load.instance.clone(),
+                });
             }
             if let Tri::Yes {
                 basis: evaluate_basis,
@@ -1051,7 +1334,7 @@ impl<'a> Validator<'a> {
                         candidate_unresolved
                             .iter()
                             .any(|p| !evaluate_unresolved.contains(p))
-                            || (!verified(candidate_basis) && verified(evaluate_basis))
+                            || (!self.verified(candidate_basis) && self.verified(evaluate_basis))
                     }
                     Tri::No { .. } | Tri::Unknown { .. } => true,
                 };
@@ -1066,72 +1349,103 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn cond_evidence(&mut self, evidence: &CondEvidence, at: &str) {
+    /// What `evidence` settles, reporting what it names that the session does not contain, and
+    /// that the condition carries the unresolved premises of what it rests on.
+    fn cond_evidence(
+        &mut self,
+        evidence: &CondEvidence,
+        condition: &Condition,
+        at: &str,
+    ) -> Option<Settles> {
+        let s = self.s;
+        let at_condition = format!("{at}.conditions[{}]", condition.id);
         match evidence {
-            CondEvidence::Behavior(support) => self.support(support, at),
-            CondEvidence::Access(_) | CondEvidence::Identity(_) => {}
-            CondEvidence::Value(origin) => self.origin(origin, at),
-            CondEvidence::Binding(state) => self.binding_state(state, at),
+            CondEvidence::Behavior(key) => {
+                if let Some(record) = self.rule_support_of(key, at) {
+                    self.carried(&record.support, &condition.unresolved, &at_condition);
+                }
+            }
+            CondEvidence::Load {
+                instance,
+                context,
+                fact,
+            } => {
+                let premises = s
+                    .loads
+                    .iter()
+                    .find(|l| l.instance == *instance && l.context == *context)
+                    .and_then(|l| l.fact(*fact))
+                    .map(|(_, _, unresolved)| unresolved);
+                if let Some(premises) = premises {
+                    self.all_carried(premises, &condition.unresolved, &at_condition);
+                }
+            }
             CondEvidence::Observed { facts } => {
                 for fact in facts {
                     self.evidence(fact, at);
                 }
             }
+            CondEvidence::Access { .. }
+            | CondEvidence::Value { .. }
+            | CondEvidence::Binding { .. }
+            | CondEvidence::Identity { .. } => {}
+        }
+        match s.resolve(evidence) {
+            Ok(settles) => Some(settles),
+            Err(missing) => {
+                // A missing rule support was reported above.
+                if !matches!(evidence, CondEvidence::Behavior(_)) {
+                    self.dangling(missing.kind, &missing.id, at);
+                }
+                None
+            }
         }
     }
 
     fn condition(&mut self, condition: &Condition, at: &str) {
-        let accepted = |a: &AssumptionId| self.accepted(a);
-        let insufficient = match &condition.state {
-            CondState::Met { evidence } => !evidence.sufficient_for_met(&accepted),
-            CondState::NotMet { evidence } => !evidence.sufficient_for_not_met(&accepted),
-            CondState::Unknown { .. } => false,
+        let error = |make: fn(String, CondId) -> ValidationError| {
+            make(at.to_string(), condition.id.clone())
         };
-        let inconsistent_unknown = match &condition.state {
-            CondState::Unknown {
-                reason: UnknownReason::InsufficientEvidence,
-                evidence,
-            } => evidence
-                .as_ref()
-                .is_none_or(|e| e.sufficient_for_met(&accepted)),
-            CondState::Unknown {
-                reason: UnknownReason::PremiseUnresolved,
-                ..
-            } => condition.unresolved.is_empty(),
-            _ => false,
-        };
-        let verified_with_unresolved = matches!(
-            &condition.state,
-            CondState::Met { evidence: CondEvidence::Behavior(support) }
-                | CondState::NotMet { evidence: CondEvidence::Behavior(support) }
-                if support.is_verified() && !condition.unresolved.is_empty()
-        );
-        if insufficient {
-            self.errors.push(ValidationError::InsufficientEvidence {
-                at: at.to_string(),
-                condition: condition.id.clone(),
-            });
-        }
-        if inconsistent_unknown {
-            self.errors
-                .push(ValidationError::UnknownReasonInconsistent {
-                    at: at.to_string(),
-                    condition: condition.id.clone(),
-                });
-        }
-        if verified_with_unresolved {
-            self.errors.push(ValidationError::VerifiedWithUnresolved {
-                at: format!("{at}.conditions[{}]", condition.id),
-            });
-        }
         match &condition.state {
             CondState::Met { evidence } | CondState::NotMet { evidence } => {
-                self.cond_evidence(evidence, at)
+                let met = matches!(condition.state, CondState::Met { .. });
+                let settles = self.cond_evidence(evidence, condition, at);
+                let problem = match settles {
+                    None | Some(Settles::Either) => None,
+                    Some(Settles::Met) if met => None,
+                    Some(Settles::NotMet) if !met => None,
+                    Some(Settles::Neither) => Some(error(|at, condition| {
+                        ValidationError::InsufficientEvidence { at, condition }
+                    })),
+                    Some(Settles::Met | Settles::NotMet) => Some(error(|at, condition| {
+                        ValidationError::ContradictedByEvidence { at, condition }
+                    })),
+                };
+                self.errors.extend(problem);
+                if !condition.unresolved.is_empty() {
+                    self.errors.push(error(|at, condition| {
+                        ValidationError::DecidedWithUnresolved { at, condition }
+                    }));
+                }
             }
             CondState::Unknown { reason, evidence } => {
                 self.reason(reason, at);
-                if let Some(evidence) = evidence {
-                    self.cond_evidence(evidence, at);
+                let settles = evidence
+                    .as_ref()
+                    .and_then(|e| self.cond_evidence(e, condition, at));
+                let inconsistent = match reason {
+                    // Evidence is named, and it settles neither way.
+                    UnknownReason::InsufficientEvidence => match (evidence, settles) {
+                        (None, _) => true,
+                        (Some(_), settles) => settles.is_some_and(|s| s != Settles::Neither),
+                    },
+                    UnknownReason::PremiseUnresolved => condition.unresolved.is_empty(),
+                    _ => false,
+                };
+                if inconsistent {
+                    self.errors.push(error(|at, condition| {
+                        ValidationError::UnknownReasonInconsistent { at, condition }
+                    }));
                 }
             }
         }
@@ -1370,13 +1684,4 @@ fn states<'s>(s: &'s Session, check: &'s CheckId) -> impl Iterator<Item = &'s Co
         .iter()
         .filter(move |c| c.check == *check)
         .map(|c| &c.state)
-}
-
-/// Whether a basis supports a claim as verified, for the "never stronger than" rule.
-fn verified(basis: &Basis) -> bool {
-    match basis {
-        Basis::Observed { .. } | Basis::Derived { .. } => true,
-        Basis::Modeled { support, .. } => support.is_verified(),
-        Basis::Assumed { .. } => false,
-    }
 }

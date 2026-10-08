@@ -59,7 +59,8 @@ pub use evidence::{
 };
 pub use finding::{
     Action, Completeness, CondEvidence, CondState, Condition, Finding, FindingKind, OpenQuestion,
-    OpenQuestionDecision, OqTreatment, Outcome, PolicyDecision, PolicyViolation, Severity, Verdict,
+    OpenQuestionDecision, OqTreatment, Outcome, PolicyDecision, PolicyViolation, Settles, Severity,
+    ValueNeed, Verdict,
 };
 pub use hint::{FeatureHint, Signal};
 pub use id::{
@@ -73,12 +74,12 @@ pub use identity::{
     ReleaseClaim, SigState, VersionAssertion, VersionSource,
 };
 pub use load::{
-    CandidateWhy, EffectWhy, LoadContext, LoadFacts, LoaderPhase, ProcessValue, TriValue, ValueKey,
-    ValueOrigin,
+    CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase, ProcessValue, TriValue,
+    ValueKey, ValueOrigin,
 };
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,
-    RuleSupport, SearchDir, SearchRule,
+    RuleSupport, RuleSupportRef, SearchDir, SearchRule,
 };
 pub use session::{
     KnowledgeKind, KnowledgeRef, Mode, ObservationMeta, RunRequest, ScanRoot, SchemaVersion,

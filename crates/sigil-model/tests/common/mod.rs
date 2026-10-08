@@ -17,6 +17,52 @@ pub const R1_GGML_HEX: &str = "40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796
 pub const ROLE: &str = "llama-server (per model)";
 pub const PROFILE: &str = "ggml.backend-loader@2";
 
+pub fn errors(s: &Session) -> Vec<ValidationError> {
+    s.validate().err().unwrap_or_default()
+}
+
+pub fn render(errors: &[ValidationError]) -> String {
+    errors.iter().map(|e| format!("  - {e}\n")).collect()
+}
+
+pub fn assert_valid(s: &Session) {
+    if let Err(errors) = s.validate() {
+        panic!("expected a valid session, got:\n{}", render(&errors));
+    }
+}
+
+pub fn assert_rejected(s: &Session, matches: impl Fn(&ValidationError) -> bool, what: &str) {
+    let errors = errors(s);
+    assert!(
+        errors.iter().any(matches),
+        "expected {what}, got:\n{}",
+        render(&errors)
+    );
+}
+
+/// The placement, artifact, and first slice of the instance `inst`.
+pub fn placed(s: &Session, inst: &str) -> Placed {
+    let instance = s.instances.iter().find(|i| i.id.as_str() == inst).unwrap();
+    let InstanceContent::Read { artifact } = &instance.content else {
+        panic!("{inst} was not read");
+    };
+    let slice = s
+        .artifacts
+        .iter()
+        .find(|a| a.id == *artifact)
+        .unwrap()
+        .slices[0]
+        .id
+        .clone();
+    Placed {
+        artifact: artifact.clone(),
+        slice,
+        inst: instance.id.clone(),
+    }
+}
+
+pub const GGML: &str = "inst:lib/ollama/libggml.so.0.13.1";
+
 pub fn id<T: TryFrom<String, Error = IdError>>(value: &str) -> T {
     T::try_from(value.to_string()).unwrap_or_else(|e| panic!("{e}"))
 }
@@ -595,14 +641,18 @@ pub fn add_world_writable_libdir(s: &mut Session, runtime: &ValueId) -> AccessId
             node("/", 0o40755),
         ],
         capabilities: vec![CapabilityAccess {
-            capability: WriteCapability::ReplaceEntry {
-                dir: t("/usr/local/lib/ollama"),
-                entry: t("libggml.so.0.13.1"),
-            },
+            capability: replace_libggml(),
             conclusion: anyone_via_libdir(),
         }],
     });
     access
+}
+
+pub fn replace_libggml() -> WriteCapability {
+    WriteCapability::ReplaceEntry {
+        dir: t("/usr/local/lib/ollama"),
+        entry: t("libggml.so.0.13.1"),
+    }
 }
 
 pub fn anyone_via_libdir() -> AccessConclusion {
@@ -610,6 +660,34 @@ pub fn anyone_via_libdir() -> AccessConclusion {
         who: Principal::Anyone,
         via: t("/usr/local/lib/ollama"),
         how: Grant::ModeOther,
+    }
+}
+
+/// The support of a loader-profile rule on the loader slice.
+pub fn loader_rule(g: &Placed, rule: &str) -> RuleSupportRef {
+    RuleSupportRef {
+        profile: id(PROFILE),
+        rule: id(rule),
+        slice: g.slice.clone(),
+    }
+}
+
+/// Whether the per-model `llama-server` binds the loader's `dlopen` call to the analyzed libggml.
+pub fn binding_of_loader(g: &Placed) -> CondEvidence {
+    CondEvidence::Binding {
+        process_role: id(ROLE),
+        site: CallRef {
+            slice: g.slice.clone(),
+            call: id("cs:0xe26d"),
+        },
+        definer: g.inst.clone(),
+    }
+}
+
+pub fn runtime_user_known() -> CondEvidence {
+    CondEvidence::Value {
+        value: id("val:llama-server (per model)/user/predicted"),
+        needs: ValueNeed::Known,
     }
 }
 
@@ -640,16 +718,13 @@ pub fn replaceable_library_finding(g: &Placed, access: &AccessId, runtime: &Valu
         subject: Ref::Instance(g.inst.clone()),
         summary: "Anyone can replace libggml.so.0.13.1, which the per-model llama-server binds to (specification example)".to_string(),
         conditions: vec![
+            met("rule_supported:evaluate", CondEvidence::Behavior(loader_rule(g, "evaluate"))),
             met(
-                "rule_supported:evaluate",
-                CondEvidence::Behavior(Support::TargetVerified { obligations: ids(&["evaluate.score_call", "evaluate.close_reached"]) }),
+                "untrusted_write:library",
+                CondEvidence::Access { access: access.clone(), capability: replace_libggml() },
             ),
-            met("untrusted_write:library", CondEvidence::Access(anyone_via_libdir())),
-            met(
-                "runtime_principal_known",
-                CondEvidence::Value(ValueOrigin::PredictedLaunch { rules: vec!["systemd.User".to_string(), "topology.user_inherited".to_string()], from: ids(&["val:ollama serve/user/configured"]) }),
-            ),
-            met(&format!("binding:{ROLE}"), CondEvidence::Binding(BindingState::Verified { scope: vec![g.inst.clone()] })),
+            met("runtime_principal_known", CondEvidence::Value { value: runtime.clone(), needs: ValueNeed::Known }),
+            met(&format!("binding:{ROLE}"), binding_of_loader(g)),
         ],
         evidence: vec![
             EvidenceRef::Instance { instance: g.inst.clone() },
@@ -823,20 +898,14 @@ pub fn budget_exceeded() -> Session {
 
 /// The open question of plan §5.5: loader behavior and the runtime principal are established,
 /// the effective cwd is not, and the filter operands are a reference-only premise.
-pub fn cwd_open_question() -> OpenQuestion {
+pub fn cwd_open_question(g: &Placed) -> OpenQuestion {
     OpenQuestion {
         id: id(&format!("oq:loader.search_path_untrusted_creator@cwd/{ROLE}")),
         rule: id("loader.search_path_untrusted_creator"),
         subject: Ref::SearchPath { role: id(ROLE), search_path: "cwd".to_string() },
         conditions: vec![
-            met(
-                "rule_supported:evaluate",
-                CondEvidence::Behavior(Support::TargetVerified { obligations: ids(&["evaluate.score_call", "evaluate.close_reached"]) }),
-            ),
-            met(
-                "runtime_principal_known",
-                CondEvidence::Value(ValueOrigin::PredictedLaunch { rules: vec!["systemd.User".to_string(), "topology.user_inherited".to_string()], from: ids(&["val:ollama serve/user/configured"]) }),
-            ),
+            met("rule_supported:evaluate", CondEvidence::Behavior(loader_rule(g, "evaluate"))),
+            met("runtime_principal_known", runtime_user_known()),
             Condition {
                 id: id("value:cwd"),
                 state: CondState::Unknown {
@@ -870,7 +939,7 @@ pub fn open_question() -> Session {
             .to_string(),
         acceptance: AssumptionAcceptance::NotAccepted,
     });
-    let oq = cwd_open_question();
+    let oq = cwd_open_question(&g);
     let oq_id = oq.id.clone();
     s.open_questions.push(oq);
     pass_complete(&mut s);
@@ -939,7 +1008,9 @@ pub fn profile_mismatch() -> Session {
     s
 }
 
-/// A backend candidate whose loader behavior is only a feature match for this file and role.
+/// A backend candidate. The loader's filter and evaluate rules are verified in its code, but the
+/// facts about this file and role rest on unresolved premises (the filter operands, the role's
+/// binding), and the `select` rule only feature-matches.
 pub fn add_feature_match_candidate(s: &mut Session, g: &Placed, zen4_hex: &str) -> Placed {
     let zen4 = add_binary(
         s,
@@ -951,7 +1022,7 @@ pub fn add_feature_match_candidate(s: &mut Session, g: &Placed, zen4_hex: &str) 
     let profile: ProfileRef = id(PROFILE);
     let binding = format!("binding:{ROLE}");
     s.rule_support.push(RuleSupport {
-        profile: profile.clone(),
+        profile,
         rule: id("select"),
         slice: g.slice.clone(),
         support: Support::FeatureMatch {
@@ -971,28 +1042,14 @@ pub fn add_feature_match_candidate(s: &mut Session, g: &Placed, zen4_hex: &str) 
                 search_path: "exe_dir".to_string(),
                 filter: "libggml-cpu-*.so".to_string(),
             },
-            basis: Basis::Modeled {
-                profile: profile.clone(),
-                rule: id("filter"),
-                support: Support::FeatureMatch {
-                    matched: ids(&["filter.reach_predicate"]),
-                    unverified: ids(&["candidate.operands"]),
-                },
-            },
+            basis: Basis::Modeled(loader_rule(g, "filter")),
             unresolved: ids(&["candidate.operands"]),
         },
         would_evaluate: Tri::Yes {
             why: EffectWhy {
                 phase: LoaderPhase::Evaluate,
             },
-            basis: Basis::Modeled {
-                profile,
-                rule: id("evaluate"),
-                support: Support::FeatureMatch {
-                    matched: ids(&["evaluate.score_call", "evaluate.close_reached"]),
-                    unverified: ids(&["candidate.operands", &binding]),
-                },
-            },
+            basis: Basis::Modeled(loader_rule(g, "evaluate")),
             unresolved: ids(&["candidate.operands", &binding]),
         },
         selectable: Tri::Unknown {
@@ -1009,6 +1066,47 @@ pub fn add_feature_match_candidate(s: &mut Session, g: &Placed, zen4_hex: &str) 
         },
     });
     zen4
+}
+
+/// Observe mode: the per-model `llama-server` has the zen4 backend mapped, and its load facts list
+/// that observation. Mapped is not "used for inference".
+pub fn add_observed_zen4_mapping(s: &mut Session) {
+    s.request.mode = Mode::Observe;
+    let process = ProcessRef {
+        pid: 4242,
+        start_ticks: 987_654,
+        boot_id: "00000000-0000-4000-8000-000000000000".to_string(),
+    };
+    let zen4: InstanceId = id("inst:lib/ollama/libggml-cpu-zen4.so");
+    let mapping = MappingObs {
+        process: process.clone(),
+        at: ts("2026-10-07T07:00:01Z"),
+        dev: 2049,
+        ino: 1002,
+        path_text: t("/usr/local/lib/ollama/libggml-cpu-zen4.so"),
+        deleted: false,
+        instance: Some(zen4.clone()),
+        same_mount_ns: Tri::Yes {
+            why: (),
+            basis: Basis::Observed {
+                source: ObsSource::Proc,
+            },
+            unresolved: vec![],
+        },
+    };
+    s.processes.push(ProcessObs {
+        process,
+        at: ts("2026-10-07T07:00:01Z"),
+        roles: ids(&[ROLE]),
+        exe: ProcessExe::Path {
+            path: t("/usr/local/lib/ollama/llama-server"),
+            deleted: false,
+        },
+        mappings: vec![mapping.clone()],
+    });
+    let load = s.loads.iter_mut().find(|l| l.instance == zen4).unwrap();
+    load.mapped = vec![mapping];
+    load.mapping_observability = Observability::Observed;
 }
 
 /// Example 9: A feature-match-only claim: it is recorded, and it cannot support a confirmed finding (the
@@ -1038,17 +1136,31 @@ pub fn feature_match_only() -> Session {
             role: id(ROLE),
             search_path: "exe_dir".to_string(),
         },
-        conditions: vec![Condition {
-            id: id("candidate_evaluated"),
-            state: CondState::Unknown {
-                reason: UnknownReason::InsufficientEvidence,
-                evidence: Some(CondEvidence::Behavior(Support::FeatureMatch {
-                    matched: ids(&["evaluate.score_call", "evaluate.close_reached"]),
-                    unverified: ids(&["candidate.operands", &format!("binding:{ROLE}")]),
-                })),
+        conditions: vec![
+            Condition {
+                id: id("candidate_evaluated"),
+                state: CondState::Unknown {
+                    reason: UnknownReason::InsufficientEvidence,
+                    evidence: Some(CondEvidence::Load {
+                        instance: zen4.inst.clone(),
+                        context: LoadContext {
+                            process_role: id(ROLE),
+                            rule: "ggml.backend-loader/load_best(cpu)".to_string(),
+                        },
+                        fact: LoadFact::WouldEvaluate,
+                    }),
+                },
+                unresolved: ids(&["candidate.operands", &format!("binding:{ROLE}")]),
             },
-            unresolved: ids(&["candidate.operands", &format!("binding:{ROLE}")]),
-        }],
+            Condition {
+                id: id("rule_supported:select"),
+                state: CondState::Unknown {
+                    reason: UnknownReason::InsufficientEvidence,
+                    evidence: Some(CondEvidence::Behavior(loader_rule(&g, "select"))),
+                },
+                unresolved: ids(&["select"]),
+            },
+        ],
         evidence: vec![EvidenceRef::Instance {
             instance: zen4.inst,
         }],
@@ -1169,7 +1281,7 @@ pub fn loader_slice_spec_example() -> Session {
             .to_string(),
         acceptance: AssumptionAcceptance::NotAccepted,
     });
-    let oq = cwd_open_question();
+    let oq = cwd_open_question(&g);
     let oq_id = oq.id.clone();
     s.open_questions.push(oq);
     pass_complete(&mut s);
