@@ -336,11 +336,15 @@ fn budgets(given: &[String], mode: Mode) -> Result<(FsBudgets, u64, ProcBudgets)
 }
 
 /// `--out` must not lie inside the models directory (C-5): SIGIL never writes under a scan root.
-/// Symlinks are resolved as far as the paths exist.
 fn check_out(out: &Path, models_dir: &Path) -> Result<(), Failure> {
-    let models =
-        resolved(models_dir).map_err(|e| Failure::Usage(format!("the models directory: {e}")))?;
-    let out = resolved(out).map_err(|e| Failure::Usage(format!("--out: {e}")))?;
+    let models = resolved(models_dir).map_err(|e| {
+        Failure::Usage(format!(
+            "the models directory {}: {e}",
+            shown_path(models_dir)
+        ))
+    })?;
+    let out =
+        resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
     if out.starts_with(&models) {
         return Err(Failure::Usage(format!(
             "--out {} is inside the models directory {}; SIGIL never writes under a scan root",
@@ -351,23 +355,41 @@ fn check_out(out: &Path, models_dir: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
-/// `path` made absolute, with its longest existing prefix resolved through symlinks.
-fn resolved(path: &Path) -> std::io::Result<PathBuf> {
-    let absolute = std::path::absolute(path)?;
-    let mut base = absolute.as_path();
-    let mut rest = vec![];
-    loop {
-        if let Ok(real) = fs::canonicalize(base) {
-            return Ok(rest.iter().rev().fold(real, |p, c| p.join(c)));
-        }
-        match (base.parent(), base.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_os_string());
-                base = parent;
+/// Where `path` leads once its missing directories are created: its longest existing prefix
+/// resolved through symlinks, then the rest applied lexically, `..` included. The rest does not
+/// exist yet and is created as plain directories, so `new/..` is the directory `new` was created
+/// in. A part of the rest that exists as a symlink (one that does not resolve) is refused: where
+/// it would lead cannot be checked.
+fn resolved(path: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
+    let parts: Vec<Component> = absolute.components().collect();
+    for existing in (1..=parts.len()).rev() {
+        let prefix: PathBuf = parts[..existing].iter().collect();
+        let Ok(mut real) = fs::canonicalize(&prefix) else {
+            continue;
+        };
+        for part in &parts[existing..] {
+            match part {
+                Component::ParentDir => {
+                    real.pop();
+                }
+                Component::CurDir => {}
+                other => {
+                    real.push(other.as_os_str());
+                    if fs::symlink_metadata(&real).is_ok() {
+                        return Err(format!(
+                            "{} exists but cannot be resolved (a symlink to nothing?)",
+                            shown_path(&real)
+                        ));
+                    }
+                }
             }
-            _ => return Ok(absolute),
         }
+        return Ok(real);
     }
+    // The root always resolves; a path with no existing prefix is relative to nothing.
+    Err("no part of the path exists".to_string())
 }
 
 fn load_policy(path: Option<&Path>) -> Result<Policy, Failure> {

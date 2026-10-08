@@ -42,17 +42,21 @@ fn manifest(dir: &Path, path: &str, layers: &[(&str, &str)]) {
     .unwrap();
 }
 
-/// A store with one model; with a license layer, or without one (a WARN).
-fn store(licensed: bool) -> TempDir {
-    let d = TempDir::new().unwrap();
-    let weights = blob(d.path(), b"weights");
+/// A store with one model in `d`; with a license layer, or without one (a WARN).
+fn fill_store(d: &Path, licensed: bool) {
+    let weights = blob(d, b"weights");
     let license;
     let mut layers = vec![(MODEL_MEDIA, weights.as_str())];
     if licensed {
-        license = blob(d.path(), b"MIT");
+        license = blob(d, b"MIT");
         layers.push((LICENSE_MEDIA, license.as_str()));
     }
-    manifest(d.path(), LIB, &layers);
+    manifest(d, LIB, &layers);
+}
+
+fn store(licensed: bool) -> TempDir {
+    let d = TempDir::new().unwrap();
+    fill_store(d.path(), licensed);
     d
 }
 
@@ -204,6 +208,48 @@ fn out_inside_the_models_directory_is_a_usage_error() {
     let r = inspect(d.path(), &[&"--out", &out]);
     assert_eq!(r.code, 2, "{}", r.stderr);
     assert!(!out.exists());
+}
+
+#[test]
+fn out_reaching_the_models_directory_through_a_new_directory_and_dot_dot_is_refused() {
+    // Review of #75: `fresh` does not exist, so `fresh/..` cannot be resolved before SIGIL
+    // creates `fresh`; it then leads back into the store.
+    let base = TempDir::new().unwrap();
+    let models = base.path().join("models");
+    fill_store(&models, true);
+    let out = base.path().join("fresh/../models/report.json");
+    let r = inspect(&models, &[&"--out", &out]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(!models.join("report.json").exists());
+    assert!(!base.path().join("fresh").exists(), "nothing is created");
+}
+
+#[test]
+fn out_through_a_symlink_into_the_models_directory_is_refused() {
+    use std::os::unix::fs::symlink;
+    let base = TempDir::new().unwrap();
+    let models = base.path().join("models");
+    fill_store(&models, true);
+    // A symlink to the store.
+    symlink(&models, base.path().join("link")).unwrap();
+    let r = inspect(&models, &[&"--out", &base.path().join("link/report.json")]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(!models.join("report.json").exists());
+    // A symlink whose target, in the store, does not exist yet.
+    symlink(models.join("new.json"), base.path().join("dangling")).unwrap();
+    let r = inspect(&models, &[&"--out", &base.path().join("dangling")]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(!models.join("new.json").exists());
+}
+
+#[test]
+fn new_nested_directories_and_dot_dot_outside_the_store_are_allowed() {
+    let d = store(true);
+    let o = TempDir::new().unwrap();
+    let out = o.path().join("a/b/../c/report.json");
+    let r = inspect(d.path(), &[&"--out", &out]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(o.path().join("a/c/report.json").is_file());
 }
 
 #[test]
