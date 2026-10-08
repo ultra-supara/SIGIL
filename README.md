@@ -35,11 +35,12 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 | Provenance | `registry / namespace / model / tag` from the manifest path |
 | License | The license layer, its SPDX id where detected, and an excerpt |
 | Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
+| Runtime API (`--active api-probe`) | Whether `GET /api/version` answered at one literal address, and the version it reported |
 | Outcome | Verdict (`PASS` / `WARN` / `FAIL`) and completeness (`COMPLETE` / `INCOMPLETE`), side by side |
 
 ## Why local-first, LLM-free
 
-- **No network I/O.** SIGIL reads files and, in observe mode, allowlisted `/proc` entries. The old Ollama API probe is gone. It returns only as an explicit active mode, off by default.
+- **No network I/O unless you ask for it.** SIGIL reads files and, in observe mode, allowlisted `/proc` entries. The one exception is the API probe, an explicit active feature (`--active api-probe`) that is off by default. It sends one `GET /api/version` to a literal address, loopback unless `--allow-remote` is given, and it resolves no names.
 - **No subprocess spawn.** Listener attribution reads `/proc/net/tcp{,6}` and `/proc/<pid>/fd` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
 - **No LLM in the verdict path.** Every finding comes from a deterministic analyzer, and every decision from a policy rule ([`crates/sigil-engine/src/policy`](crates/sigil-engine/src/policy)). An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
 - **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store.
@@ -67,6 +68,9 @@ cargo run -p sigil-cli -- inspect ollama --format md --out out/report.md
 # Observe: also the runtime's listening sockets (allowlisted /proc reads)
 cargo run -p sigil-cli -- inspect ollama --mode observe --out out/session.json
 
+# Active: also ask the runtime's API for its version (one request to 127.0.0.1:11434)
+cargo run -p sigil-cli -- inspect ollama --active api-probe --out out/session.json
+
 # Explain a saved session: one finding, the verdict, or the coverage
 cargo run -p sigil-cli -- explain out/session.json --verdict
 cargo run -p sigil-cli -- explain out/session.json --finding <FINDING-ID> --format md
@@ -81,6 +85,7 @@ Other flags worth knowing:
 - `--models-dir <dir>`: the model store (default `$OLLAMA_MODELS`, else `~/.ollama/models`). `--model <name>` inventories one model.
 - `--policy <file>`: a policy (TOML, [docs/policy.md](docs/policy.md)) that sets the audit scope, rule actions with reasons and expiry, and accepted assumptions.
 - `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`). Budgets that run out leave the result incomplete, never silently clean.
+- `--active api-probe [--api-addr IP[:PORT]] [--allow-remote]`: probe the API at a literal address (default `127.0.0.1:11434`; `localhost` means 127.0.0.1). A refused connection closes the check: nothing answers there. A timeout or a reply that is not the Ollama API leaves it open. The probe's budgets are `api_connect_ms`, `api_io_ms`, and `api_response_bytes`.
 - `--fail-on warn|fail` and `--fail-on-incomplete` for CI. Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached, `4` incomplete.
 
 Details: [model store](docs/model-store.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
@@ -116,13 +121,12 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 - Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
 - Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
 - The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
-- CLI: `inspect ollama`, `session render`, `explain`, `rules`.
-- Syscall safety tests of contracts C-1 to C-6 over every CLI path.
+- CLI: `inspect ollama` (static, observe, and the active API probe), `session render`, `explain`, `rules`.
+- Syscall safety tests of contracts C-1 to C-6 over every CLI path, with the active probe held to one connection to its destination.
 
 **Not yet**
 
 - Binary analysis of the runtime's executables and libraries (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
-- The API probe as an explicit active mode.
 - AI-BOM v2 and the browser viewer on v2 sessions.
 - Runtimes beyond Ollama, and baseline comparison.
 

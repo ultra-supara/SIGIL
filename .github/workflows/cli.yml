@@ -2,7 +2,9 @@ name: CLI
 
 # crates/sigil-cli is the v2 command line: `inspect ollama`, `session render`, `explain`, and
 # `rules`. This job runs its end-to-end tests (the real binary, its outputs, and its exit codes)
-# on Linux; observe mode reads the runner's own /proc. The syscall contracts are the `safety` job.
+# on Linux; observe mode reads the runner's own /proc, and the API probe talks to servers on
+# loopback started by the tests. It also runs crates/sigil-probe's tests. The syscall contracts
+# are the `safety` job.
 on:
   push:
     branches: [main]
@@ -10,6 +12,7 @@ on:
       - 'crates/sigil-cli/**'
       - 'crates/sigil-engine/**'
       - 'crates/sigil-model/**'
+      - 'crates/sigil-probe/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/cli.yml'
@@ -18,6 +21,7 @@ on:
       - 'crates/sigil-cli/**'
       - 'crates/sigil-engine/**'
       - 'crates/sigil-model/**'
+      - 'crates/sigil-probe/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/cli.yml'
@@ -44,3 +48,5 @@ jobs:
           workspaces: '. -> target'
       - name: End-to-end tests (inspect, render, explain, rules, exit codes)
         run: cargo test -p sigil-cli --bin sigil --test cli
+      - name: API probe tests (bounds, outcomes, loopback-only rule)
+        run: cargo test -p sigil-probe
