@@ -18,6 +18,7 @@
 
 pub mod analyze;
 pub mod collect;
+pub mod explain;
 pub mod inspect;
 pub mod observe;
 pub mod policy;

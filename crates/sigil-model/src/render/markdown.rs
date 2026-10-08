@@ -5,13 +5,16 @@
 //! code span, or HTML in the report. Tables are GFM, and a cell never contains a line break.
 
 use crate::artifact::{NsInode, ProcessExe, ProcessObs};
-use crate::coverage::{CoverageState, SkipReason, Unavailability};
-use crate::evidence::{NotObservable, Observability, Ref};
-use crate::finding::{Action, Completeness, FindingKind, OqTreatment, Verdict};
+use crate::evidence::Observability;
+use crate::finding::Completeness;
 use crate::listener::ListenerOwner;
 use crate::model::{BlobLookup, Model};
-use crate::session::{Mode, Session};
+use crate::session::Session;
 use crate::text::UntrustedText;
+
+use super::{
+    action, completeness, coverage_state, kind, mode, not_observable, subject, treatment, verdict,
+};
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
 /// that does not close, and the models, listeners, and processes observed. The other lists are
@@ -112,14 +115,10 @@ fn run(out: &mut String, s: &Session) {
 fn outcome(out: &mut String, s: &Session) {
     section(out, "Outcome");
     let o = &s.outcome;
-    let completeness = match o.completeness {
-        Completeness::Complete => "COMPLETE",
-        Completeness::Incomplete { .. } => "INCOMPLETE",
-    };
     out.push_str(&format!(
         "**Verdict:** {} · **Completeness:** {}\n\n",
         esc(verdict(o.verdict)),
-        esc(completeness)
+        esc(completeness(&o.completeness))
     ));
     out.push_str(&esc(&format!(
         "Confirmed: {} fail, {} warn, {} policy violations.",
@@ -229,7 +228,7 @@ fn coverage(out: &mut String, s: &Session) {
             vec![
                 esc(c.check.as_str()),
                 esc(&subject(&c.scope)),
-                state(&c.state),
+                coverage_state(&c.state).markdown(),
             ]
         })
         .collect();
@@ -373,103 +372,4 @@ fn joined<T: std::fmt::Display>(items: &[T]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn mode(m: Mode) -> &'static str {
-    match m {
-        Mode::Static => "static",
-        Mode::Observe => "observe",
-    }
-}
-
-fn verdict(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Pass => "PASS",
-        Verdict::Warn => "WARN",
-        Verdict::Fail => "FAIL",
-    }
-}
-
-fn action(a: Action) -> &'static str {
-    match a {
-        Action::Fail => "fail",
-        Action::Warn => "warn",
-        Action::Ignore => "ignore",
-    }
-}
-
-fn treatment(t: &OqTreatment) -> &'static str {
-    match t {
-        OqTreatment::CountAsGap => "count as gap",
-        OqTreatment::Warn => "warn",
-        OqTreatment::Fail => "fail",
-        OqTreatment::Ignore => "ignore",
-    }
-}
-
-fn kind(k: FindingKind) -> &'static str {
-    match k {
-        FindingKind::Integrity => "integrity",
-        FindingKind::Exposure => "exposure",
-        FindingKind::Loader => "loader",
-        FindingKind::Precondition => "precondition",
-    }
-}
-
-fn not_observable(n: NotObservable) -> &'static str {
-    match n {
-        NotObservable::PermissionDenied => "permission denied",
-        NotObservable::NoProcess => "no process",
-        NotObservable::ModeDisabled => "not read in this mode",
-        NotObservable::NamespaceMismatch => "another namespace",
-        NotObservable::ReadIncomplete => "read incompletely",
-    }
-}
-
-/// What a finding, open question, policy violation, or coverage entry is about.
-pub fn subject(r: &Ref) -> String {
-    match r {
-        Ref::Audit => "the audit".to_string(),
-        Ref::Root(id) => id.to_string(),
-        Ref::Artifact(id) => id.to_string(),
-        Ref::Slice(id) => id.to_string(),
-        Ref::Instance(id) => id.to_string(),
-        Ref::Component { slice, component } => format!("{component} in {slice}"),
-        Ref::Role(role) => format!("role {role}"),
-        Ref::SearchPath { role, search_path } => format!("{search_path} of role {role}"),
-        Ref::Process(p) => format!("process {} (start {})", p.pid, p.start_ticks),
-        Ref::Model(id) => id.to_string(),
-        Ref::Listener(id) => id.to_string(),
-    }
-}
-
-/// A coverage state, escaped.
-fn state(st: &CoverageState) -> String {
-    match st {
-        CoverageState::Complete => esc("complete"),
-        CoverageState::Partial { missing } => esc(&format!("partial: {}", missing.join("; "))),
-        CoverageState::NotPresent { scope, .. } => esc(&format!("not present in {scope}")),
-        CoverageState::ProfileMismatch { profile, failed } => {
-            esc(&format!("profile mismatch: {profile} ({})", joined(failed)))
-        }
-        CoverageState::OutOfScope { why } => esc(&format!("out of scope: {why}")),
-        CoverageState::Skipped { by } => esc(&match by {
-            SkipReason::ModeDisabled => "skipped: not run in this mode".to_string(),
-            SkipReason::Flag { flag } => format!("skipped: {flag}"),
-        }),
-        CoverageState::Unavailable { why } => esc(match why {
-            Unavailability::PermissionDenied => "unavailable: permission denied",
-            Unavailability::NotFound => "unavailable: not found",
-            Unavailability::PlatformUnsupported => "unavailable: platform unsupported",
-        }),
-        CoverageState::Unsupported { what } => esc(&format!("unsupported: {what}")),
-        CoverageState::BudgetExceeded {
-            budget,
-            used,
-            limit,
-        } => esc(&format!("budget exceeded: {budget} ({used} of {limit})")),
-        CoverageState::Error { message } => {
-            format!("{} {}", esc("error:"), message.markdown_inline())
-        }
-    }
 }
