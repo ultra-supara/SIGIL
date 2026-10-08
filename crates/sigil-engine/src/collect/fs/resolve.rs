@@ -40,9 +40,11 @@ pub(crate) enum End {
         fd: Option<OwnedFd>,
     },
     NotFound,
-    /// A symlink led outside every scan root; `target` is that link's target text.
+    /// A symlink led outside every scan root; `target` is that link's target text and `link`
+    /// the link's own metadata.
     OutsideRoots {
         target: UntrustedText,
+        link: Stat,
     },
     PermissionDenied,
     TooManyHops,
@@ -97,6 +99,7 @@ impl SafeFs {
         let roots = self.canonical_roots();
         let max_hops = self.budgets.max_link_hops as usize;
         let mut hops: Vec<LinkHop> = vec![];
+        let mut last_link: Option<Stat> = None;
         let mut current = root;
         let mut stack: Vec<(String, OwnedFd)> = vec![];
         let mut queue: VecDeque<String> = rel.components().iter().cloned().collect();
@@ -119,11 +122,12 @@ impl SafeFs {
             }
             if name == ".." {
                 if stack.pop().is_none() {
-                    // Only a symlink target can contain `..`, so there is a hop to name.
-                    let target = hops
-                        .last()
-                        .map_or_else(|| UntrustedText::new(".."), |h| h.target.clone());
-                    return done(hops, End::OutsideRoots { target });
+                    // Only a symlink target can contain `..`, so there is a hop and a link.
+                    let (Some(hop), Some(link)) = (hops.last(), last_link) else {
+                        return done(hops, End::Failed("`..` above a scan root".into()));
+                    };
+                    let target = hop.target.clone();
+                    return done(hops, End::OutsideRoots { target, link });
                 }
                 continue;
             }
@@ -142,6 +146,7 @@ impl SafeFs {
                         Err(e) => return done(hops, End::from_errno(e)),
                     };
                     let text = UntrustedText::from_bytes(target.clone());
+                    last_link = Some(lstat);
                     hops.push(LinkHop {
                         path: UntrustedText::new(link_path(&roots[current], &stack, &name)),
                         target: text.clone(),
@@ -160,7 +165,13 @@ impl SafeFs {
                             prepend(&mut queue, rest);
                         }
                         LinkTarget::Outside => {
-                            return done(hops, End::OutsideRoots { target: text })
+                            return done(
+                                hops,
+                                End::OutsideRoots {
+                                    target: text,
+                                    link: lstat,
+                                },
+                            )
                         }
                     }
                 }

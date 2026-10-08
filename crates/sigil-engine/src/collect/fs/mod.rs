@@ -23,9 +23,11 @@ use rustix::fs::{Mode, OFlags};
 use sigil_model::RootId;
 
 mod path;
+mod read;
 mod resolve;
 
 pub use path::{link_target, LinkTarget, PathError, RelPath};
+pub use read::{FileRead, ReadOutcome, ReadSpec};
 
 /// Budgets that bound a scan (plan §4.9). Exceeding one is recorded, never fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
