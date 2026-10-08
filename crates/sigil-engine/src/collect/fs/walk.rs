@@ -80,9 +80,12 @@ impl SafeFs {
         let index = self
             .root_index(root)
             .ok_or_else(|| WalkError::Failed(format!("unknown scan root {root}")))?;
+        // A link can lead into another scan root: the directory is opened in the root the path
+        // resolved to, while the walk keeps reporting paths under `dir` in `root`.
         let start = match self.resolve(index, dir).end {
-            End::Dir { fd, .. } => self.dir_fd(index, fd),
+            End::Dir { root: at, fd, .. } => self.dir_fd(at, fd),
             End::Entry {
+                root: at,
                 parent,
                 name,
                 lstat,
@@ -90,7 +93,7 @@ impl SafeFs {
             } if FileType::from_raw_mode(lstat.st_mode) == FileType::Directory => {
                 let parent = parent
                     .as_ref()
-                    .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
+                    .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
                 self.open_dir(parent, &name)
             }
             End::Entry { .. } | End::NotADirectory => return Err(WalkError::NotADirectory),

@@ -520,3 +520,30 @@ fn walking_something_that_is_not_a_directory_is_an_error() {
         WalkError::OutsideRoots
     );
 }
+
+#[test]
+fn a_walk_that_starts_at_a_link_into_another_root_lists_that_root() {
+    let a = TempDir::new().unwrap();
+    let b = TempDir::new().unwrap();
+    let (pa, pb) = (a.path(), b.path().canonicalize().unwrap());
+    fs::create_dir(pb.join("sub")).unwrap();
+    fs::write(pb.join("only-in-b"), b"b").unwrap();
+    fs::write(pb.join("sub/deeper-in-b"), b"b").unwrap();
+    // Same names in A, so opening the wrong root shows in the result.
+    fs::create_dir(pa.join("sub")).unwrap();
+    fs::write(pa.join("only-in-a"), b"a").unwrap();
+    fs::write(pa.join("sub/decoy-in-a"), b"a").unwrap();
+    symlink(&pb, pa.join("to-b")).unwrap();
+    symlink(pb.join("sub"), pa.join("to-b-sub")).unwrap();
+    let ra = RootId::new("a").unwrap();
+    let mut fs = SafeFs::new(FsBudgets::default());
+    fs.add_root(ra.clone(), pa).unwrap();
+    fs.add_root(RootId::new("b").unwrap(), &pb).unwrap();
+
+    // The link leads to root B itself.
+    let w = fs.walk(&ra, &rel("to-b")).unwrap();
+    assert_eq!(listed(&w), ["to-b/only-in-b", "to-b/sub/deeper-in-b"]);
+    // The link leads to a directory directly under root B.
+    let w = fs.walk(&ra, &rel("to-b-sub")).unwrap();
+    assert_eq!(listed(&w), ["to-b-sub/deeper-in-b"]);
+}
