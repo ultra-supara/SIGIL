@@ -396,3 +396,39 @@ fn a_malformed_listen_row_is_a_gap_and_the_others_stand() {
     assert!(f.gaps.iter().any(|g| g.contains("net/tcp")), "{:?}", f.gaps);
     assert_eq!(f.listeners.len(), 1);
 }
+
+#[test]
+fn an_fd_link_that_cannot_be_read_leaves_the_table_incomplete() {
+    let mut fake = FakeProc::new();
+    fake.process(&Proc {
+        pid: 100,
+        sockets: &[8001],
+        ..Proc::default()
+    });
+    // Not a link: `readlinkat` fails, so this table was not read completely.
+    std::fs::write(fake.pid_dir(100).join("fd/9"), b"").unwrap();
+    fake.listen("0.0.0.0", 22, 8002);
+    let f = run(&fake);
+    assert!(
+        matches!(f.listeners[0].owner, ListenerOwner::Unknown { .. }),
+        "{:?}",
+        f.listeners[0].owner
+    );
+}
+
+#[test]
+fn a_process_whose_name_cannot_be_read_is_a_gap() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    let comm = fake.pid_dir(4242).join("comm");
+    std::fs::set_permissions(&comm, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&comm).is_ok() {
+        eprintln!("SKIPPED: an unreadable comm needs an unprivileged user");
+        return;
+    }
+    let f = run(&fake);
+    std::fs::set_permissions(&comm, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(f.gaps.iter().any(|g| g.contains("4242")), "{:?}", f.gaps);
+}

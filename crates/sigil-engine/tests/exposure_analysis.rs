@@ -238,3 +238,27 @@ fn read_gaps_leave_the_binds_open() {
         Some(CoverageState::Partial { .. })
     ));
 }
+
+#[test]
+fn a_runtime_fd_table_listed_in_part_leaves_its_binds_open() {
+    let mut fake = FakeProc::new();
+    fake.process(&serve(&[7001, 7002, 7003]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    let f = observe(
+        fake.path(),
+        &Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+        BOOT_ID,
+        ProcBudgets {
+            max_fds: 1,
+            ..ProcBudgets::default()
+        },
+    );
+    let (_, coverage) = analyze(&f);
+    assert!(
+        matches!(
+            binds(&coverage, &runtime_scope(&f)),
+            Some(CoverageState::Partial { .. })
+        ),
+        "{coverage:?}"
+    );
+}
