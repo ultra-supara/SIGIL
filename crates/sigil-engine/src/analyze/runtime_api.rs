@@ -14,11 +14,9 @@
 //! A refusal is an observation: nothing answers there. A timeout is not: something may answer
 //! later, or a firewall may drop the connection, so the check stays open.
 
-use std::net::{IpAddr, SocketAddr};
-
 use sigil_model::{
-    AbsenceBasis, ApiProbe, CheckId, Coverage, CoverageState, EvidenceRef, ProbePhase, ProbeResult,
-    Ref, UntrustedText,
+    target, AbsenceBasis, ApiProbe, CheckId, Coverage, CoverageState, EvidenceRef, ProbePhase,
+    ProbeResult, Ref, UntrustedText,
 };
 
 /// Whether the version the runtime's API reports is known.
@@ -41,13 +39,7 @@ pub fn analyze(probes: &[ApiProbe]) -> Vec<Coverage> {
 }
 
 fn state(probe: &ApiProbe) -> CoverageState {
-    // A recorded probe has a valid address (`Session::validate`); the text is kept as recorded
-    // otherwise.
-    let target = probe
-        .address
-        .parse::<IpAddr>()
-        .map(|ip| SocketAddr::new(ip, probe.port).to_string())
-        .unwrap_or_else(|_| format!("{}:{}", probe.address, probe.port));
+    let target = target(&probe.address, probe.port);
     let not_the_api = |why: String| CoverageState::Unsupported {
         what: format!("the service at {target} did not answer as the Ollama API ({why})"),
     };

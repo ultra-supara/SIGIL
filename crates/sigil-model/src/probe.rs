@@ -5,7 +5,7 @@
 //! loopback unless the request allows remote targets. An [`ApiProbe`] records the outcome as
 //! seen. A refused connection is an observation (nothing answers there); a timeout is not.
 
-use core::net::IpAddr;
+use core::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +69,15 @@ pub enum ProbePhase {
     Read,
 }
 
+/// `address:port` as a socket address is written (an IPv6 address in brackets), or as recorded
+/// when `address` is not an IP address.
+pub fn target(address: &str, port: u16) -> String {
+    match address.parse::<IpAddr>() {
+        Ok(ip) => SocketAddr::new(ip, port).to_string(),
+        Err(_) => format!("{address}:{port}"),
+    }
+}
+
 /// Whether `address` is loopback: `127.0.0.0/8`, `::1`, or IPv4-mapped `::ffff:127.0.0.0/104`.
 /// The one definition the CLI, the probe, and validation share.
 pub fn is_loopback(address: IpAddr) -> bool {
@@ -83,6 +92,13 @@ pub fn is_loopback(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn targets_are_written_as_socket_addresses() {
+        assert_eq!(target("127.0.0.1", 11434), "127.0.0.1:11434");
+        assert_eq!(target("::1", 11434), "[::1]:11434");
+        assert_eq!(target("not-an-ip", 1), "not-an-ip:1");
+    }
 
     #[test]
     fn loopback_addresses() {

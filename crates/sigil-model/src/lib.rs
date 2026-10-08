@@ -88,7 +88,7 @@ pub use model::{
     digest_hex, BlobLookup, LayerRole, LicenseText, Model, ModelLayer, ModelProvenance,
     LICENSE_MEDIA_TYPE,
 };
-pub use probe::{is_loopback, ActiveFeature, ApiProbe, ProbePhase, ProbeResult};
+pub use probe::{is_loopback, target, ActiveFeature, ApiProbe, ProbePhase, ProbeResult};
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,
     RuleSupport, RuleSupportRef, SearchDir, SearchRule,

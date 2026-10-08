@@ -3,9 +3,10 @@
 
 pub mod markdown;
 
-use crate::coverage::{CoverageState, SkipReason, Unavailability};
+use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
 use crate::evidence::{NotObservable, Ref};
 use crate::finding::{Action, Completeness, FindingKind, OqTreatment, Severity, Verdict};
+use crate::probe::{target, ActiveFeature, ProbePhase, ProbeResult};
 use crate::session::Mode;
 use crate::text::UntrustedText;
 
@@ -97,6 +98,11 @@ pub fn coverage_state(state: &CoverageState) -> Shown {
         CoverageState::Partial { missing } => {
             Shown::own(format!("partial: {}", missing.join("; ")))
         }
+        CoverageState::NotPresent {
+            scope,
+            basis: AbsenceBasis::ConnectionRefused,
+            ..
+        } => Shown::own(format!("not present: connection refused at {scope}")),
         CoverageState::NotPresent { scope, .. } => Shown::own(format!("not present in {scope}")),
         CoverageState::ProfileMismatch { profile, failed } => {
             let failed: Vec<String> = failed.iter().map(ToString::to_string).collect();
@@ -122,6 +128,54 @@ pub fn coverage_state(state: &CoverageState) -> Shown {
             limit,
         } => Shown::own(format!("budget exceeded: {budget} ({used} of {limit})")),
         CoverageState::Error { message } => Shown::own("error: ").and_input(message),
+    }
+}
+
+/// How a probe ended.
+pub fn probe_result(r: &ProbeResult) -> Shown {
+    match r {
+        ProbeResult::Answered {
+            status,
+            version: Some(version),
+        } => Shown::own(format!("answered (HTTP {status}), version ")).and_input(version),
+        ProbeResult::Answered {
+            status,
+            version: None,
+        } => Shown::own(format!("answered (HTTP {status}), no version")),
+        ProbeResult::Refused => Shown::own("refused"),
+        ProbeResult::TimedOut { phase } => {
+            Shown::own(format!("timed out ({})", probe_phase(*phase)))
+        }
+        ProbeResult::TooLarge { limit } => Shown::own(format!("response over {limit} bytes")),
+        ProbeResult::Malformed { why } => Shown::own(format!("unreadable response: {why}")),
+        ProbeResult::Failed { message } => Shown::own("failed: ").and_input(message),
+    }
+}
+
+/// The label of a value, as reports show it.
+pub fn probe_phase(p: ProbePhase) -> &'static str {
+    match p {
+        ProbePhase::Connect => "connect",
+        ProbePhase::Write => "write",
+        ProbePhase::Read => "read",
+    }
+}
+
+/// A requested active feature, e.g. `api-probe 127.0.0.1:11434`.
+pub fn active_feature(f: &ActiveFeature) -> String {
+    match f {
+        ActiveFeature::ApiProbe {
+            address,
+            port,
+            allow_remote,
+        } => {
+            let remote = if *allow_remote {
+                " (remote allowed)"
+            } else {
+                ""
+            };
+            format!("api-probe {}{remote}", target(address, *port))
+        }
     }
 }
 
