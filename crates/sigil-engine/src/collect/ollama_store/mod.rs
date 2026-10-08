@@ -44,6 +44,9 @@ pub struct StoreFacts {
     pub coverage: Vec<Coverage>,
     /// A filter was given and some manifest matched it.
     pub matched_filter: bool,
+    /// When a filter was given and no manifest matched: the `manifests/` directory that was
+    /// listed (its metadata only). It is the evidence that the model is not in the store.
+    pub listed_without_match: Option<InstanceId>,
 }
 
 /// Inventories the model store at scan root `root`.
@@ -67,6 +70,9 @@ pub fn collect(
         Ok(walk) => {
             for file in &walk.files {
                 c.manifest(file, filter);
+            }
+            if filter.is_some() && !c.facts.matched_filter {
+                c.listed_without_match();
             }
             let (state, budget) = inventory(&walk);
             c.cover(Ref::Root(root.clone()), state, budget);
@@ -142,6 +148,22 @@ impl Collector<'_> {
                 budget,
             });
         }
+    }
+
+    /// Records the `manifests/` directory itself: a directory is never read, so this keeps its
+    /// metadata.
+    fn listed_without_match(&mut self) {
+        let Ok(dir) = RelPath::parse("manifests") else {
+            return;
+        };
+        let spec = ReadSpec {
+            keep: 0,
+            limit: Some(0),
+        };
+        let read = self
+            .fs
+            .read_file(self.root, &dir, spec, vec![DiscoverySource::Walk]);
+        self.facts.listed_without_match = self.record(read);
     }
 
     /// Keeps the instance and artifact of a read, once each; returns the instance.

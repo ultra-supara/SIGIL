@@ -6,48 +6,13 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
 
-use sha2::{Digest, Sha256};
 use sigil_engine::collect::fs::{FsBudgets, SafeFs};
 use sigil_engine::collect::ollama_store::{collect, StoreFacts, DEFAULT_MANIFEST_LIMIT};
 use sigil_model::*;
 use tempfile::TempDir;
 
-const MODEL_MEDIA: &str = "application/vnd.ollama.image.model";
-const LIB: &str = "registry.ollama.ai/library/m/latest";
-
-fn root() -> RootId {
-    RootId::new("models").unwrap()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-/// Writes a blob under `blobs/` and returns its digest.
-fn blob(dir: &Path, bytes: &[u8]) -> String {
-    fs::create_dir_all(dir.join("blobs")).unwrap();
-    fs::write(
-        dir.join("blobs").join(format!("sha256-{}", hex(bytes))),
-        bytes,
-    )
-    .unwrap();
-    format!("sha256:{}", hex(bytes))
-}
-
-/// Writes `manifests/<path>` with an optional config and `(mediaType, digest)` layers.
-fn manifest(dir: &Path, path: &str, config: Option<&str>, layers: &[(&str, &str)]) {
-    let layers: Vec<serde_json::Value> = layers
-        .iter()
-        .map(|(m, d)| serde_json::json!({"mediaType": m, "digest": d, "size": 1}))
-        .collect();
-    let mut doc = serde_json::json!({"schemaVersion": 2, "layers": layers});
-    if let Some(c) = config {
-        doc["config"] = serde_json::json!({"mediaType": "application/vnd.docker.container.image.v1+json", "digest": c});
-    }
-    let file = dir.join("manifests").join(path);
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, serde_json::to_vec(&doc).unwrap()).unwrap();
-}
+mod common;
+use common::*;
 
 fn run_with(dir: &Path, filter: Option<&str>, manifest_limit: u64) -> StoreFacts {
     let mut fs = SafeFs::new(FsBudgets::default());
@@ -73,20 +38,6 @@ fn complete() -> Vec<(Ref, CoverageState)> {
 
 fn placed<'a>(f: &'a StoreFacts, id: &InstanceId) -> &'a FileInstance {
     f.instances.iter().find(|i| i.id == *id).unwrap()
-}
-
-fn inst(rel: &str) -> InstanceId {
-    InstanceId::new(format!("inst:models/{rel}")).unwrap()
-}
-
-fn privileged(dir: &Path) -> bool {
-    let probe = dir.join(".probe");
-    fs::write(&probe, b"x").unwrap();
-    fs::set_permissions(&probe, fs::Permissions::from_mode(0o000)).unwrap();
-    let readable = fs::read(&probe).is_ok();
-    fs::set_permissions(&probe, fs::Permissions::from_mode(0o600)).unwrap();
-    fs::remove_file(&probe).unwrap();
-    readable
 }
 
 #[test]
@@ -351,9 +302,21 @@ fn the_filter_applies_before_anything_is_read() {
     // I-05: a shallow path cannot match a filter, so it is not reported with one.
     assert!(f.shallow.is_empty());
 
+    assert_eq!(f.listed_without_match, None);
+
+    // No match: only the listed `manifests/` directory is recorded, by its metadata.
     let f = run(d, Some("absent:latest"));
     assert!(!f.matched_filter);
-    assert!(f.models.is_empty() && f.instances.is_empty());
+    assert!(f.models.is_empty());
+    let listed = inst("manifests");
+    assert_eq!(f.listed_without_match.as_ref(), Some(&listed));
+    assert_eq!(f.instances.len(), 1);
+    assert_eq!(
+        placed(&f, &listed).content,
+        InstanceContent::NotRead {
+            why: NotReadReason::NotRegularFile
+        }
+    );
 
     let f = run(d, None);
     assert!(!f.matched_filter);
