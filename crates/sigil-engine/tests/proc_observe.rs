@@ -348,13 +348,15 @@ fn a_process_that_cannot_be_identified_is_a_gap_not_absent() {
 
 #[test]
 fn a_partially_listed_fd_table_never_makes_a_listener_unheld() {
+    // Which fd entry is listed first depends on the file system, so the listener's socket is one
+    // no table holds: it is unmatched whatever part of the table was listed.
     let mut fake = FakeProc::new();
     fake.process(&Proc {
         pid: 100,
         sockets: &[8001, 8002, 8003],
         ..Proc::default()
     });
-    fake.listen("0.0.0.0", 22, 8003);
+    fake.listen("0.0.0.0", 22, 8009);
     let f = run_with(
         &fake,
         ProcBudgets {
