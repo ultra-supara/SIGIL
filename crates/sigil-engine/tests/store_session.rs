@@ -52,9 +52,13 @@ fn request(dir: &Path, filter: Option<&str>) -> StoreRequest {
 
 /// A session with the built-in policy; it must validate.
 fn session(dir: &Path, filter: Option<&str>) -> Session {
+    session_for(&request(dir, filter))
+}
+
+fn session_for(req: &StoreRequest) -> Session {
     let policy = Policy::builtin_default().unwrap();
     let s = store_session(
-        &request(dir, filter),
+        req,
         &policy,
         tool(),
         observation(),
@@ -345,6 +349,25 @@ fn a_filter_that_matches_nothing_is_not_found_and_incomplete() {
     let s = session(dir.path(), Some("gemma4"));
     assert_eq!(rules(&s), ["model.not_found"]);
     assert_eq!(outcome(&s), (Verdict::Warn, missing(&[INTEGRITY, LICENSE])));
+}
+
+#[test]
+fn a_filter_is_not_found_only_after_a_complete_listing() {
+    // The model exists, but the listing never got to it: that is a gap, not an absence.
+    let dir = TempDir::new().unwrap();
+    good_store(dir.path());
+    let s = session_for(&StoreRequest {
+        budgets: FsBudgets {
+            max_entries: 0,
+            ..FsBudgets::default()
+        },
+        ..request(dir.path(), Some("m:latest"))
+    });
+    assert!(s.findings.is_empty(), "{:?}", rules(&s));
+    assert_eq!(
+        outcome(&s),
+        (Verdict::Pass, missing(&[INTEGRITY, INVENTORY, LICENSE]))
+    );
 }
 
 // --- determinism -----------------------------------------------------------------------------

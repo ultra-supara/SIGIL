@@ -44,8 +44,9 @@ pub struct StoreFacts {
     pub coverage: Vec<Coverage>,
     /// A filter was given and some manifest matched it.
     pub matched_filter: bool,
-    /// When a filter was given and no manifest matched: the `manifests/` directory that was
-    /// listed (its metadata only). It is the evidence that the model is not in the store.
+    /// When a filter was given, the listing of `manifests/` was complete, and no manifest
+    /// matched: that directory (its metadata only). It is the evidence that the model is not in
+    /// the store. An incomplete listing leaves only the inventory gap.
     pub listed_without_match: Option<InstanceId>,
 }
 
@@ -71,10 +72,11 @@ pub fn collect(
             for file in &walk.files {
                 c.manifest(file, filter);
             }
-            if filter.is_some() && !c.facts.matched_filter {
+            let (state, budget) = inventory(&walk);
+            // Absence is concluded only from a listing that saw every candidate.
+            if filter.is_some() && !c.facts.matched_filter && state == CoverageState::Complete {
                 c.listed_without_match();
             }
-            let (state, budget) = inventory(&walk);
             c.cover(Ref::Root(root.clone()), state, budget);
         }
         Err(e) => c.cover(Ref::Root(root.clone()), unavailable(e), None),
