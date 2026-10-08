@@ -143,7 +143,7 @@ fn registered() -> Vec<(&'static str, Probe)> {
         OpenQuestionDecision => "OpenQuestionDecision", OqTreatment => "OqTreatment", Outcome => "Outcome",
         Verdict => "Verdict", Completeness => "Completeness",
         Model => "Model", ModelProvenance => "ModelProvenance", ModelLayer => "ModelLayer",
-        LayerRole => "LayerRole", LicenseText => "LicenseText",
+        LayerRole => "LayerRole", LicenseText => "LicenseText", BlobLookup => "BlobLookup",
     ]
 }
 
@@ -567,6 +567,13 @@ fn gallery() -> Vec<(&'static str, Value)> {
         ),
         sample("Ref", Ref::Process(process.clone())),
         sample("Ref", Ref::Model(id(MODEL))),
+        sample("BlobLookup", BlobLookup::Absent),
+        sample(
+            "BlobLookup",
+            BlobLookup::Unresolved {
+                why: t("more than 40 symlink hops"),
+            },
+        ),
         sample(
             "Model",
             Model {
@@ -584,13 +591,15 @@ fn gallery() -> Vec<(&'static str, Value)> {
                         role: LayerRole::Config,
                         media_type: None,
                         digest: t(&format!("sha256:{}", hex(0x11))),
-                        blob: Some(id(&format!("inst:models/blobs/sha256-{}", hex(0x11)))),
+                        blob: BlobLookup::Found {
+                            instance: id(&format!("inst:models/blobs/sha256-{}", hex(0x11))),
+                        },
                     },
                     ModelLayer {
                         role: LayerRole::Layer,
                         media_type: Some(t(LICENSE_MEDIA_TYPE)),
                         digest: t("sha256:FOO"),
-                        blob: None,
+                        blob: BlobLookup::NotLookedUp,
                     },
                 ],
                 license: Some(LicenseText {

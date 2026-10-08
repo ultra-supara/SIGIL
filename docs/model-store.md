@@ -44,22 +44,27 @@ manifests are never opened.
 | Rule | Default | When | Coverage |
 |---|---|---|---|
 | `model.manifest_digest_malformed` | FAIL | a digest is malformed (uppercase hex included) | integrity `Partial` |
-| `model.blob_missing` | WARN | a well-formed digest has no blob | integrity `Partial` |
+| `model.blob_missing` | WARN | a well-formed digest's blob is confirmed absent | integrity `Partial` |
+| — | — | the blob's path could not be resolved (permission, too many links, I/O): unknown, not absent | integrity `Partial` |
 | `model.blob_digest_mismatch` | FAIL | the blob's contents hash to another digest | integrity checked |
 | — | — | the blob exists but was not read | integrity `Partial` |
 | `model.license_missing` | WARN | no license layer | license checked |
 | — | — | the license layer's digest is malformed or its blob is missing | license `Partial` |
-| — | — | the license layer's blob exists but was not read | license `Error` |
+| — | — | the license layer's blob exists but was not read, or could not be resolved | license `Error` |
 | `model.manifest_unparseable` | WARN | a manifest that is not JSON, or a descriptor without a string digest | inventory `Error` on that manifest |
 | `model.provenance_unknown` | WARN | a path too shallow to name a model; never reported with a filter | — |
-| `model.not_found` | WARN | a filter matched no manifest | — |
+| `model.not_found` | WARN | a filter matched no manifest, and the listing of `manifests/` was complete | — |
 
 - **`model_store.inventory`** is recorded on the root:
-  - `Complete` when `manifests/` was walked;
+  - `Complete` when `manifests/` was walked and every listed manifest was reached;
   - `Unavailable(NotFound)` when it does not exist;
-  - `Partial` or `BudgetExceeded` when the walk could not see everything.
+  - `Partial` or `BudgetExceeded` when the walk could not see everything, or a listed manifest
+    could not be reached (it vanished, or its path could not be resolved).
 
-  A manifest that was not read adds its own entry.
+  A manifest that was reached but not read adds its own entry.
+- **How a blob lookup ended is recorded** (`BlobLookup`): `Found`, `Absent` (nothing at the
+  path), `Unresolved` (the path could not be resolved), or `NotLookedUp` (malformed digest). Only
+  `Absent` supports `model.blob_missing`.
 - **`model_store.integrity`** and **`model_store.license`** are recorded per model. With no models,
   they have no entry, so they stay open.
 - A missing models directory therefore gives `PASS` + `INCOMPLETE`, never a clean `PASS` (I-01).

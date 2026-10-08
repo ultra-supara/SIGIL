@@ -7,18 +7,19 @@
 //! | Rule | When | Coverage |
 //! |---|---|---|
 //! | `model.manifest_digest_malformed` | a digest is not `sha256:` + 64 lowercase hex digits | integrity `Partial` |
-//! | `model.blob_missing` | a well-formed digest has no blob | integrity `Partial` |
+//! | `model.blob_missing` | a well-formed digest's blob is confirmed absent | integrity `Partial` |
+//! | — | the blob's path could not be resolved (permission, links, I/O) | integrity `Partial` |
 //! | `model.blob_digest_mismatch` | the blob's contents hash to another digest | integrity checked |
 //! | — | the blob exists but was not read | integrity `Partial` |
 //! | `model.license_missing` | no license layer | license checked |
 //! | — | the license layer's digest is malformed or its blob is missing | license `Partial` |
-//! | — | the license layer's blob exists but was not read | license `Error` |
+//! | — | the license layer's blob exists but was not read, or could not be resolved | license `Error` |
 //! | `model.provenance_unknown` | a manifest path too shallow to name a model | — |
 //! | `model.manifest_unparseable` | a manifest that is not valid JSON or lacks a digest | (inventory `Error`, by the collector) |
 //! | `model.not_found` | a filter matched no manifest | — |
 
 use sigil_model::{
-    digest_hex, Action, CheckId, CondEvidence, CondId, CondState, Condition, Coverage,
+    digest_hex, Action, BlobLookup, CheckId, CondEvidence, CondId, CondState, Condition, Coverage,
     CoverageState, EvidenceRef, FileInstance, Finding, FindingId, InstanceContent, InstanceId,
     Model, PolicyDecision, PolicyRuleRef, Ref, RootId, RuleId, Severity, UntrustedText,
     LICENSE_MEDIA_TYPE,
@@ -91,16 +92,31 @@ impl Out {
                 );
                 continue;
             };
-            let Some(blob) = &layer.blob else {
-                open.push(format!("layer {i}: no blob"));
-                self.about(
-                    model,
-                    "model.blob_missing",
-                    &at,
-                    "blob_absent",
-                    vec![manifest.clone()],
-                );
-                continue;
+            let blob = match &layer.blob {
+                BlobLookup::Found { instance } => instance,
+                // Confirmed absent: a finding.
+                BlobLookup::Absent => {
+                    open.push(format!("layer {i}: no blob"));
+                    self.about(
+                        model,
+                        "model.blob_missing",
+                        &at,
+                        "blob_absent",
+                        vec![manifest.clone()],
+                    );
+                    continue;
+                }
+                // Not known to be absent: a gap, never `blob_missing`.
+                BlobLookup::Unresolved { why } => {
+                    let why = String::from_utf8_lossy(why.as_bytes());
+                    open.push(format!("layer {i}: blob not resolved ({why})"));
+                    continue;
+                }
+                // Validation allows this only for a malformed digest, handled above.
+                BlobLookup::NotLookedUp => {
+                    open.push(format!("layer {i}: blob not looked up"));
+                    continue;
+                }
             };
             match placed(blob).map(|b: &FileInstance| &b.content) {
                 Some(InstanceContent::Read { artifact }) => {
@@ -158,15 +174,24 @@ impl Out {
                     CoverageState::Complete
                 }
             }
-            Some(layer) => match layer.blob.as_ref().and_then(placed) {
-                None => CoverageState::Partial {
-                    missing: vec!["license blob".to_string()],
-                },
-                Some(blob) => match &blob.content {
-                    InstanceContent::Read { .. } => CoverageState::Complete,
-                    InstanceContent::NotRead { why } => CoverageState::Error {
+            Some(layer) => match &layer.blob {
+                BlobLookup::Found { instance } => match placed(instance).map(|b| &b.content) {
+                    Some(InstanceContent::Read { .. }) => CoverageState::Complete,
+                    Some(InstanceContent::NotRead { why }) => CoverageState::Error {
                         message: UntrustedText::new(format!("license blob not read ({why:?})")),
                     },
+                    None => CoverageState::Error {
+                        message: UntrustedText::new("license blob not recorded"),
+                    },
+                },
+                BlobLookup::Absent | BlobLookup::NotLookedUp => CoverageState::Partial {
+                    missing: vec!["license blob".to_string()],
+                },
+                BlobLookup::Unresolved { why } => CoverageState::Error {
+                    message: UntrustedText::new(format!(
+                        "license blob not resolved ({})",
+                        String::from_utf8_lossy(why.as_bytes())
+                    )),
                 },
             },
         };

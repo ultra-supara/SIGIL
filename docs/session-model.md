@@ -91,8 +91,9 @@ The rule then yields an open question at most.
     write capability. A duplicate is rejected, never resolved by picking one entry;
   - slice IDs agree with their artifact.
 - **A model's blobs are its digests' blobs:**
-  - a layer names a blob only for a well-formed digest (`sha256:` + 64 lowercase hex digits);
-  - the blob is the instance at `blobs/sha256-<hex>` in the manifest's root;
+  - a layer's lookup is `NotLookedUp` exactly when its digest is malformed (a well-formed digest
+    is `sha256:` + 64 lowercase hex digits);
+  - a found blob is the instance at `blobs/sha256-<hex>` in the manifest's root;
   - a license is the text read from the license layer's blob.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
@@ -364,7 +365,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 |---|---|---|
 | Session root | `Session`, `SchemaVersion`, `ToolInfo`, `KnowledgeRef`, `RunRequest`, `ObservationMeta` | One run. Knowledge hashes, the request (deterministic), and observation metadata (not analysis) |
 | Content and placement | `Artifact`, `Slice`, `FileInstance`, `InstanceContent`, `StatInfo`, `Stability` | What was read and where it was found, with change detection |
-| Model store | `Model`, `ModelProvenance`, `ModelLayer`, `LayerRole`, `LicenseText` | One manifest, what its path says, its layers as written with the blobs found for them, and the license text read |
+| Model store | `Model`, `ModelProvenance`, `ModelLayer`, `LayerRole`, `BlobLookup`, `LicenseText` | One manifest, what its path says, its layers as written with how each blob lookup ended, and the license text read |
 | Process observation | `ProcessObs`, `ProcessRef`, `MappingObs` | What was seen in a process at an instant |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |

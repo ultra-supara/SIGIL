@@ -472,7 +472,7 @@
       }
     },
     "ModelLayer": {
-      "description": "One manifest entry as written, with the blob instance found for a well-formed digest.",
+      "description": "One manifest entry as written, with how the lookup of its blob ended.",
       "type": "object",
       "additionalProperties": false,
       "required": ["role", "media_type", "digest", "blob"],
@@ -480,8 +480,40 @@
         "role": {"$ref": "#/$defs/LayerRole"},
         "media_type": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
         "digest": {"$ref": "#/$defs/UntrustedText"},
-        "blob": {"anyOf": [{"$ref": "#/$defs/InstanceId"}, {"type": "null"}]}
+        "blob": {"$ref": "#/$defs/BlobLookup"}
       }
+    },
+    "BlobLookup": {
+      "description": "How the lookup of a layer's blob ended: NotLookedUp (malformed digest), Found, Absent (confirmed), or Unresolved (unknown).",
+      "oneOf": [
+        {"type": "string", "enum": ["NotLookedUp", "Absent"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Found"],
+          "properties": {
+            "Found": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["instance"],
+              "properties": {"instance": {"$ref": "#/$defs/InstanceId"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Unresolved"],
+          "properties": {
+            "Unresolved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["why"],
+              "properties": {"why": {"$ref": "#/$defs/UntrustedText"}}
+            }
+          }
+        }
+      ]
     },
     "LayerRole": {"type": "string", "enum": ["Config", "Layer"]},
     "LicenseText": {

@@ -18,9 +18,9 @@ pub mod manifest;
 use std::collections::BTreeMap;
 
 use sigil_model::{
-    Artifact, BudgetUse, CheckId, Coverage, CoverageState, DiscoverySource, FileInstance,
-    InstanceContent, InstanceId, LicenseText, Model, ModelId, ModelLayer, NotReadReason, Ref,
-    RootId, Unavailability, UntrustedText,
+    Artifact, BlobLookup, BudgetUse, CheckId, Coverage, CoverageState, DiscoverySource,
+    FileInstance, InstanceContent, InstanceId, LicenseText, Model, ModelId, ModelLayer,
+    NotReadReason, Ref, RootId, Unavailability, UntrustedText,
 };
 
 use crate::collect::fs::{FileRead, ReadOutcome, ReadSpec, RelPath, SafeFs, Skip, Walk, WalkError};
@@ -57,22 +57,36 @@ pub fn collect(
     filter: Option<&str>,
     manifest_limit: u64,
 ) -> StoreFacts {
+    let walk = RelPath::parse("manifests")
+        .map_err(|e| WalkError::Failed(e.to_string()))
+        .and_then(|dir| fs.walk(root, &dir));
+    collect_listed(fs, root, walk, filter, manifest_limit)
+}
+
+/// Inventories the manifests a listing of `manifests/` found. Separate from the listing so that a
+/// test can change the store between the two.
+fn collect_listed(
+    fs: &SafeFs,
+    root: &RootId,
+    walk: Result<Walk, WalkError>,
+    filter: Option<&str>,
+    manifest_limit: u64,
+) -> StoreFacts {
     let mut c = Collector {
         fs,
         root,
         manifest_limit,
         facts: StoreFacts::default(),
         blobs: BTreeMap::new(),
+        unreached: vec![],
     };
-    let walk = RelPath::parse("manifests")
-        .map_err(|e| WalkError::Failed(e.to_string()))
-        .and_then(|dir| fs.walk(root, &dir));
     match walk {
         Ok(walk) => {
             for file in &walk.files {
                 c.manifest(file, filter);
             }
-            let (state, budget) = inventory(&walk);
+            let unreached = std::mem::take(&mut c.unreached);
+            let (state, budget) = inventory(&walk, unreached);
             // Absence is concluded only from a listing that saw every candidate.
             if filter.is_some() && !c.facts.matched_filter && state == CoverageState::Complete {
                 c.listed_without_match();
@@ -84,8 +98,9 @@ pub fn collect(
     c.facts
 }
 
-/// The inventory of `manifests/` as a whole.
-fn inventory(walk: &Walk) -> (CoverageState, Option<BudgetUse>) {
+/// The inventory of `manifests/` as a whole. `unreached` are listed manifests that no read
+/// reached (they vanished, or their path could not be resolved).
+fn inventory(walk: &Walk, unreached: Vec<String>) -> (CoverageState, Option<BudgetUse>) {
     if let Some(budget) = walk.exceeded.first() {
         let state = CoverageState::BudgetExceeded {
             budget: budget.budget.clone(),
@@ -106,6 +121,7 @@ fn inventory(walk: &Walk) -> (CoverageState, Option<BudgetUse>) {
             )
         })
         .map(|(path, _)| path.display())
+        .chain(unreached)
         .collect();
     if missing.is_empty() {
         (CoverageState::Complete, None)
@@ -136,8 +152,10 @@ struct Collector<'a> {
     root: &'a RootId,
     manifest_limit: u64,
     facts: StoreFacts,
-    /// Blobs read so far, by path: the instance (if any) and the first bytes, for a license.
-    blobs: BTreeMap<String, (Option<InstanceId>, Vec<u8>)>,
+    /// Blobs looked up so far, by path: how the lookup ended, and the first bytes, for a license.
+    blobs: BTreeMap<String, (BlobLookup, Vec<u8>)>,
+    /// Listed manifests that no read reached, with why.
+    unreached: Vec<String>,
 }
 
 impl Collector<'_> {
@@ -211,13 +229,16 @@ impl Collector<'_> {
         let outcome = read.outcome.clone();
         let prefix = read.prefix.clone();
         let Some(id) = self.record(read) else {
-            if let ReadOutcome::Failed(message) = outcome {
-                let path = rel.display();
-                let state = CoverageState::Error {
-                    message: UntrustedText::new(format!("{path}: {message}")),
-                };
-                self.cover(Ref::Root(self.root.clone()), state, None);
-            }
+            // Listed, but no read reached it: the inventory cannot be complete.
+            let why = match outcome {
+                ReadOutcome::NotFound => "vanished after it was listed".to_string(),
+                ReadOutcome::NotRead(why) => format!("not reached ({why:?})"),
+                ReadOutcome::Failed(message) => message,
+                ReadOutcome::Complete | ReadOutcome::LimitExceeded { .. } => {
+                    "no instance recorded".to_string()
+                }
+            };
+            self.unreached.push(format!("{}: {why}", rel.display()));
             return;
         };
         let Some(path) = path else {
@@ -278,7 +299,10 @@ impl Collector<'_> {
             .map(|e| ModelLayer {
                 role: e.role,
                 media_type: e.media_type.map(UntrustedText::new),
-                blob: layout::blob_path(&e.digest).and_then(|rel| self.blob(&rel, &id)),
+                blob: match layout::blob_path(&e.digest) {
+                    Some(rel) => self.blob(&rel, &id),
+                    None => BlobLookup::NotLookedUp,
+                },
                 digest: UntrustedText::new(e.digest),
             })
             .collect();
@@ -294,20 +318,23 @@ impl Collector<'_> {
         self.facts.models.push(model);
     }
 
-    /// Reads the blob at `rel` once; later manifests naming it are added to how it was found.
-    fn blob(&mut self, rel: &RelPath, manifest: &InstanceId) -> Option<InstanceId> {
+    /// Looks up and reads the blob at `rel` once; later manifests naming it are added to how it
+    /// was found. A lookup that ends without an instance is `Absent` only when nothing is there.
+    fn blob(&mut self, rel: &RelPath, manifest: &InstanceId) -> BlobLookup {
         let source = DiscoverySource::Manifest {
             manifest: manifest.clone(),
         };
         let key = rel.display();
         if let Some((known, _)) = self.blobs.get(&key) {
-            let known = known.clone()?;
-            if let Some(i) = self.facts.instances.iter_mut().find(|i| i.id == known) {
-                if !i.discovered_by.contains(&source) {
-                    i.discovered_by.push(source);
+            let known = known.clone();
+            if let Some(id) = known.instance() {
+                if let Some(i) = self.facts.instances.iter_mut().find(|i| i.id == *id) {
+                    if !i.discovered_by.contains(&source) {
+                        i.discovered_by.push(source);
+                    }
                 }
             }
-            return Some(known);
+            return known;
         }
         let spec = ReadSpec {
             keep: license::DETECT_BYTES,
@@ -315,15 +342,32 @@ impl Collector<'_> {
         };
         let read = self.fs.read_file(self.root, rel, spec, vec![source]);
         let prefix = read.prefix.clone();
-        let id = self.record(read);
-        self.blobs.insert(key, (id.clone(), prefix));
-        id
+        let outcome = read.outcome.clone();
+        let lookup = match self.record(read) {
+            Some(instance) => BlobLookup::Found { instance },
+            None => match outcome {
+                ReadOutcome::NotFound => BlobLookup::Absent,
+                ReadOutcome::NotRead(why) => BlobLookup::Unresolved {
+                    why: UntrustedText::new(format!("{why:?}")),
+                },
+                ReadOutcome::Failed(message) => BlobLookup::Unresolved {
+                    why: UntrustedText::new(message),
+                },
+                ReadOutcome::Complete | ReadOutcome::LimitExceeded { .. } => {
+                    BlobLookup::Unresolved {
+                        why: UntrustedText::new("no instance recorded"),
+                    }
+                }
+            },
+        };
+        self.blobs.insert(key, (lookup.clone(), prefix));
+        lookup
     }
 
     /// The license text, when the license layer's blob was read.
     fn license(&self, model: &Model) -> Option<LicenseText> {
         let layer = model.license_layer()?;
-        let blob = layer.blob.as_ref()?;
+        let blob = layer.blob.instance()?;
         let placed = self.facts.instances.iter().find(|i| i.id == *blob)?;
         let InstanceContent::Read { artifact } = &placed.content else {
             return None;
@@ -336,5 +380,44 @@ impl Collector<'_> {
             spdx: detected.spdx,
             excerpt: UntrustedText::new(detected.excerpt),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collect::fs::FsBudgets;
+
+    #[test]
+    fn a_manifest_that_vanishes_after_the_listing_leaves_the_inventory_partial() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir
+            .path()
+            .join("manifests/registry.ollama.ai/library/m/latest");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"{}").unwrap();
+        let root = RootId::new("models").unwrap();
+        let mut fs = SafeFs::new(FsBudgets::default());
+        fs.add_root(root.clone(), dir.path()).unwrap();
+        let walk = fs.walk(&root, &RelPath::parse("manifests").unwrap());
+        // Between the listing and the read.
+        std::fs::remove_file(&file).unwrap();
+
+        let facts = collect_listed(&fs, &root, walk, None, DEFAULT_MANIFEST_LIMIT);
+        assert!(facts.models.is_empty() && facts.instances.is_empty());
+        assert_eq!(
+            facts.coverage,
+            [Coverage {
+                check: CheckId::new(INVENTORY).unwrap(),
+                scope: Ref::Root(root),
+                state: CoverageState::Partial {
+                    missing: vec![
+                        "manifests/registry.ollama.ai/library/m/latest: vanished after it was listed"
+                            .to_string()
+                    ]
+                },
+                budget: None,
+            }]
+        );
     }
 }

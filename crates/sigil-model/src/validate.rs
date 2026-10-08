@@ -41,7 +41,7 @@ use crate::id::{
 };
 use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
-use crate::model::digest_hex;
+use crate::model::{digest_hex, BlobLookup};
 use crate::relation::{
     BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
 };
@@ -64,7 +64,8 @@ pub enum ValidationError {
     SliceMismatch { slice: SliceId },
     /// `resolved` must be present exactly when `link_chain` is not empty.
     LinkChainInconsistent { instance: InstanceId },
-    /// A model layer names a blob for a malformed digest, or a blob instance that is not at
+    /// A model layer's lookup disagrees with its digest: a malformed digest must be
+    /// `NotLookedUp`, a well-formed one must not be, and a found blob must be the instance at
     /// `blobs/sha256-<hex>` in the manifest's root.
     LayerBlobInconsistent { model: ModelId, digest: String },
     /// A model's license is not what was read from its license layer's blob.
@@ -173,7 +174,7 @@ impl fmt::Display for ValidationError {
                 write!(f, "instance {instance}: `resolved` must be set exactly when `link_chain` is not empty")
             }
             LayerBlobInconsistent { model, digest } => {
-                write!(f, "models[{model}]: the blob of {digest:?} must be blobs/sha256-<hex> in the manifest's root, for a well-formed digest only")
+                write!(f, "models[{model}]: the lookup of {digest:?} must be NotLookedUp exactly when the digest is malformed, and a found blob must be blobs/sha256-<hex> in the manifest's root")
             }
             LicenseInconsistent { model } => {
                 write!(f, "models[{model}]: the license must be the text read from the license layer's blob")
@@ -799,11 +800,19 @@ impl<'a> Validator<'a> {
             self.instance(&model.manifest, &at);
             let manifest_root = placed(&model.manifest).map(|i| &i.root);
             for layer in &model.layers {
-                let Some(blob) = &layer.blob else {
+                let hex = layer.digest.as_str().and_then(digest_hex);
+                let BlobLookup::Found { instance: blob } = &layer.blob else {
+                    // Only a malformed digest is not looked up.
+                    let not_looked_up = matches!(layer.blob, BlobLookup::NotLookedUp);
+                    if not_looked_up != hex.is_none() {
+                        self.errors.push(ValidationError::LayerBlobInconsistent {
+                            model: model.id.clone(),
+                            digest: String::from_utf8_lossy(layer.digest.as_bytes()).into_owned(),
+                        });
+                    }
                     continue;
                 };
                 self.instance(blob, &at);
-                let hex = layer.digest.as_str().and_then(digest_hex);
                 let consistent = match (hex, placed(blob)) {
                     (None, _) => false,
                     // Dangling: reported above.
@@ -834,7 +843,7 @@ impl<'a> Validator<'a> {
                 self.artifact(&license.artifact, &at);
                 let read = model
                     .license_layer()
-                    .and_then(|l| l.blob.as_ref())
+                    .and_then(|l| l.blob.instance())
                     .and_then(placed)
                     .and_then(|i| match &i.content {
                         InstanceContent::Read { artifact } => Some(artifact),

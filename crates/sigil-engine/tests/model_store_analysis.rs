@@ -312,3 +312,33 @@ fn every_condition_is_observed_from_files() {
         artifact: ArtifactId::new(format!("sha256:{}", hex(b"changed"))).unwrap()
     }));
 }
+
+#[test]
+fn a_blob_that_cannot_be_resolved_is_a_gap_not_missing() {
+    let dir = TempDir::new().unwrap();
+    let d = dir.path();
+    fs::create_dir_all(d.join("blobs")).unwrap();
+    let looped = format!("sha256-{}", hex(b"loop"));
+    symlink(&looped, d.join("blobs").join(&looped)).unwrap();
+    let license = blob(d, b"MIT");
+    manifest(
+        d,
+        LIB,
+        None,
+        &[
+            (MODEL_MEDIA, &format!("sha256:{}", hex(b"loop"))),
+            (LICENSE_MEDIA_TYPE, &license),
+        ],
+    );
+    let (facts, findings, coverage) = run(d, None);
+    assert!(findings.is_empty(), "{:?}", rules(&findings));
+    let Some(CoverageState::Partial { missing }) = state(&coverage, INTEGRITY, &model_ref(&facts))
+    else {
+        panic!("integrity must stay open");
+    };
+    assert_eq!(missing.len(), 1);
+    assert!(
+        missing[0].starts_with("layer 0: blob not resolved"),
+        "{missing:?}"
+    );
+}

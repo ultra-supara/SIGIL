@@ -7,7 +7,9 @@
 //! - the license text read from the license layer.
 //!
 //! Whether a blob is missing, malformed, unread, or does not match its digest is derived from those
-//! facts and the blob instance's content. It is never stored, so it cannot contradict them.
+//! facts and the blob instance's content. It is never stored, so it cannot contradict them. How
+//! the lookup of a blob ended is a fact of its own: a blob confirmed absent is not a blob that
+//! could not be looked up.
 
 use serde::{Deserialize, Serialize};
 
@@ -52,9 +54,33 @@ pub struct ModelLayer {
     pub media_type: Option<UntrustedText>,
     /// As written in the manifest. Well formed only as [`digest_hex`] accepts it.
     pub digest: UntrustedText,
-    /// The instance at `blobs/sha256-<hex>` in the manifest's root. Recorded only for a
-    /// well-formed digest; `None` when no file is there.
-    pub blob: Option<InstanceId>,
+    /// What looking up `blobs/sha256-<hex>` in the manifest's root found.
+    pub blob: BlobLookup,
+}
+
+/// How the lookup of a layer's blob ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum BlobLookup {
+    /// The digest is malformed, so no blob was looked up.
+    NotLookedUp,
+    /// The blob's instance (read or not, as its content says).
+    Found { instance: InstanceId },
+    /// The lookup completed and nothing is at the path.
+    Absent,
+    /// The path could not be resolved (permission, too many links, a component that is not a
+    /// directory, an I/O error): whether a blob is there is unknown.
+    Unresolved { why: UntrustedText },
+}
+
+impl BlobLookup {
+    /// The blob's instance, when one was found.
+    pub fn instance(&self) -> Option<&InstanceId> {
+        match self {
+            BlobLookup::Found { instance } => Some(instance),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -79,7 +79,8 @@ pub use load::{
     ValueKey, ValueOrigin,
 };
 pub use model::{
-    digest_hex, LayerRole, LicenseText, Model, ModelLayer, ModelProvenance, LICENSE_MEDIA_TYPE,
+    digest_hex, BlobLookup, LayerRole, LicenseText, Model, ModelLayer, ModelProvenance,
+    LICENSE_MEDIA_TYPE,
 };
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,

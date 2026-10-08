@@ -1292,17 +1292,18 @@ fn add_blob(s: &mut Session, byte: u8, ino: u64) -> (String, InstanceId, Artifac
     (format!("sha256:{h}"), inst, artifact)
 }
 
-fn layer(
-    role: LayerRole,
-    media: Option<&str>,
-    digest: &str,
-    blob: Option<&InstanceId>,
-) -> ModelLayer {
+fn layer(role: LayerRole, media: Option<&str>, digest: &str, blob: BlobLookup) -> ModelLayer {
     ModelLayer {
         role,
         media_type: media.map(t),
         digest: t(digest),
-        blob: blob.cloned(),
+        blob,
+    }
+}
+
+fn found(instance: &InstanceId) -> BlobLookup {
+    BlobLookup::Found {
+        instance: instance.clone(),
     }
 }
 
@@ -1342,18 +1343,18 @@ fn with_model() -> Session {
             tag: t("latest"),
         },
         layers: vec![
-            layer(LayerRole::Config, None, &config, Some(&config_blob)),
+            layer(LayerRole::Config, None, &config, found(&config_blob)),
             layer(
                 LayerRole::Layer,
                 Some("application/vnd.ollama.image.model"),
                 &weights,
-                Some(&weights_blob),
+                found(&weights_blob),
             ),
             layer(
                 LayerRole::Layer,
                 Some(LICENSE_MEDIA),
                 &license,
-                Some(&license_blob),
+                found(&license_blob),
             ),
         ],
         license: Some(LicenseText {
@@ -1370,21 +1371,53 @@ fn a_model_records_facts_that_resolve() {
     let s = round_trip(&with_model());
     assert_valid(&s);
 
-    // Missing and malformed blobs are facts too: no blob instance, nothing concluded.
+    // How each lookup ended is a fact: absent, unresolved, or not looked up (malformed).
     let mut s = with_model();
+    let well_formed = format!("sha256:{}", hex(0x14));
     s.models[0].layers.push(layer(
         LayerRole::Layer,
         None,
-        &format!("sha256:{}", hex(0x14)),
+        &well_formed,
+        BlobLookup::Absent,
+    ));
+    s.models[0].layers.push(layer(
+        LayerRole::Layer,
         None,
+        &well_formed,
+        BlobLookup::Unresolved {
+            why: t("more than 40 symlink hops"),
+        },
     ));
     s.models[0].layers.push(layer(
         LayerRole::Layer,
         None,
         "sha256:foo/../../secret",
-        None,
+        BlobLookup::NotLookedUp,
     ));
     assert_valid(&s);
+}
+
+#[test]
+fn only_a_malformed_digest_is_not_looked_up() {
+    let well_formed = format!("sha256:{}", hex(0x14));
+    for (digest, lookup) in [
+        (well_formed.as_str(), BlobLookup::NotLookedUp),
+        ("sha256:foo/../../secret", BlobLookup::Absent),
+        (
+            "sha256:foo/../../secret",
+            BlobLookup::Unresolved { why: t("denied") },
+        ),
+    ] {
+        let mut s = with_model();
+        s.models[0]
+            .layers
+            .push(layer(LayerRole::Layer, None, digest, lookup));
+        assert_rejected(
+            &s,
+            |e| matches!(e, ValidationError::LayerBlobInconsistent { .. }),
+            "a lookup that disagrees with its digest",
+        );
+    }
 }
 
 #[test]
@@ -1505,7 +1538,7 @@ fn a_license_is_the_text_of_the_license_layers_blob() {
 
     // The license layer's blob was not read.
     let mut s = with_model();
-    let blob = s.models[0].layers[2].blob.clone().unwrap();
+    let blob = s.models[0].layers[2].blob.instance().unwrap().clone();
     for inst in &mut s.instances {
         if inst.id == blob {
             inst.content = InstanceContent::NotRead {

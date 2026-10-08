@@ -64,7 +64,7 @@ fn one_model_is_inventoried_with_its_blobs_read() {
     );
     for (layer, digest) in m.layers.iter().zip([&config, &weights]) {
         assert_eq!(layer.digest.as_str(), Some(digest.as_str()));
-        let blob = placed(&f, layer.blob.as_ref().unwrap());
+        let blob = placed(&f, layer.blob.instance().unwrap());
         assert_eq!(
             blob.content,
             InstanceContent::Read {
@@ -162,11 +162,11 @@ fn a_symlinked_blob_is_read_inside_the_root_and_not_outside() {
 
     let f = run(d, None);
     let layers = &f.models[0].layers;
-    let read = placed(&f, layers[0].blob.as_ref().unwrap());
+    let read = placed(&f, layers[0].blob.instance().unwrap());
     assert!(matches!(read.content, InstanceContent::Read { .. }));
     assert_eq!(read.link_chain.len(), 1);
     // I-07: a blob outside the store is recorded and never read.
-    let away = placed(&f, layers[1].blob.as_ref().unwrap());
+    let away = placed(&f, layers[1].blob.instance().unwrap());
     assert_eq!(
         away.content,
         InstanceContent::NotRead {
@@ -272,7 +272,7 @@ fn an_unreadable_blob_is_recorded_and_not_read() {
     let f = run(d, None);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
-        placed(&f, f.models[0].layers[0].blob.as_ref().unwrap()).content,
+        placed(&f, f.models[0].layers[0].blob.instance().unwrap()).content,
         InstanceContent::NotRead {
             why: NotReadReason::PermissionDenied
         }
@@ -371,7 +371,16 @@ fn malformed_and_missing_digests_have_no_blob() {
         ],
     );
     let f = run(d, None);
-    assert!(f.models[0].layers.iter().all(|l| l.blob.is_none()));
+    // Uppercase and path-like digests are not looked up; the well-formed one is absent.
+    let lookups: Vec<&BlobLookup> = f.models[0].layers.iter().map(|l| &l.blob).collect();
+    assert_eq!(
+        lookups,
+        [
+            &BlobLookup::NotLookedUp,
+            &BlobLookup::NotLookedUp,
+            &BlobLookup::Absent
+        ]
+    );
     assert!(f
         .instances
         .iter()
@@ -402,4 +411,42 @@ fn a_manifest_link_out_of_the_root_makes_the_inventory_partial() {
             }
         )]
     );
+}
+
+#[test]
+fn a_blob_that_cannot_be_resolved_is_not_absent() {
+    // A blob path that is a link to itself: the lookup ends at the hop limit, not at "absent".
+    let dir = TempDir::new().unwrap();
+    let d = dir.path();
+    fs::create_dir_all(d.join("blobs")).unwrap();
+    let looped = format!("sha256-{}", hex(b"loop"));
+    symlink(&looped, d.join("blobs").join(&looped)).unwrap();
+    manifest(
+        d,
+        LIB,
+        None,
+        &[(MODEL_MEDIA, &format!("sha256:{}", hex(b"loop")))],
+    );
+    let f = run(d, None);
+    assert!(
+        matches!(f.models[0].layers[0].blob, BlobLookup::Unresolved { .. }),
+        "{:?}",
+        f.models[0].layers[0].blob
+    );
+
+    // `blobs` is a file: no blob can be resolved under it.
+    let dir = TempDir::new().unwrap();
+    let d = dir.path();
+    fs::write(d.join("blobs"), b"not a directory").unwrap();
+    manifest(
+        d,
+        LIB,
+        None,
+        &[(MODEL_MEDIA, &format!("sha256:{}", hex(b"w")))],
+    );
+    let f = run(d, None);
+    assert!(matches!(
+        f.models[0].layers[0].blob,
+        BlobLookup::Unresolved { .. }
+    ));
 }
