@@ -10,10 +10,10 @@
 //!   load facts is one recorded for its process.
 //! - **Active probes match the request.** Each requested target is a canonical IP address, is
 //!   loopback unless remote targets were allowed, and has exactly one probe; each probe was
-//!   requested and is identified by its target. A probe's `runtime_api.version` coverage closes
-//!   the check only as its outcome supports: `Complete` on a 200 answer with a version,
-//!   `NotPresent` on a refused connection, never `OutOfScope`. An absence on a refused
-//!   connection cites probes, each refused.
+//!   requested and is identified by its target. `runtime_api.version` coverage is scoped to a
+//!   probe, every probe has it, and it closes the check only as the probe's outcome supports:
+//!   `Complete` on a 200 answer with a version, `NotPresent` on a refused connection, never
+//!   `OutOfScope`. A refused connection is evidence for that check only, citing refused probes.
 //! - **Claims do not exceed their evidence.** A condition names the record that decides it and is
 //!   `Met` or `NotMet` only as that record settles (plan §4.4.9, [`Session::settles`]); a finding
 //!   has every condition established; an identity status is not stronger than its assertions;
@@ -102,6 +102,12 @@ pub enum ValidationError {
     /// An absence resting on a refused connection whose evidence names no probe, or a probe that
     /// was not refused.
     RefusalNotObserved { check: CheckId },
+    /// `runtime_api.version` coverage on something other than a probe: it is about one probe.
+    ScopeNotAProbe { check: CheckId },
+    /// A probe without its `runtime_api.version` coverage.
+    ProbeUncovered { probe: ProbeId },
+    /// An absence on a refused connection for a check other than `runtime_api.version`.
+    RefusalForAnotherCheck { check: CheckId },
     /// A mapping recorded under a process it does not belong to.
     MappingOfAnotherProcess { pid: u32, at: String },
     /// An identity status stronger than the assertions support.
@@ -225,6 +231,16 @@ impl fmt::Display for ValidationError {
             CoverageContradictsProbe { check, probe, why } => {
                 write!(f, "coverage[{check}] on {probe}: {why}")
             }
+            ScopeNotAProbe { check } => {
+                write!(f, "coverage[{check}]: it is about one probe, so it must be scoped to a probe")
+            }
+            ProbeUncovered { probe } => {
+                write!(f, "probes[{probe}]: no runtime_api.version coverage")
+            }
+            RefusalForAnotherCheck { check } => write!(
+                f,
+                "coverage[{check}]: a refused connection is evidence for runtime_api.version only"
+            ),
             RefusalNotObserved { check } => write!(
                 f,
                 "coverage[{check}]: an absence on a refused connection must cite probes, each refused"
@@ -1017,19 +1033,36 @@ impl<'a> Validator<'a> {
         }
     }
 
-    /// A probe's `runtime_api.version` coverage closes the check only as the probe's outcome
-    /// supports, and an absence on a refused connection rests on refused probes. A gap never
+    /// `runtime_api.version` coverage is about one probe: it is scoped to a probe, every probe
+    /// has it, and it closes the check only as that probe's outcome supports. A refused
+    /// connection is evidence for that check only, and rests on refused probes. A gap never
     /// contradicts an outcome.
     fn probe_coverage(&mut self) {
         let s = self.s;
         let outcome = |id: &ProbeId| s.probes.iter().find(|p| p.id == *id).map(|p| &p.result);
+        for probe in &s.probes {
+            let covered = s.coverage.iter().any(|c| {
+                c.check.as_str() == RUNTIME_API_VERSION && c.scope == Ref::Probe(probe.id.clone())
+            });
+            if !covered {
+                self.errors.push(ValidationError::ProbeUncovered {
+                    probe: probe.id.clone(),
+                });
+            }
+        }
         for c in &s.coverage {
+            let version = c.check.as_str() == RUNTIME_API_VERSION;
             if let CoverageState::NotPresent {
                 evidence,
                 basis: AbsenceBasis::ConnectionRefused,
                 ..
             } = &c.state
             {
+                if !version {
+                    self.errors.push(ValidationError::RefusalForAnotherCheck {
+                        check: c.check.clone(),
+                    });
+                }
                 let probes: Vec<&ProbeId> = evidence
                     .iter()
                     .filter_map(|e| match e {
@@ -1047,12 +1080,17 @@ impl<'a> Validator<'a> {
                     });
                 }
             }
+            if !version {
+                continue;
+            }
             let Ref::Probe(id) = &c.scope else {
+                self.errors.push(ValidationError::ScopeNotAProbe {
+                    check: c.check.clone(),
+                });
                 continue;
             };
             // An unknown probe is reported as dangling.
-            let (true, Some(result)) = (c.check.as_str() == RUNTIME_API_VERSION, outcome(id))
-            else {
+            let Some(result) = outcome(id) else {
                 continue;
             };
             let why = match (&c.state, result) {

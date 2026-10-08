@@ -104,8 +104,9 @@ The rule then yields an open question at most.
   - each requested target is the canonical text of a specified IP address with a non-zero port, and is loopback unless `allow_remote` is set;
   - each requested target has exactly one probe, and each probe was requested;
   - a probe's ID is `probe:api/<address>:<port>`, with an IPv6 address in brackets;
+  - `runtime_api.version` coverage is about one probe: it is scoped to a probe (never the audit, a root, or anything else), and every probe has it, so it cannot be moved or dropped to escape the next rule;
   - a probe's `runtime_api.version` coverage closes the check only as its outcome supports: `Complete` needs a 200 answer with a version, `NotPresent` a refused connection on the basis `ConnectionRefused` that cites the probe, and a requested probe is never `OutOfScope` (a timed-out probe therefore never closes it). A gap never contradicts an outcome;
-  - an absence on the basis `ConnectionRefused` cites probes, each refused;
+  - the basis `ConnectionRefused` is used only for `runtime_api.version`, and cites probes, each refused;
   - a probe is not an `Observed` fact for a condition: no finding rests on it.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
