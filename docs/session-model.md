@@ -122,7 +122,8 @@ It does **not**:
   predicted value from the values it was predicted from, a binding from the search order, or a
   release set from the identity claims of its files.
 
-Those belong to the engine and its collectors (PR-3a and later).
+Those belong to the engine and its collectors (PR-3a and later). The engine computes decisions and
+the outcome from a policy: see [`docs/policy.md`](policy.md).
 
 ## Example: FAIL and INCOMPLETE
 

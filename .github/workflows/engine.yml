@@ -1,0 +1,48 @@
+name: Engine
+
+# crates/sigil-engine is the v2 engine: SafeFs, collectors, and policy evaluation. This job runs
+# its tests on Linux (SafeFs uses openat2 and the walker on real temporary trees; the permission
+# cases need a non-root user, which the GitHub runner is).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/sigil-engine/**'
+      - 'crates/sigil-model/**'
+      - 'schemas/examples/**'
+      - 'docs/policy.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/engine.yml'
+  pull_request:
+    paths:
+      - 'crates/sigil-engine/**'
+      - 'crates/sigil-model/**'
+      - 'schemas/examples/**'
+      - 'docs/policy.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/engine.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: Engine tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+      - name: Tests (SafeFs, policy loading, evaluation)
+        run: cargo test -p sigil-engine

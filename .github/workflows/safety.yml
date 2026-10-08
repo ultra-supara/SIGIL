@@ -46,7 +46,7 @@ jobs:
         # Cached clippy results are not invalidated by clippy.toml edits, so the workspace crates
         # are cleaned first (dependencies stay cached).
         run: |
-          cargo clean -p sigil-core -p sigil-cli -p sigil-aibom-wasm
+          cargo clean -p sigil-core -p sigil-cli -p sigil-aibom-wasm -p sigil-model -p sigil-engine
           cargo clippy --workspace --all-targets -- -D warnings
       - name: Build-time bans (crates)
         run: cargo deny check bans

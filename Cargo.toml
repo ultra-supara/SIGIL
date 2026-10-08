@@ -4,6 +4,7 @@ members = [
     "crates/sigil-cli",
     "crates/sigil-aibom-wasm",
     "crates/sigil-model",
+    "crates/sigil-engine",
 ]
 resolver = "2"
 
@@ -26,3 +27,5 @@ sha2 = "0.10"
 tempfile = "3.10"
 thiserror = "1.0"
 jsonschema = { version = "0.46", default-features = false }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+toml = "1.1"
