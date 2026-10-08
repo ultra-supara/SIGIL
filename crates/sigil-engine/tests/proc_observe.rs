@@ -250,3 +250,67 @@ fn budgets_bound_what_is_read() {
     assert!(!f.gaps.is_empty());
     assert!(f.listeners.is_empty());
 }
+
+#[test]
+fn only_ollama_serve_is_the_runtime() {
+    let mut fake = FakeProc::new();
+    // A client command of the same binary.
+    fake.process(&Proc {
+        pid: 300,
+        comm: "ollama",
+        argv: &["/usr/local/bin/ollama", "run", "gemma4"],
+        exe: Some("/usr/local/bin/ollama"),
+        ..Proc::default()
+    });
+    // `cmdline` is read only for processes named `ollama`: another name is not considered.
+    fake.process(&Proc {
+        pid: 301,
+        comm: "renamed",
+        argv: &["/usr/local/bin/ollama", "serve"],
+        exe: Some("/usr/local/bin/ollama"),
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 1, 1);
+    assert!(run(&fake).processes.is_empty());
+}
+
+#[test]
+fn a_socket_the_runtime_shares_with_a_fronting_process_is_the_runtimes() {
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001]));
+    fake.process(&Proc {
+        pid: 200,
+        comm: "nginx",
+        argv: &["nginx"],
+        exe: Some("/usr/sbin/nginx"),
+        sockets: &[7001],
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 11434, 7001);
+    let f = run(&fake);
+    assert_eq!(
+        f.listeners[0].owner,
+        ListenerOwner::Process {
+            process: process_ref(4242, 4000)
+        }
+    );
+}
+
+#[test]
+fn the_fd_budget_bounds_each_table() {
+    let mut fake = FakeProc::new();
+    fake.process(&serve(4242, &[7001, 7002]));
+    fake.listen("0.0.0.0", 11434, 7001);
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_fds: 1,
+            ..ProcBudgets::default()
+        },
+    );
+    assert!(
+        f.gaps.iter().any(|g| g.contains("fd table of 4242")),
+        "{:?}",
+        f.gaps
+    );
+}
