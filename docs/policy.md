@@ -99,7 +99,9 @@ assumption's acceptance (`Accepted`, source `policy:assumptions.accept`, if list
 `NotAccepted`).
 
 Evaluation never changes them. It refuses a policy whose required checks or accepted assumptions
-differ from those recorded, and leaves the session unchanged. Such a policy changes the technical
+differ from those recorded, and leaves the session unchanged. Required checks are compared as a
+set: a check added or removed is a difference, their order is not (a session saved as canonical
+JSON lists them sorted). Such a policy changes the technical
 conclusions, so the session must be analyzed again with it. A policy that differs only in its
 decisions (rule overrides, open-question treatment, denied components) can re-evaluate a recorded
 session.

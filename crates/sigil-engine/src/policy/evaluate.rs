@@ -14,6 +14,7 @@
 //! the first evaluation and a later re-evaluation. Findings, open questions, their conditions and
 //! evidence, and `default_severity` are never touched. An ignored finding stays, with its reason.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use sigil_model::{
@@ -40,8 +41,9 @@ pub enum EvaluateError {
     /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
     /// resting on one of them could become settled or unsettled.
     AssumptionsChanged(Vec<AssumptionId>),
-    /// The policy requires other checks than the session's request. Coverage was collected for
-    /// the request's checks.
+    /// The policy requires another set of checks than the session's request: a check is added or
+    /// removed. Coverage was collected for the request's checks. The order of the lists does not
+    /// matter (a canonical session sorts them).
     RequiredChecksChanged {
         request: Vec<CheckId>,
         policy: Vec<CheckId>,
@@ -75,7 +77,8 @@ impl std::error::Error for EvaluateError {}
 /// outcome so that a re-evaluation reuses it.
 ///
 /// Fails, without changing `session`, when the policy's accepted assumptions or required checks
-/// differ from those recorded in the session ([`EvaluateError`]).
+/// differ from those recorded in the session ([`EvaluateError`]). Required checks are compared as
+/// sets, so a session saved as canonical JSON and loaded again re-evaluates with the same policy.
 pub fn evaluate(
     session: &mut Session,
     policy: &Policy,
@@ -94,7 +97,8 @@ pub fn evaluate(
         return Err(EvaluateError::AssumptionsChanged(changed));
     }
     let (_, required) = policy.scope(session.request.mode);
-    if required != session.request.required_checks {
+    let set = |checks: &[CheckId]| checks.iter().cloned().collect::<BTreeSet<CheckId>>();
+    if set(&required) != set(&session.request.required_checks) {
         return Err(EvaluateError::RequiredChecksChanged {
             request: session.request.required_checks.clone(),
             policy: required,

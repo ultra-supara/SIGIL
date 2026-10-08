@@ -401,19 +401,66 @@ fn a_change_in_accepted_assumptions_requires_reanalysis() {
 #[test]
 fn a_change_in_required_checks_requires_reanalysis() {
     let original = example("01-complete-pass");
+    let time = original.outcome.policy_time.clone();
+    let check = |c: &str| CheckId::new(c).unwrap();
+    let refused = |required: Vec<CheckId>| {
+        let mut s = original.clone();
+        let mut p = policy_for(&s, "");
+        p.extra_required = required.clone();
+        assert_eq!(
+            evaluate(&mut s, &p, time.clone()),
+            Err(EvaluateError::RequiredChecksChanged {
+                request: original.request.required_checks.clone(),
+                policy: required,
+            })
+        );
+        assert_eq!(
+            s, original,
+            "a refused evaluation leaves the session unchanged"
+        );
+    };
+    let recorded = original.request.required_checks.clone();
+    assert_eq!(
+        recorded,
+        [check("artifacts.discovery"), check("loader.identify")]
+    );
+
+    // A check added, a check removed, and one replaced by another (the same count).
+    let mut added = recorded.clone();
+    added.push(check("loader.search_paths"));
+    refused(added);
+    refused(vec![check("artifacts.discovery")]);
+    refused(vec![
+        check("artifacts.discovery"),
+        check("loader.search_paths"),
+    ]);
+
+    // The same checks in another order are the same requirement.
     let mut s = original.clone();
     let mut p = policy_for(&s, "");
-    p.extra_required
-        .push(CheckId::new("loader.search_paths").unwrap());
+    p.extra_required.reverse();
+    evaluate(&mut s, &p, time).unwrap();
+    assert_valid(&s);
+}
+
+#[test]
+fn a_canonical_round_trip_keeps_a_session_evaluable_with_the_same_policy() {
+    let policy = Policy::builtin_default().unwrap();
+    let mut s = example("01-complete-pass");
+    let (audit, required) = policy.scope(s.request.mode);
+    s.request.audit = audit;
+    s.request.required_checks = required.clone();
     let time = s.outcome.policy_time.clone();
-    assert_eq!(
-        evaluate(&mut s, &p, time),
-        Err(EvaluateError::RequiredChecksChanged {
-            request: original.request.required_checks.clone(),
-            policy: p.extra_required.clone(),
-        })
-    );
-    assert_eq!(s, original);
+    evaluate(&mut s, &policy, time.clone()).unwrap();
+    assert_valid(&s);
+    let saved = s.to_canonical_json().unwrap();
+
+    let mut reloaded: Session = serde_json::from_str(&saved).unwrap();
+    // Canonical order sorts the checks: the request no longer lists them in the policy's order.
+    assert_ne!(reloaded.request.required_checks, required);
+    evaluate(&mut reloaded, &policy, time).unwrap();
+    assert_valid(&reloaded);
+    assert_eq!(reloaded.to_canonical_json().unwrap(), saved);
 }
 
 #[test]
