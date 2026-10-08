@@ -1,16 +1,17 @@
 # SIGIL
 
-**Local-first AI-BOMs for auditing local LLMs.**
+**Local-first audits of local LLMs.**
 
 The local-AI audit artifact you can attach to a review ticket — no cloud, no LLM in the verdict path, no subprocess spawned.
 
 ```bash
 git clone https://github.com/ultra-supara/SIGIL && cd SIGIL
-./demos/demo_suspicious_fail.sh
-# → SIGIL Verdict: [FAIL]    out/suspicious.report.md
+cargo run -q -p sigil-cli -- inspect ollama --format md --out out/report.md
+# verdict: WARN           confirmed: 0 fail · 1 warn · 0 policy violations
+# completeness: COMPLETE
 ```
 
-A single static Rust binary inventories every local LLM, verifies model artefacts against their manifest digests, classifies how the runtime is exposed, identifies license metadata, and lifts native binaries through a guarded SafeISA. Every PASS / WARN / FAIL comes from a deterministic analyzer plus a YAML policy — nothing leaves your machine, no LLM ever decides the verdict.
+A single static Rust binary inventories the models in an Ollama store, verifies every blob against its manifest digest, records license layers, and, in observe mode, attributes the runtime's listening sockets. Every result has two parts: a **verdict** (PASS / WARN / FAIL) from a deterministic analyzer and a policy, and a **completeness** that says whether everything required was actually seen. What SIGIL could not see is never reported as absent. Nothing leaves your machine, and no LLM ever decides the verdict.
 
 [Live site](https://ultra-supara.github.io/SIGIL/) · [Try the AI-BOM viewer in your browser](https://ultra-supara.github.io/SIGIL/viewer/) · [Compare to other tools](https://ultra-supara.github.io/SIGIL/compare/) · [State of Local AI Audit — 2026 H1](https://ultra-supara.github.io/SIGIL/reports/2026-h1/)
 
@@ -18,161 +19,120 @@ A single static Rust binary inventories every local LLM, verifies model artefact
 
 ## The audit you can't get today
 
-Local LLMs slip past every SBOM tool you already run. Models arrive via `ollama pull` with no package-manager trace. Runtime APIs bind to ports nobody audits. License obligations are invisible. The native binaries serving the model bring their own attack surface. When the auditor asks _"what AI is running here, where is it exposed, under what license, and with what native capabilities?"_, there is no single artefact to hand them.
+Local LLMs slip past every SBOM tool you already run. Models arrive via `ollama pull` with no package-manager trace. Runtime APIs bind to ports nobody audits. License obligations are invisible. When the auditor asks _"what AI is running here, where is it exposed, and under what license?"_, there is no single artefact to hand them.
 
-SIGIL produces that artefact. One JSON, one Markdown — same model, never out of sync.
+SIGIL produces that artefact: one session per inspection, as JSON and as Markdown, rendered from the same facts.
 
 ## What you get
 
-A single AI-BOM per inspection, in two synchronized renderings the schema guarantees identical:
-
-- **JSON** — `schema_version: "1.1"`, runtime-agnostic, enum-stabilized, pinned by tests. Diff it across review cycles.
-- **Markdown** — verdict banner, runtime property table, model card (License / Provenance / Manifest / Layers), findings table. Attach it to the review ticket.
-
-The artefact covers:
+- **The session** (`sigil-session/1`, [schema](schemas/session-v1.schema.json)): every fact observed, every finding with the facts it rests on, what each check covered, and the outcome. Canonical JSON, so two runs over the same input give the same bytes. Diff it across review cycles.
+- **Markdown**: the outcome, findings, open coverage, models, listeners, and processes, for the review ticket. Every input-derived string is escaped.
+- **`sigil explain`**: why a finding fired (its facts, the policy decision, and the fix), or how the verdict and completeness were reached.
 
 | Surface | Evidence captured |
 |---|---|
-| Ollama model store | Manifest path, blob digests, SHA-256, sizes, kind (`model` / `config` / `license` / `params`) |
-| Provenance | `registry / namespace / model / tag` parsed from the manifest path, plus `config_digest` and `layer_digests` |
-| License | Digest, size, SPDX id from 10 detected families, 256-byte text excerpt |
-| Runtime API exposure | `not_probed` / `localhost` / `network` / `public_bind` / `unavailable` |
-| Runtime listener bind | `localhost` / `lan` / `public_bind` / `docker_published` / `proxy` / `unknown`, classified from `/proc` |
-| Native binary capabilities | x86_64 → IR → SafeISA, with external symbols mapped to `network` / `file_read` / `file_write` / `process_spawn` / `dynamic_loading` / `environment_access` / `anti_debug` |
-| Verdict | `PASS` / `WARN` / `FAIL` from analyzer output + policy |
+| Ollama model store | Each manifest, its layers, and each blob's SHA-256 against its digest |
+| Provenance | `registry / namespace / model / tag` from the manifest path |
+| License | The license layer, its SPDX id where detected, and an excerpt |
+| Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
+| Outcome | Verdict (`PASS` / `WARN` / `FAIL`) and completeness (`COMPLETE` / `INCOMPLETE`), side by side |
 
 ## Why local-first, LLM-free
 
-- **Nothing leaves the machine.** Model bytes, manifests, license text, and runtime metadata are read in place. With `--no-probe-api` there is no network I/O; the optional Ollama API probe, on by default until v2 makes it an explicit active mode, connects to the configured Ollama host.
-- **No subprocess spawn.** Runtime bind detection parses `/proc/net/tcp{,6}` and `/proc/<pid>/comm` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
-- **No LLM in the verdict path.** Every verdict comes from a deterministic analyzer ([`crates/sigil-core/src/assess`](crates/sigil-core/src/assess)) plus a YAML policy rule. An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
-- **Read-only.** SIGIL does not execute lifted code, call inspected external symbols, or mutate any artefact it inspects.
+- **No network I/O.** SIGIL reads files and, in observe mode, allowlisted `/proc` entries. The old Ollama API probe is gone. It returns only as an explicit active mode, off by default.
+- **No subprocess spawn.** Listener attribution reads `/proc/net/tcp{,6}` and `/proc/<pid>/fd` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
+- **No LLM in the verdict path.** Every finding comes from a deterministic analyzer, and every decision from a policy rule ([`crates/sigil-engine/src/policy`](crates/sigil-engine/src/policy)). An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
+- **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store.
 
-Full safety boundary in [docs/architecture-and-safety.md](docs/architecture-and-safety.md). These properties are **checked** by build-time API bans and by syscall tests over the exercised CLI paths ([ADR-002](docs/adr/ADR-002-execution-modes.md)). They are not enforced by a runtime sandbox.
+These properties are **checked** by build-time API bans and by syscall tests over the exercised CLI paths ([ADR-002](docs/adr/ADR-002-execution-modes.md)). They are not enforced by a runtime sandbox.
 
 ## Quickstart
 
-### macOS
-
 ```bash
-./scripts/setup_macos_m3.sh
-```
-
-Installs Rust via `rustup` (if missing) and the Homebrew LLVM / Clang toolchain, then runs `cargo test`.
-
-### Manual
-
-```bash
-# Linux
-sudo apt-get install -y clang
-cargo test
-cargo run -p sigil-cli -- --help
-
-# macOS
-brew install llvm
-export PATH="$(brew --prefix llvm)/bin:$PATH"
 cargo test
 cargo run -p sigil-cli -- --help
 ```
 
-## Run the demos
+On macOS, `./scripts/setup_macos_m3.sh` installs Rust via `rustup` (if missing) and the Homebrew LLVM / Clang toolchain, then runs `cargo test`. The syscall safety tests run on Linux with `strace` and a C compiler.
 
-Two end-to-end demos that produce real evidence + Markdown reports under `out/`:
-
-```bash
-./demos/demo_clean_pass.sh        # arithmetic-only kernel → SIGIL Verdict: [PASS]
-./demos/demo_suspicious_fail.sh   # kernel that calls connect → SIGIL Verdict: [FAIL]
-```
-
-The suspicious demo's Markdown report includes a capabilities table with the `network` row pointing at address `0x26` and the SafeISA excerpt showing `CALL_STUB connect` — the external call was recorded as evidence, not executed.
-
-## Inspect a real Ollama deployment
+## Inspect an Ollama installation
 
 ```bash
-ollama pull gemma4:e2b
+# Static (the default): the model store only
+cargo run -p sigil-cli -- inspect ollama --out out/session.json
 
-# Full inspection: API probe + /proc listener walk
-cargo run -p sigil-cli -- runtime inspect ollama \
-  --model gemma4:e2b \
-  --out out/gemma4-ollama.evidence.json
+# Markdown for the review ticket
+cargo run -p sigil-cli -- inspect ollama --format md --out out/report.md
 
-# AI-BOM Markdown for the review ticket
-cargo run -p sigil-cli -- aibom generate \
-  --runtime ollama \
-  --model gemma4:e2b \
-  --format md \
-  --out out/gemma4-aibom.md
+# Observe: also the runtime's listening sockets (allowlisted /proc reads)
+cargo run -p sigil-cli -- inspect ollama --mode observe --out out/session.json
 
-# Static-only (skip API probe + /proc walk)
-cargo run -p sigil-cli -- runtime inspect ollama \
-  --model gemma4:e2b \
-  --no-probe-api --no-inspect-runtime \
-  --out out/gemma4-static.evidence.json
+# Explain a saved session: one finding, the verdict, or the coverage
+cargo run -p sigil-cli -- explain out/session.json --verdict
+cargo run -p sigil-cli -- explain out/session.json --finding <FINDING-ID> --format md
+cargo run -p sigil-cli -- session render out/session.json
+
+# The detection rules
+cargo run -p sigil-cli -- rules
 ```
 
 Other flags worth knowing:
 
-- `--models-dir <path>` — inspect a non-default model store (defaults to `$OLLAMA_MODELS` or `~/.ollama/models`).
-- `--host <url>` — evaluate a specific Ollama API endpoint. `0.0.0.0` and public-bind hosts are reported as `WARN`.
-- Host resolution order: explicit `--host` → `OLLAMA_HOST` env → default `http://127.0.0.1:11434`.
+- `--models-dir <dir>`: the model store (default `$OLLAMA_MODELS`, else `~/.ollama/models`). `--model <name>` inventories one model.
+- `--policy <file>`: a policy (TOML, [docs/policy.md](docs/policy.md)) that sets the audit scope, rule actions with reasons and expiry, and accepted assumptions.
+- `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`). Budgets that run out leave the result incomplete, never silently clean.
+- `--fail-on warn|fail` and `--fail-on-incomplete` for CI. Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached, `4` incomplete.
 
-Full evidence-field reference, SPDX detection table, finding ids, and bind classification: [docs/ollama-inspection.md](docs/ollama-inspection.md). The AI-BOM JSON contract: [docs/ai-bom-and-comparison.md](docs/ai-bom-and-comparison.md).
+Details: [model store](docs/model-store.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
 
 ## Who SIGIL is for
 
 | If you are… | SIGIL gives you |
 |---|---|
-| An AI compliance / GRC reviewer | One AI-BOM JSON per review cycle that captures provenance, SPDX id, runtime exposure, layer digests, and findings — stable across runs because the schema is versioned. |
+| An AI compliance / GRC reviewer | One session per review cycle that captures provenance, license, runtime exposure, layer digests, and findings, with a completeness you can hold the run to. |
 | A security or AI platform engineer running the audit | A read-only CLI that never shells out, streams SHA-256 over multi-GB blobs, and produces the artefact the reviewer needs in one command. |
-| A CISO / Head of AI Risk | A defensible local-AI audit story you can show an external auditor: every verdict is derived from a deterministic analyzer plus a YAML policy, in the open, unit-tested. |
-| A legal / IP reviewer | License layer + SPDX id + provenance tuple per model — covers Apache-2.0, MIT, MPL-2.0, GPL-2.0 / 3.0, LGPL-2.1 / 3.0, BSD-2 / 3-Clause, ISC. |
+| A CISO / Head of AI Risk | A defensible local-AI audit story you can show an external auditor: every verdict comes from a deterministic analyzer plus a policy, in the open, unit-tested. |
+| A legal / IP reviewer | License layer, SPDX id, and provenance per model. |
 
-If your entire AI footprint is hosted (OpenAI API, Bedrock, Vertex AI) and there is no local model store, local runtime, or local native binary to inspect — SIGIL has nothing to do today.
+If your entire AI footprint is hosted (OpenAI API, Bedrock, Vertex AI) and there is no local model store or local runtime to inspect, SIGIL has nothing to do today.
 
 ## Try it in the browser
 
-The AI-BOM viewer at [`/viewer/`](https://ultra-supara.github.io/SIGIL/viewer/) renders the same Markdown the CLI would, fully client-side via `wasm32-unknown-unknown`. Drop your own `.aibom.json` or load one of the three sample verdicts — no upload, no sign-up, no network call after the page loads. The same Rust `render_ai_bom` drives both the CLI and the browser, and CI compares the committed wasm bundle against the source on every PR.
+The AI-BOM viewer at [`/viewer/`](https://ultra-supara.github.io/SIGIL/viewer/) renders AI-BOM v1 files (SIGIL 0.1) fully client-side via `wasm32-unknown-unknown`: no upload, no sign-up, no network call after the page loads. It moves to v2 sessions with AI-BOM v2.
 
 ## Direction
 
 SIGIL grows from single-runtime inspection into local AI environment **comparison**:
 
-- Diff a current AI-BOM against a trusted baseline (planned).
-- Detect model digest drift, missing license, downgraded runtime exposure, new findings.
+- Identify the runtime's own binaries and libraries, and how its loader picks backends.
+- Diff a session against a trusted baseline: model digest drift, missing license, wider exposure, new findings (planned).
 - Add llama.cpp, LM Studio, vLLM, and other local OpenAI-compatible runtimes (planned).
-- Continue publishing the AI-BOM JSON Schema at [`schemas/aibom-v1.schema.json`](schemas/aibom-v1.schema.json) (JSON Schema draft 2020-12).
-
-See [ROADMAP.md](ROADMAP.md) and [docs/ai-bom-and-comparison.md](docs/ai-bom-and-comparison.md).
 
 ## What's in the box
 
 **Implemented today**
 
-- Deterministic policy parser + evaluator ([`crates/sigil-core/src/assess`](crates/sigil-core/src/assess)).
-- Capability mapping from external symbols.
-- SafeISA model + emulator with blocked `CALL_STUB` / `SYSCALL_STUB`.
-- ELF function loading + `iced-x86` decoding (narrow x86_64 integer subset).
-- IR → SafeISA emission.
-- CLI: `lift` and `assess` through the deterministic analysis path; structured Markdown report with verdict banner, capability table, policy violations with call-site lookup, and SafeISA excerpt.
-- Ollama model-store inventory, manifest + blob SHA-256 verification, provenance extraction.
-- SPDX license detection across 10 families (Apache-2.0, MIT, MPL-2.0, GPL-2.0, GPL-3.0, LGPL-2.1, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, ISC), with fast-path shortnames validated against the supported set before body matching.
-- Runtime API exposure classification, Linux `/proc`-based listener walk with `localhost` / `lan` / `public_bind` / `docker_published` / `proxy` classes.
-- Stable AI-BOM JSON contract at `schema_version: "1.1"`, runtime-agnostic, shared by `runtime inspect ollama --out` and `aibom generate`.
-- Browser AI-BOM viewer at [`site/viewer/`](site/viewer/) — same renderer compiled to wasm32, schema-validated client-side, CI-pinned against the Rust source on every PR.
+- Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, license layers with SPDX detection.
+- Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
+- Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
+- The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
+- CLI: `inspect ollama`, `session render`, `explain`, `rules`.
+- Syscall safety tests of contracts C-1 to C-6 over every CLI path.
 
 **Not yet**
 
-- Decompiler-level coverage of x86_64 (narrow by design).
-- Runtimes beyond Ollama.
-- AI-BOM baseline comparison and drift detection.
-- `trace`, `policy-from-source`, and `explain` are placeholder CLI commands.
+- Binary analysis of the runtime's executables and libraries (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
+- The API probe as an explicit active mode.
+- AI-BOM v2 and the browser viewer on v2 sessions.
+- Runtimes beyond Ollama, and baseline comparison.
 
 ## Documentation
 
-- [Overview](docs/sigil-overview.md) — product position, current scope, design principles.
-- [Ollama inspection](docs/ollama-inspection.md) — commands, evidence fields, SPDX detection table, findings, runtime bind classes.
-- [AI-BOM and comparison](docs/ai-bom-and-comparison.md) — schema 1.1 contract, enum reference, planned comparison direction.
-- [Architecture and safety](docs/architecture-and-safety.md) — crates, SafeISA, capability mapping, policy YAML, analysis-only safety boundary.
+- [Session model](docs/session-model.md): what a session records, and the invariants it keeps.
+- [Model store](docs/model-store.md) and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
+- [Policy](docs/policy.md): the policy format and how the outcome is computed.
+- [ADR-002](docs/adr/ADR-002-execution-modes.md): execution modes and safety contracts.
+- v0.1 references, to be updated with AI-BOM v2: [overview](docs/sigil-overview.md), [Ollama inspection](docs/ollama-inspection.md), [AI-BOM and comparison](docs/ai-bom-and-comparison.md), [architecture and safety](docs/architecture-and-safety.md).
 
 ## License
 
