@@ -84,6 +84,12 @@ impl RelPath {
         path.extend(&self.0);
         path
     }
+
+    /// From components the walker already knows are plain.
+    pub(crate) fn from_components(parts: Vec<String>) -> RelPath {
+        debug_assert!(parts.iter().all(|p| is_component(p)));
+        RelPath(parts)
+    }
 }
 
 /// Where a symlink target starts. The components may contain `.` and `..`; the walker resolves
@@ -127,8 +133,8 @@ pub fn link_target(roots: &[PathBuf], target: &str) -> LinkTarget {
                     _ => None,
                 })
                 .collect();
-            let matches = prefix.len() <= parts.len()
-                && prefix.iter().zip(&parts).all(|(a, b)| a == b);
+            let matches =
+                prefix.len() <= parts.len() && prefix.iter().zip(&parts).all(|(a, b)| a == b);
             matches.then_some((i, prefix.len()))
         })
         .max_by_key(|&(_, len)| len);
@@ -166,7 +172,10 @@ mod tests {
         );
         assert_eq!(p.display(), "manifests/registry.ollama.ai/library");
         assert_eq!(p.name(), Some("library"));
-        assert_eq!(p.parent().unwrap().display(), "manifests/registry.ollama.ai");
+        assert_eq!(
+            p.parent().unwrap().display(),
+            "manifests/registry.ollama.ai"
+        );
         assert_eq!(RelPath::root().display(), "");
         assert_eq!(RelPath::root().parent(), None);
         assert_eq!(rel("a").join("b").unwrap(), rel("a/b"));
@@ -175,11 +184,16 @@ mod tests {
 
     #[test]
     fn parse_rejects_anything_that_could_leave_the_root() {
-        for bad in ["", "/a", "a/", "a//b", "./a", "a/./b", "a/../b", "..", "a\0b"] {
+        for bad in [
+            "", "/a", "a/", "a//b", "./a", "a/./b", "a/../b", "..", "a\0b",
+        ] {
             assert!(RelPath::parse(bad).is_err(), "{bad:?} accepted");
         }
         for bad in ["", ".", "..", "a/b", "a\0"] {
-            assert!(rel("x").join(bad).is_err(), "{bad:?} accepted as a component");
+            assert!(
+                rel("x").join(bad).is_err(),
+                "{bad:?} accepted as a component"
+            );
         }
     }
 
@@ -212,7 +226,10 @@ mod tests {
             rest: parts(rest),
         };
         assert_eq!(link_target(&r, "/usr/local/lib/x"), abs(2, &["lib", "x"]));
-        assert_eq!(link_target(&r, "/srv/models/blobs/b"), abs(1, &["blobs", "b"]));
+        assert_eq!(
+            link_target(&r, "/srv/models/blobs/b"),
+            abs(1, &["blobs", "b"])
+        );
         assert_eq!(link_target(&r, "/srv/other"), abs(0, &["other"]));
         assert_eq!(link_target(&r, "/srv/models2/x"), abs(0, &["models2", "x"]));
         assert_eq!(link_target(&r, "/usr/local"), abs(2, &[]));
