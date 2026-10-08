@@ -41,6 +41,7 @@ impl Session {
             sort_json(&mut process.mappings);
         }
         sort_json(&mut self.processes);
+        sort_json(&mut self.listeners);
         for value in &mut self.values {
             sort_json(&mut value.applies_to);
         }

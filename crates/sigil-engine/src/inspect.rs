@@ -10,9 +10,11 @@ use sigil_model::{
     UntrustedText, Verdict,
 };
 
-use crate::analyze::model_store;
+use crate::analyze::{exposure, model_store};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
+use crate::observe;
+use crate::observe::proc::{ProcBudgets, ProcFacts};
 use crate::policy::{evaluate, EvaluateError, Policy};
 
 /// What a static model-store inspection is asked to do.
@@ -57,6 +59,15 @@ impl fmt::Display for InspectError {
 
 impl std::error::Error for InspectError {}
 
+/// What an observe-mode inspection is asked to do: the model store, and the running system.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObserveRequest {
+    pub store: StoreRequest,
+    /// `/proc` outside tests.
+    pub proc_root: PathBuf,
+    pub proc_budgets: ProcBudgets,
+}
+
 /// Inspects a model store in static mode and evaluates `policy` on the result.
 ///
 /// The request's audit scope and required checks come from `policy`, so evaluation cannot refuse
@@ -64,6 +75,56 @@ impl std::error::Error for InspectError {}
 /// canonical order and passes `Session::validate`.
 pub fn store_session(
     req: &StoreRequest,
+    policy: &Policy,
+    tool: ToolInfo,
+    observation: ObservationMeta,
+    policy_time: Timestamp,
+) -> Result<Session, InspectError> {
+    assemble(
+        Mode::Static,
+        req,
+        None,
+        policy,
+        tool,
+        observation,
+        policy_time,
+    )
+}
+
+/// Inspects the model store and the running system in observe mode (plan §4.6.8), and evaluates
+/// `policy` on the result. As [`store_session`], with the runtime's processes, listeners, and
+/// exposure added. SIGIL's own network namespace, as read, replaces `observation.net_ns`; the
+/// processes are observed at `observation.started_at`.
+pub fn observe_session(
+    req: &ObserveRequest,
+    policy: &Policy,
+    tool: ToolInfo,
+    mut observation: ObservationMeta,
+    policy_time: Timestamp,
+) -> Result<Session, InspectError> {
+    let proc = observe::proc::observe(
+        &req.proc_root,
+        &observation.started_at,
+        &observation.boot_id,
+        req.proc_budgets,
+    );
+    observation.net_ns = proc.own_net_ns;
+    let observed = Some((proc, req.proc_budgets));
+    assemble(
+        Mode::Observe,
+        &req.store,
+        observed,
+        policy,
+        tool,
+        observation,
+        policy_time,
+    )
+}
+
+fn assemble(
+    mode: Mode,
+    req: &StoreRequest,
+    observed: Option<(ProcFacts, ProcBudgets)>,
     policy: &Policy,
     tool: ToolInfo,
     observation: ObservationMeta,
@@ -79,23 +140,37 @@ pub fn store_session(
     };
     // The canonical path SafeFs opened, or the path as given when it could not be opened.
     let path = fs.root_path(&root).unwrap_or(&req.models_dir);
-    let (findings, analysis_coverage) = model_store::analyze(&facts, &root);
-    let (audit, required_checks) = policy.scope(Mode::Static);
+    let (mut findings, analysis_coverage) = model_store::analyze(&facts, &root);
+    let (audit, required_checks) = policy.scope(mode);
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
+    let mut budgets = budgets(req);
+    let (mut processes, mut listeners) = (vec![], vec![]);
+    if let Some((proc, proc_budgets)) = observed {
+        let (exposure_findings, exposure_coverage) = exposure::analyze(&proc);
+        findings.extend(exposure_findings);
+        coverage.extend(exposure_coverage);
+        processes = proc.processes;
+        listeners = proc.listeners;
+        budgets.extend([
+            ("processes_listed".to_string(), proc_budgets.max_processes),
+            ("fds_per_process".to_string(), proc_budgets.max_fds),
+            ("tcp_table_bytes".to_string(), proc_budgets.max_table_bytes),
+        ]);
+    }
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
         knowledge: Vec::<KnowledgeRef>::new(),
         request: RunRequest {
-            mode: Mode::Static,
+            mode,
             roots: vec![ScanRoot {
                 id: root,
                 path: recorded(path),
             }],
             audit,
             required_checks,
-            budgets: budgets(req),
+            budgets,
             observe_env: false,
             model_filter: req.model_filter.clone(),
         },
@@ -103,7 +178,8 @@ pub fn store_session(
         artifacts: facts.artifacts,
         instances: facts.instances,
         models: facts.models,
-        processes: vec![],
+        processes,
+        listeners,
         values: vec![],
         components: vec![],
         releases: vec![],

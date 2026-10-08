@@ -36,8 +36,8 @@ use crate::finding::{
     PolicyDecision, Settles, Verdict,
 };
 use crate::id::{
-    ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ModelId,
-    ObligationId, OpenQuestionId, PremiseId, ProcessRole, ProfileRef, SliceId,
+    ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ListenerId,
+    ModelId, ObligationId, OpenQuestionId, PremiseId, ProcessRole, ProfileRef, SliceId,
 };
 use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
@@ -70,6 +70,8 @@ pub enum ValidationError {
     LayerBlobInconsistent { model: ModelId, digest: String },
     /// A model's license is not what was read from its license layer's blob.
     LicenseInconsistent { model: ModelId },
+    /// A listener's address is not an IP address.
+    ListenerAddressInvalid { listener: ListenerId },
     /// A mapping recorded under a process it does not belong to.
     MappingOfAnotherProcess { pid: u32, at: String },
     /// An identity status stronger than the assertions support.
@@ -176,6 +178,9 @@ impl fmt::Display for ValidationError {
             LayerBlobInconsistent { model, digest } => {
                 write!(f, "models[{model}]: the lookup of {digest:?} must be NotLookedUp exactly when the digest is malformed, and a found blob must be blobs/sha256-<hex> in the manifest's root")
             }
+            ListenerAddressInvalid { listener } => {
+                write!(f, "listeners[{listener}]: the address must be an IPv4 or IPv6 address")
+            }
             LicenseInconsistent { model } => {
                 write!(f, "models[{model}]: the license must be the text read from the license layer's blob")
             }
@@ -280,6 +285,7 @@ struct Validator<'a> {
     slices: BTreeSet<&'a str>,
     instances: BTreeSet<&'a str>,
     models: BTreeSet<&'a str>,
+    listeners: BTreeSet<&'a str>,
     values: BTreeSet<&'a str>,
     access: BTreeSet<&'a str>,
     assumptions: BTreeSet<&'a str>,
@@ -349,6 +355,11 @@ impl<'a> Validator<'a> {
             s.instances.iter().map(|i| i.id.as_str()),
         );
         let models = unique(&mut errors, "model", s.models.iter().map(|m| m.id.as_str()));
+        let listeners = unique(
+            &mut errors,
+            "listener",
+            s.listeners.iter().map(|l| l.id.as_str()),
+        );
         let values = unique(&mut errors, "value", s.values.iter().map(|v| v.id.as_str()));
         let access = unique(
             &mut errors,
@@ -413,6 +424,7 @@ impl<'a> Validator<'a> {
             slices,
             instances,
             models,
+            listeners,
             values,
             access,
             assumptions,
@@ -509,6 +521,7 @@ impl<'a> Validator<'a> {
         self.artifacts_and_instances();
         self.models();
         self.processes();
+        self.listeners();
         for value in &s.values {
             let at = format!("values[{}]", value.id);
             self.origin(&value.origin, &at);
@@ -631,6 +644,12 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn listener(&mut self, id: &ListenerId, at: &str) {
+        if !self.listeners.contains(id.as_str()) {
+            self.dangling("listener", id.as_str(), at);
+        }
+    }
+
     fn model(&mut self, id: &ModelId, at: &str) {
         if !self.models.contains(id.as_str()) {
             self.dangling("model", id.as_str(), at);
@@ -722,6 +741,7 @@ impl<'a> Validator<'a> {
             }
             EvidenceRef::ProfileRule(rule) => self.profile_rule(rule, at),
             EvidenceRef::Model { model } => self.model(model, at),
+            EvidenceRef::Listener { listener } => self.listener(listener, at),
         }
     }
 
@@ -738,6 +758,7 @@ impl<'a> Validator<'a> {
             Ref::Instance(i) => self.instance(i, at),
             Ref::Process(p) => self.process(p, at),
             Ref::Model(m) => self.model(m, at),
+            Ref::Listener(l) => self.listener(l, at),
         }
     }
 
@@ -854,6 +875,22 @@ impl<'a> Validator<'a> {
                         model: model.id.clone(),
                     });
                 }
+            }
+        }
+    }
+
+    /// A listener's address is an IP address, and its owner a recorded process.
+    fn listeners(&mut self) {
+        let s = self.s;
+        for listener in &s.listeners {
+            let at = format!("listeners[{}]", listener.id);
+            if listener.address.parse::<core::net::IpAddr>().is_err() {
+                self.errors.push(ValidationError::ListenerAddressInvalid {
+                    listener: listener.id.clone(),
+                });
+            }
+            if let crate::listener::ListenerOwner::Process { process } = &listener.owner {
+                self.process(process, &at);
             }
         }
     }

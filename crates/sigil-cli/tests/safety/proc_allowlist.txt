@@ -9,9 +9,13 @@
 # A traced run fails on any /proc access that matches no entry of its scopes. Adding or widening an
 # entry is an intentional, reviewed change: name the reading code and the plan section it serves.
 runtime  /proc/self/maps        # Rust std reads the main thread's stack bounds at startup
-observe  /proc/net/tcp          # listener table (sigil-core runtime/listeners.rs; plan §4.6.8)
-observe  /proc/net/tcp6         # listener table (sigil-core runtime/listeners.rs; plan §4.6.8)
-observe  /proc                  # enumerate PIDs to attribute listening sockets (listeners.rs)
-observe  /proc/{pid}/fd         # list a process's fds to find socket inodes (listeners.rs)
-observe  /proc/{pid}/fd/{n}     # readlink an fd to read socket:[inode] (listeners.rs)
-observe  /proc/{pid}/comm       # process name, an attribution hint only (listeners.rs)
+observe  /proc/net/tcp          # listener table (sigil-core runtime/listeners.rs, sigil-engine observe::proc; plan §4.6.8)
+observe  /proc/net/tcp6         # listener table (listeners.rs, observe::proc; plan §4.6.8)
+observe  /proc                  # enumerate PIDs to attribute listening sockets (listeners.rs, observe::proc)
+observe  /proc/{pid}/fd         # list a process's fds to find socket inodes (listeners.rs, observe::proc)
+observe  /proc/{pid}/fd/{n}     # readlink an fd to read socket:[inode], never followed (listeners.rs, observe::proc)
+observe  /proc/{pid}/comm       # process name: selects candidates, marks fronting hints (listeners.rs, observe::proc)
+observe  /proc/{pid}/cmdline    # argv of an `ollama` process: the runtime role rests on it (observe::proc; plan §4.2)
+observe  /proc/{pid}/exe        # readlink only, never followed: confirms the runtime's executable (observe::proc; plan §4.2)
+observe  /proc/{pid}/stat       # start time, part of a process's identity (observe::proc; plan §4.2)
+observe  /proc/{pid}/ns/net     # readlink only: the network namespace, SIGIL's own and the runtime's (observe::proc; plan §4.6.8)

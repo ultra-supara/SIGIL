@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ProcessRef;
 use crate::id::{
     AccessId, AnalyzerRef, ArtifactId, AssumptionId, CallId, CheckId, ComponentKey, FnId,
-    GroundTruthRef, InstanceId, ModelId, ObligationId, PolicyRuleRef, PremiseId, ProcessRole,
-    ProfileRef, ProfileRuleId, RootId, SliceId, ValueId,
+    GroundTruthRef, InstanceId, ListenerId, ModelId, ObligationId, PolicyRuleRef, PremiseId,
+    ProcessRole, ProfileRef, ProfileRuleId, RootId, SliceId, ValueId,
 };
 use crate::relation::RuleSupportRef;
 use crate::text::UntrustedText;
@@ -74,6 +74,8 @@ pub enum EvidenceRef {
     ProfileRule(ProfileRuleRef),
     /// A model: its manifest, layers, and the blobs found for them.
     Model { model: ModelId },
+    /// A listening socket as read from `/proc/net/tcp{,6}`: an observation.
+    Listener { listener: ListenerId },
 }
 
 /// A location inside a binary slice.
@@ -221,6 +223,9 @@ pub enum NotObservable {
     NoProcess,
     ModeDisabled,
     NamespaceMismatch,
+    /// A listing or read ended before it was complete (a budget, or an error): what it found is
+    /// kept, but it is not all there is.
+    ReadIncomplete,
 }
 
 /// Whether process mappings could be observed at all. An empty mapping list means "not mapped
@@ -258,4 +263,6 @@ pub enum Ref {
     Process(ProcessRef),
     /// A model in a model store.
     Model(ModelId),
+    /// A listening socket.
+    Listener(ListenerId),
 }

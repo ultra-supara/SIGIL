@@ -275,6 +275,11 @@ string_id!(
     |k, v| check_prefixed(k, v, "model:")
 );
 string_id!(
+    /// A listening socket: `listener:<protocol>/<address>:<port>#<socket inode>`.
+    ListenerId,
+    |k, v| check_prefixed(k, v, "listener:")
+);
+string_id!(
     /// A function inside one slice's [`crate::CodeFacts`], e.g. `fn:0xecb0`.
     FnId,
     |k, v| check_prefixed(k, v, "fn:")

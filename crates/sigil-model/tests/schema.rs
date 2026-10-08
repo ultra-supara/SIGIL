@@ -144,11 +144,14 @@ fn registered() -> Vec<(&'static str, Probe)> {
         Verdict => "Verdict", Completeness => "Completeness",
         Model => "Model", ModelProvenance => "ModelProvenance", ModelLayer => "ModelLayer",
         LayerRole => "LayerRole", LicenseText => "LicenseText", BlobLookup => "BlobLookup",
+        Listener => "Listener", ListenerOwner => "ListenerOwner", NsInode => "NsInode",
+        Protocol => "Protocol",
     ]
 }
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
 const MODEL: &str = "model:models/registry.ollama.ai/library/m/latest";
+const LISTENER: &str = "listener:tcp6/:::11434#7001";
 
 const SCALAR_DEFS: &[&str] = &[
     "ArtifactId",
@@ -156,6 +159,7 @@ const SCALAR_DEFS: &[&str] = &[
     "InstanceId",
     "RootId",
     "ModelId",
+    "ListenerId",
     "FnId",
     "CallId",
     "ValueId",
@@ -557,6 +561,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("UnknownReason", reason.clone()),
         sample("NotObservable", NotObservable::NoProcess),
         sample("NotObservable", NotObservable::NamespaceMismatch),
+        sample("NotObservable", NotObservable::ReadIncomplete),
         sample("Ref", Ref::Root(id("install"))),
         sample(
             "Ref",
@@ -567,6 +572,45 @@ fn gallery() -> Vec<(&'static str, Value)> {
         ),
         sample("Ref", Ref::Process(process.clone())),
         sample("Ref", Ref::Model(id(MODEL))),
+        sample("Ref", Ref::Listener(id(LISTENER))),
+        sample(
+            "EvidenceRef",
+            EvidenceRef::Listener {
+                listener: id(LISTENER),
+            },
+        ),
+        sample(
+            "Listener",
+            Listener {
+                id: id(LISTENER),
+                protocol: Protocol::Tcp6,
+                address: "::".to_string(),
+                port: 11434,
+                socket_inode: 7001,
+                owner: ListenerOwner::Process {
+                    process: process.clone(),
+                },
+            },
+        ),
+        sample(
+            "Listener",
+            Listener {
+                id: id("listener:tcp/0.0.0.0:22#7002"),
+                protocol: Protocol::Tcp,
+                address: "0.0.0.0".to_string(),
+                port: 22,
+                socket_inode: 7002,
+                owner: ListenerOwner::Unknown {
+                    why: NotObservable::PermissionDenied,
+                },
+            },
+        ),
+        sample("ListenerOwner", ListenerOwner::Unheld),
+        sample("NsInode", NsInode::Inode(4026531840)),
+        sample(
+            "NsInode",
+            NsInode::NotObservable(NotObservable::PermissionDenied),
+        ),
         sample("BlobLookup", BlobLookup::Absent),
         sample(
             "BlobLookup",

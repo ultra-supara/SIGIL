@@ -126,6 +126,7 @@ pub fn base(required: &[&str]) -> Session {
         instances: vec![],
         models: vec![],
         processes: vec![],
+        listeners: vec![],
         values: vec![],
         components: vec![],
         releases: vec![],
@@ -1105,6 +1106,10 @@ pub fn add_observed_zen4_mapping(s: &mut Session) {
             deleted: false,
         },
         mappings: vec![mapping.clone()],
+        name: Some(t("llama-server")),
+        argv: None,
+        net_ns: NsInode::Inode(4026531840),
+        fd_table: Observability::NotObservable(NotObservable::PermissionDenied),
     });
     let load = s.loads.iter_mut().find(|l| l.instance == zen4).unwrap();
     load.mapped = vec![mapping];

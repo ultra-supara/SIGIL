@@ -28,14 +28,12 @@
 //! What was read stays in the facts.
 
 use sigil_model::{
-    digest_hex, Action, BlobLookup, CheckId, CondEvidence, CondId, CondState, Condition, Coverage,
-    CoverageState, EvidenceRef, FileInstance, Finding, FindingId, InstanceContent, InstanceId,
-    Model, PolicyDecision, PolicyRuleRef, Ref, RootId, RuleId, Severity, Stability, UntrustedText,
-    LICENSE_MEDIA_TYPE,
+    digest_hex, BlobLookup, CheckId, Coverage, CoverageState, EvidenceRef, FileInstance, Finding,
+    InstanceContent, InstanceId, Model, Ref, RootId, Stability, UntrustedText, LICENSE_MEDIA_TYPE,
 };
 
+use super::observed_finding;
 use crate::collect::ollama_store::{StoreFacts, INVENTORY};
-use crate::policy::catalog;
 
 /// Whether every blob of a model was read and compared with its digest.
 pub const INTEGRITY: &str = "model_store.integrity";
@@ -300,52 +298,9 @@ impl Out {
         facts: Vec<EvidenceRef>,
         evidence: Vec<EvidenceRef>,
     ) {
-        // Catalog rules and fixed names: these always validate. A failure is a catalog bug and
-        // drops the finding rather than panicking.
-        let Some(info) = catalog::rule(rule) else {
-            return;
-        };
-        let on = match &subject {
-            Ref::Model(m) => m.as_str().to_string(),
-            Ref::Instance(i) => i.as_str().to_string(),
-            Ref::Root(r) => r.as_str().to_string(),
-            _ => return,
-        };
-        let (Ok(id), Ok(rule_id), Ok(cond_id), Ok(source)) = (
-            FindingId::new(format!("finding:{rule}@{on}{at}")),
-            RuleId::new(rule),
-            CondId::new(condition),
-            PolicyRuleRef::new(format!("default:{rule}")),
-        ) else {
-            return;
-        };
-        self.findings.push(Finding {
-            id,
-            rule: rule_id,
-            kind: info.kind,
-            subject,
-            summary: info.summary.to_string(),
-            conditions: vec![Condition {
-                id: cond_id,
-                state: CondState::Met {
-                    evidence: CondEvidence::Observed { facts },
-                },
-                unresolved: vec![],
-            }],
-            evidence,
-            limits: vec![],
-            default_severity: info.default,
-            // Replaced by policy evaluation.
-            decision: PolicyDecision {
-                action: match info.default {
-                    Severity::Warn => Action::Warn,
-                    Severity::Fail => Action::Fail,
-                },
-                source,
-                reason: None,
-                expires: None,
-            },
-        });
+        if let Some(finding) = observed_finding(rule, subject, at, condition, facts, evidence) {
+            self.findings.push(finding);
+        }
     }
 
     fn cover(&mut self, check: &str, scope: Ref, state: CoverageState) {
