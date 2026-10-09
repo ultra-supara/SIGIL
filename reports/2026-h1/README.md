@@ -1,6 +1,12 @@
 # State of Local AI Audit — 2026 H1 (historical, SIGIL 0.1)
 
-This directory holds the data of the 2026-H1 report: five Ollama models, inspected by **SIGIL 0.1.0**, which wrote AI-BOM v1 (`schema_version: "1.1"`). It was generated on 2026-06-14 (`summary.json`, `generated_at`). The report page is [`site/reports/2026-h1/`](../../site/reports/2026-h1/index.html), published at <https://ultra-supara.github.io/SIGIL/reports/2026-h1/>.
+This directory holds the data of the 2026-H1 report: five Ollama models, inspected by **SIGIL 0.1.0**, which wrote AI-BOM v1 (`schema_version: "1.1"`).
+
+- **Audited:** 2026-06-06 (UTC). The first summary was generated at 2026-06-06T16:06:52Z.
+- **First published:** 2026-06-07.
+- **Corrected:** 2026-06-14. With the SPDX fast-path fix, `phi3:mini`'s AI-BOM records `MIT` instead of the false `Microsoft.`, and the summary was re-aggregated at 2026-06-14T11:45:40Z (`summary.json`, `generated_at`). The other four AI-BOMs are as audited.
+
+The report page is [`site/reports/2026-h1/`](../../site/reports/2026-h1/index.html), published at <https://ultra-supara.github.io/SIGIL/reports/2026-h1/>.
 
 ## v0.1 semantics
 
