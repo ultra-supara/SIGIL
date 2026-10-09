@@ -1,320 +1,120 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SIGIL vs ollama show + hf cache verify — what built-ins do and don't cover</title>
-    <meta
-      name="description"
-      content="Honest comparison between SIGIL and vendor built-ins: `ollama show` and `hf cache verify`. Where the built-ins are enough and where SIGIL extends to an audit-ready artifact."
-    />
-    <link rel="stylesheet" href="../../styles.css" />
-  </head>
-  <body class="sakura-page compare-detail-page">
-    <div class="site-noise"></div>
-    <div class="site-bg"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>SIGIL vs ollama show + hf cache verify — what built-ins do and don&#x27;t cover</title>
+<link rel="stylesheet" href="../../site.css">
+</head>
+<body>
+<nav><a href="../../">SIGIL</a> · <a href="../../compare/">Compare</a> · <a href="../../reports/2026-h1/">2026 H1 report</a> · <a href="../../viewer/">Viewer</a> · <a href="https://github.com/ultra-supara/SIGIL">GitHub</a></nav>
+<main>
+<h1>SIGIL vs <code>ollama show</code> + <code>hf cache verify</code></h1>
+<p>These are the commands a developer reaches for first — and they are the right tools for what they do. This page is honest about what each covers and where SIGIL extends the surface into an audit-ready artifact.</p>
 
-    <header class="site-header">
-      <a class="brand" href="../../" aria-label="SIGIL home">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">SIGIL</span>
-      </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="../../#platform">Platform</a>
-        <a href="../../#research">Research</a>
-        <a href="../../#tools">Tools</a>
-        <a href="../" aria-current="page">Compare</a>
-        <a href="../../reports/2026-h1/">2026 H1</a>
-        <a href="../../viewer/">Viewer</a>
-        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
-      </nav>
-    </header>
+<h2>Pick the built-in when</h2>
+<p>You are inspecting a single model interactively. You want to check that downloaded files are intact, see the Modelfile and tokenizer details, or list which features (completion, vision) the model advertises. The terminal output is the answer.</p>
 
-    <main id="top">
-      <section class="page-hero">
-        <div class="hero-copy">
-          <p class="definition">Compare · Vendor built-ins</p>
-          <h1>SIGIL vs <code>ollama show</code> + <code>hf cache verify</code></h1>
-          <p class="lead">
-            These are the commands a developer reaches for first — and they
-            are the right tools for what they do. This page is honest about
-            what each covers and where SIGIL extends the surface into an
-            audit-ready artifact.
-          </p>
-        </div>
-        <figure class="hero-visual" aria-label="SIGIL versus built-in tools visual">
-          <div class="sigil-orb" aria-hidden="true">
-            <div class="sigil-ring ring-a"></div>
-            <div class="sigil-ring ring-b"></div>
-            <div class="sigil-ring ring-c"></div>
-            <div class="sigil-kanji">印</div>
-            <div class="sigil-axis axis-x"></div>
-            <div class="sigil-axis axis-y"></div>
-            <div class="sigil-axis axis-d1"></div>
-            <div class="sigil-axis axis-d2"></div>
-          </div>
+<h2>Pick SIGIL when</h2>
+<p>You need one artifact you can attach to a compliance review — JSON for diffing, Markdown for the ticket — that records manifest provenance, SPDX license family, every blob's SHA-256, the runtime's exposure (in observe mode), and a deterministic verdict from a policy with a completeness beside it (no LLM).</p>
 
-          <div class="floating-label label-one">
-            <span>COMPARE</span>
-            <strong>BUILT-INS</strong>
-          </div>
+<h2>Axis-by-axis</h2>
+<p>What each command produces and what it leaves to you.</p>
+<table>
+<thead><tr><th>Axis</th><th><code>ollama show</code></th><th><code>hf cache verify</code></th><th>SIGIL</th></tr></thead>
+<tbody>
+<tr><td>Input</td><td>Single Ollama model tag</td><td>Single HF repo (model / dataset / space)</td><td>Entire Ollama store (or a single model)</td></tr>
+<tr><td>Returns</td><td><code>modelfile / parameters / template / details / model_info / capabilities</code></td><td>Checksum verification result (file count + OK/FAIL)</td><td>The session (JSON) with models, layers, licenses, listeners, findings, coverage, verdict and completeness; Markdown and AI-BOM v2 rendered from it</td></tr>
+<tr><td>Integrity check</td><td>None</td><td>File checksum vs. Hub</td><td>Streaming SHA-256 of every Ollama blob vs. manifest digest</td></tr>
+<tr><td>License family</td><td>Modelfile <code>LICENSE</code> string only</td><td>None</td><td>SPDX id from the Ollama license layer — 10 families by shortname or body match</td></tr>
+<tr><td>Provenance</td><td>Implicit in the tag</td><td>HF repo id</td><td><code>registry / namespace / model / tag</code> tuple parsed from manifest path</td></tr>
+<tr><td>Runtime API exposure</td><td>Out of scope</td><td>Out of scope</td><td>With <code>--active api-probe</code>: whether <code>GET /api/version</code> answered at one literal address, and the version it reported. Classifying the configured host is planned</td></tr>
+<tr><td>Listener bind classification</td><td>Out of scope</td><td>Out of scope</td><td>Observe mode: the listener held by <code>ollama serve</code>, found through its fd table; <code>loopback / wildcard / private / global</code> from the address</td></tr>
+<tr><td>Audit artifact</td><td>Terminal text — not designed for archival</td><td>Terminal text — not designed for archival</td><td>Canonical JSON session (<code>sigil-session/1</code>) + Markdown render — diffable across review cycles</td></tr>
+<tr><td>Verdict</td><td>None</td><td>Pass/fail per file</td><td>PASS / WARN / FAIL from findings and a TOML policy, with completeness beside it (no LLM)</td></tr>
+<tr><td>Reach</td><td>Ollama only</td><td>HF cache only</td><td>Ollama today; llama.cpp / vLLM planned</td></tr>
+</tbody>
+</table>
 
-          <div class="floating-label label-two">
-            <span>OUTPUT</span>
-            <strong>REVIEW ARTIFACT</strong>
-          </div>
-
-          <div class="terminal-card" aria-hidden="true">
-            <div class="terminal-top">
-              <span></span>
-              <span></span>
-              <span></span>
-              <strong>sigil://builtins</strong>
-            </div>
-
-            <div class="terminal-body comparison-terminal">
-              <p><b>[sigil]</b> schema 1.1 AI-BOM + Markdown</p>
-              <p><em>[ollama]</em> terminal model metadata</p>
-              <p><em>[hf]</em> cache integrity verification</p>
-              <p><b>[sigil]</b> SPDX + exposure + deterministic verdict</p>
-              <p><b>[ok]</b> ticket-ready evidence identified.</p>
-            </div>
-          </div>
-          <figcaption class="visually-hidden">SIGIL emits an audit-ready AI-BOM artifact with a PASS verdict; ollama show and hf cache verify emit terminal-only output.</figcaption>
-        </figure>
-      </section>
-
-      <section class="section verdict-section">
-        <div class="verdict-box">
-          <div>
-            <h3>Pick the built-in when</h3>
-            <p>
-              You are inspecting a single model interactively. You want to
-              check that downloaded files are intact, see the Modelfile and
-              tokenizer details, or list which features (completion, vision)
-              the model advertises. The terminal output is the answer.
-            </p>
-          </div>
-          <div>
-            <h3>Pick SIGIL when</h3>
-            <p>
-              You need one artifact you can attach to a compliance review —
-              JSON for diffing, Markdown for the ticket — that records
-              runtime exposure, manifest provenance, SPDX license family,
-              every blob's SHA-256, and a deterministic verdict aggregated
-              from analyzer findings (no LLM).
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section compare-axes">
-        <div class="section-heading">
-          <h2>Axis-by-axis</h2>
-          <p>
-            What each command produces and what it leaves to you.
-          </p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Axis</th>
-                <th><code>ollama show</code></th>
-                <th><code>hf cache verify</code></th>
-                <th>SIGIL</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Input</td>
-                <td>Single Ollama model tag</td>
-                <td>Single HF repo (model / dataset / space)</td>
-                <td>Entire Ollama store (or a single model)</td>
-              </tr>
-              <tr>
-                <td>Returns</td>
-                <td><code>modelfile / parameters / template / details / model_info / capabilities</code></td>
-                <td>Checksum verification result (file count + OK/FAIL)</td>
-                <td>JSON + Markdown AI-BOM with runtime, models, licenses, findings, verdict</td>
-              </tr>
-              <tr>
-                <td>Integrity check</td>
-                <td>None</td>
-                <td>File checksum vs. Hub</td>
-                <td>Streaming SHA-256 of every Ollama blob vs. manifest digest</td>
-              </tr>
-              <tr>
-                <td>License family</td>
-                <td>Modelfile <code>LICENSE</code> string only</td>
-                <td>None</td>
-                <td>SPDX id from the Ollama license layer — 10 families by shortname or body match</td>
-              </tr>
-              <tr>
-                <td>Provenance</td>
-                <td>Implicit in the tag</td>
-                <td>HF repo id</td>
-                <td><code>registry / namespace / model / tag</code> tuple parsed from manifest path</td>
-              </tr>
-              <tr>
-                <td>Runtime API exposure</td>
-                <td>Out of scope</td>
-                <td>Out of scope</td>
-                <td>Configured Ollama host classified — <code>localhost / network / public_bind / unavailable</code></td>
-              </tr>
-              <tr>
-                <td>Listener bind classification</td>
-                <td>Out of scope</td>
-                <td>Out of scope</td>
-                <td><code>/proc</code> walk → <code>localhost / lan / public_bind / docker_published / proxy</code></td>
-              </tr>
-              <tr>
-                <td>Audit artifact</td>
-                <td>Terminal text — not designed for archival</td>
-                <td>Terminal text — not designed for archival</td>
-                <td>Stable JSON (<code>schema_version: 1.1</code>) + Markdown render — diffable across review cycles</td>
-              </tr>
-              <tr>
-                <td>Verdict</td>
-                <td>None</td>
-                <td>Pass/fail per file</td>
-                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> per AI-BOM, aggregated deterministically from analyzer-emitted finding severities (no LLM)</td>
-              </tr>
-              <tr>
-                <td>Reach</td>
-                <td>Ollama only</td>
-                <td>HF cache only</td>
-                <td>Ollama today; llama.cpp / vLLM planned</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="section split">
-        <div>
-          <h2>What <code>ollama show</code> tells you, and what it doesn't</h2>
-          <p>
-            <code>ollama show gemma4:e2b --license</code> prints the license
-            text declared in the Modelfile, and <code>--modelfile</code>
-            prints the Modelfile itself. Useful for triage, not for
-            attaching to a review ticket.
-          </p>
-          <ul class="check-list">
-            <li>No SPDX id — just whatever string the Modelfile carries</li>
-            <li>No SHA-256 of layers verified against the manifest digest</li>
-            <li>No classification of the runtime endpoint or the listener</li>
-            <li>No structured artifact — terminal output only</li>
-          </ul>
-        </div>
-        <div class="command-panel" aria-label="Built-in vs SIGIL output shape">
-          <pre><code># ollama show output
+<h2>What <code>ollama show</code> tells you, and what it doesn't</h2>
+<p><code>ollama show gemma4:e2b --license</code> prints the license text declared in the Modelfile, and <code>--modelfile</code> prints the Modelfile itself. Useful for triage, not for attaching to a review ticket.</p>
+<ul>
+<li>No SPDX id — just whatever string the Modelfile carries</li>
+<li>No SHA-256 of layers verified against the manifest digest</li>
+<li>No classification of the runtime endpoint or the listener</li>
+<li>No structured artifact — terminal output only</li>
+</ul>
+<pre># ollama show output
 Modelfile: ...
 LICENSE: """Apache License Version 2.0, January 2004 ..."""
 parameters: temperature 0.7
 template: """..."""
-
 # hf cache verify output
 ✅ Verified 13 file(s) for 'meta-llama/Llama-3.2-1B-Instruct' (model)
-   in ~/.cache/huggingface/hub/models--meta-llama--Llama-3.2-1B-Instruct/...
-   All checksums match.
+in ~/.cache/huggingface/hub/models--meta-llama--Llama-3.2-1B-Instruct/...
+All checksums match.</pre>
+<p>Specification example (golden example 14, <code>tool.version</code> 0.0.0-example), not a real system. An excerpt of SIGIL's AI-BOM v2 Markdown, as it is written:</p>
+<pre># SIGIL AI-BOM
 
-# sigil aibom generate output  (file at out/gemma4-aibom.md)
-# SIGIL AI-BOM: [PASS]
-- Schema: `1.1`
-- Runtime exposure: `localhost` (source: `proc`)
-- gemma4:e2b — License: Apache-2.0 (sha256:7339...)
-- Layers SHA-256 verified vs. manifest digest
-- Findings: none</code></pre>
-        </div>
-      </section>
+| AI\-BOM |  |
+|---|---|
+| Schema | sigil\-aibom\/2 |
+| Mode | observe |
 
-      <section class="section split alt">
-        <div>
-          <h2>What <code>hf cache verify</code> does well</h2>
-          <p>
-            For Hugging Face cache integrity, this is the right tool. It is
-            fast, vendor-official, and answers exactly the question:
-            "did my downloaded files match the Hub at fetch time?".
-          </p>
-          <ul class="check-list">
-            <li>HF cache layout only (<code>~/.cache/huggingface/hub/</code>)</li>
-            <li>Pass/fail per file — not per model or per review cycle</li>
-            <li>No license family detection</li>
-            <li>No record of how the runtime was bound at audit time</li>
-          </ul>
-        </div>
-        <div>
-          <h2>Where SIGIL extends the surface</h2>
-          <p>
-            SIGIL covers what the built-ins leave out: the auditable
-            artifact, the structured deterministic verdict, the
-            manifest-aware integrity check, and the runtime exposure
-            picture as it was when you audited.
-          </p>
-          <ul class="check-list">
-            <li>One JSON (schema 1.1) + Markdown — same model, never drift</li>
-            <li>Manifest-aware SHA-256 against the declared digest</li>
-            <li>Verdict aggregated from analyzer findings — no LLM, no remote service</li>
-            <li><code>/proc</code>-derived listener classification recorded with a timestamp</li>
-          </ul>
-        </div>
-      </section>
+## Outcome
 
-      <section class="section">
-        <div class="section-heading">
-          <h2>Use both</h2>
-          <p>
-            Built-ins are daily tools. SIGIL is the per-review-cycle artifact.
-          </p>
-        </div>
-        <ul class="check-list">
-          <li>Use <code>ollama show</code> for quick triage of a single model</li>
-          <li>Use <code>hf cache verify</code> as a fast HF cache integrity check</li>
-          <li>Use <code>sigil aibom generate --runtime ollama</code> when the artifact has to outlive the terminal session</li>
-        </ul>
-        <div class="anti-persona">
-          <h3>When SIGIL is the wrong choice</h3>
-          <p>
-            If you only need ad-hoc inspection of one model and you don't
-            need a versioned artifact, the built-ins are faster. If your
-            entire AI footprint is the HF cache and you do not run Ollama,
-            <code>hf cache verify</code> covers integrity and SIGIL adds
-            nothing today — llama.cpp and vLLM support are planned, not
-            current.
-          </p>
-        </div>
-      </section>
+**Verdict:** PASS · **Completeness:** COMPLETE
 
-      <section class="section docs-section">
-        <div class="section-heading">
-          <h2>Sources</h2>
-          <p>Facts above are checked against current vendor docs.</p>
-        </div>
-        <div class="doc-links">
-          <a href="https://github.com/ollama/ollama/blob/main/docs/api.md">
-            <span>Ollama <code>/api/show</code></span>
-            Field list: modelfile, parameters, template, details, model_info, capabilities. No SHA verification, no exposure.
-          </a>
-          <a href="https://huggingface.co/docs/huggingface_hub/guides/manage-cache">
-            <span><code>hf cache verify</code></span>
-            HF cache checksum verification — file-level OK/FAIL against the Hub.
-          </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ollama-inspection.md">
-            <span>SIGIL Ollama inspection</span>
-            Evidence fields, SPDX detection table, runtime bind classes, findings.
-          </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ai-bom-and-comparison.md">
-            <span>SIGIL AI-BOM contract</span>
-            Schema 1.1, enum reference, planned comparison direction.
-          </a>
-        </div>
-      </section>
-    </main>
+## Listeners
 
-    <footer class="site-footer">
-      <span>SIGIL is local-first and analysis-only.</span>
-      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
-    </footer>
-  </body>
+| Listener | Address | Port | Owner |
+|---|---|---|---|
+| listener\:tcp\/127\.0\.0\.1\:11434\#7001 | 127\.0\.0\.1 | 11434 | process 4242 \(start 1000\) |
+
+## Models
+
+| Model | Name | Provenance | Layers | License |
+|---|---|---|---|---|
+| model\:models\/registry\.ollama\.ai\/library\/m\/latest | m\:latest | registry\.ollama\.ai\/library\/m\:latest | 3 \(found 3\, absent 0\, unresolved 0\, not looked up 0\) | MIT |</pre>
+
+<h2>What <code>hf cache verify</code> does well</h2>
+<p>For Hugging Face cache integrity, this is the right tool. It is fast, vendor-official, and answers exactly the question: "did my downloaded files match the Hub at fetch time?".</p>
+<ul>
+<li>HF cache layout only (<code>~/.cache/huggingface/hub/</code>)</li>
+<li>Pass/fail per file — not per model or per review cycle</li>
+<li>No license family detection</li>
+<li>No record of how the runtime was bound at audit time</li>
+</ul>
+
+<h2>Where SIGIL extends the surface</h2>
+<p>SIGIL covers what the built-ins leave out: the auditable artifact, the deterministic verdict and completeness, the manifest-aware integrity check, and the runtime's exposure as it was when you audited.</p>
+<ul>
+<li>One session (canonical JSON), with Markdown and AI-BOM v2 rendered from it — never drifting apart</li>
+<li>Manifest-aware SHA-256 against the declared digest</li>
+<li>Verdict from findings and a policy — no LLM, no remote service — and a completeness that says what was not seen</li>
+<li>Listener attribution from <code>/proc</code>, recorded with the time of observation</li>
+</ul>
+
+<h2>Use both</h2>
+<p>Built-ins are daily tools. SIGIL is the per-review-cycle artifact.</p>
+<ul>
+<li>Use <code>ollama show</code> for quick triage of a single model</li>
+<li>Use <code>hf cache verify</code> as a fast HF cache integrity check</li>
+<li>Use <code>sigil inspect ollama --format md</code> when the artifact has to outlive the terminal session</li>
+</ul>
+
+<h2>When SIGIL is the wrong choice</h2>
+<p>If you only need ad-hoc inspection of one model and you don't need a versioned artifact, the built-ins are faster. If your entire AI footprint is the HF cache and you do not run Ollama, <code>hf cache verify</code> covers integrity and SIGIL adds nothing today — llama.cpp and vLLM support are planned, not current.</p>
+
+<h2>Sources</h2>
+<p>Facts above are checked against current vendor docs.</p>
+<ul>
+<li><a href="https://github.com/ollama/ollama/blob/main/docs/api.md">Ollama <code>/api/show</code></a>: Field list: modelfile, parameters, template, details, model_info, capabilities. No SHA verification, no exposure.</li>
+<li><a href="https://huggingface.co/docs/huggingface_hub/guides/manage-cache"><code>hf cache verify</code></a>: HF cache checksum verification — file-level OK/FAIL against the Hub.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ollama-inspection.md">SIGIL Ollama guide</a>: modes, outputs, and what is read; rules and coverage in the model-store and exposure docs.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ai-bom-and-comparison.md">SIGIL AI-BOM v2</a>: the projection of the session, and the planned comparison direction.</li>
+</ul>
+</main>
+</body>
 </html>
