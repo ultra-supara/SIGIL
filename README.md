@@ -55,7 +55,7 @@ cargo test
 cargo run -p sigil-cli -- --help
 ```
 
-On macOS, `./scripts/setup_macos_m3.sh` installs Rust via `rustup` (if missing) and the Homebrew LLVM / Clang toolchain, then runs `cargo test`. The syscall safety tests run on Linux with `strace` and a C compiler.
+SIGIL needs a stable Rust toolchain ([rustup](https://rustup.rs)). The syscall safety tests run on Linux with `strace` and a C compiler.
 
 ## Inspect an Ollama installation
 
@@ -85,15 +85,9 @@ cargo run -p sigil-cli -- session render out/session.json
 cargo run -p sigil-cli -- rules
 ```
 
-Other flags worth knowing:
+Every option, the exit codes, and a CI recipe are in the [Ollama guide](docs/ollama-inspection.md). Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached (`--fail-on`), `4` incomplete (`--fail-on-incomplete`).
 
-- `--models-dir <dir>`: the model store (default `$OLLAMA_MODELS`, else `~/.ollama/models`). `--model <name>` inventories one model.
-- `--policy <file>`: a policy (TOML, [docs/policy.md](docs/policy.md)) that sets the audit scope, rule actions with reasons and expiry, and accepted assumptions.
-- `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`). Budgets that run out leave the result incomplete, never silently clean.
-- `--active api-probe [--api-addr IP[:PORT]] [--allow-remote]`: probe the API at a literal address (default `127.0.0.1:11434`; `localhost` means 127.0.0.1). A refused connection closes the check: nothing answers at that address from SIGIL's network namespace. That is not "no Ollama on this system": a runtime in another namespace (for example, outside SIGIL's container) or on another host is neither seen nor ruled out, and a version is the endpoint's own claim, not tied to an observed process or binary. A timeout or a reply that is not the Ollama API leaves the check open. The probe's budgets are `api_connect_ms` (at most 30000), `api_io_ms` (at most 60000), and `api_response_bytes` (at most 1048576).
-- `--fail-on warn|fail` and `--fail-on-incomplete` for CI. Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached, `4` incomplete.
-
-Details: [model store](docs/model-store.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
+Details: [Ollama guide](docs/ollama-inspection.md) · [model store](docs/model-store.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
 
 ## Who SIGIL is for
 
@@ -118,6 +112,8 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 - Diff a session against a trusted baseline: model digest drift, missing license, wider exposure, new findings (planned).
 - Add llama.cpp, LM Studio, vLLM, and other local OpenAI-compatible runtimes (planned).
 
+The milestones are in the [Roadmap](docs/sigil-overview.md#roadmap).
+
 ## What's in the box
 
 **Implemented today**
@@ -138,13 +134,15 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 
 ## Documentation
 
+- [Overview and Roadmap](docs/sigil-overview.md): what SIGIL is, what it does today, and what comes next.
 - [Session model](docs/session-model.md): what a session records, and the invariants it keeps.
+- [Ollama guide](docs/ollama-inspection.md): modes, outputs, options, exit codes, and CI.
 - [Model store](docs/model-store.md) and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
 - [Policy](docs/policy.md): the policy format and how the outcome is computed.
+- [Architecture and safety](docs/architecture-and-safety.md): the crates, the data flow, and the safety boundaries.
 - [ADR-002](docs/adr/ADR-002-execution-modes.md): execution modes and safety contracts.
 - [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md): why the v0.1 IR, SafeISA, and emulator were removed, and where each v0.1 capability went.
 - [AI-BOM and comparison](docs/ai-bom-and-comparison.md): the AI-BOM v2, how it names its session, and the comparison direction.
-- v0.1 references, to be updated: [overview](docs/sigil-overview.md), [Ollama inspection](docs/ollama-inspection.md), [architecture and safety](docs/architecture-and-safety.md).
 
 ## License
 

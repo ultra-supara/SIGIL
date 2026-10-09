@@ -995,3 +995,95 @@ fn help_lists_the_aibom_format() {
     let r = run(&[&"session", &"render", &"--help"]);
     assert!(r.stdout.contains("aibom"), "{}", r.stdout);
 }
+
+// --- the documented commands (README, docs/ollama-inspection.md) ------------------------------
+
+/// The `cargo run … -p sigil-cli -- ARGS` commands of the fenced `bash` blocks of `markdown`, in
+/// order, as argument lists. A trailing `\` joins lines, and a token starting with `#` starts a
+/// comment.
+fn documented_commands(markdown: &str) -> Vec<Vec<String>> {
+    let mut commands = vec![];
+    let mut in_bash = false;
+    let mut pending = String::new();
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_bash {
+            in_bash = trimmed == "```bash";
+            continue;
+        }
+        if trimmed == "```" {
+            in_bash = false;
+            continue;
+        }
+        if let Some(head) = trimmed.strip_suffix('\\') {
+            pending.push_str(head);
+            pending.push(' ');
+            continue;
+        }
+        pending.push_str(trimmed);
+        let joined = std::mem::take(&mut pending);
+        let tokens: Vec<&str> = joined
+            .split_whitespace()
+            .take_while(|t| !t.starts_with('#'))
+            .collect();
+        if tokens.len() < 2 || tokens[0] != "cargo" || tokens[1] != "run" {
+            continue;
+        }
+        let Some(dash) = tokens.iter().position(|t| *t == "--") else {
+            continue;
+        };
+        if !tokens[2..dash].windows(2).any(|w| w == ["-p", "sigil-cli"]) {
+            continue;
+        }
+        commands.push(tokens[dash + 1..].iter().map(|t| t.to_string()).collect());
+    }
+    commands
+}
+
+/// Runs the commands of `doc` (relative to the workspace) in order, in one temporary directory,
+/// with `OLLAMA_MODELS` set to a store whose model has no license (one WARN finding). Each must
+/// exit 0, 3, or 4: never an execution error (1) or a usage error (2).
+fn run_documented(doc: &str) -> usize {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(doc);
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {doc}: {e}"));
+    let models = store(false);
+    let cwd = TempDir::new().unwrap();
+    let commands = documented_commands(&text);
+    for documented in &commands {
+        let mut args: Vec<String> = documented
+            .iter()
+            .map(|a| a.replace("<FINDING-ID>", LICENSE_MISSING))
+            .collect();
+        assert!(
+            !args.iter().any(|a| a.contains('<') || a.contains('>')),
+            "{doc}: a placeholder is left in `sigil {}`",
+            args.join(" ")
+        );
+        // Never reach a local Ollama from a test.
+        if args.iter().any(|a| a == "--active") && !args.iter().any(|a| a == "--api-addr") {
+            args.extend(["--api-addr".to_string(), "127.0.0.1:9".to_string()]);
+        }
+        let out = sigil()
+            .current_dir(cwd.path())
+            .env("OLLAMA_MODELS", models.path())
+            .args(&args)
+            .output()
+            .unwrap();
+        let code = out.status.code().unwrap();
+        assert!(
+            matches!(code, 0 | 3 | 4),
+            "{doc}: `sigil {}` exited {code}:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    commands.len()
+}
+
+#[test]
+fn every_documented_command_runs() {
+    let n = run_documented("README.md") + run_documented("docs/ollama-inspection.md");
+    assert!(n >= 10, "only {n} documented commands were found");
+}
