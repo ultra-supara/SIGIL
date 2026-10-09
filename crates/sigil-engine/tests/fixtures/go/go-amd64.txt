@@ -1,0 +1,13 @@
+fixture-amd64: go1.25.6
+	path	example.com/sigil-fixture
+	mod	example.com/sigil-fixture	(devel)	
+	dep	example.com/dep	v1.0.0
+	=>	./dep	(devel)	
+	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
