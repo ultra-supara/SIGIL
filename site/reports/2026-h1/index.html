@@ -1,365 +1,117 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>State of Local AI Audit — 2026 H1 (SIGIL Report)</title>
-    <meta
-      name="description"
-      content="A sample audit of five popular Ollama models. License layer presence, SPDX detection, runtime exposure, manifest integrity, and verdict distribution — generated with SIGIL."
-    />
-    <link rel="stylesheet" href="../../styles.css" />
-  </head>
-  <body class="sakura-page report-page">
-    <div class="site-noise"></div>
-    <div class="site-bg"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>State of Local AI Audit — 2026 H1 (historical, SIGIL 0.1)</title>
+<link rel="stylesheet" href="../../site.css">
+</head>
+<body>
+<nav><a href="../../">SIGIL</a> · <a href="../../compare/">Compare</a> · <a href="../../reports/2026-h1/">2026 H1 report</a> · <a href="../../viewer/">Viewer</a> · <a href="https://github.com/ultra-supara/SIGIL">GitHub</a></nav>
+<main>
+<h1>State of Local AI Audit — 2026 H1</h1>
+<p><strong>Historical report (SIGIL 0.1 semantics).</strong> Produced by SIGIL 0.1.0 with the API probe on. PASS did not consider coverage then. Not comparable with v2 results; not re-evaluated. See <a href="https://github.com/ultra-supara/SIGIL/blob/main/reports/2026-h1/README.md">reports/2026-h1/README.md</a>.</p>
+<p>Published 2026-06-07. A 5-model sample of the Ollama public registry, audited with SIGIL 0.1.0. We report license layer presence, SPDX detection, manifest integrity, and verdict distribution — derived deterministically from each model's on-disk evidence, with no LLM in the verdict path.</p>
+<p>Aggregate PASS verdict for the 2026 H1 sample: all five models (gemma3:4b, llama3.2:3b, mistral:7b, phi3:mini, qwen2.5:7b) PASS. 5 Ollama tags audited: 5 / 5 PASS; 100% layer presence · 60% SPDX; 5 / 5 manifest digests matched.</p>
 
-    <header class="site-header">
-      <a class="brand" href="../../" aria-label="SIGIL home">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">SIGIL</span>
-      </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="../../#platform">Platform</a>
-        <a href="../../#research">Research</a>
-        <a href="../../#tools">Tools</a>
-        <a href="../../compare/">Compare</a>
-        <a href="./" aria-current="page">2026 H1</a>
-        <a href="../../viewer/">Viewer</a>
-        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
-      </nav>
-    </header>
+<h2>Headline numbers</h2>
+<p>Four numbers a compliance reviewer can quote. The raw per-model AI-BOM JSONs are linked below so the figures can be re-aggregated independently.</p>
+<table>
+<thead><tr><th>Measure</th><th>Value</th><th>What it counts</th></tr></thead>
+<tbody>
+<tr><td>Sample size</td><td>5</td><td>Ollama tags, see Methodology</td></tr>
+<tr><td>License layer presence</td><td>100 %</td><td>5/5 models shipping a license layer</td></tr>
+<tr><td>SPDX detection rate</td><td>60 %</td><td>3/5 license layers matched to an SPDX id</td></tr>
+<tr><td>Manifest integrity</td><td>5 / 5</td><td>models where every blob SHA-256 matched the manifest digest</td></tr>
+</tbody>
+</table>
 
-    <main id="top">
-      <section class="page-hero">
-        <div class="hero-copy">
-          <span class="report-badge">Published 2026-06-07</span>
-          <p class="definition">Report · 2026 H1</p>
-          <h1>State of Local AI Audit</h1>
-          <p class="lead">
-            A 5-model sample of the Ollama public registry, audited with
-            SIGIL 0.1.0. We report license layer presence, SPDX detection,
-            manifest integrity, and verdict distribution — derived
-            deterministically from each model's on-disk evidence, with no
-            LLM in the verdict path.
-          </p>
-        </div>
-        <figure class="hero-visual" aria-label="SIGIL 2026 H1 report visual">
-          <div class="sigil-orb" aria-hidden="true">
-            <div class="sigil-ring ring-a"></div>
-            <div class="sigil-ring ring-b"></div>
-            <div class="sigil-ring ring-c"></div>
-            <div class="sigil-kanji">印</div>
-            <div class="sigil-axis axis-x"></div>
-            <div class="sigil-axis axis-y"></div>
-            <div class="sigil-axis axis-d1"></div>
-            <div class="sigil-axis axis-d2"></div>
-          </div>
+<h2>License analysis</h2>
+<p>License-layer states partition into three buckets: absent, present but not matched to an SPDX family, and present + matched.</p>
+<table>
+<thead><tr><th>License layer state</th><th>Count</th><th>Share of sample</th></tr></thead>
+<tbody>
+<tr><td>Present, SPDX detected</td><td>3</td><td>60 %</td></tr>
+<tr><td>Present, SPDX undetected</td><td>2</td><td>40 %</td></tr>
+<tr><td>Absent</td><td>0</td><td>0 %</td></tr>
+</tbody>
+</table>
 
-          <div class="floating-label label-one">
-            <span>REPORT</span>
-            <strong>2026 H1</strong>
-          </div>
+<h3>SPDX family distribution</h3>
+<p>For the models with a license layer matched to an SPDX shortname, the family distribution.</p>
+<table>
+<thead><tr><th>SPDX id</th><th>Count</th><th>Models</th></tr></thead>
+<tbody>
+<tr><td><code>Apache-2.0</code></td><td>2</td><td><code>mistral:7b</code>, <code>qwen2.5:7b</code></td></tr>
+<tr><td><code>MIT</code></td><td>1</td><td><code>phi3:mini</code></td></tr>
+</tbody>
+</table>
 
-          <div class="floating-label label-two">
-            <span>AGGREGATE</span>
-            <strong>5 / 5 PASS</strong>
-          </div>
+<h2>Verdict and findings</h2>
+<p>Each model's AI-BOM carries a deterministic PASS / WARN / FAIL verdict aggregated from analyzer-emitted finding severities. The distribution across the sample is reported as-is.</p>
+<table>
+<thead><tr><th>Verdict</th><th>Count</th></tr></thead>
+<tbody>
+<tr><td>PASS</td><td>count: 5</td></tr>
+<tr><td>WARN</td><td>count: 0</td></tr>
+<tr><td>FAIL</td><td>count: 0</td></tr>
+</tbody>
+</table>
+<p>Total findings: 0. Models with at least one finding: 0.</p>
 
-          <div class="terminal-card" aria-hidden="true">
-            <div class="terminal-top">
-              <span></span>
-              <span></span>
-              <span></span>
-              <strong>sigil://report</strong>
-            </div>
+<h2>Runtime exposure</h2>
+<p>Reported as the default Ollama install on the audit workstation — the host was not specially configured. This is the as-shipped picture, not a hardened deployment.</p>
+<ul>
+<li>Default <code>OLLAMA_HOST</code>: <code>http://127.0.0.1:11434</code></li>
+<li>Observed listener class: <code>localhost</code> (single bind <code>127.0.0.1:11434</code>)</li>
+<li>Source: <code>/proc</code></li>
+</ul>
 
-            <div class="terminal-body">
-              <p><em>$</em> sigil report 2026-h1 --sample ollama</p>
-              <p><b>[sample]</b> 5 Ollama tags audited</p>
-              <p><b>[license]</b> 100% layer presence · 60% SPDX</p>
-              <p><b>[integrity]</b> 5 / 5 manifest digests matched</p>
-              <p><b>[ok]</b> aggregate verdict sealed as PASS.</p>
-            </div>
-          </div>
-          <figcaption class="visually-hidden">Aggregate PASS verdict for the 2026 H1 sample: all five models (gemma3:4b, llama3.2:3b, mistral:7b, phi3:mini, qwen2.5:7b) PASS.</figcaption>
-        </figure>
-      </section>
+<h2>Per-model index</h2>
+<p>One row per scanned model. The per-model AI-BOM JSON is the authoritative source for everything above.</p>
+<table>
+<thead><tr><th>Model</th><th>Verdict</th><th>License</th><th>Layer count</th><th>Model bytes</th><th>Findings</th></tr></thead>
+<tbody>
+<tr><td><code>gemma3:4b</code></td><td>PASS</td><td>present, SPDX undetected</td><td>5</td><td>3.34 GB</td><td>0</td></tr>
+<tr><td><code>llama3.2:3b</code></td><td>PASS</td><td>present, SPDX undetected</td><td>6</td><td>2.02 GB</td><td>0</td></tr>
+<tr><td><code>mistral:7b</code></td><td>PASS</td><td><code>Apache-2.0</code></td><td>5</td><td>4.37 GB</td><td>0</td></tr>
+<tr><td><code>phi3:mini</code></td><td>PASS</td><td><code>MIT</code></td><td>5</td><td>2.18 GB</td><td>0</td></tr>
+<tr><td><code>qwen2.5:7b</code></td><td>PASS</td><td><code>Apache-2.0</code></td><td>5</td><td>4.68 GB</td><td>0</td></tr>
+</tbody>
+</table>
 
-      <section class="section">
-        <div class="section-heading">
-          <h2>Headline numbers</h2>
-          <p>
-            Four numbers a compliance reviewer can quote. The raw
-            per-model AI-BOM JSONs are linked below so the figures can be
-            re-aggregated independently.
-          </p>
-        </div>
-        <div class="stat-grid">
-          <div class="stat-card">
-            <div class="stat-label">Sample size</div>
-            <div class="stat-value">5</div>
-            <div class="stat-sub">Ollama tags, see Methodology</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">License layer presence</div>
-            <div class="stat-value">100 %</div>
-            <div class="stat-sub">5/5 models shipping a license layer</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">SPDX detection rate</div>
-            <div class="stat-value">60 %</div>
-            <div class="stat-sub">3/5 license layers matched to an SPDX id</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Manifest integrity</div>
-            <div class="stat-value">5 / 5</div>
-            <div class="stat-sub">models where every blob SHA-256 matched the manifest digest</div>
-          </div>
-        </div>
-      </section>
+<h2>Methodology</h2>
+<p>Five Ollama tags were chosen by license diversity rather than by popularity ranking: Gemma + Llama for vendor-custom community licenses; Qwen + Mistral for Apache-2.0; Phi for MIT.</p>
+<ul>
+<li>Sample size: 5 tags from the Ollama public registry</li>
+<li>Tool: <code>sigil aibom generate --runtime ollama --format json</code> (SIGIL 0.1; removed in v2)</li>
+<li>SIGIL version at run time: <code>0.1.0</code></li>
+<li>AI-BOM schema version: <code>1.1</code></li>
+<li>Audit date: <code>2026-06-06</code> UTC; summary re-aggregated with the SPDX fast-path fix at <code>2026-06-14T11:45:40Z</code> in <code>summary.json</code></li>
+<li>Ollama version on the audit workstation: <code>0.30.6</code></li>
+<li>Verdict path: deterministic severity aggregation in <a href="https://github.com/ultra-supara/SIGIL/blob/b30d0a2801fb24467ec287798df2e9926a232a91/crates/sigil-core/src/ollama.rs#L349-L356"><code>crates/sigil-core/src/ollama.rs:349-356</code></a> (at the commit of the report's data)</li>
+<li>SPDX detection: shortname + body match over 10 families</li>
+<li>Manifest integrity = no finding with id in <code>{ollama.blob_digest_mismatch, ollama.invalid_blob_digest, ollama.blob_missing, ollama.model_not_found}</code>. Surfaced as <code>manifest_integrity.integrity_pass_count</code> in <code>summary.json</code>.</li>
+</ul>
 
-      <section class="section compare-axes">
-        <div class="section-heading">
-          <h2>License analysis</h2>
-          <p>
-            License-layer states partition into three buckets: absent, present
-            but not matched to an SPDX family, and present + matched.
-          </p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>License layer state</th>
-                <th>Count</th>
-                <th>Share of sample</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Present, SPDX detected</td>
-                <td>3</td>
-                <td>60 %</td>
-              </tr>
-              <tr>
-                <td>Present, SPDX undetected</td>
-                <td>2</td>
-                <td>40 %</td>
-              </tr>
-              <tr>
-                <td>Absent</td>
-                <td>0</td>
-                <td>0 %</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="section-heading" style="margin-top: 38px;">
-          <h2>SPDX family distribution</h2>
-          <p>
-            For the models with a license layer matched to an SPDX
-            shortname, the family distribution.
-          </p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>SPDX id</th>
-                <th>Count</th>
-                <th>Models</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>Apache-2.0</code></td>
-                <td>2</td>
-                <td><code>mistral:7b</code>, <code>qwen2.5:7b</code></td>
-              </tr>
-              <tr>
-                <td><code>MIT</code></td>
-                <td>1</td>
-                <td><code>phi3:mini</code></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="section split">
-        <div>
-          <h2>Verdict and findings</h2>
-          <p>
-            Each model's AI-BOM carries a deterministic
-            <code>PASS</code> / <code>WARN</code> / <code>FAIL</code> verdict
-            aggregated from analyzer-emitted finding severities. The
-            distribution across the sample is reported as-is.
-          </p>
-          <ul class="check-list">
-            <li><code>PASS</code> count: 5</li>
-            <li><code>WARN</code> count: 0</li>
-            <li><code>FAIL</code> count: 0</li>
-            <li>Total findings: 0</li>
-            <li>Models with at least one finding: 0</li>
-          </ul>
-        </div>
-        <div>
-          <h2>Runtime exposure</h2>
-          <p>
-            Reported as the default Ollama install on the audit
-            workstation — the host was not specially configured. This is
-            the as-shipped picture, not a hardened deployment.
-          </p>
-          <ul class="check-list">
-            <li>Default <code>OLLAMA_HOST</code>: <code>http://127.0.0.1:11434</code></li>
-            <li>Observed listener class: <code>localhost</code> (single bind <code>127.0.0.1:11434</code>)</li>
-            <li>Source: <code>/proc</code></li>
-          </ul>
-        </div>
-      </section>
-
-      <section class="section compare-axes">
-        <div class="section-heading">
-          <h2>Per-model index</h2>
-          <p>
-            One row per scanned model. The per-model AI-BOM JSON is the
-            authoritative source for everything above.
-          </p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Verdict</th>
-                <th>License</th>
-                <th>Layer count</th>
-                <th>Model bytes</th>
-                <th>Findings</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>gemma3:4b</code></td>
-                <td><code>PASS</code></td>
-                <td>present, SPDX undetected</td>
-                <td>5</td>
-                <td>3.34 GB</td>
-                <td>0</td>
-              </tr>
-              <tr>
-                <td><code>llama3.2:3b</code></td>
-                <td><code>PASS</code></td>
-                <td>present, SPDX undetected</td>
-                <td>6</td>
-                <td>2.02 GB</td>
-                <td>0</td>
-              </tr>
-              <tr>
-                <td><code>mistral:7b</code></td>
-                <td><code>PASS</code></td>
-                <td><code>Apache-2.0</code></td>
-                <td>5</td>
-                <td>4.37 GB</td>
-                <td>0</td>
-              </tr>
-              <tr>
-                <td><code>phi3:mini</code></td>
-                <td><code>PASS</code></td>
-                <td><code>MIT</code></td>
-                <td>5</td>
-                <td>2.18 GB</td>
-                <td>0</td>
-              </tr>
-              <tr>
-                <td><code>qwen2.5:7b</code></td>
-                <td><code>PASS</code></td>
-                <td><code>Apache-2.0</code></td>
-                <td>5</td>
-                <td>4.68 GB</td>
-                <td>0</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="section split alt">
-        <div>
-          <h2>Methodology</h2>
-          <p>
-            Five Ollama tags were chosen by license diversity rather than
-            by popularity ranking: Gemma + Llama for vendor-custom
-            community licenses; Qwen + Mistral for Apache-2.0; Phi for
-            MIT.
-          </p>
-          <ul class="check-list">
-            <li>Sample size: 5 tags from the Ollama public registry</li>
-            <li>Tool: <code>sigil aibom generate --runtime ollama --format json</code></li>
-            <li>SIGIL version at run time: <code>0.1.0</code></li>
-            <li>AI-BOM schema version: <code>1.1</code></li>
-            <li>Audit date: <code>2026-06-06</code> UTC; summary re-aggregated with the SPDX fast-path fix at <code>2026-06-14T11:45:40Z</code> in <code>summary.json</code></li>
-            <li>Ollama version on the audit workstation: <code>0.30.6</code></li>
-            <li>Verdict path: deterministic severity aggregation in <code>crates/sigil-core/src/ollama.rs:349-356</code></li>
-            <li>SPDX detection: shortname + body match over 10 families</li>
-            <li>
-              Manifest integrity = no finding with id in
-              <code>{ollama.blob_digest_mismatch, ollama.invalid_blob_digest, ollama.blob_missing, ollama.model_not_found}</code>.
-              Surfaced as <code>manifest_integrity.integrity_pass_count</code> in <code>summary.json</code>.
-            </li>
-          </ul>
-        </div>
-        <div>
-          <h2>Reproduce this</h2>
-          <p>
-            The runner and aggregator are checked in. The model list is a
-            plain text file with one Ollama tag per line.
-          </p>
-          <div class="command-panel">
-            <pre><code>git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
+<h2>How it was produced</h2>
+<p>The runner and aggregator are checked in, next to the data. The model list is a plain text file with one Ollama tag per line. They use the SIGIL 0.1 CLI, so they run only at the commit the report was produced with:</p>
+<pre>git clone https://github.com/ultra-supara/SIGIL &amp;&amp; cd SIGIL
+git checkout b30d0a2                     # SIGIL 0.1, as this report was produced
 sudo apt-get install -y clang jq         # Linux
-
 # Edit scripts/audit-models.txt if you want a different sample.
 ./scripts/audit-run.sh                   # pulls + runs sigil on each model
-./scripts/audit-aggregate.sh             # writes reports/2026-h1/summary.json</code></pre>
-          </div>
-        </div>
-      </section>
+./scripts/audit-aggregate.sh             # writes reports/2026-h1/summary.json</pre>
 
-      <section class="section docs-section">
-        <div class="section-heading">
-          <h2>Sources and raw data</h2>
-          <p>
-            Per-model AI-BOM JSONs are the authoritative source for
-            everything in this report.
-          </p>
-        </div>
-        <div class="doc-links">
-          <a href="https://github.com/ultra-supara/SIGIL/tree/main/reports/2026-h1">
-            <span>Per-model AI-BOM JSONs</span>
-            <code>reports/2026-h1/raw/&lt;model&gt;.aibom.json</code> — one per model, schema 1.1.
-          </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/reports/2026-h1/summary.json">
-            <span>Aggregated summary JSON</span>
-            <code>reports/2026-h1/summary.json</code> — the numbers in this report come from here.
-          </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/scripts/audit-run.sh">
-            <span>Runner</span>
-            <code>scripts/audit-run.sh</code> — pull + scan + emit per-model JSON.
-          </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/scripts/audit-aggregate.sh">
-            <span>Aggregator</span>
-            <code>scripts/audit-aggregate.sh</code> — jq pipeline that builds <code>summary.json</code>.
-          </a>
-        </div>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <span>SIGIL is local-first and analysis-only.</span>
-      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
-    </footer>
-  </body>
+<h2>Sources and raw data</h2>
+<p>Per-model AI-BOM JSONs are the authoritative source for everything in this report.</p>
+<ul>
+<li><a href="https://github.com/ultra-supara/SIGIL/tree/main/reports/2026-h1/raw">Per-model AI-BOM JSONs</a>: <code>reports/2026-h1/raw/&lt;model&gt;.aibom.json</code> — one per model, schema 1.1.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/reports/2026-h1/summary.json">Aggregated summary JSON</a>: <code>reports/2026-h1/summary.json</code> — the numbers in this report come from here.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/reports/2026-h1/audit-run.sh">Runner</a>: <code>reports/2026-h1/audit-run.sh</code> — pull + scan + emit per-model JSON.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/reports/2026-h1/audit-aggregate.sh">Aggregator</a>: <code>reports/2026-h1/audit-aggregate.sh</code> — jq pipeline that builds <code>summary.json</code>.</li>
+</ul>
+</main>
+</body>
 </html>
