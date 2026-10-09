@@ -1,0 +1,128 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "b3f0d23331f9e0df1100e059212b5258d452556c25f63aed8659481b76591f23",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [],
+        "gaps": [
+          "oq:loader.search_path_untrusted_creator@cwd/llama-server (per model)"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libggml-cpu-zen4.so"
+      ],
+      "slices": [
+        {
+          "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "components": []
+        }
+      ]
+    },
+    {
+      "id": "sha256:40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libggml.so.0.13.1"
+      ],
+      "slices": [
+        {
+          "id": "sha256:40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f",
+          "components": [
+            {
+              "component": "ggml",
+              "status": "ReferenceMatched",
+              "versions": [
+                "0.13.1"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "size": 512,
+      "format": "Other",
+      "paths": [
+        "/etc/systemd/system/ollama.service"
+      ],
+      "slices": []
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "loader.identify",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "loader.search_paths",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    }
+  ]
+}

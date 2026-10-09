@@ -93,6 +93,7 @@ pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,
     RuleSupport, RuleSupportRef, SearchDir, SearchRule,
 };
+pub use render::aibom::AiBom;
 pub use session::{
     KnowledgeKind, KnowledgeRef, Mode, ObservationMeta, RunRequest, ScanRoot, SchemaVersion,
     Session, ToolInfo,

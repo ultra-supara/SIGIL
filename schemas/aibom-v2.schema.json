@@ -1,0 +1,1541 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ultra-supara/SIGIL/main/schemas/aibom-v2.schema.json",
+  "title": "SIGIL AI-BOM v2",
+  "description": "Schema for the AI-BOM v2 (`schema: \"sigil-aibom/2\"`), a projection of a SIGIL analysis session (`sigil-session/1`). Self-contained: no external $ref. Strict: additionalProperties: false on every object. Enums are externally tagged with their variant names; struct fields are snake_case; every field is always serialized and required. Definitions shared with the session schema are copied from session-v1.schema.json and kept equal to it by crates/sigil-model/tests/aibom_schema.rs.",
+  "$ref": "#/$defs/AiBom",
+  "$defs": {
+    "AiBom": {
+      "description": "An AI-BOM v2: a compact, versioned projection of a SIGIL session. Follow session.sha256 to the session for the evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "tool",
+        "session",
+        "outcome",
+        "runtime",
+        "models",
+        "artifacts",
+        "findings",
+        "policy_violations",
+        "coverage"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/AiBomSchema"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolInfo"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionLink"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "runtime": {
+          "$ref": "#/$defs/BomRuntime"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomModel"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomArtifact"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomFinding"
+          }
+        },
+        "policy_violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomViolation"
+          }
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckSummary"
+          }
+        }
+      }
+    },
+    "AiBomSchema": {
+      "type": "string",
+      "enum": [
+        "sigil-aibom/2"
+      ]
+    },
+    "SessionLink": {
+      "description": "The session this AI-BOM was projected from. sha256 is the SHA-256 of the session's canonical JSON; a session SIGIL saved hashes to its file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sha256",
+        "mode",
+        "started_at",
+        "policy"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/SchemaVersion"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "BomRuntime": {
+      "description": "What was seen of the running runtime. Each API probe is the endpoint's own claim, from SIGIL's network namespace.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "processes",
+        "listeners",
+        "api",
+        "releases"
+      ],
+      "properties": {
+        "processes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomProcess"
+          }
+        },
+        "listeners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Listener"
+          }
+        },
+        "api": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiProbe"
+          }
+        },
+        "releases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomRelease"
+          }
+        }
+      }
+    },
+    "BomProcess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process",
+        "roles",
+        "name",
+        "exe"
+      ],
+      "properties": {
+        "process": {
+          "$ref": "#/$defs/ProcessRef"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessRole"
+          }
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UntrustedText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exe": {
+          "$ref": "#/$defs/ProcessExe"
+        }
+      }
+    },
+    "BomRelease": {
+      "description": "A release identity claim, with its basis reduced to its kind.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "candidates",
+        "basis"
+      ],
+      "properties": {
+        "product": {
+          "$ref": "#/$defs/ComponentKey"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "basis": {
+          "$ref": "#/$defs/ReleaseBasisKind"
+        }
+      }
+    },
+    "ReleaseBasisKind": {
+      "type": "string",
+      "enum": [
+        "ReferenceMatches",
+        "SelfReportedCommit"
+      ]
+    },
+    "BomModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "provenance",
+        "layers",
+        "license"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ModelId"
+        },
+        "name": {
+          "$ref": "#/$defs/UntrustedText"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ModelProvenance"
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomLayer"
+          }
+        },
+        "license": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BomLicense"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "BomLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "media_type",
+        "digest",
+        "blob"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/LayerRole"
+        },
+        "media_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UntrustedText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "digest": {
+          "$ref": "#/$defs/UntrustedText"
+        },
+        "blob": {
+          "$ref": "#/$defs/BomBlob"
+        }
+      }
+    },
+    "BomBlob": {
+      "description": "How a layer's blob lookup ended. Found gives the path and the content read there (null if not read).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "NotLookedUp",
+            "Absent"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Found"
+          ],
+          "properties": {
+            "Found": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "content"
+              ],
+              "properties": {
+                "path": {
+                  "$ref": "#/$defs/UntrustedText"
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ArtifactId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Unresolved"
+          ],
+          "properties": {
+            "Unresolved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "why"
+              ],
+              "properties": {
+                "why": {
+                  "$ref": "#/$defs/UntrustedText"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "BomLicense": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "spdx",
+        "excerpt"
+      ],
+      "properties": {
+        "spdx": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "excerpt": {
+          "$ref": "#/$defs/UntrustedText"
+        }
+      }
+    },
+    "BomArtifact": {
+      "description": "A file content, where it was found (sorted paths), and what was identified in each slice.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "size",
+        "format",
+        "paths",
+        "slices"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "format": {
+          "$ref": "#/$defs/Format"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UntrustedText"
+          }
+        },
+        "slices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomSlice"
+          }
+        }
+      }
+    },
+    "BomSlice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "arch",
+        "sha256",
+        "components"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SliceId"
+        },
+        "arch": {
+          "$ref": "#/$defs/Arch"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BomComponent"
+          }
+        }
+      }
+    },
+    "BomComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "status",
+        "versions"
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ComponentKey"
+        },
+        "status": {
+          "$ref": "#/$defs/IdentityStatus"
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UntrustedText"
+          }
+        }
+      }
+    },
+    "BomFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rule",
+        "kind",
+        "subject",
+        "summary",
+        "default_severity",
+        "decision",
+        "limits"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/FindingId"
+        },
+        "rule": {
+          "$ref": "#/$defs/RuleId"
+        },
+        "kind": {
+          "$ref": "#/$defs/FindingKind"
+        },
+        "subject": {
+          "$ref": "#/$defs/Ref"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "default_severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "decision": {
+          "$ref": "#/$defs/PolicyDecision"
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "BomViolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_rule",
+        "subject",
+        "decision"
+      ],
+      "properties": {
+        "policy_rule": {
+          "$ref": "#/$defs/PolicyRuleRef"
+        },
+        "subject": {
+          "$ref": "#/$defs/Ref"
+        },
+        "decision": {
+          "$ref": "#/$defs/PolicyDecision"
+        }
+      }
+    },
+    "CheckSummary": {
+      "description": "One check: whether it is required, whether it is closed (it has entries and every one can close it), and its entries per coverage state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check",
+        "required",
+        "closed",
+        "states"
+      ],
+      "properties": {
+        "check": {
+          "$ref": "#/$defs/CheckId"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "closed": {
+          "type": "boolean"
+        },
+        "states": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "Complete",
+              "Partial",
+              "NotPresent",
+              "ProfileMismatch",
+              "OutOfScope",
+              "Skipped",
+              "Unavailable",
+              "Unsupported",
+              "BudgetExceeded",
+              "Error"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          }
+        }
+      }
+    },
+    "Action": {
+      "type": "string",
+      "enum": [
+        "Fail",
+        "Warn",
+        "Ignore"
+      ]
+    },
+    "ApiProbe": {
+      "description": "One API probe and its outcome (ADR-002 active mode).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "address",
+        "port",
+        "at",
+        "result"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ProbeId"
+        },
+        "address": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "result": {
+          "$ref": "#/$defs/ProbeResult"
+        }
+      }
+    },
+    "Arch": {
+      "type": "string",
+      "enum": [
+        "x86_64",
+        "aarch64",
+        "other"
+      ]
+    },
+    "ArtifactId": {
+      "description": "Content identity: sha256 of the whole file. Never a path.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "CheckId": {
+      "description": "An audit check whose coverage decides completeness.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Completeness": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Complete"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Incomplete"
+          ],
+          "properties": {
+            "Incomplete": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "missing_required",
+                "gaps"
+              ],
+              "properties": {
+                "missing_required": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/CheckId"
+                  }
+                },
+                "gaps": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionId"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ComponentKey": {
+      "description": "A component name used by identification.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Date": {
+      "description": "A calendar date.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+    },
+    "ElfType": {
+      "type": "string",
+      "enum": [
+        "Exec",
+        "Dyn",
+        "Rel"
+      ]
+    },
+    "FindingId": {
+      "description": "A technical finding.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "FindingKind": {
+      "type": "string",
+      "enum": [
+        "Integrity",
+        "Exposure",
+        "Loader",
+        "Precondition"
+      ]
+    },
+    "Format": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "MachO",
+            "MachOFat",
+            "Other"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Elf"
+          ],
+          "properties": {
+            "Elf": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/ElfType"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "IdentityStatus": {
+      "type": "string",
+      "enum": [
+        "Conflicting",
+        "ReferenceMatched",
+        "Corroborated",
+        "NameOnly",
+        "Unidentified"
+      ]
+    },
+    "InstanceId": {
+      "description": "Placement identity: inst:<scan-root-relative path>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^inst:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "KnowledgeKind": {
+      "type": "string",
+      "enum": [
+        "SignatureDb",
+        "Profile",
+        "RuleSet",
+        "Policy",
+        "ReferenceManifest"
+      ]
+    },
+    "KnowledgeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "version",
+        "sha256"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/KnowledgeKind"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        }
+      }
+    },
+    "LayerRole": {
+      "type": "string",
+      "enum": [
+        "Config",
+        "Layer"
+      ]
+    },
+    "Listener": {
+      "description": "A listening socket in SIGIL's network namespace. Its bind class is derived from the address, never stored.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "protocol",
+        "address",
+        "port",
+        "socket_inode",
+        "owner"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ListenerId"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "address": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "socket_inode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "owner": {
+          "$ref": "#/$defs/ListenerOwner"
+        }
+      }
+    },
+    "ListenerId": {
+      "description": "A listening socket: listener:<protocol>/<address>:<port>#<socket inode>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^listener:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "ListenerOwner": {
+      "description": "Who holds the socket, as far as the readable fd tables show. Never by port.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Unheld"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Process"
+          ],
+          "properties": {
+            "Process": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "process"
+              ],
+              "properties": {
+                "process": {
+                  "$ref": "#/$defs/ProcessRef"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Unknown"
+          ],
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "why"
+              ],
+              "properties": {
+                "why": {
+                  "$ref": "#/$defs/NotObservable"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Mode": {
+      "type": "string",
+      "enum": [
+        "Static",
+        "Observe"
+      ]
+    },
+    "ModelId": {
+      "description": "A model in a model store: model:<root id>/<manifest path under manifests/>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^model:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "ModelProvenance": {
+      "description": "What the manifest path says: <registry>/<namespace...>/<model>/<tag>.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry",
+        "namespace",
+        "model",
+        "tag"
+      ],
+      "properties": {
+        "registry": {
+          "$ref": "#/$defs/UntrustedText"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UntrustedText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/UntrustedText"
+        },
+        "tag": {
+          "$ref": "#/$defs/UntrustedText"
+        }
+      }
+    },
+    "NotObservable": {
+      "type": "string",
+      "enum": [
+        "PermissionDenied",
+        "NoProcess",
+        "ModeDisabled",
+        "NamespaceMismatch",
+        "ReadIncomplete"
+      ]
+    },
+    "OpenQuestionId": {
+      "description": "An open question.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Outcome": {
+      "description": "Verdict and completeness: independent, always reported together.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "completeness",
+        "confirmed_failures",
+        "confirmed_warnings",
+        "policy_time"
+      ],
+      "properties": {
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "completeness": {
+          "$ref": "#/$defs/Completeness"
+        },
+        "confirmed_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "confirmed_warnings": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "policy_time": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      }
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "source",
+        "reason",
+        "expires"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "source": {
+          "$ref": "#/$defs/PolicyRuleRef"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PolicyRuleRef": {
+      "description": "The policy rule a decision came from.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ProbeId": {
+      "description": "An active probe: probe:api/<address>:<port>, with an IPv6 address in brackets.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^probe:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "ProbePhase": {
+      "type": "string",
+      "enum": [
+        "Connect",
+        "Write",
+        "Read"
+      ]
+    },
+    "ProbeResult": {
+      "description": "How a probe ended. Refused is an observation (nothing answers there); a timeout is not.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Refused"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Answered"
+          ],
+          "properties": {
+            "Answered": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "version"
+              ],
+              "properties": {
+                "status": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "version": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/UntrustedText"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "TimedOut"
+          ],
+          "properties": {
+            "TimedOut": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "phase"
+              ],
+              "properties": {
+                "phase": {
+                  "$ref": "#/$defs/ProbePhase"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "TooLarge"
+          ],
+          "properties": {
+            "TooLarge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "limit"
+              ],
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Malformed"
+          ],
+          "properties": {
+            "Malformed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "why"
+              ],
+              "properties": {
+                "why": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Failed"
+          ],
+          "properties": {
+            "Failed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "message"
+              ],
+              "properties": {
+                "message": {
+                  "$ref": "#/$defs/UntrustedText"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ProcessExe": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Instance"
+          ],
+          "properties": {
+            "Instance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "instance"
+              ],
+              "properties": {
+                "instance": {
+                  "$ref": "#/$defs/InstanceId"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Path"
+          ],
+          "properties": {
+            "Path": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "deleted"
+              ],
+              "properties": {
+                "path": {
+                  "$ref": "#/$defs/UntrustedText"
+                },
+                "deleted": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "NotObservable"
+          ],
+          "properties": {
+            "NotObservable": {
+              "$ref": "#/$defs/NotObservable"
+            }
+          }
+        }
+      ]
+    },
+    "ProcessRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "start_ticks",
+        "boot_id"
+      ],
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "start_ticks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "boot_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ProcessRole": {
+      "description": "A process role from a topology rule. Generic: no runtime-specific meaning.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Protocol": {
+      "type": "string",
+      "enum": [
+        "Tcp",
+        "Tcp6"
+      ]
+    },
+    "Ref": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Audit"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Root"
+          ],
+          "properties": {
+            "Root": {
+              "$ref": "#/$defs/RootId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Artifact"
+          ],
+          "properties": {
+            "Artifact": {
+              "$ref": "#/$defs/ArtifactId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Slice"
+          ],
+          "properties": {
+            "Slice": {
+              "$ref": "#/$defs/SliceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Instance"
+          ],
+          "properties": {
+            "Instance": {
+              "$ref": "#/$defs/InstanceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Component"
+          ],
+          "properties": {
+            "Component": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "slice",
+                "component"
+              ],
+              "properties": {
+                "slice": {
+                  "$ref": "#/$defs/SliceId"
+                },
+                "component": {
+                  "$ref": "#/$defs/ComponentKey"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Role"
+          ],
+          "properties": {
+            "Role": {
+              "$ref": "#/$defs/ProcessRole"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "SearchPath"
+          ],
+          "properties": {
+            "SearchPath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role",
+                "search_path"
+              ],
+              "properties": {
+                "role": {
+                  "$ref": "#/$defs/ProcessRole"
+                },
+                "search_path": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Process"
+          ],
+          "properties": {
+            "Process": {
+              "$ref": "#/$defs/ProcessRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ],
+          "properties": {
+            "Model": {
+              "$ref": "#/$defs/ModelId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Listener"
+          ],
+          "properties": {
+            "Listener": {
+              "$ref": "#/$defs/ListenerId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Probe"
+          ],
+          "properties": {
+            "Probe": {
+              "$ref": "#/$defs/ProbeId"
+            }
+          }
+        }
+      ]
+    },
+    "RootId": {
+      "description": "A scan root declared in the request.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "RuleId": {
+      "description": "A detection rule that yields findings or open questions.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "SchemaVersion": {
+      "type": "string",
+      "enum": [
+        "sigil-session/1"
+      ]
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "Warn",
+        "Fail"
+      ]
+    },
+    "Sha256Hex": {
+      "description": "A lowercase hex SHA-256 digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "SliceId": {
+      "description": "One architecture slice of an artifact: <artifact>#<arch>@<offset>.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}#(x86_64|aarch64|other)@(0|[1-9][0-9]*)$"
+    },
+    "Timestamp": {
+      "description": "An instant, RFC 3339 UTC.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]{1,9})?Z$"
+    },
+    "ToolInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "git_rev"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "git_rev": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "UntrustedText": {
+      "description": "Input-derived text. A string when valid UTF-8; otherwise {\"hex\": <lowercase hex of the bytes>}, used only for values that are not valid UTF-8. Consumers must escape it before display.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hex"
+          ],
+          "properties": {
+            "hex": {
+              "type": "string",
+              "pattern": "^([0-9a-f]{2})*$"
+            }
+          }
+        }
+      ]
+    },
+    "Verdict": {
+      "type": "string",
+      "enum": [
+        "Pass",
+        "Warn",
+        "Fail"
+      ]
+    }
+  }
+}

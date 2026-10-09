@@ -1,0 +1,89 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "0c612ae8a211a117a7183a520cf21c15e33a363b6f0a70443ba84efd31c61c99",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "loader.identify"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libggml.so"
+      ],
+      "slices": [
+        {
+          "id": "sha256:6666666666666666666666666666666666666666666666666666666666666666#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+          "components": [
+            {
+              "component": "ggml",
+              "status": "NameOnly",
+              "versions": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "loader.identify",
+      "required": true,
+      "closed": false,
+      "states": {
+        "ProfileMismatch": 1
+      }
+    }
+  ]
+}
