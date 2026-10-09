@@ -14,6 +14,9 @@
 //! tests exercise every path without the JS runtime.
 //!
 //! The crate depends only on `sigil-model`: no file, `/proc`, or network code enters the bundle.
+//!
+//! The viewer's bundle (`site/viewer/pkg/`) is built with `ci/build-viewer-wasm.sh`, which pins
+//! rustc, wasm-pack, and paths so that a rebuild anywhere gives the same bytes. CI requires that.
 
 use serde_json::Value;
 use sigil_model::render::aibom::markdown as aibom_markdown;

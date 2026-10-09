@@ -8,8 +8,11 @@ name: Viewer wasm
 # - `committed-wasm`: the bundle the browser serves (site/viewer/pkg/) must track the source.
 #   1. Behaviour: every sample's Markdown and HTML from the committed bundle equal the native
 #      render, and every invalid sample gives its manifest's error (ci/check-committed-wasm.mjs).
-#   2. A fresh wasm-pack build has the same API surface (.d.ts), stays within 500 KB gzipped,
-#      and does not move far in size from the committed one.
+#   2. Reproducibility: ci/build-viewer-wasm.sh rebuilds the bundle with the pinned rustc
+#      (ci/viewer-wasm-toolchain), wasm-pack 0.15.0, wasm-bindgen from Cargo.lock, and
+#      CARGO_HOME remapped. Every file must equal the committed one byte for byte (`.js` and
+#      `.wasm` included), and the `.wasm` must stay within 500 KB gzipped.
+#   3. The viewer's state (load, failure, latest-wins) passes its node tests.
 on:
   push:
     branches: [main]
@@ -19,6 +22,9 @@ on:
       - 'site/viewer/**'
       - 'schemas/**'
       - 'ci/check-committed-wasm.mjs'
+      - 'ci/build-viewer-wasm.sh'
+      - 'ci/viewer-wasm-toolchain'
+      - 'ci/viewer-state.test.mjs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/wasm.yml'
@@ -29,6 +35,9 @@ on:
       - 'site/viewer/**'
       - 'schemas/**'
       - 'ci/check-committed-wasm.mjs'
+      - 'ci/build-viewer-wasm.sh'
+      - 'ci/viewer-wasm-toolchain'
+      - 'ci/viewer-state.test.mjs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/wasm.yml'
@@ -60,7 +69,7 @@ jobs:
         run: cargo build -p sigil-wasm --target wasm32-unknown-unknown --release
 
   committed-wasm:
-    name: Committed wasm tracks Rust source (behaviour, API surface, size)
+    name: Committed wasm tracks Rust source (behaviour, reproducible bytes, size)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -69,9 +78,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The bundle's rustc, pinned for reproducible bytes: keep equal to ci/viewer-wasm-toolchain
+      # (ci/build-viewer-wasm.sh refuses any other).
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.0
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -91,55 +102,31 @@ jobs:
           done
       - name: Behaviour — the committed bundle renders as the source does
         run: node ci/check-committed-wasm.mjs /tmp/expected
+      - name: The viewer's state (load, failure, latest-wins)
+        run: node --test ci/viewer-state.test.mjs
       - name: Install wasm-pack (pinned)
         run: cargo install wasm-pack --version 0.15.0 --locked
-      - name: Snapshot the committed bundle
-        id: before
+      - name: Reproducibility — a rebuild equals the committed bundle, byte for byte
         run: |
           set -euo pipefail
-          mkdir -p /tmp/wasm-before
-          cp site/viewer/pkg/sigil_wasm.d.ts site/viewer/pkg/sigil_wasm_bg.wasm.d.ts /tmp/wasm-before/
-          {
-            echo "size=$(stat -c '%s' site/viewer/pkg/sigil_wasm_bg.wasm)"
-            echo "gz=$(gzip -c site/viewer/pkg/sigil_wasm_bg.wasm | wc -c)"
-          } >>"$GITHUB_OUTPUT"
-      - name: Rebuild
-        run: |
-          wasm-pack build crates/sigil-wasm --target web --release \
-            --out-dir ../../site/viewer/pkg --out-name sigil_wasm
-          rm -f site/viewer/pkg/.gitignore
-      - name: API surface and size budget
-        run: |
-          set -euo pipefail
-          after_size=$(stat -c '%s' site/viewer/pkg/sigil_wasm_bg.wasm)
-          after_gz=$(gzip -c site/viewer/pkg/sigil_wasm_bg.wasm | wc -c)
-          before_size='${{ steps.before.outputs.size }}'
-          before_gz='${{ steps.before.outputs.gz }}'
+          ci/build-viewer-wasm.sh /tmp/rebuilt
+          if ! diff -r site/viewer/pkg /tmp/rebuilt; then
+            echo "::error::the committed site/viewer/pkg/ differs from a reproducible rebuild. Run ci/build-viewer-wasm.sh (rustc $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0) and commit site/viewer/pkg/."
+            exit 1
+          fi
+          size=$(stat -c '%s' site/viewer/pkg/sigil_wasm_bg.wasm)
+          gz=$(gzip -c site/viewer/pkg/sigil_wasm_bg.wasm | wc -c)
           max_gz=$((500 * 1024))
           {
             echo "## Viewer wasm bundle"
             echo
-            echo "| Metric | Committed | Rebuilt |"
+            echo "Reproducible: every file equals a fresh build (rustc $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0)."
+            echo
+            echo "| .wasm bytes | .wasm gzipped | budget (gzipped) |"
             echo "|---|---|---|"
-            echo "| .wasm bytes | $before_size | $after_size |"
-            echo "| .wasm gzipped | $before_gz | $after_gz |"
-            echo "| Budget (gzipped) | $max_gz | |"
+            echo "| $size | $gz | $max_gz |"
           } >>"$GITHUB_STEP_SUMMARY"
-          fail=0
-          if [ "$after_gz" -gt "$max_gz" ]; then
-            echo "::error::the wasm bundle exceeds 500 KB gzipped ($after_gz > $max_gz)"
-            fail=1
+          if [ "$gz" -gt "$max_gz" ]; then
+            echo "::error::the wasm bundle exceeds 500 KB gzipped ($gz > $max_gz)"
+            exit 1
           fi
-          for f in sigil_wasm.d.ts sigil_wasm_bg.wasm.d.ts; do
-            if ! diff -u "/tmp/wasm-before/$f" "site/viewer/pkg/$f"; then
-              echo "::error::the committed $f does not match a fresh build. Run: wasm-pack build crates/sigil-wasm --target web --release --out-dir ../../site/viewer/pkg --out-name sigil_wasm && rm -f site/viewer/pkg/.gitignore, then commit site/viewer/pkg/."
-              fail=1
-            fi
-          done
-          # A large size swing almost always means a stale committed bundle.
-          delta=$(( after_size > before_size ? after_size - before_size : before_size - after_size ))
-          if [ "$delta" -gt $(( before_size / 2 )) ] && [ "$delta" -gt 102400 ]; then
-            echo "::error::the wasm size moved by $delta bytes between the committed bundle and a rebuild"
-            fail=1
-          fi
-          exit "$fail"
