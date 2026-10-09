@@ -72,7 +72,7 @@ so requesting it gives an honest `INCOMPLETE`.
 | `model_store` | `model_store.inventory`, `model_store.integrity`, `model_store.license` | PR-3a-2 |
 | `exposure` | `exposure.binds` | PR-3a-2 (observe mode) |
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
-| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release` | PR-4a (`--install-dir`) |
+| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container` | PR-4a, PR-4b-1 (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
 
 **Rules** (kind, default severity):

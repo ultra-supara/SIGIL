@@ -117,8 +117,8 @@ release: install not found
 
 ## Coverage
 
-Both checks belong to the scope `runtime_artifacts`, which the default policy audits when
-`--install-dir` is given.
+`artifacts.discovery`, `artifacts.release`, and `artifacts.container` (see Binaries) belong to the
+scope `runtime_artifacts`, which the default policy audits when `--install-dir` is given.
 
 **`artifacts.discovery`** (scope: the root `install`):
 
@@ -139,7 +139,7 @@ Both checks belong to the scope `runtime_artifacts`, which the default policy au
 | `Partial { missing }` | Otherwise, one entry per reason: `discovery incomplete`; `<release>: <n> files, <m> symlinks, and <k> directories absent from the install`; `<path>: not in any reference`; `<path>: matches no reference`; `<path>: symlink to <t>; <release>: <t'>`; `<path>: <kind> where <release> has a <kind>`; `<path>: not compared`; `mixed install: …` |
 | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 
-Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets both checks
+Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets its checks
 `Skipped { Flag("--install-dir") }`, so the result is INCOMPLETE.
 
 ## Verification
@@ -165,11 +165,80 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
 | `sigil session render`, `sigil explain` | every session read | when the session names the embedded set by its SHA-256 (a disagreement is exit 1). A session made with another set is rendered with a note |
 | The browser viewer | every session read | **never**: it has no reference set |
 
+## Binaries
+
+Every ELF file of the install also gets its container facts: a `binaries` record per slice in the
+session, read from the file's own bytes. They are observations, not identity.
+
+- **How it is read.**
+  - The parse runs on the fd that hashed the file, after hashing and before the post-read check.
+    A file that changes while it is parsed is `ChangedDuringRead`, and its facts are dropped.
+  - Each content is parsed once.
+  - Everything goes through `pread`, never mapped or loaded, within `binary_parse_bytes`.
+  - An ELF needs its whole header: 52 bytes for ELF32, 64 for ELF64.
+- **What is read: the program headers first** (what the dynamic loader reads), then the sections:
+
+  | Fact | Source | Confirmed absent (no gap) | Gap |
+  |---|---|---|---|
+  | Interpreter | `PT_INTERP` | no `PT_INTERP` | outside the file, or no NUL within 4 KiB |
+  | SONAME, NEEDED (in order), RPATH, RUNPATH | `PT_DYNAMIC`, its strings through `DT_STRTAB`/`DT_STRSZ` in a `PT_LOAD`'s file-backed range | no `PT_DYNAMIC` (a static executable, a relocatable object) | `PT_DYNAMIC` out of the file, strings not file-backed, an offset past `DT_STRSZ` |
+  | build-id | `PT_NOTE`, then `SHT_NOTE` | every note read, none `NT_GNU_BUILD_ID` | a malformed note |
+  | `.comment`, stripped | the sections | a section header table without `.comment` | no section header table, or one out of the file (`sections: …`; stripped is then unknown) |
+  | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC` | no `PT_DYNAMIC` | dynamic symbols without a `.dynsym` section, a malformed table |
+  | Go build info | below | the whole range searched, no magic | below |
+
+- **Known data symbols.** Four symbols from llama.cpp's `common/build-info.cpp`: `LLAMA_COMMIT`,
+  `LLAMA_COMPILER`, `LLAMA_BUILD_TARGET` (pointers), and `LLAMA_BUILD_NUMBER` (an `int`). A value
+  is the one the loader leaves, or `Unknown` with the reason. It is never guessed from a stored word:
+
+  | At the symbol's address | Value |
+  |---|---|
+  | A RELA `R_X86_64_RELATIVE` / `R_AARCH64_RELATIVE` | the string at its addend |
+  | Any other relocation | `Unknown` (`relocated by R_X86_64_64`, …) |
+  | No RELA relocation, and the file has `DT_REL`/`DT_RELR` | `Unknown` (not read) |
+  | No relocation, in a non-PIE executable | the string at the stored address |
+  | No relocation, in a position-independent file | `Unknown` |
+
+- **Go build info**, as Go's `debug/buildinfo` reads it:
+  - **Where:** the `.go.buildinfo` section, else the first writable, non-executable `PT_LOAD`.
+  - **The search:** to its end, at 16-aligned virtual addresses, in 64 KiB chunks from an aligned start.
+  - **What is read:** both formats (inline and pointer) in either byte order, Go's sentinel
+    stripping, and its modinfo lines (`path`, `mod`, `dep`, `=>`, `build`).
+  - **What it is:** the binary's own claims about how it was built.
+- **Output limits.** A malformed file cannot multiply a few input bytes into many values. At each
+  limit, what was read is kept, and a gap says so:
+  - 65,536 `PT_DYNAMIC` entries;
+  - 1,024 NEEDED;
+  - 64 RPATH/RUNPATH entries;
+  - 4 KiB per string;
+  - 1,024 notes per segment;
+  - a 64-byte build-id;
+  - 16 comments of 256 bytes;
+  - `binary_imports` imports;
+  - a 1 KiB Go version, 1 MiB of modinfo, 4,096 deps, and 1,024 build settings.
+- **Budgets** (`--budget`, with `--install-dir` only):
+  - `binary_parse_bytes` (64 MiB per artifact) bounds the parser's input cache, bookkeeping
+    included, before anything is allocated;
+  - `binary_imports` (4,096 per slice).
+- **`artifacts.container`** (scope: the root `install`), a third check of `runtime_artifacts`:
+
+  | State | When |
+  |---|---|
+  | `Complete` | Discovery is complete, and every ELF file's facts have no gap |
+  | `Partial { missing }` | Otherwise: `discovery incomplete`, and `<path>: <gap>` for each gap |
+  | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
+
+  `Complete` means each fact was read in full or confirmed absent. Anything not parsed, not
+  searched, or cut short is a gap.
+- **NEEDED** is also recorded as `Declares` relations, one per distinct name. The order stays in
+  the record, for the loader's lookup order.
+
 ## Not yet
 
-- Mach-O and other formats: their content is matched by SHA-256 like any file, and their format is
-  not identified.
-- Component identity (ggml, llama.cpp), and the backends a library holds.
+- Mach-O and fat binaries, and `sigil binary inspect` (PR-4b-2). A Mach-O file's content is
+  matched by SHA-256 like any file.
+- Component identity (ggml, llama.cpp) from these facts, and the backends a library holds (PR-4c).
+- Resolving NEEDED, RPATH, and RUNPATH to files (PR-4d).
 - Releases outside the embedded set, and releases built from a source commit.
 - Optional members: an installation without a GPU backend's directory is INCOMPLETE against a
   release that ships it.
