@@ -254,3 +254,61 @@ fn a_refused_connection_is_shown_as_such() {
         "not present: connection refused at 127.0.0.1:11434 from SIGIL's network namespace"
     );
 }
+
+#[test]
+fn a_session_with_an_install_shows_its_runtime_artifacts() {
+    // Example 12: one placement matching v0.30.6, and the claim.
+    let md = render_session(&conflicting_identity());
+    let section = md
+        .split("\n## ")
+        .find(|s| s.starts_with("Runtime artifacts"))
+        .unwrap_or_else(|| panic!("no section:\n{md}"));
+    assert!(
+        section.contains(&t("content matches v0.30.6").markdown_inline()),
+        "{section}"
+    );
+    let cells: Vec<String> = [
+        "lib/ollama/libggml.so.0.13.1",
+        "File",
+        "sha256:111111111111",
+        "matches v0.30.6",
+    ]
+    .iter()
+    .map(|c| t(c).markdown_inline())
+    .collect();
+    let row = format!("| {} |", cells.join(" | "));
+    assert!(section.contains(&row), "{row}\n{section}");
+
+    // An install root without a comparison says so.
+    let md = render_session(&complete_pass());
+    assert!(md.contains("not compared with a reference set"), "{md}");
+
+    // No install root, no section.
+    let mut s = complete_pass();
+    s.request.roots.retain(|r| r.id.as_str() != INSTALL_ROOT);
+    s.instances.retain(|i| i.root.as_str() != INSTALL_ROOT);
+    assert!(!render_session(&s).contains("## Runtime artifacts"));
+}
+
+#[test]
+fn the_absent_members_of_a_candidate_are_listed() {
+    let mut s = conflicting_identity();
+    let mut row = s.reference_matches[0].clone();
+    row.member = "bin/ollama".to_string();
+    row.instance = None;
+    row.result = MemberResult::Absent {
+        kind: MemberKind::File,
+    };
+    s.reference_matches.push(row.clone());
+    // Another release's absent member is not listed: it is not a candidate.
+    row.release = "v0.30.7".to_string();
+    row.member = "lib/ollama/other".to_string();
+    s.reference_matches.push(row);
+    let md = render_session(&s);
+    let shown = t("Absent from the install (v0.30.6): bin/ollama").markdown_inline();
+    assert!(md.contains(&shown), "{md}");
+    assert!(
+        !md.contains(&t("lib/ollama/other").markdown_inline()),
+        "{md}"
+    );
+}

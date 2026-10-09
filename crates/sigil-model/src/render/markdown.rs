@@ -4,10 +4,13 @@
 //! SIGIL's own labels alike. Nothing in a session can therefore form a heading, link, table cell,
 //! code span, or HTML in the report. Tables are GFM, and a cell never contains a line break.
 
-use crate::artifact::{NsInode, ProcessObs};
+use crate::artifact::{FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs};
 use crate::evidence::Observability;
 use crate::model::{BlobLookup, Model};
+use crate::reference::{MemberResult, ARTIFACTS_RELEASE, INSTALL_ROOT};
 use crate::session::Session;
+use crate::text::UntrustedText;
+use crate::ReleaseBasis;
 
 use super::md::{self, esc, joined, section, table};
 use super::{
@@ -15,8 +18,9 @@ use super::{
 };
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
-/// that does not close, the models, listeners, and processes observed, and the runtime API when
-/// it was probed. The other lists are counted. The same session gives the same bytes.
+/// that does not close, the models, the installation's files (with an install root), listeners,
+/// and processes observed, and the runtime API when it was probed. The other lists are counted.
+/// The same session gives the same bytes.
 pub fn render_session(s: &Session) -> String {
     let mut out = String::from("# SIGIL session\n\n");
     run(&mut out, s);
@@ -26,6 +30,7 @@ pub fn render_session(s: &Session) -> String {
     policy_violations(&mut out, s);
     coverage(&mut out, s);
     models(&mut out, s);
+    runtime_artifacts(&mut out, s);
     md::listeners(&mut out, &s.listeners);
     processes(&mut out, s);
     md::probes(&mut out, &s.probes);
@@ -185,6 +190,125 @@ fn model_row(m: &Model) -> Vec<String> {
         esc(&format!("{} ({found} blobs found)", m.layers.len())),
         license,
     ]
+}
+
+/// The install root's placements and their comparison with the reference set (PR-4a).
+fn runtime_artifacts(out: &mut String, s: &Session) {
+    let Some(root) = s
+        .request
+        .roots
+        .iter()
+        .find(|r| r.id.as_str() == INSTALL_ROOT)
+    else {
+        return;
+    };
+    section(out, "Runtime artifacts");
+    let claim = s
+        .releases
+        .iter()
+        .find(|c| matches!(c.basis, ReleaseBasis::ReferenceMatches { .. }));
+    // A comparison always records `artifacts.release`, whatever its result.
+    let compared = !s.reference_matches.is_empty()
+        || s.coverage
+            .iter()
+            .any(|c| c.check.as_str() == ARTIFACTS_RELEASE);
+    let release = match claim {
+        Some(c) => format!("content matches {}", c.candidates.join(", ")),
+        None if compared => "not established (see Coverage)".to_string(),
+        None => "not compared with a reference set".to_string(),
+    };
+    out.push_str(&format!("{} {}\n\n", esc("Release:"), esc(&release)));
+    let mut prefix = root.path.as_bytes().to_vec();
+    prefix.push(b'/');
+    let rows = s
+        .instances
+        .iter()
+        .filter(|i| i.root == root.id)
+        .map(|i| {
+            let member = match i.path.as_bytes().strip_prefix(prefix.as_slice()) {
+                Some(rest) => UntrustedText::from_bytes(rest.to_vec()),
+                None => i.path.clone(),
+            };
+            vec![
+                member.markdown_inline(),
+                esc(&format!("{:?}", i.entry_kind())),
+                placement_value(i),
+                esc(&reference_cell(s, i, compared)),
+            ]
+        })
+        .collect();
+    table(
+        out,
+        &["Path", "Kind", "SHA-256 or target", "Reference"],
+        rows,
+    );
+    for tag in claim.map(|c| c.candidates.as_slice()).unwrap_or_default() {
+        let absent: Vec<&str> = s
+            .reference_matches
+            .iter()
+            .filter(|r| r.release == *tag && matches!(r.result, MemberResult::Absent { .. }))
+            .map(|r| r.member.as_str())
+            .collect();
+        if !absent.is_empty() {
+            out.push_str(&esc(&format!(
+                "Absent from the install ({tag}): {}",
+                absent.join(", ")
+            )));
+            out.push_str("\n\n");
+        }
+    }
+}
+
+/// A placement's short SHA-256, its first link target, or why it was not read.
+fn placement_value(i: &FileInstance) -> String {
+    match (&i.content, i.link_chain.first()) {
+        (_, Some(hop)) => format!("{} {}", esc("→"), hop.target.markdown_inline()),
+        (InstanceContent::Read { artifact }, None) => {
+            esc(&artifact.as_str().chars().take(19).collect::<String>())
+        }
+        (
+            InstanceContent::NotRead {
+                why: NotReadReason::Directory,
+            },
+            None,
+        ) => esc("-"),
+        (InstanceContent::NotRead { why }, None) => esc(&format!("not read: {why:?}")),
+    }
+}
+
+/// The releases a placement matches, differs from, or was not compared with.
+fn reference_cell(s: &Session, i: &FileInstance, compared: bool) -> String {
+    if !compared {
+        return "-".to_string();
+    }
+    let (mut matches, mut differs, mut not_compared) = (vec![], vec![], vec![]);
+    for r in s
+        .reference_matches
+        .iter()
+        .filter(|r| r.instance.as_ref() == Some(&i.id))
+    {
+        let to = match &r.result {
+            _ if r.result.matches() => &mut matches,
+            MemberResult::NotCompared => &mut not_compared,
+            _ => &mut differs,
+        };
+        to.push(r.release.as_str());
+    }
+    let mut parts = vec![];
+    for (label, tags) in [
+        ("matches", matches),
+        ("differs from", differs),
+        ("not compared with", not_compared),
+    ] {
+        if !tags.is_empty() {
+            parts.push(format!("{label} {}", tags.join(", ")));
+        }
+    }
+    if parts.is_empty() {
+        "in no reference".to_string()
+    } else {
+        parts.join("; ")
+    }
 }
 
 fn processes(out: &mut String, s: &Session) {
