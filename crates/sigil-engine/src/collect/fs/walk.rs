@@ -11,10 +11,10 @@ use std::rc::Rc;
 
 use rustix::fs::{AtFlags, FileType, OFlags};
 use rustix::io::Errno;
-use sigil_model::{BudgetUse, RootId};
+use sigil_model::{BudgetUse, RootId, StatInfo};
 
 use super::path::RelPath;
-use super::read::Snapshot;
+use super::read::{stat_info, Snapshot};
 use super::resolve::End;
 use super::SafeFs;
 
@@ -31,6 +31,69 @@ pub struct Walk {
     /// walk of a SafeFs), `directory_entries` (a directory had more entries than one may; `used` is
     /// the first entry over the limit), and `walk_depth`.
     pub exceeded: Vec<BudgetUse>,
+    /// Every entry, for [`SafeFs::walk_entries`]; empty for [`SafeFs::walk`].
+    pub entries: Vec<Entry>,
+}
+
+/// One entry listed by [`SafeFs::walk_entries`] or [`SafeFs::entry_at`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub rel: RelPath,
+    pub kind: EntryType,
+    /// The entry's own `lstat`; `None` only for [`EntryType::Vanished`].
+    pub stat: Option<StatInfo>,
+}
+
+/// What an entry is, by its own `lstat` (a symlink is not followed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryType {
+    File,
+    Directory,
+    /// A symlink, with its target text as stored.
+    Symlink {
+        target: String,
+    },
+    /// A FIFO, socket, or device.
+    Special,
+    /// Listed by `readdir`, gone before its `lstat`.
+    Vanished,
+}
+
+/// The entry `name` in directory `parent`, found at `rel`: its `lstat`, and for a symlink its
+/// target text. Nothing is followed or opened.
+pub(crate) fn entry_of(parent: BorrowedFd<'_>, name: &str, rel: RelPath) -> Result<Entry, Skip> {
+    let st = match rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(st) => st,
+        Err(Errno::NOENT) => {
+            return Ok(Entry {
+                rel,
+                kind: EntryType::Vanished,
+                stat: None,
+            })
+        }
+        Err(Errno::ACCESS | Errno::PERM) => return Err(Skip::PermissionDenied),
+        Err(e) => return Err(Skip::Failed(e.to_string())),
+    };
+    let kind = match FileType::from_raw_mode(st.st_mode) {
+        FileType::RegularFile => EntryType::File,
+        FileType::Directory => EntryType::Directory,
+        FileType::Symlink => match rustix::fs::readlinkat(parent, name, Vec::new()) {
+            Ok(target) => match target.to_str() {
+                Ok(target) => EntryType::Symlink {
+                    target: target.to_string(),
+                },
+                Err(_) => return Err(Skip::Failed("the link target is not UTF-8".into())),
+            },
+            Err(Errno::NOENT) => EntryType::Vanished,
+            Err(e) => return Err(Skip::Failed(e.to_string())),
+        },
+        _ => EntryType::Special,
+    };
+    Ok(Entry {
+        rel,
+        kind,
+        stat: Some(stat_info(&st)),
+    })
 }
 
 /// Why an entry was not listed.
@@ -97,11 +160,25 @@ struct Walker<'a> {
     deepest: Option<u32>,
     /// A directory had more entries than `max_dir_entries`.
     oversized: bool,
+    /// List every entry (`walk_entries`) instead of files (`walk`).
+    entries: bool,
 }
 
 impl SafeFs {
     /// Lists the files under `dir` (depth-first, sorted), within the depth and file budgets.
     pub fn walk(&self, root: &RootId, dir: &RelPath) -> Result<Walk, WalkError> {
+        self.walk_with(root, dir, false)
+    }
+
+    /// Lists every entry under `dir` with its own `lstat` (PR-4a): files, directories (entered),
+    /// symlinks with their target text (never followed, so a link to a directory is not entered
+    /// and a dangling link is kept), and specials. An entry gone between `readdir` and `lstat` is
+    /// [`EntryType::Vanished`]. Each entry counts against the file budget.
+    pub fn walk_entries(&self, root: &RootId, dir: &RelPath) -> Result<Walk, WalkError> {
+        self.walk_with(root, dir, true)
+    }
+
+    fn walk_with(&self, root: &RootId, dir: &RelPath, entries: bool) -> Result<Walk, WalkError> {
         let index = self
             .root_index(root)
             .ok_or_else(|| WalkError::Failed(format!("unknown scan root {root}")))?;
@@ -141,6 +218,7 @@ impl SafeFs {
             linked: vec![],
             deepest: None,
             oversized: false,
+            entries,
         };
         if let Some(id) = dev_ino(start.as_fd()) {
             walker.visited.insert(id);
@@ -155,7 +233,7 @@ impl SafeFs {
     }
 
     /// An fd on a directory reached as a whole (`None` is the root's own fd).
-    fn dir_fd(&self, root: usize, fd: Option<OwnedFd>) -> Result<OwnedFd, Errno> {
+    pub(crate) fn dir_fd(&self, root: usize, fd: Option<OwnedFd>) -> Result<OwnedFd, Errno> {
         match fd {
             Some(fd) => Ok(fd),
             None => self.open_at(
@@ -377,6 +455,42 @@ impl Walker<'_> {
             let Ok(child) = rel.join(&name) else {
                 continue;
             };
+            if self.entries {
+                if !self.fs.take_file() {
+                    self.out.unscanned.push(rel);
+                    self.out
+                        .unscanned
+                        .extend(subdirs.into_iter().map(|p: Pending| p.rel));
+                    return Err(Shared::Files);
+                }
+                match entry_of(parent.as_fd(), &name, child.clone()) {
+                    Ok(entry) => {
+                        if entry.kind == EntryType::Directory {
+                            let depth = depth + 1;
+                            let id = entry.stat.as_ref().map_or((0, 0), |st| (st.dev, st.ino));
+                            if depth > self.fs.budgets.max_depth {
+                                self.deepest = self.deepest.max(Some(depth));
+                                self.out.unscanned.push(child);
+                            } else if self.visited.insert(id) {
+                                subdirs.push(Pending {
+                                    rel: child,
+                                    depth,
+                                    dir: Handle::Child {
+                                        parent: Rc::clone(&parent),
+                                        name,
+                                        id,
+                                    },
+                                });
+                            } else {
+                                self.skip(child, Skip::AlreadyVisited);
+                            }
+                        }
+                        self.out.entries.push(entry);
+                    }
+                    Err(why) => self.skip(child, why),
+                }
+                continue;
+            }
             let lstat = match rustix::fs::statat(
                 parent.as_fd(),
                 name.as_str(),
@@ -515,6 +629,7 @@ impl Walker<'_> {
             });
         }
         self.out.files.sort();
+        self.out.entries.sort_by(|a, b| a.rel.cmp(&b.rel));
         self.out.skipped.sort_by(|a, b| a.0.cmp(&b.0));
         self.out.unscanned.sort();
         self.out.unscanned.dedup();

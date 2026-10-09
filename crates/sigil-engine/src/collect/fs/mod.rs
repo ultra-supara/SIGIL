@@ -19,7 +19,7 @@
 //! root, `open` plus what `std::fs::canonicalize` needs. All are read-only (contract C-5).
 
 use std::cell::Cell;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use rustix::fs::{Mode, OFlags};
@@ -32,7 +32,7 @@ mod walk;
 
 pub use path::{link_target, recorded, LinkTarget, PathError, RelPath};
 pub use read::{FileRead, ReadOutcome, ReadSpec};
-pub use walk::{Skip, Walk, WalkError};
+pub use walk::{Entry, EntryType, Skip, Walk, WalkError};
 
 /// Budgets that bound a scan (plan §4.9). Exceeding one is recorded, never fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +143,36 @@ impl SafeFs {
 
     pub(crate) fn root_index(&self, id: &RootId) -> Option<usize> {
         self.roots.iter().position(|r| r.id == *id)
+    }
+
+    /// The entry at `rel`, by `lstat` of its last component: a symlink is not followed. `None`
+    /// when nothing is there or its directory cannot be reached.
+    pub fn entry_at(&self, root: &RootId, rel: &RelPath) -> Option<Entry> {
+        let index = self.root_index(root)?;
+        let parent = rel.parent()?;
+        let name = rel.name()?.to_string();
+        let fd = match self.resolve(index, &parent).end {
+            resolve::End::Dir { root: at, fd, .. } => self.dir_fd(at, fd).ok()?,
+            resolve::End::Entry {
+                root: at,
+                parent: grand,
+                name: dir_name,
+                lstat,
+                ..
+            } if rustix::fs::FileType::from_raw_mode(lstat.st_mode)
+                == rustix::fs::FileType::Directory =>
+            {
+                let grand = grand
+                    .as_ref()
+                    .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
+                self.open_dir(grand, &dir_name).ok()?
+            }
+            _ => return None,
+        };
+        match walk::entry_of(fd.as_fd(), &name, rel.clone()) {
+            Ok(entry) if entry.kind != EntryType::Vanished => Some(entry),
+            _ => None,
+        }
     }
 
     pub(crate) fn canonical_roots(&self) -> Vec<PathBuf> {
