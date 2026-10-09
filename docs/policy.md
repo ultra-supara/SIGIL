@@ -20,6 +20,7 @@ name   = "default"             # required; recorded in the session with the file
 audit          = ["model_store"]   # audited in every mode
 observe_audit  = ["exposure"]      # added in observe mode
 active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
+install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
 extra_required = []                # checks required beyond those of the scopes
 
 [open_questions]
@@ -48,7 +49,15 @@ reason    = "The RPC backend is outside the internal standard"
 ```
 
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
-`[trust]`, root and the runtime user are trusted.
+`[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy
+written before `install_audit` existed loads unchanged, and adds nothing for an installation.
+
+**The scope rule.** The audit scope is `audit`, plus `observe_audit` in observe mode, plus
+`active_audit` when an active feature is requested, plus `install_audit` when the session has an
+`install` root (`--install-dir`). The session records the result. Evaluation computes it again from
+the recorded request, so the two always agree. A policy that lists `runtime_artifacts` in `audit`
+gets both its checks `Skipped { Flag("--install-dir") }` on a run without `--install-dir`, and the
+result is INCOMPLETE.
 
 ## Catalogs
 
@@ -63,7 +72,7 @@ so requesting it gives an honest `INCOMPLETE`.
 | `model_store` | `model_store.inventory`, `model_store.integrity`, `model_store.license` | PR-3a-2 |
 | `exposure` | `exposure.binds` | PR-3a-2 (observe mode) |
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
-| `runtime_artifacts` | `artifacts.discovery` | PR-4 (extends the list) |
+| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release` | PR-4a (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
 
 **Rules** (kind, default severity):
@@ -81,7 +90,8 @@ so requesting it gives an honest `INCOMPLETE`.
 | `exposure.bind_lan` | Exposure | WARN |
 
 When each `model.*` rule applies, and which coverage it affects: [`docs/model-store.md`](model-store.md).
-For the `exposure.*` rules: [`docs/exposure.md`](exposure.md).
+For the `exposure.*` rules: [`docs/exposure.md`](exposure.md). For the `artifacts.*` checks, which
+have no rules: [`docs/runtime-artifacts.md`](runtime-artifacts.md).
 
 **Assumptions** a finding condition may rest on, only if accepted:
 
@@ -171,7 +181,8 @@ A typo never silently weakens a policy.
 
 `crates/sigil-engine/policies/default.toml`:
 - audits `model_store`, plus `exposure` in observe mode, plus `runtime_api` when the API probe is
-  requested (`--active api-probe`);
+  requested (`--active api-probe`), plus `runtime_artifacts` when an installation is inspected
+  (`--install-dir`);
 - counts open questions as gaps;
 - accepts no assumption;
 - has no overrides.

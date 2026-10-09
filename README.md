@@ -33,6 +33,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 | Surface | Evidence captured |
 |---|---|
 | Ollama model store | Each manifest, its layers, and each blob's SHA-256 against its digest |
+| Ollama installation (`--install-dir`) | Each file of `bin/ollama` and `lib/ollama` against the official release manifests: which releases the content matches, and whether any member is absent |
 | Provenance | `registry / namespace / model / tag` from the manifest path |
 | License | The license layer, its SPDX id where detected, and an excerpt |
 | Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
@@ -44,7 +45,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 - **No network I/O unless you ask for it.** SIGIL reads files and, in observe mode, allowlisted `/proc` entries. The one exception is the API probe, an explicit active feature (`--active api-probe`) that is off by default. It sends one `GET /api/version` to a literal address, loopback unless `--allow-remote` is given, and it resolves no names.
 - **No subprocess spawn.** Listener attribution reads `/proc/net/tcp{,6}` and `/proc/<pid>/fd` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
 - **No LLM in the verdict path.** Every finding comes from a deterministic analyzer, and every decision from a policy rule ([`crates/sigil-engine/src/policy`](crates/sigil-engine/src/policy)). An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
-- **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store.
+- **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store and installation.
 
 These properties are **checked** by build-time API bans and by syscall tests over the exercised CLI paths ([ADR-002](docs/adr/ADR-002-execution-modes.md)). They are not enforced by a runtime sandbox.
 
@@ -65,6 +66,9 @@ cargo run -p sigil-cli -- inspect ollama --out out/session.json
 
 # Markdown for the review ticket
 cargo run -p sigil-cli -- inspect ollama --format md --out out/report.md
+
+# Also the installation: bin/ollama and lib/ollama against the official release manifests
+cargo run -p sigil-cli -- inspect ollama --install-dir /usr/local --out out/session.json
 
 # Observe: also the runtime's listening sockets (allowlisted /proc reads)
 cargo run -p sigil-cli -- inspect ollama --mode observe --out out/session.json
@@ -87,7 +91,7 @@ cargo run -p sigil-cli -- rules
 
 Every option, the exit codes, and a CI recipe are in the [Ollama guide](docs/ollama-inspection.md). Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached (`--fail-on`), `4` incomplete (`--fail-on-incomplete`).
 
-Details: [Ollama guide](docs/ollama-inspection.md) · [model store](docs/model-store.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
+Details: [Ollama guide](docs/ollama-inspection.md) · [model store](docs/model-store.md) · [runtime artifacts](docs/runtime-artifacts.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
 
 ## Who SIGIL is for
 
@@ -119,17 +123,18 @@ The milestones are in the [Roadmap](docs/sigil-overview.md#roadmap).
 **Implemented today**
 
 - Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, license layers with SPDX detection.
+- The installation's release by reference (`--install-dir`): every file of `bin/ollama` and `lib/ollama` compared with the official release manifests embedded in SIGIL (not a signature check), with attribution and completeness reported separately.
 - Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
 - Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
 - The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): the projection, its JSON Schema, and its Markdown.
 - The browser viewer (`sigil-wasm`) for sessions and AI-BOM v2.
-- CLI: `inspect ollama` (static, observe, and the active API probe; session, Markdown, or AI-BOM output), `session render` (Markdown or AI-BOM), `explain`, `rules`.
+- CLI: `inspect ollama` (static, observe, the installation, and the active API probe; session, Markdown, or AI-BOM output), `session render` (Markdown or AI-BOM), `explain`, `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path, with the active probe held to one connection to its destination.
 
 **Not yet**
 
-- Binary analysis of the runtime's executables and libraries (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
+- Binary analysis of the runtime's executables and libraries beyond their release (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
 - Runtimes beyond Ollama, and baseline comparison.
 
 ## Documentation
@@ -137,7 +142,7 @@ The milestones are in the [Roadmap](docs/sigil-overview.md#roadmap).
 - [Overview and Roadmap](docs/sigil-overview.md): what SIGIL is, what it does today, and what comes next.
 - [Session model](docs/session-model.md): what a session records, and the invariants it keeps.
 - [Ollama guide](docs/ollama-inspection.md): modes, outputs, options, exit codes, and CI.
-- [Model store](docs/model-store.md) and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
+- [Model store](docs/model-store.md), [runtime artifacts](docs/runtime-artifacts.md), and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
 - [Policy](docs/policy.md): the policy format and how the outcome is computed.
 - [Architecture and safety](docs/architecture-and-safety.md): the crates, the data flow, and the safety boundaries.
 - [ADR-002](docs/adr/ADR-002-execution-modes.md): execution modes and safety contracts.

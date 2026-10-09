@@ -9,6 +9,7 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 ## What SIGIL does today
 
 - Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, and license layers with SPDX detection.
+- The installation's release (`--install-dir`): each file of `bin/ollama` and `lib/ollama/` compared with the official release manifests embedded in SIGIL. Which releases the content matches and whether the installation is complete are reported separately.
 - Observe mode: the runtime's listening sockets, attributed through `/proc` fd tables, with network-namespace checks. `hidepid` and permission gaps are reported as incompleteness.
 - The active API probe (`--active api-probe`): one `GET /api/version` to a literal address, off by default.
 - Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, and open-question treatment.
@@ -22,7 +23,7 @@ How to run it: the [Ollama guide](ollama-inspection.md).
 
 ## What SIGIL does not do yet
 
-- Analysis of the runtime's own executables and libraries: identification first, then call-site evidence (see the Roadmap).
+- Analysis of the runtime's own executables and libraries beyond their release: component identification first, then call-site evidence (see the Roadmap).
 - Runtimes other than Ollama.
 - Comparing a session against a baseline.
 
@@ -49,7 +50,7 @@ Verdict and completeness are independent: a run can be `PASS` and `INCOMPLETE`. 
 | Milestone | What it brings | Status |
 |---|---|---|
 | M0 | Safety contracts and their syscall tests, the session model, the engine (model store, observe), CLI v2, the active API probe, AI-BOM v2, the viewer | Done |
-| M0 | Identification of the runtime's own files and of its release, and `sigil binary inspect` ([#44](https://github.com/ultra-supara/SIGIL/issues/44)) | Next |
+| M0 | Identification of the runtime's own files and of its release, and `sigil binary inspect` ([#44](https://github.com/ultra-supara/SIGIL/issues/44)) | In progress: the release by reference manifests is done; component identification and `binary inspect` are next |
 | M1 | Call-site evidence in the runtime's binaries (`binary inspect --code`; for example `connect` → network), semantic profiles, and how the runtime loads its backends | Planned |
 | M2 | The GGUF parsing path, and advisories matched to what was identified | Planned |
 | M3 | aarch64 and Mach-O binaries | Planned |

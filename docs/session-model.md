@@ -108,6 +108,26 @@ The rule then yields an open question at most.
   - a probe's `runtime_api.version` coverage closes the check only as its outcome supports: `Complete` needs a 200 answer with a version, `NotPresent` a refused connection on the basis `ConnectionRefused` that cites the probe, and a requested probe is never `OutOfScope` (a timed-out probe therefore never closes it). A gap never contradicts an outcome;
   - the basis `ConnectionRefused` is used only for `runtime_api.version`, and cites probes, each refused;
   - a probe is not an `Observed` fact for a condition: no finding rests on it.
+- **Reference rows are the placements' own facts (PR-4a,
+  [`docs/runtime-artifacts.md`](runtime-artifacts.md)):**
+  - V1: a row's reference set is a `ReferenceManifest` knowledge entry;
+  - V2: a row names a placement exactly when it is not `Absent`, and that placement is under the
+    `install` root at the row's member path;
+  - V3–V5: a `File` row is a stable, read file whose artifact has the observed SHA-256; a `Symlink`
+    row a stable link whose first target text is the observed one; a `Directory` row a directory;
+  - V6: a `KindDiffers` row names the placement's own kind, and a member kind that differs from it;
+  - V7: `NotCompared` exactly for a placement that is not stable, or a file that was not read;
+  - V8: `Absent` only when `artifacts.discovery` is `Complete`, and never at a placement's path;
+  - V9: one row per reference set, release, and member;
+  - V10: a release claim by reference matches lists every placement, rests on a complete
+    discovery, and its candidates are exactly the releases every placement matches, recomputed
+    from the rows;
+  - V11: `artifacts.release` is `Complete` exactly when there is such a claim, discovery is
+    complete, and no candidate has an `Absent` row.
+
+  The rows' expected values, and whether a release lists a member at all, come from the reference
+  set, which a session does not hold. The engine's verifier checks them
+  (`verify_reference_matches`).
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -138,8 +158,9 @@ It does **not**:
 - evaluate policy, derive required checks, or decide whether a `NotPresent` basis is acceptable
   for a particular check;
 - recompute an analysis from its inputs: an access conclusion from the node metadata, a
-  predicted value from the values it was predicted from, a binding from the search order, or a
-  release set from the identity claims of its files.
+  predicted value from the values it was predicted from, a binding from the search order, a
+  release set from the identity claims of its files, or a reference row's expected value from the
+  reference set.
 
 Those belong to the engine and its collectors (PR-3a and later). The engine computes decisions and
 the outcome from a policy: see [`docs/policy.md`](policy.md).
@@ -384,6 +405,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Active probes | `ActiveFeature`, `ApiProbe`, `ProbeResult`, `ProbePhase` | What `--active` asked for (`request.active`) and how each probe ended. A refused connection is an observation (`NotPresent` with basis `ConnectionRefused`); a timeout is not |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
+| Reference matches | `ReferenceMatch`, `MemberResult`, `MemberKind`, `EntryKind` | One placement of the install root, or one member absent from it, compared with one release of a reference set. A placement that was not read says why (`NotReadReason`, which gained `Directory`, `LinkToDirectory`, and `Dangling` in PR-4a) |
 | B: presence | `FeatureHint`, `Signal` | A feature signal exists |
 | C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice |
 | Relations | `Relation` (`Declares`, `Candidate`, `SymbolCandidate`, `ProfileMatch`, `SearchPath`, `Spawns`), `ObligationResult`, `BindingPremise` | Dependencies, profile obligations, search paths, topology, binding |
@@ -417,12 +439,16 @@ A field added after sessions without it were written is optional on read, so tho
 |---|---|---|
 | `request.active` | PR-3b-2 | `[]` (nothing active requested) |
 | `probes` | PR-3b-2 | `[]` (no probe) |
+| `reference_matches` | PR-4a | `[]` (no installation compared) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
+`reference_matches` is the exception to "always writes it": SIGIL writes it only when it has rows, so
+a session without `--install-dir` keeps its bytes, and an earlier SIGIL still reads it.
+
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, and one from before PR-4a a session with `reference_matches`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet
