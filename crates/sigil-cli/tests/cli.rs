@@ -1444,3 +1444,27 @@ fn documented_install_dirs_are_pointed_at_the_test_tree() {
         v(&["inspect", "ollama", "--out", "o"])
     );
 }
+
+#[test]
+fn binary_budgets_apply_with_install_dir_only() {
+    let models = store(true);
+    let install = install_tree();
+    let r = inspect(
+        models.path(),
+        &[
+            &"--install-dir",
+            &install.path(),
+            &"--budget",
+            &"binary_parse_bytes=4096",
+            &"--budget",
+            &"binary_imports=2",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.budgets["binary_parse_bytes"], 4096);
+    assert_eq!(s.request.budgets["binary_imports"], 2);
+    let r = inspect(models.path(), &[&"--budget", &"binary_imports=2"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("--install-dir"), "{}", r.stderr);
+}
