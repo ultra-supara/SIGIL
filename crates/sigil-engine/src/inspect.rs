@@ -5,10 +5,10 @@ use std::fmt;
 use std::path::PathBuf;
 
 use sigil_model::{
-    ActiveFeature, ApiProbe, CheckId, Completeness, Coverage, CoverageState, KnowledgeRef, Mode,
-    ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion, Session,
-    SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict, ARTIFACTS_DISCOVERY,
-    ARTIFACTS_RELEASE, INSTALL_ROOT,
+    ActiveFeature, ApiProbe, Artifact, CheckId, Completeness, Coverage, CoverageState, Format,
+    KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion,
+    Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict,
+    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
 };
 
 use crate::analyze::{exposure, model_store, release, runtime_api};
@@ -200,8 +200,9 @@ fn assemble(
         });
         instances.extend(facts.instances);
         for a in facts.artifacts {
-            if !artifacts.iter().any(|x| x.id == a.id) {
-                artifacts.push(a);
+            match artifacts.iter_mut().find(|x| x.id == a.id) {
+                Some(known) => merge(known, a).map_err(|e| InspectError::Invalid(vec![e]))?,
+                None => artifacts.push(a),
             }
         }
         knowledge.push(set.knowledge());
@@ -349,6 +350,23 @@ fn budgets(req: &StoreRequest) -> BTreeMap<String, u64> {
     ])
 }
 
+/// One content read under two roots: the same bytes, so the same size, and the format and slices
+/// that either reading identified. The model store does not parse executables, so an ELF found
+/// there too keeps the install's ELF format and slice. Two readings that identified different
+/// formats are a bug.
+fn merge(known: &mut Artifact, other: Artifact) -> Result<(), String> {
+    let plain = |a: &Artifact| a.format == Format::Other && a.slices.is_empty();
+    if known.size != other.size {
+        return Err(format!("artifact {}: read with two sizes", known.id));
+    }
+    if plain(known) {
+        *known = other;
+    } else if !plain(&other) && (known.format != other.format || known.slices != other.slices) {
+        return Err(format!("artifact {}: read as two formats", known.id));
+    }
+    Ok(())
+}
+
 /// The install scan's budgets, by the names `BudgetUse` reports with the `install_` prefix.
 fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
     let fs = FsBudgets::default();
@@ -360,4 +378,51 @@ fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
         ("install_link_hops".to_string(), u64::from(fs.max_link_hops)),
         ("install_bytes".to_string(), b.bytes),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use sigil_model::{Arch, ArtifactId, ElfType, Format, Slice, SliceId};
+
+    use super::{merge, Artifact};
+
+    fn artifact(format: Format, sliced: bool, size: u64) -> Artifact {
+        let id = ArtifactId::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let slices = if sliced {
+            vec![Slice {
+                id: SliceId::from_parts(&id, Arch::X86_64, 0),
+                arch: Arch::X86_64,
+                offset: 0,
+                size,
+                sha256: sigil_model::Sha256Hex::new("a".repeat(64)).unwrap(),
+            }]
+        } else {
+            vec![]
+        };
+        Artifact {
+            id,
+            size,
+            format,
+            slices,
+        }
+    }
+
+    #[test]
+    fn the_identified_reading_of_one_content_is_kept() {
+        let elf = || artifact(Format::Elf { kind: ElfType::Dyn }, true, 64);
+        let plain = || artifact(Format::Other, false, 64);
+        // Whichever was read first, the ELF reading is kept.
+        let mut known = plain();
+        merge(&mut known, elf()).unwrap();
+        assert_eq!(known, elf());
+        let mut known = elf();
+        merge(&mut known, plain()).unwrap();
+        assert_eq!(known, elf());
+        let mut known = elf();
+        merge(&mut known, elf()).unwrap();
+        assert_eq!(known, elf());
+        // Readings that disagree are a bug, not a choice.
+        assert!(merge(&mut elf(), artifact(Format::MachO, false, 64)).is_err());
+        assert!(merge(&mut plain(), artifact(Format::Other, false, 65)).is_err());
+    }
 }

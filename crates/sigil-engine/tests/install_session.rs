@@ -229,6 +229,39 @@ fn an_artifact_in_both_roots_is_recorded_once() {
 }
 
 #[test]
+fn an_elf_in_both_roots_keeps_the_install_s_format_and_slice() {
+    // The model store does not parse executables: its reading of the same bytes is `Other`.
+    let models = TempDir::new().unwrap();
+    let weights = blob(models.path(), &elf(3));
+    manifest(models.path(), LIB, None, &[(MODEL_MEDIA, &weights)]);
+    let tree = install();
+    let s = session(
+        &request(models.path(), Some(tree.path())),
+        &Policy::builtin_default().unwrap(),
+    );
+    let shared: Vec<&Artifact> = s
+        .artifacts
+        .iter()
+        .filter(|a| a.id.as_str() == weights)
+        .collect();
+    assert_eq!(shared.len(), 1);
+    assert_eq!(shared[0].format, Format::Elf { kind: ElfType::Dyn });
+    assert_eq!(shared[0].slices.len(), 1);
+    let placed: Vec<&RootId> = s
+        .instances
+        .iter()
+        .filter(|i| {
+            i.content
+                == (InstanceContent::Read {
+                    artifact: shared[0].id.clone(),
+                })
+        })
+        .map(|i| &i.root)
+        .collect();
+    assert_eq!(placed.len(), 2, "one placement under each root");
+}
+
+#[test]
 fn without_an_install_the_default_requires_nothing_new_and_a_custom_policy_is_skipped() {
     let s = inspect_without_install(Policy::builtin_default().unwrap());
     assert!(!s
