@@ -1,5 +1,5 @@
 //! License text: an SPDX identifier and an excerpt (pure). Ported unchanged from v0.1
-//! (`sigil-core/src/ollama.rs`), with its unit tests.
+//! (`sigil-core/src/ollama.rs`, removed in PR-3b-3c-1; see git history), with its unit tests.
 
 /// Bytes of the license blob examined for an identifier.
 pub const DETECT_BYTES: usize = 4096;

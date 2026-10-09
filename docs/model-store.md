@@ -82,7 +82,7 @@ mismatch the blob and what it holds. Findings about one layer carry its index in
 
 ## From v0.1
 
-v0.1's tests stay until PR-3b-3 removes `sigil-core`. Each v0.1 case maps to a v2 test as follows.
+v0.1's tests were removed with `sigil-core` in PR-3b-3c-1 ([ADR-006](adr/ADR-006-remove-ir-safeisa.md)). Each v0.1 case maps to a v2 test as follows.
 
 **`crates/sigil-core/tests/ollama.rs`**
 
@@ -98,7 +98,9 @@ v0.1's tests stay until PR-3b-3 removes `sigil-core`. Each v0.1 case maps to a v
 | the 10 display-name and filter cases | `layout` unit tests, `store_session::the_filter_round_trips_display_names` |
 | `runtime_public_bind_listener_warns`, `runtime_localhost_listener_keeps_pass`, `runtime_lan_listener_warns` | [`docs/exposure.md`](exposure.md) (PR-3a-3) |
 | `flags_public_bind_host_as_warn_without_network_probe`, `treats_scheme_less_loopback_host_as_local`, `flags_non_local_network_host_as_warn_without_probe` | PR-4 (configured host, E4) |
-| `renders_ai_bom_with_model_runtime_and_files`, `ai_bom_includes_runtime_exposure_and_binds`, `ai_bom_runtime_exposure_unknown_when_disabled` | PR-3b-3 (AI-BOM v2) |
+| `renders_ai_bom_with_model_runtime_and_files` | `aibom::layers_say_where_each_blob_was_found_and_what_was_read`, `aibom::every_section_lists_what_the_aibom_holds` (AI-BOM v2, `sigil-model`) |
+| `ai_bom_includes_runtime_exposure_and_binds` | `aibom::the_runtime_is_carried_as_observed` |
+| `ai_bom_runtime_exposure_unknown_when_disabled` | replaced: without observation, `exposure.binds` is `Skipped` (`ModeDisabled`), and when it is required the outcome is incomplete. The AI-BOM has an empty `runtime` and shows the check open (`aibom::every_session_example_projects_to_its_committed_aibom`, example 04) |
 
 **Other v0.1 tests**
 
