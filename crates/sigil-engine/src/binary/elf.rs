@@ -499,7 +499,6 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
 
     /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA), by the
     /// address they write: `(type, addend)`.
-    #[allow(dead_code)] // used by the data symbols (next commit)
     pub(crate) fn relocations(
         &mut self,
         dynamic: &Dynamic,
