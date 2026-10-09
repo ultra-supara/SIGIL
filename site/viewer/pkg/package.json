@@ -1,7 +1,7 @@
 {
-  "name": "sigil-aibom-wasm",
+  "name": "sigil-wasm",
   "type": "module",
-  "description": "wasm32 binding for SIGIL's AI-BOM Markdown renderer (browser viewer).",
+  "description": "SIGIL's session and AI-BOM v2 renderers for the browser viewer (wasm32).",
   "version": "0.1.0",
   "license": "MIT",
   "repository": {
@@ -9,12 +9,12 @@
     "url": "https://github.com/ultra-supara/SIGIL"
   },
   "files": [
-    "sigil_aibom_wasm_bg.wasm",
-    "sigil_aibom_wasm.js",
-    "sigil_aibom_wasm.d.ts"
+    "sigil_wasm_bg.wasm",
+    "sigil_wasm.js",
+    "sigil_wasm.d.ts"
   ],
-  "main": "sigil_aibom_wasm.js",
-  "types": "sigil_aibom_wasm.d.ts",
+  "main": "sigil_wasm.js",
+  "types": "sigil_wasm.d.ts",
   "sideEffects": [
     "./snippets/*"
   ]

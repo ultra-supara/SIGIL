@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 
 const css = readFileSync("site/styles.css", "utf8");
-const viewerCss = readFileSync("site/viewer/viewer.css", "utf8");
 const h1ReportHtml = readFileSync("site/reports/2026-h1/index.html", "utf8");
 const h1Summary = readFileSync("reports/2026-h1/summary.json", "utf8");
 const h1Phi3Raw = readFileSync("reports/2026-h1/raw/phi3_mini.aibom.json", "utf8");
@@ -17,12 +16,6 @@ const pages = [
     path: "site/compare/index.html",
     topPrefix: "../",
     expectedTerminal: "sigil://compare",
-  },
-  {
-    name: "viewer",
-    path: "site/viewer/index.html",
-    topPrefix: "../",
-    expectedTerminal: "sigil://viewer",
   },
   {
     name: "report",
@@ -93,11 +86,8 @@ checks.push(
       css.includes(".sakura-page .terminal-card"),
   },
   {
-    name: "sakura page cards and viewer controls are dark themed",
-    pass:
-      css.includes(".sakura-page .compare-index-card") &&
-      css.includes(".sakura-page .viewer-controls") &&
-      css.includes(".sakura-page .dropzone"),
+    name: "sakura page cards are dark themed",
+    pass: css.includes(".sakura-page .compare-index-card"),
   },
   {
     name: "report table sections keep the dark sakura background",
@@ -105,42 +95,6 @@ checks.push(
       /\.sakura-page\s+\.compare-axes\s*{[\s\S]*background:\s*transparent/.test(css) &&
       /\.sakura-page\s+\.compare-axes\s+\.table-wrap\s*{[\s\S]*background:\s*rgba\(255,\s*255,\s*255,\s*0\.025\)/.test(
         css,
-      ),
-  },
-  {
-    name: "viewer rendered report code is not the old light paper chip",
-    pass:
-      /\.sakura-page\s+\.report-output\s+code\s*{[\s\S]*background:\s*rgba\(255,\s*216,\s*231,\s*0\.08\)/.test(
-        viewerCss,
-      ) &&
-      /\.sakura-page\s+\.report-output\s+code\s*{[\s\S]*color:\s*var\(--home-sakura\)/.test(
-        viewerCss,
-      ),
-  },
-  {
-    name: "viewer rendered report code wraps long paths and digests",
-    pass: /\.sakura-page\s+\.report-output\s+code\s*{[\s\S]*overflow-wrap:\s*anywhere/.test(
-      viewerCss,
-    ),
-  },
-  {
-    name: "viewer rendered report tables do not inherit the old wide table minimum",
-    pass:
-      /\.sakura-page\s+\.report-output\s+table\s*{[\s\S]*min-width:\s*0/.test(
-        viewerCss,
-      ) &&
-      /\.sakura-page\s+\.report-output\s+table\s*{[\s\S]*white-space:\s*normal/.test(
-        viewerCss,
-      ),
-  },
-  {
-    name: "viewer digest tables stack on mobile instead of crushing hashes",
-    pass:
-      /@media\s+\(max-width:\s*680px\)\s*{[\s\S]*\.sakura-page\s+\.report-output\s+table:has\(th:nth-child\(3\)\)\s+tr\s*{[\s\S]*display:\s*grid/.test(
-        viewerCss,
-      ) &&
-      /@media\s+\(max-width:\s*680px\)\s*{[\s\S]*\.sakura-page\s+\.report-output\s+table:has\(th:nth-child\(3\)\)\s+td:nth-child\(3\)\s*{[\s\S]*grid-column:\s*1\s*\/\s*-1/.test(
-        viewerCss,
       ),
   },
   {

@@ -2,6 +2,7 @@
 //! viewer. Every value they show goes through the [`UntrustedText`] escape API.
 
 pub mod aibom;
+pub mod html;
 pub mod markdown;
 mod md;
 

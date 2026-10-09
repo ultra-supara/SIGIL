@@ -30,7 +30,7 @@ use crate::session::{KnowledgeRef, Mode, SchemaVersion, ToolInfo};
 use crate::text::UntrustedText;
 
 pub use markdown::markdown;
-pub use project::{project, state_name, STATE_NAMES};
+pub use project::{project, state_name, CLOSING_STATES, STATE_NAMES};
 
 /// An AI-BOM v2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,4 +211,79 @@ pub struct CheckSummary {
     pub closed: bool,
     /// Entries per coverage state ([`STATE_NAMES`]).
     pub states: BTreeMap<String, u32>,
+}
+
+/// Why an AI-BOM v2 is inconsistent, beyond what its types and schema check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BomError {
+    /// A coverage state name that is not one of [`STATE_NAMES`].
+    UnknownState { check: CheckId, state: String },
+    /// A state listed with no entries.
+    EmptyState { check: CheckId, state: String },
+    /// `closed` disagrees with the states: a check is closed exactly when it has entries and every
+    /// state listed is one of [`CLOSING_STATES`].
+    ClosedDisagrees { check: CheckId, closed: bool },
+}
+
+impl std::fmt::Display for BomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BomError::UnknownState { check, state } => {
+                write!(f, "coverage[{check}]: {state:?} is not a coverage state")
+            }
+            BomError::EmptyState { check, state } => {
+                write!(f, "coverage[{check}]: {state} is listed with no entries")
+            }
+            BomError::ClosedDisagrees { check, closed } => write!(
+                f,
+                "coverage[{check}]: closed is {closed}, but its states say otherwise"
+            ),
+        }
+    }
+}
+
+impl AiBom {
+    /// Checks what the types cannot. An AI-BOM that SIGIL projected always passes. The viewer
+    /// refuses one that does not, instead of showing it.
+    ///
+    /// - Each coverage summary names only coverage states ([`STATE_NAMES`]), each with at least
+    ///   one entry.
+    /// - `closed` agrees with the states: true exactly when there are entries and every state
+    ///   listed is a closing state ([`CLOSING_STATES`]). (A state with no entries is already an
+    ///   error.)
+    pub fn validate(&self) -> Result<(), Vec<BomError>> {
+        let mut errors = vec![];
+        for c in &self.coverage {
+            for (state, count) in &c.states {
+                if !STATE_NAMES.contains(&state.as_str()) {
+                    errors.push(BomError::UnknownState {
+                        check: c.check.clone(),
+                        state: state.clone(),
+                    });
+                }
+                if *count == 0 {
+                    errors.push(BomError::EmptyState {
+                        check: c.check.clone(),
+                        state: state.clone(),
+                    });
+                }
+            }
+            let entries: u64 = c.states.values().map(|n| u64::from(*n)).sum();
+            let closes = entries > 0
+                && c.states
+                    .keys()
+                    .all(|state| CLOSING_STATES.contains(&state.as_str()));
+            if c.closed != closes {
+                errors.push(BomError::ClosedDisagrees {
+                    check: c.check.clone(),
+                    closed: c.closed,
+                });
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }

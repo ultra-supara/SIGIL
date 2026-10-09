@@ -13,7 +13,7 @@ cargo run -q -p sigil-cli -- inspect ollama --format md --out out/report.md
 
 A single static Rust binary inventories the models in an Ollama store, verifies every blob against its manifest digest, records license layers, and, in observe mode, attributes the runtime's listening sockets. Every result has two parts: a **verdict** (PASS / WARN / FAIL) from a deterministic analyzer and a policy, and a **completeness** that says whether everything required was actually seen. What SIGIL could not see is never reported as absent. Nothing leaves your machine, and no LLM ever decides the verdict.
 
-[Live site](https://ultra-supara.github.io/SIGIL/) · [Try the AI-BOM viewer in your browser](https://ultra-supara.github.io/SIGIL/viewer/) · [Compare to other tools](https://ultra-supara.github.io/SIGIL/compare/) · [State of Local AI Audit — 2026 H1](https://ultra-supara.github.io/SIGIL/reports/2026-h1/)
+[Live site](https://ultra-supara.github.io/SIGIL/) · [Try the viewer in your browser](https://ultra-supara.github.io/SIGIL/viewer/) · [Compare to other tools](https://ultra-supara.github.io/SIGIL/compare/) · [State of Local AI Audit — 2026 H1](https://ultra-supara.github.io/SIGIL/reports/2026-h1/)
 
 ---
 
@@ -108,7 +108,7 @@ If your entire AI footprint is hosted (OpenAI API, Bedrock, Vertex AI) and there
 
 ## Try it in the browser
 
-The AI-BOM viewer at [`/viewer/`](https://ultra-supara.github.io/SIGIL/viewer/) renders AI-BOM v1 files (SIGIL 0.1) fully client-side via `wasm32-unknown-unknown`: no upload, no sign-up, no network call after the page loads. It moves to v2 sessions with AI-BOM v2.
+The viewer at [`/viewer/`](https://ultra-supara.github.io/SIGIL/viewer/) shows the report of a session or an AI-BOM v2 with the CLI's own renderers, compiled to `wasm32-unknown-unknown` (`crates/sigil-wasm`). The file stays in your browser: no upload, no sign-up. A session is validated before it is shown. The page's HTML comes only from the Rust renderer's escaping contract, under a strict Content Security Policy. An AI-BOM v1 file (SIGIL 0.1) is named, not rendered.
 
 ## Direction
 
@@ -127,13 +127,13 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 - Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
 - The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): the projection, its JSON Schema, and its Markdown.
+- The browser viewer (`sigil-wasm`) for sessions and AI-BOM v2.
 - CLI: `inspect ollama` (static, observe, and the active API probe; session, Markdown, or AI-BOM output), `session render` (Markdown or AI-BOM), `explain`, `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path, with the active probe held to one connection to its destination.
 
 **Not yet**
 
 - Binary analysis of the runtime's executables and libraries (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
-- The browser viewer on v2 sessions and AI-BOM v2 (PR-3b-3b).
 - Runtimes beyond Ollama, and baseline comparison.
 
 ## Documentation

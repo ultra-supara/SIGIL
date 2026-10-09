@@ -1,0 +1,132 @@
+name: Viewer wasm
+
+# crates/sigil-wasm runs the CLI's session and AI-BOM v2 renderers in the browser viewer
+# (site/viewer/). The viewer's HTML comes only from its `markdown_html` (U-10).
+#
+# - `native`: the crate's tests (renders equal the model's, validation, refusals, the viewer
+#   samples), and a wasm32 build.
+# - `committed-wasm`: the bundle the browser serves (site/viewer/pkg/) must track the source.
+#   1. Behaviour: every sample's Markdown and HTML from the committed bundle equal the native
+#      render, and every invalid sample gives its manifest's error (ci/check-committed-wasm.mjs).
+#   2. Reproducibility: ci/build-viewer-wasm.sh rebuilds the bundle with the pinned rustc
+#      (ci/viewer-wasm-toolchain), wasm-pack 0.15.0, wasm-bindgen from Cargo.lock, and
+#      CARGO_HOME remapped. Every file must equal the committed one byte for byte (`.js` and
+#      `.wasm` included), and the `.wasm` must stay within 500 KB gzipped.
+#   3. The viewer's state (load, failure, latest-wins) passes its node tests.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/sigil-model/**'
+      - 'crates/sigil-wasm/**'
+      - 'site/viewer/**'
+      - 'schemas/**'
+      - 'ci/check-committed-wasm.mjs'
+      - 'ci/build-viewer-wasm.sh'
+      - 'ci/viewer-wasm-toolchain'
+      - 'ci/viewer-state.test.mjs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wasm.yml'
+  pull_request:
+    paths:
+      - 'crates/sigil-model/**'
+      - 'crates/sigil-wasm/**'
+      - 'site/viewer/**'
+      - 'schemas/**'
+      - 'ci/check-committed-wasm.mjs'
+      - 'ci/build-viewer-wasm.sh'
+      - 'ci/viewer-wasm-toolchain'
+      - 'ci/viewer-state.test.mjs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wasm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Viewer renderer tests + wasm32 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+      - name: Tests (renders, validation, refusals, samples)
+        run: cargo test -p sigil-wasm
+      - name: Build for wasm32
+        run: cargo build -p sigil-wasm --target wasm32-unknown-unknown --release
+
+  committed-wasm:
+    name: Committed wasm tracks Rust source (behaviour, reproducible bytes, size)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The bundle's rustc, pinned for reproducible bytes: keep equal to ci/viewer-wasm-toolchain
+      # (ci/build-viewer-wasm.sh refuses any other).
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # stable
+        with:
+          toolchain: 1.93.0
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Render the samples natively (source of truth)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/expected
+          cargo build -q -p sigil-wasm --example render_sample
+          for sample in site/viewer/samples/*.json; do
+            stem=$(basename "$sample" .json)
+            cargo run -q -p sigil-wasm --example render_sample -- "$sample" > "/tmp/expected/$stem.md"
+            cargo run -q -p sigil-wasm --example render_sample -- "$sample" --html > "/tmp/expected/$stem.html"
+          done
+      - name: Behaviour — the committed bundle renders as the source does
+        run: node ci/check-committed-wasm.mjs /tmp/expected
+      - name: The viewer's state (load, failure, latest-wins)
+        run: node --test ci/viewer-state.test.mjs
+      - name: Install wasm-pack (pinned)
+        run: cargo install wasm-pack --version 0.15.0 --locked
+      - name: Reproducibility — a rebuild equals the committed bundle, byte for byte
+        run: |
+          set -euo pipefail
+          ci/build-viewer-wasm.sh /tmp/rebuilt
+          if ! diff -r site/viewer/pkg /tmp/rebuilt; then
+            echo "::error::the committed site/viewer/pkg/ differs from a reproducible rebuild. Run ci/build-viewer-wasm.sh (rustc $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0) and commit site/viewer/pkg/."
+            exit 1
+          fi
+          size=$(stat -c '%s' site/viewer/pkg/sigil_wasm_bg.wasm)
+          gz=$(gzip -c site/viewer/pkg/sigil_wasm_bg.wasm | wc -c)
+          max_gz=$((500 * 1024))
+          {
+            echo "## Viewer wasm bundle"
+            echo
+            echo "Reproducible: every file equals a fresh build (rustc $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0)."
+            echo
+            echo "| .wasm bytes | .wasm gzipped | budget (gzipped) |"
+            echo "|---|---|---|"
+            echo "| $size | $gz | $max_gz |"
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "$gz" -gt "$max_gz" ]; then
+            echo "::error::the wasm bundle exceeds 500 KB gzipped ($gz > $max_gz)"
+            exit 1
+          fi

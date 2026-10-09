@@ -1,0 +1,22 @@
+[package]
+name = "sigil-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SIGIL's session and AI-BOM v2 renderers for the browser viewer (wasm32)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sigil-model = { path = "../sigil-model" }
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+
+[[example]]
+name = "render_sample"
+path = "examples/render_sample.rs"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

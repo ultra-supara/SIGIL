@@ -1,34 +1,34 @@
-{
-  "bad-digest-prefix.aibom.json": {
-    "description": "scalar: pattern on files[*].digest",
-    "expected_error_contains": "sha256:"
+[
+  {
+    "file": "unknown-field.json",
+    "expect": "unknown field `extra`"
   },
-  "empty-tool-name.aibom.json": {
-    "description": "scalar: minLength on tool.name",
-    "expected_error_contains": "tool.name"
+  {
+    "file": "fails-validation.json",
+    "expect": "The session fails validation"
   },
-  "non-hex-sha256.aibom.json": {
-    "description": "scalar: pattern on files[*].sha256",
-    "expected_error_contains": "sha256"
+  {
+    "file": "aibom-v1.json",
+    "expect": "This is an AI-BOM v1 file (SIGIL 0.1"
   },
-  "text-excerpt-too-long.aibom.json": {
-    "description": "scalar: maxLength on license.text_excerpt",
-    "expected_error_contains": "text_excerpt"
+  {
+    "file": "unknown-schema.json",
+    "expect": "\"schema\": \"sigil-session/2\""
   },
-  "unknown-nested-runtime.aibom.json": {
-    "description": "serde deny_unknown_fields on RuntimeInfo",
-    "expected_error_contains": "unknown field"
+  {
+    "file": "not-json.json",
+    "expect": "This is not valid JSON"
   },
-  "unknown-top-level-field.aibom.json": {
-    "description": "envelope: additionalProperties: false at root",
-    "expected_error_contains": "smuggled"
+  {
+    "file": "aibom-unknown-state.json",
+    "expect": "\"Bogus\" is not a coverage state"
   },
-  "wrong-enum-verdict.aibom.json": {
-    "description": "serde enum: verdict must be PASS/WARN/FAIL",
-    "expected_error_contains": "unknown variant"
+  {
+    "file": "aibom-empty-state.json",
+    "expect": "listed with no entries"
   },
-  "wrong-schema-version.aibom.json": {
-    "description": "envelope: schema_version != \"1.1\"",
-    "expected_error_contains": "1.2"
+  {
+    "file": "aibom-closed-disagrees.json",
+    "expect": "closed is true"
   }
-}
+]
