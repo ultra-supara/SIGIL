@@ -799,6 +799,30 @@ fn the_probe_is_shown_in_markdown_and_with_observe_mode() {
 }
 
 #[test]
+fn probe_budgets_at_their_maximum_are_accepted() {
+    let d = store(true);
+    let addr = refused_addr();
+    let r = inspect(
+        d.path(),
+        &[
+            &"--active",
+            &"api-probe",
+            &"--api-addr",
+            &addr,
+            &"--budget",
+            &"api_connect_ms=30000",
+            &"--budget",
+            &"api_io_ms=60000",
+            &"--budget",
+            &"api_response_bytes=1048576",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.budgets["api_response_bytes"], 1 << 20);
+}
+
+#[test]
 fn the_probe_target_is_checked_before_anything_runs() {
     let d = store(true);
     let cases: &[(&[&str], &str)] = &[
@@ -852,6 +876,23 @@ fn the_probe_target_is_checked_before_anything_runs() {
         (
             &["--active", "api-probe", "--budget", "api_io_ms=0"],
             "greater than 0",
+        ),
+        (
+            &["--active", "api-probe", "--budget", "api_connect_ms=30001"],
+            "at most 30000",
+        ),
+        (
+            &["--active", "api-probe", "--budget", "api_io_ms=60001"],
+            "at most 60000",
+        ),
+        (
+            &[
+                "--active",
+                "api-probe",
+                "--budget",
+                "api_response_bytes=1048577",
+            ],
+            "at most 1048576",
         ),
         (&["--budget", "api_io_ms=200"], "--active api-probe"),
     ];

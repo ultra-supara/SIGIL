@@ -294,6 +294,46 @@ fn an_unusable_target_or_bound_is_refused() {
 }
 
 #[test]
+fn bounds_above_their_maximum_are_refused() {
+    use sigil_probe::{MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE};
+    assert_eq!(MAX_CONNECT_TIMEOUT, Duration::from_secs(30));
+    assert_eq!(MAX_IO_DEADLINE, Duration::from_secs(60));
+    assert_eq!(MAX_RESPONSE, 1 << 20);
+    let target: SocketAddr = "127.0.0.1:11434".parse().unwrap();
+    for opts in [
+        ProbeOptions {
+            connect_timeout: MAX_CONNECT_TIMEOUT + Duration::from_millis(1),
+            ..ProbeOptions::default()
+        },
+        ProbeOptions {
+            io_deadline: MAX_IO_DEADLINE + Duration::from_millis(1),
+            ..ProbeOptions::default()
+        },
+        ProbeOptions {
+            max_response: MAX_RESPONSE + 1,
+            ..ProbeOptions::default()
+        },
+    ] {
+        assert_eq!(
+            probe_version(target, &opts, at()),
+            Err(ProbeError::BoundTooLarge),
+            "{opts:?}"
+        );
+    }
+    // Exactly the maximum is accepted.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let refused = listener.local_addr().unwrap();
+    drop(listener);
+    let at_max = ProbeOptions {
+        connect_timeout: MAX_CONNECT_TIMEOUT,
+        io_deadline: MAX_IO_DEADLINE,
+        max_response: MAX_RESPONSE,
+        allow_remote: false,
+    };
+    assert_eq!(probe(refused, &at_max), ProbeResult::Refused);
+}
+
+#[test]
 fn ipv6_loopback_is_loopback() {
     let Some(target) = serve_on("[::1]:0", |mut stream| {
         read_request(&mut stream);

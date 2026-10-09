@@ -39,7 +39,9 @@ use sigil_model::{
     is_loopback, target, ActiveFeature, Completeness, Mode, Session, Timestamp, ToolInfo,
     UntrustedText, Verdict,
 };
-use sigil_probe::{probe_version, ProbeOptions};
+use sigil_probe::{
+    probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "sigil", version)]
@@ -450,6 +452,16 @@ fn probe(target: SocketAddr, options: ProbeOptions) -> Result<ActiveInput, Failu
     })
 }
 
+/// The largest value a probe budget accepts (`sigil-probe`'s maximums, in the budget's unit).
+fn probe_maximum(key: &str) -> u64 {
+    let millis = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+    match key {
+        "api_connect_ms" => millis(MAX_CONNECT_TIMEOUT),
+        "api_io_ms" => millis(MAX_IO_DEADLINE),
+        _ => MAX_RESPONSE,
+    }
+}
+
 /// The budgets, by the names the session records in `request.budgets`.
 fn budgets(
     given: &[String],
@@ -487,6 +499,12 @@ fn budgets(
             }
             "api_connect_ms" | "api_io_ms" | "api_response_bytes" if value == 0 => {
                 return Err(usage("the value must be greater than 0"));
+            }
+            "api_connect_ms" | "api_io_ms" | "api_response_bytes" if value > probe_maximum(key) => {
+                return Err(usage(&format!(
+                    "the value must be at most {}",
+                    probe_maximum(key)
+                )));
             }
             "api_connect_ms" => probe_options.connect_timeout = Duration::from_millis(value),
             "api_io_ms" => probe_options.io_deadline = Duration::from_millis(value),

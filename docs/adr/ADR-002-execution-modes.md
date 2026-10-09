@@ -47,7 +47,7 @@ PR-1 made the contracts below checkable for the v0.1 CLI. Since PR-3b-1 they are
 |---|---|---|
 | C-4 (active) | **Only the API probe's one connection.** At most one `socket(AF_INET\|AF_INET6, SOCK_STREAM)`, of the destination's family; a `connect` of that socket to the requested destination; and option, send (with no destination address), receive, name, and shutdown calls on it. Any other family, a second socket, `bind`, `listen`, `accept`, `socketpair`, `sendmsg`, a call on another socket, or another destination is a violation | runs with `--active api-probe` |
 
-The destination is a literal IP address and port: SIGIL resolves no name, so no resolver, NSS module, or DNS query is involved. It is loopback (`127.0.0.0/8`, `::1`, IPv4-mapped loopback) unless `--allow-remote` is given. The probe is bounded by a connect timeout, one deadline for the request and the response, and a response byte limit, each recorded in the session as a budget.
+The destination is a literal IP address and port: SIGIL resolves no name, so no resolver, NSS module, or DNS query is involved. It is loopback (`127.0.0.0/8`, `::1`, IPv4-mapped loopback) unless `--allow-remote` is given. The probe is bounded by a connect timeout, one deadline for the request and the response, and a response byte limit, each recorded in the session as a budget. Each bound has a maximum (30 s, 60 s, 1 MiB), and the socket timeout is reset to the time left before every `write` and `read`, so the one deadline holds across partial writes and reads.
 
 Two further contracts from the v2 plan are checked by the PRs that introduce the code they govern:
 - C-7 (bounded resource use, PR-3a/PR-4);
