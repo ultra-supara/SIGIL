@@ -55,7 +55,7 @@ pub enum ProbeResult {
         status: u16,
         version: Option<UntrustedText>,
     },
-    /// The connection was refused: nothing answers at the target from this host.
+    /// The connection was refused: nothing answers at the target from SIGIL's network namespace.
     Refused,
     /// The phase did not finish within its bound.
     TimedOut { phase: ProbePhase },

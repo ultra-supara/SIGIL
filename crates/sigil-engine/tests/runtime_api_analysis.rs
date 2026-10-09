@@ -42,7 +42,7 @@ fn a_refused_connection_is_not_present_at_the_target() {
             evidence: vec![EvidenceRef::Probe {
                 probe: ProbeId::new("probe:api/127.0.0.1:11434").unwrap(),
             }],
-            scope: "127.0.0.1:11434 from this host".to_string(),
+            scope: "127.0.0.1:11434 from SIGIL's network namespace".to_string(),
             basis: AbsenceBasis::ConnectionRefused,
         }
     );
@@ -52,7 +52,7 @@ fn a_refused_connection_is_not_present_at_the_target() {
     let c = analyze(&[p]);
     assert!(matches!(
         &c[0].state,
-        CoverageState::NotPresent { scope, .. } if scope == "[::1]:8080 from this host"
+        CoverageState::NotPresent { scope, .. } if scope == "[::1]:8080 from SIGIL's network namespace"
     ));
 }
 

@@ -131,6 +131,10 @@ pub fn coverage_state(state: &CoverageState) -> Shown {
     }
 }
 
+/// What an API probe can and cannot say (ADR-002 active mode; PR-3b-2 design §6.1). Shown next
+/// to every probe in a report, in `explain`, and in the CLI summary.
+pub const PROBE_SCOPE_NOTE: &str = "A probe is one request to that address from SIGIL's network namespace. An answer is the endpoint's own claim: it is not tied to an observed process, the runtime's binary, or the model store. A refusal means nothing answered there: a runtime in another network namespace or on another host is neither seen nor ruled out.";
+
 /// How a probe ended.
 pub fn probe_result(r: &ProbeResult) -> Shown {
     match r {

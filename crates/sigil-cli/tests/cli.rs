@@ -687,6 +687,11 @@ fn a_refused_probe_closes_the_check() {
         "{}",
         r.stderr
     );
+    assert!(
+        r.stderr.contains(sigil_model::render::PROBE_SCOPE_NOTE),
+        "the probe's limits are not stated:\n{}",
+        r.stderr
+    );
 }
 
 #[test]

@@ -177,6 +177,11 @@ fn a_probe_is_shown_with_its_target_and_outcome() {
         "{md}"
     );
     assert_eq!(md, render_session(&probed(t("0.12.3"))));
+    // What the probe can and cannot say is stated next to it.
+    assert!(
+        md.contains(&t(sigil_model::render::PROBE_SCOPE_NOTE).markdown_inline()),
+        "{md}"
+    );
 }
 
 #[test]
@@ -241,11 +246,11 @@ fn every_probe_outcome_has_a_label() {
 fn a_refused_connection_is_shown_as_such() {
     let state = CoverageState::NotPresent {
         evidence: vec![],
-        scope: "127.0.0.1:11434 from this host".to_string(),
+        scope: "127.0.0.1:11434 from SIGIL's network namespace".to_string(),
         basis: AbsenceBasis::ConnectionRefused,
     };
     assert_eq!(
         sigil_model::render::coverage_state(&state).terminal(),
-        "not present: connection refused at 127.0.0.1:11434 from this host"
+        "not present: connection refused at 127.0.0.1:11434 from SIGIL's network namespace"
     );
 }

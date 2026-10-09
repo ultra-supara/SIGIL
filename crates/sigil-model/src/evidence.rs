@@ -267,6 +267,6 @@ pub enum Ref {
     Model(ModelId),
     /// A listening socket.
     Listener(ListenerId),
-    /// An active probe (its target, from this host).
+    /// An active probe: one request to its target from SIGIL's network namespace.
     Probe(ProbeId),
 }

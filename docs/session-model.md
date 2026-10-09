@@ -420,6 +420,11 @@ A field added after sessions without it were written is optional on read, so tho
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
+The schema is **backward compatible, not forward compatible.**
+- This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`.
+- A change that a newer reader must not ignore needs `sigil-session/2`.
+
 ## Not in the model yet
 
 | Item | Arrives in |

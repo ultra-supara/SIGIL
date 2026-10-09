@@ -262,7 +262,11 @@ fn a_probe_is_explained_in_the_coverage() {
     assert!(text.contains("runtime_api.version"), "{text}");
     assert!(text.contains("probe:api/127.0.0.1:11434"), "{text}");
     assert!(
-        text.contains("connection refused at 127.0.0.1:11434 from this host"),
+        text.contains("connection refused at 127.0.0.1:11434 from SIGIL's network namespace"),
         "{text}"
+    );
+    assert!(
+        text.contains(sigil_model::render::PROBE_SCOPE_NOTE),
+        "the probe's limits are not stated:\n{text}"
     );
 }

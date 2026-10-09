@@ -33,7 +33,7 @@ use sigil_engine::policy::Policy;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
     action, completeness, coverage_state, mode as mode_name, probe_result, severity, subject,
-    verdict,
+    verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
     is_loopback, target, ActiveFeature, Completeness, Mode, Session, Timestamp, ToolInfo,
@@ -628,6 +628,9 @@ fn summary(s: &Session, out: Option<&Path>) {
             shown(&target(&p.address, p.port)),
             probe_result(&p.result).terminal()
         ));
+    }
+    if !s.probes.is_empty() {
+        lines.push(format!("note: {PROBE_SCOPE_NOTE}"));
     }
     let o = &s.outcome;
     lines.push(format!(
