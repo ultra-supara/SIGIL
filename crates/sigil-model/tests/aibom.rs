@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use common::*;
 use sha2::{Digest, Sha256};
-use sigil_model::render::aibom::{project, BomBlob, ReleaseBasisKind};
+use sigil_model::render;
+use sigil_model::render::aibom::{markdown, project, BomBlob, BomFinding, ReleaseBasisKind};
 use sigil_model::*;
 
 fn root() -> PathBuf {
@@ -359,4 +360,135 @@ fn every_coverage_state_has_a_name() {
         };
         assert_eq!(&tag, name);
     }
+}
+
+// --- Markdown (design §5) ---------------------------------------------------------------------
+
+const HOSTILE: &str =
+    "x|y `code` <script>alert(1)</script> [a](http://e) *b* _c_\n# heading\u{202E}";
+
+/// Every table row has the cells of its header.
+fn assert_tables_hold(md: &str) {
+    let mut cells = None;
+    for line in md.lines() {
+        if !line.starts_with('|') {
+            cells = None;
+            continue;
+        }
+        let n = line
+            .char_indices()
+            .filter(|(i, c)| *c == '|' && !line[..*i].ends_with('\\'))
+            .count();
+        match cells {
+            None => cells = Some(n),
+            Some(m) => assert_eq!(n, m, "a row breaks its table: {line}"),
+        }
+    }
+}
+
+#[test]
+fn every_example_renders_the_same_way_twice() {
+    for (name, s) in session_examples() {
+        let bom = project(&s, sha(&s));
+        let md = markdown(&bom);
+        assert_eq!(md, markdown(&bom), "{name}");
+        assert!(md.starts_with("# SIGIL AI-BOM\n"), "{name}");
+        assert!(
+            md.contains(sha(&s).as_str()),
+            "{name}: the session hash is not shown"
+        );
+        assert_tables_hold(&md);
+    }
+}
+
+#[test]
+fn the_outcome_shows_verdict_and_completeness_together() {
+    let s = incomplete_pass();
+    let md = markdown(&project(&s, sha(&s)));
+    let line = md
+        .lines()
+        .find(|l| l.starts_with("**Verdict:**"))
+        .expect("an outcome line");
+    assert!(
+        line.contains("PASS") && line.contains("INCOMPLETE"),
+        "{line}"
+    );
+}
+
+#[test]
+fn every_section_lists_what_the_aibom_holds() {
+    let s = store_and_runtime();
+    let bom = project(&s, sha(&s));
+    let md = markdown(&bom);
+    let shown = |text: &str| t(text).markdown_inline();
+    for expected in [
+        "## Runtime API",
+        "## Processes",
+        "## Listeners",
+        "## Models",
+        "## Artifacts",
+        "## Coverage",
+    ] {
+        assert!(
+            md.contains(&format!("\n{expected}\n")),
+            "{expected} missing:\n{md}"
+        );
+    }
+    for value in [
+        "m:latest",
+        "0.30.6",
+        "ollama serve",
+        "runtime_api.version",
+        "MIT",
+        &format!("{MODELS_DIR}/blobs/sha256-{}", hex(0x11)),
+    ] {
+        assert!(md.contains(&shown(value)), "{value} missing:\n{md}");
+    }
+    let s = conflicting_identity();
+    let md = markdown(&project(&s, sha(&s)));
+    assert!(md.contains("\n## Releases\n"), "{md}");
+    assert!(
+        md.contains(&shown("ReferenceMatched")) || md.contains(&shown("Conflicting")),
+        "{md}"
+    );
+}
+
+#[test]
+fn the_probe_note_appears_with_probes_only() {
+    let note = t(render::PROBE_SCOPE_NOTE).markdown_inline();
+    let s = store_and_runtime();
+    assert!(markdown(&project(&s, sha(&s))).contains(&note));
+    let s = complete_pass();
+    let md = markdown(&project(&s, sha(&s)));
+    assert!(!md.contains(&note), "{md}");
+    assert!(!md.contains("Runtime API"), "{md}");
+}
+
+#[test]
+fn hostile_text_forms_no_markdown_or_html() {
+    let s = store_and_runtime();
+    let mut bom = project(&s, sha(&s));
+    bom.models[0].name = t(HOSTILE);
+    bom.runtime.api[0].result = ProbeResult::Answered {
+        status: 200,
+        version: Some(t(HOSTILE)),
+    };
+    bom.artifacts[0].paths = vec![
+        t(HOSTILE),
+        UntrustedText::from_bytes(vec![0xff, b'<', b'|']),
+    ];
+    let finding = project(&complete_fail(), sha(&complete_fail())).findings[0].clone();
+    bom.findings.push(BomFinding {
+        summary: HOSTILE.to_string(),
+        ..finding
+    });
+    let md = markdown(&bom);
+    assert!(md.contains(&t(HOSTILE).markdown_inline()), "{md}");
+    for raw in ["<script>", "](http", "x|y", "`code`", "*b*", "_c_"] {
+        assert!(!md.contains(raw), "{raw:?} reached the report:\n{md}");
+    }
+    assert!(!md.contains('\u{202E}'));
+    assert!(!md.lines().any(|l| l.starts_with("# heading")), "{md}");
+    assert!(md.contains(r"hex\:ff3c7c"), "{md}");
+    assert_tables_hold(&md);
 }

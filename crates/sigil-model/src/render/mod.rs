@@ -3,6 +3,7 @@
 
 pub mod aibom;
 pub mod markdown;
+mod md;
 
 use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
 use crate::evidence::{NotObservable, Ref};

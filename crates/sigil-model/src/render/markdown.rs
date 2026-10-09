@@ -1,22 +1,18 @@
 //! A session as a Markdown report (plan §4.8, §4.10).
 //!
-//! Every value is shown through [`UntrustedText::markdown_inline`]: input-derived text, IDs, and
+//! Every value is shown through [`crate::UntrustedText::markdown_inline`]: input-derived text, IDs, and
 //! SIGIL's own labels alike. Nothing in a session can therefore form a heading, link, table cell,
 //! code span, or HTML in the report. Tables are GFM, and a cell never contains a line break.
 
-use crate::artifact::{NsInode, ProcessExe, ProcessObs};
+use crate::artifact::{NsInode, ProcessObs};
 use crate::evidence::Observability;
-use crate::finding::Completeness;
-use crate::listener::ListenerOwner;
 use crate::model::{BlobLookup, Model};
 use crate::session::Session;
-use crate::text::UntrustedText;
 
+use super::md::{self, esc, joined, section, table};
 use super::{
-    action, active_feature, completeness, coverage_state, kind, mode, not_observable, probe_result,
-    subject, treatment, verdict, PROBE_SCOPE_NOTE,
+    action, active_feature, coverage_state, kind, mode, not_observable, subject, treatment,
 };
-use crate::probe::target;
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
 /// that does not close, the models, listeners, and processes observed, and the runtime API when
@@ -24,57 +20,17 @@ use crate::probe::target;
 pub fn render_session(s: &Session) -> String {
     let mut out = String::from("# SIGIL session\n\n");
     run(&mut out, s);
-    outcome(&mut out, s);
+    md::outcome(&mut out, &s.outcome, s.policy_violations.len());
     findings(&mut out, s);
     open_questions(&mut out, s);
     policy_violations(&mut out, s);
     coverage(&mut out, s);
     models(&mut out, s);
-    listeners(&mut out, s);
+    md::listeners(&mut out, &s.listeners);
     processes(&mut out, s);
-    runtime_api(&mut out, s);
+    md::probes(&mut out, &s.probes);
     others(&mut out, s);
     out
-}
-
-/// Escaped for a table cell or a line.
-fn esc(text: &str) -> String {
-    UntrustedText::new(text).markdown_inline()
-}
-
-fn section(out: &mut String, title: &str) {
-    out.push_str("## ");
-    out.push_str(&esc(title));
-    out.push_str("\n\n");
-}
-
-/// A table of escaped cells. Nothing when `rows` is empty.
-fn table(out: &mut String, header: &[&str], rows: Vec<Vec<String>>) {
-    if rows.is_empty() {
-        out.push_str("None.\n\n");
-        return;
-    }
-    out.push('|');
-    for h in header {
-        out.push(' ');
-        out.push_str(&esc(h));
-        out.push_str(" |");
-    }
-    out.push_str("\n|");
-    for _ in header {
-        out.push_str("---|");
-    }
-    out.push('\n');
-    for row in rows {
-        out.push('|');
-        for cell in row {
-            out.push(' ');
-            out.push_str(&cell);
-            out.push_str(" |");
-        }
-        out.push('\n');
-    }
-    out.push('\n');
 }
 
 fn run(out: &mut String, s: &Session) {
@@ -117,44 +73,6 @@ fn run(out: &mut String, s: &Session) {
         esc(s.outcome.policy_time.as_str()),
     ]);
     table(out, &["Run", ""], rows);
-}
-
-fn outcome(out: &mut String, s: &Session) {
-    section(out, "Outcome");
-    let o = &s.outcome;
-    out.push_str(&format!(
-        "**Verdict:** {} · **Completeness:** {}\n\n",
-        esc(verdict(o.verdict)),
-        esc(completeness(&o.completeness))
-    ));
-    out.push_str(&esc(&format!(
-        "Confirmed: {} fail, {} warn, {} policy violations.",
-        o.confirmed_failures,
-        o.confirmed_warnings,
-        s.policy_violations.len()
-    )));
-    out.push_str("\n\n");
-    if let Completeness::Incomplete {
-        missing_required,
-        gaps,
-    } = &o.completeness
-    {
-        for check in missing_required {
-            out.push_str(&format!(
-                "- {} {}\n",
-                esc("Required check not closed:"),
-                esc(check.as_str())
-            ));
-        }
-        for gap in gaps {
-            out.push_str(&format!(
-                "- {} {}\n",
-                esc("Open question counted as a gap:"),
-                esc(gap.as_str())
-            ));
-        }
-        out.push('\n');
-    }
 }
 
 fn findings(out: &mut String, s: &Session) {
@@ -269,30 +187,6 @@ fn model_row(m: &Model) -> Vec<String> {
     ]
 }
 
-fn listeners(out: &mut String, s: &Session) {
-    section(out, "Listeners");
-    let rows = s
-        .listeners
-        .iter()
-        .map(|l| {
-            let owner = match &l.owner {
-                ListenerOwner::Process { process } => {
-                    format!("process {} (start {})", process.pid, process.start_ticks)
-                }
-                ListenerOwner::Unknown { why } => format!("unknown ({})", not_observable(*why)),
-                ListenerOwner::Unheld => "held by no process".to_string(),
-            };
-            vec![
-                esc(l.id.as_str()),
-                esc(&l.address),
-                esc(&l.port.to_string()),
-                esc(&owner),
-            ]
-        })
-        .collect();
-    table(out, &["Listener", "Address", "Port", "Owner"], rows);
-}
-
 fn processes(out: &mut String, s: &Session) {
     section(out, "Processes");
     let rows = s.processes.iter().map(process_row).collect();
@@ -304,23 +198,8 @@ fn processes(out: &mut String, s: &Session) {
 }
 
 fn process_row(p: &ProcessObs) -> Vec<String> {
-    let name = match &p.name {
-        Some(n) => n.markdown_inline(),
-        None => esc("not read"),
-    };
-    let exe = match &p.exe {
-        ProcessExe::Instance { instance } => esc(instance.as_str()),
-        ProcessExe::Path { path, deleted } => {
-            let mut shown = path.markdown_inline();
-            if *deleted {
-                shown.push_str(&esc(" (deleted)"));
-            }
-            shown
-        }
-        ProcessExe::NotObservable(why) => {
-            esc(&format!("not observable ({})", not_observable(*why)))
-        }
-    };
+    let name = md::name_cell(p.name.as_ref());
+    let exe = md::exe_cell(&p.exe);
     let fd_table = match p.fd_table {
         Observability::Observed => "listed".to_string(),
         Observability::NotObservable(why) => format!("not listed ({})", not_observable(why)),
@@ -339,28 +218,6 @@ fn process_row(p: &ProcessObs) -> Vec<String> {
         exe,
         esc(&fd_table),
     ]
-}
-
-/// The API probes (active mode). Nothing when none was requested.
-fn runtime_api(out: &mut String, s: &Session) {
-    if s.probes.is_empty() {
-        return;
-    }
-    section(out, "Runtime API");
-    let rows = s
-        .probes
-        .iter()
-        .map(|p| {
-            vec![
-                esc(&target(&p.address, p.port)),
-                esc(p.at.as_str()),
-                probe_result(&p.result).markdown(),
-            ]
-        })
-        .collect();
-    table(out, &["Target", "Attempted at", "Outcome"], rows);
-    out.push_str(&esc(PROBE_SCOPE_NOTE));
-    out.push_str("\n\n");
 }
 
 fn others(out: &mut String, s: &Session) {
@@ -390,15 +247,4 @@ fn others(out: &mut String, s: &Session) {
         "The session JSON holds every fact; this report shows the outcome and what it rests on.",
     ));
     out.push('\n');
-}
-
-fn joined<T: std::fmt::Display>(items: &[T]) -> String {
-    if items.is_empty() {
-        return "none".to_string();
-    }
-    items
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ")
 }
