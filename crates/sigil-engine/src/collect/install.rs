@@ -54,6 +54,16 @@ const LIB: &str = "lib/ollama";
 
 /// Scans `dir`. An error only for an invalid built-in identifier.
 pub fn collect(dir: &Path, budgets: InstallBudgets) -> Result<InstallFacts, String> {
+    collect_with(dir, budgets, &|_| {})
+}
+
+/// As [`collect`], calling `after_read` with each file's or link's path right after its read: the
+/// tests' way to change an entry between a link's two `readlinkat`.
+fn collect_with(
+    dir: &Path,
+    budgets: InstallBudgets,
+    after_read: &dyn Fn(&RelPath),
+) -> Result<InstallFacts, String> {
     let root = RootId::new(INSTALL_ROOT).map_err(|e| e.to_string())?;
     let check = CheckId::new(ARTIFACTS_DISCOVERY).map_err(|e| e.to_string())?;
     let mut fs = SafeFs::new(FsBudgets {
@@ -76,6 +86,7 @@ pub fn collect(dir: &Path, budgets: InstallBudgets) -> Result<InstallFacts, Stri
         errors: vec![],
         exceeded: vec![],
         found: 0,
+        after_read,
     };
     let state = match opened {
         Err(RootError::NotFound) => CoverageState::Unavailable {
@@ -122,6 +133,7 @@ struct Collector<'a> {
     exceeded: Vec<BudgetUse>,
     /// How many of the two places exist.
     found: u32,
+    after_read: &'a dyn Fn(&RelPath),
 }
 
 impl Collector<'_> {
@@ -286,6 +298,7 @@ impl Collector<'_> {
             },
             vec![DiscoverySource::Walk],
         );
+        (self.after_read)(&entry.rel);
         let Some(mut instance) = read.instance else {
             match (&link_text, &read.outcome) {
                 // Nothing at the link's end: a dangling link, kept with its target text.
@@ -384,5 +397,50 @@ impl Collector<'_> {
             self.errors
                 .push(format!("{}: ChangedDuringRead", entry.rel.display()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use sigil_model::{CoverageState, Stability};
+
+    use super::{collect_with, InstallBudgets};
+
+    /// A link retargeted between its two `readlinkat`: the file read through it is unchanged, so
+    /// only the second `readlinkat` can see it.
+    #[test]
+    fn a_symlink_retargeted_during_the_read_is_unstable() {
+        let d = tempfile::TempDir::new().unwrap();
+        let lib = d.path().join("lib/ollama");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("a.so"), b"a").unwrap();
+        std::fs::write(lib.join("b.so"), b"b").unwrap();
+        symlink("a.so", lib.join("link.so")).unwrap();
+        let retarget = |rel: &crate::collect::fs::RelPath| {
+            if rel.display() == "lib/ollama/link.so" {
+                std::fs::remove_file(lib.join("link.so")).unwrap();
+                symlink("b.so", lib.join("link.so")).unwrap();
+            }
+        };
+        let f = collect_with(d.path(), InstallBudgets::default(), &retarget).unwrap();
+        let link = f
+            .instances
+            .iter()
+            .find(|i| i.path.as_bytes().ends_with(b"/link.so"))
+            .unwrap();
+        assert_eq!(link.stability, Stability::ChangedDuringRead);
+        assert!(
+            matches!(&f.discovery.state, CoverageState::Error { .. }),
+            "{:?}",
+            f.discovery.state
+        );
+        // Without a change, the same tree is stable.
+        let f = collect_with(d.path(), InstallBudgets::default(), &|_| {}).unwrap();
+        assert!(f
+            .instances
+            .iter()
+            .all(|i| i.stability == Stability::NoChangeDetected));
     }
 }
