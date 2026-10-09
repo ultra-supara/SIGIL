@@ -160,3 +160,122 @@ pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefS
         releases,
     })
 }
+
+/// Whether `s`'s reference rows are exactly what `set` gives for its placements (PR-4a §3.3).
+///
+/// - The session names this set (its `KnowledgeRef` SHA-256).
+/// - For **every release of the set**, whether or not the session has rows for it, every file,
+///   symlink, and directory member has exactly one row when a placement is at its path, an
+///   `Absent` row when there is none and discovery is complete, and no row otherwise.
+/// - Every row's expected value is the set's, and every row names a release and member of it.
+///
+/// `Session::validate` checks the rest (observed values against placements, the claim against
+/// the rows, and coverage). A session that neither names the set nor has rows for it passes.
+pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
+    use sigil_model::{CoverageState, MemberResult, ARTIFACTS_DISCOVERY, INSTALL_ROOT};
+    let named = s.knowledge.iter().any(|k| {
+        k.kind == KnowledgeKind::ReferenceManifest
+            && k.id == set.id.as_str()
+            && k.sha256 == set.sha256
+    });
+    let mine = |r: &&sigil_model::ReferenceMatch| r.reference == set.id;
+    if !named && !s.reference_matches.iter().any(|r| mine(&r)) {
+        return Ok(());
+    }
+    let mut errors = vec![];
+    if !named {
+        errors.push(format!(
+            "the session does not name reference set {} with SHA-256 {}",
+            set.id, set.sha256
+        ));
+    }
+    let Some(root) = s
+        .request
+        .roots
+        .iter()
+        .find(|r| r.id.as_str() == INSTALL_ROOT)
+    else {
+        errors.push("reference rows without an install root".to_string());
+        return Err(errors);
+    };
+    let root_text = sigil_model::UntrustedText::from_bytes(root.path.as_bytes().to_vec());
+    let placed: BTreeMap<String, &sigil_model::FileInstance> = s
+        .instances
+        .iter()
+        .filter(|i| i.root == root.id)
+        .filter_map(|i| crate::analyze::release::member_of(&root_text, i).map(|m| (m, i)))
+        .collect();
+    let complete = s
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == ARTIFACTS_DISCOVERY && c.state == CoverageState::Complete);
+    for release in &set.releases {
+        for (member, expected) in &release.members {
+            let rows: Vec<&sigil_model::ReferenceMatch> = s
+                .reference_matches
+                .iter()
+                .filter(mine)
+                .filter(|r| r.release == release.tag && r.member == *member)
+                .collect();
+            let placement = placed.get(member);
+            let want = usize::from(placement.is_some() || complete);
+            if rows.len() != want {
+                errors.push(format!(
+                    "{} {member}: {} rows, expected {want}",
+                    release.tag,
+                    rows.len()
+                ));
+                continue;
+            }
+            let Some(row) = rows.first() else { continue };
+            let agrees = match (&row.result, expected) {
+                (MemberResult::File { expected: e, .. }, RefMember::File { sha256, .. }) => {
+                    e == sha256
+                }
+                (MemberResult::Symlink { expected: e, .. }, RefMember::Symlink { target }) => {
+                    e.as_bytes() == target.as_bytes()
+                }
+                (MemberResult::Directory, RefMember::Directory) => true,
+                (MemberResult::KindDiffers { expected: k, .. }, m) => *k == m.kind(),
+                (MemberResult::Absent { kind }, m) => placement.is_none() && *kind == m.kind(),
+                (MemberResult::NotCompared, _) => placement.is_some(),
+                _ => false,
+            };
+            let instance_ok = match placement {
+                Some(i) => row.instance.as_ref() == Some(&i.id),
+                None => row.instance.is_none(),
+            };
+            if !agrees || !instance_ok {
+                errors.push(format!(
+                    "{} {member}: the row disagrees with the set",
+                    release.tag
+                ));
+            }
+        }
+        for row in s
+            .reference_matches
+            .iter()
+            .filter(mine)
+            .filter(|r| r.release == release.tag)
+        {
+            if !release.members.contains_key(&row.member) {
+                errors.push(format!(
+                    "{} {}: not a member of the release",
+                    release.tag, row.member
+                ));
+            }
+        }
+    }
+    if s.reference_matches
+        .iter()
+        .filter(mine)
+        .any(|r| !set.releases.iter().any(|x| x.tag == r.release))
+    {
+        errors.push("a row names a release the set does not have".to_string());
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
