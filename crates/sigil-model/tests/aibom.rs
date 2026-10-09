@@ -492,3 +492,36 @@ fn hostile_text_forms_no_markdown_or_html() {
     assert!(md.contains(r"hex\:ff3c7c"), "{md}");
     assert_tables_hold(&md);
 }
+
+#[test]
+fn an_artifact_found_twice_lists_both_paths_sorted() {
+    let mut s = with_model();
+    // A copy of the first blob, placed where its path sorts first.
+    let mut copy = s.instances[1].clone();
+    copy.id = id("inst:models/a/copy");
+    copy.path = t("/a/copy");
+    let artifact = match &copy.content {
+        InstanceContent::Read { artifact } => artifact.clone(),
+        other => panic!("{other:?}"),
+    };
+    s.instances.push(copy);
+    let bom = project(&s, sha(&s));
+    let a = bom.artifacts.iter().find(|a| a.id == artifact).unwrap();
+    assert_eq!(a.paths.len(), 2);
+    assert_eq!(a.paths[0], t("/a/copy"));
+    assert!(a.paths[0].as_bytes() < a.paths[1].as_bytes());
+}
+
+#[test]
+fn entries_in_one_state_are_counted() {
+    let mut s = base(&["model_store.inventory"]);
+    s.coverage.push(complete("model_store.inventory"));
+    s.coverage.push(coverage(
+        "model_store.inventory",
+        Ref::Root(id("install")),
+        CoverageState::Complete,
+    ));
+    let bom = project(&s, sha(&s));
+    assert_eq!(bom.coverage[0].states.get("Complete"), Some(&2));
+    assert!(bom.coverage[0].closed);
+}
