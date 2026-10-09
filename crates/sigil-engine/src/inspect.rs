@@ -8,10 +8,10 @@ use sigil_model::{
     ActiveFeature, ApiProbe, Artifact, CheckId, Completeness, Coverage, CoverageState, Format,
     KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion,
     Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict,
-    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
+    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
 };
 
-use crate::analyze::{exposure, model_store, release, runtime_api};
+use crate::analyze::{container, exposure, model_store, release, runtime_api};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
@@ -190,10 +190,12 @@ fn assemble(
     let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
     let mut knowledge = Vec::<KnowledgeRef>::new();
     let (mut releases, mut reference_matches) = (vec![], vec![]);
+    let (mut relations, mut binaries) = (vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
         let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
+        let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
         roots.push(ScanRoot {
             id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
             path: facts.root_path,
@@ -209,12 +211,17 @@ fn assemble(
         budgets.extend(install_budgets(r.budgets));
         coverage.push(facts.discovery);
         coverage.push(result.coverage);
+        coverage.push(container);
+        relations.extend(declares);
+        binaries = facts.binaries;
         reference_matches = result.rows;
         releases.extend(result.claim);
     } else {
         // A policy that requires the install's checks without one: skipped, so incomplete.
         for check in &required_checks {
-            if [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE].contains(&check.as_str()) {
+            if [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, ARTIFACTS_CONTAINER]
+                .contains(&check.as_str())
+            {
                 coverage.push(Coverage {
                     check: check.clone(),
                     scope: Ref::Audit,
@@ -268,10 +275,10 @@ fn assemble(
         components: vec![],
         releases,
         reference_matches,
-        binaries: vec![],
+        binaries,
         hints: vec![],
         code: vec![],
-        relations: vec![],
+        relations,
         rule_support: vec![],
         bindings: vec![],
         loads: vec![],
@@ -378,6 +385,8 @@ fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
         ("install_walk_depth".to_string(), u64::from(fs.max_depth)),
         ("install_link_hops".to_string(), u64::from(fs.max_link_hops)),
         ("install_bytes".to_string(), b.bytes),
+        ("binary_parse_bytes".to_string(), b.binary.parse_bytes),
+        ("binary_imports".to_string(), b.binary.imports),
     ])
 }
 

@@ -99,6 +99,7 @@ fn the_plan_example_loads() {
             "model_store.license",
             "artifacts.discovery",
             "artifacts.release",
+            "artifacts.container",
             "loader.identify",
             "loader.search_paths",
         ]
@@ -354,7 +355,7 @@ fn an_active_feature_adds_the_active_scopes() {
 }
 
 #[test]
-fn the_install_adds_runtime_artifacts_and_its_two_checks() {
+fn the_install_adds_runtime_artifacts_and_its_three_checks() {
     use sigil_engine::policy::ScopeInput;
     let policy = Policy::builtin_default().unwrap();
     let base = ScopeInput {
@@ -374,7 +375,14 @@ fn the_install_adds_runtime_artifacts_and_its_two_checks() {
         .filter(|c| !required.contains(c))
         .map(|c| c.as_str())
         .collect();
-    assert_eq!(extra, ["artifacts.discovery", "artifacts.release"]);
+    assert_eq!(
+        extra,
+        [
+            "artifacts.discovery",
+            "artifacts.release",
+            "artifacts.container"
+        ]
+    );
 }
 
 #[test]
