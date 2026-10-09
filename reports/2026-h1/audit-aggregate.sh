@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
+# SIGIL 0.1 (the v0.1 CLI, AI-BOM schema 1.1). Kept as the record of how the 2026-H1 report in
+# this directory was produced. It does not run on SIGIL v2: v2 has no `aibom generate`, and its
+# AI-BOM is `sigil-aibom/2` (see README.md here).
+#
 # State of Local AI Audit — aggregator.
 # Reads every AI-BOM JSON under the raw directory and emits one summary JSON
 # with the headline distributions (license, verdict, exposure) plus per-model
 # rows. The summary is meant to be embedded into the report HTML by hand.
 #
 # Usage:
-#   ./scripts/audit-aggregate.sh
-#   ./scripts/audit-aggregate.sh path/to/raw path/to/summary.json
+#   ./reports/2026-h1/audit-aggregate.sh
+#   ./reports/2026-h1/audit-aggregate.sh path/to/raw path/to/summary.json
 #
 # Requires: jq.
 
@@ -32,7 +36,8 @@ mkdir -p "$(dirname "$OUT_FILE")"
 jq -s '
   # Finding ids that indicate manifest-integrity failure. Any of these on a
   # model means the on-disk artifact did not match what the Ollama manifest
-  # declared. Source: crates/sigil-core/src/ollama.rs.
+  # declared. Source (v0.1):
+  # https://github.com/ultra-supara/SIGIL/blob/b30d0a2801fb24467ec287798df2e9926a232a91/crates/sigil-core/src/ollama.rs
   [
     "ollama.invalid_blob_digest",
     "ollama.blob_digest_mismatch",

@@ -1,317 +1,107 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SIGIL vs OWASP AIBOM Generator — claimed metadata vs local evidence</title>
-    <meta
-      name="description"
-      content="Honest comparison between SIGIL and the OWASP GenAI Security Project's AIBOM Generator. Same artifact name, different input source and integrity model."
-    />
-    <link rel="stylesheet" href="../../styles.css" />
-  </head>
-  <body class="sakura-page compare-detail-page">
-    <div class="site-noise"></div>
-    <div class="site-bg"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>SIGIL vs OWASP AIBOM Generator — claimed metadata vs local evidence</title>
+<link rel="stylesheet" href="../../site.css">
+</head>
+<body>
+<nav><a href="../../">SIGIL</a> · <a href="../../compare/">Compare</a> · <a href="../../reports/2026-h1/">2026 H1 report</a> · <a href="../../viewer/">Viewer</a> · <a href="https://github.com/ultra-supara/SIGIL">GitHub</a></nav>
+<main>
+<h1>SIGIL vs OWASP AIBOM Generator</h1>
+<p>The OWASP AIBOM Generator is the institutional reference for what an AI Bill of Materials looks like, listed in the CycloneDX Tool Center. SIGIL covers the same artifact name from a different angle — what is actually installed on the box, hashed.</p>
 
-    <header class="site-header">
-      <a class="brand" href="../../" aria-label="SIGIL home">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">SIGIL</span>
-      </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="../../#platform">Platform</a>
-        <a href="../../#research">Research</a>
-        <a href="../../#tools">Tools</a>
-        <a href="../" aria-current="page">Compare</a>
-        <a href="../../reports/2026-h1/">2026 H1</a>
-        <a href="../../viewer/">Viewer</a>
-        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
-      </nav>
-    </header>
+<h2>Pick OWASP AIBOM Generator when</h2>
+<p>The model lives on Hugging Face and you want a CycloneDX 1.6 AIBOM derived from the model card, configurations, and repository metadata. You want institutional-reference output you can hand to anyone familiar with the CycloneDX ecosystem.</p>
 
-    <main id="top">
-      <section class="page-hero">
-        <div class="hero-copy">
-          <p class="definition">Compare · Institutional reference</p>
-          <h1>SIGIL vs OWASP AIBOM Generator</h1>
-          <p class="lead">
-            The OWASP AIBOM Generator is the institutional reference for what
-            an AI Bill of Materials looks like, listed in the CycloneDX Tool
-            Center. SIGIL covers the same artifact name from a different
-            angle — what is actually installed on the box, hashed.
-          </p>
-        </div>
-        <figure class="hero-visual" aria-label="SIGIL versus OWASP AIBOM Generator visual">
-          <div class="sigil-orb" aria-hidden="true">
-            <div class="sigil-ring ring-a"></div>
-            <div class="sigil-ring ring-b"></div>
-            <div class="sigil-ring ring-c"></div>
-            <div class="sigil-kanji">印</div>
-            <div class="sigil-axis axis-x"></div>
-            <div class="sigil-axis axis-y"></div>
-            <div class="sigil-axis axis-d1"></div>
-            <div class="sigil-axis axis-d2"></div>
-          </div>
+<h2>Pick SIGIL when</h2>
+<p>The model is already deployed locally through Ollama and you want the AI-BOM derived from the on-disk manifest, with every blob's SHA-256 verified against the declared digest, the runtime's listening sockets attributed from <code>/proc</code>, and a deterministic PASS/WARN/FAIL verdict from a policy, with a completeness beside it — no LLM in the path.</p>
 
-          <div class="floating-label label-one">
-            <span>COMPARE</span>
-            <strong>OWASP AIBOM</strong>
-          </div>
+<h2>Axis-by-axis</h2>
+<p>Both produce an AI-BOM. The difference is which question the artifact answers.</p>
+<table>
+<thead><tr><th>Axis</th><th>OWASP AIBOM Generator</th><th>SIGIL</th></tr></thead>
+<tbody>
+<tr><td>Input source</td><td>Hugging Face model ID (e.g. <code>google-bert/bert-base-uncased</code>)</td><td>Local Ollama store path (default <code>~/.ollama/models</code>)</td></tr>
+<tr><td>Information source</td><td>Model card, configurations, repo files</td><td>Ollama OCI manifest + referenced blobs on disk</td></tr>
+<tr><td>Integrity model</td><td>What the model card declares</td><td>Streaming SHA-256 of every blob vs. manifest digest</td></tr>
+<tr><td>Output format</td><td>CycloneDX 1.6 JSON (SPDX AI Profile compatible)</td><td>The session (<code>sigil-session/1</code>) and AI-BOM v2 (<code>sigil-aibom/2</code>), JSON with JSON Schemas, plus Markdown</td></tr>
+<tr><td>License detection</td><td>Model card <code>license</code> field</td><td>SPDX id from the Ollama license layer — 10 families by shortname or body match</td></tr>
+<tr><td>Runtime exposure</td><td>Out of scope</td><td>Observe mode: the listener held by <code>ollama serve</code>, found through its fd table, classed by address; with <code>--active api-probe</code>, whether the API answered at one literal address</td></tr>
+<tr><td>Native binary capability</td><td>Out of scope</td><td>Planned: call-site evidence in the runtime's binaries (M1)</td></tr>
+<tr><td>Verdict</td><td>AIBOM completeness score (0–100) + recommendations</td><td>PASS / WARN / FAIL from findings and a TOML policy, with completeness (COMPLETE / INCOMPLETE: was every required check closed) beside it; no LLM</td></tr>
+<tr><td>Network egress</td><td>Yes — fetches from <code>huggingface.co</code></td><td>None — every byte read is local, unless the active API probe is asked for</td></tr>
+<tr><td>Distribution</td><td>Python (<code>pip install -r requirements.txt</code>) + hosted web UI</td><td>A single Rust CLI binary</td></tr>
+<tr><td>License (project)</td><td>NOASSERTION (see repo)</td><td>MIT</td></tr>
+<tr><td>Project home</td><td>OWASP GenAI Security Project</td><td>Independent open-source</td></tr>
+</tbody>
+</table>
 
-          <div class="floating-label label-two">
-            <span>SOURCE</span>
-            <strong>LOCAL EVIDENCE</strong>
-          </div>
-
-          <div class="terminal-card" aria-hidden="true">
-            <div class="terminal-top">
-              <span></span>
-              <span></span>
-              <span></span>
-              <strong>sigil://owasp</strong>
-            </div>
-
-            <div class="terminal-body comparison-terminal">
-              <p><b>[sigil]</b> hashes installed Ollama artifacts</p>
-              <p><em>[owasp]</em> reads Hugging Face metadata</p>
-              <p><b>[sigil]</b> classifies local runtime exposure</p>
-              <p><em>[owasp]</em> emits CycloneDX from claims</p>
-              <p><b>[ok]</b> artifact source made explicit.</p>
-            </div>
-          </div>
-          <figcaption class="visually-hidden">SIGIL derives the AI-BOM from on-disk Ollama evidence with a PASS verdict; the OWASP generator derives it from Hugging Face metadata.</figcaption>
-        </figure>
-      </section>
-
-      <section class="section verdict-section">
-        <div class="verdict-box">
-          <div>
-            <h3>Pick OWASP AIBOM Generator when</h3>
-            <p>
-              The model lives on Hugging Face and you want a CycloneDX 1.6
-              AIBOM derived from the model card, configurations, and
-              repository metadata. You want institutional-reference output
-              you can hand to anyone familiar with the CycloneDX ecosystem.
-            </p>
-          </div>
-          <div>
-            <h3>Pick SIGIL when</h3>
-            <p>
-              The model is already deployed locally through Ollama and you
-              want the AI-BOM derived from the on-disk manifest, with every
-              blob's SHA-256 verified against the declared digest, runtime
-              exposure classified from <code>/proc</code>, and a deterministic
-              PASS/WARN/FAIL verdict aggregated from analyzer findings — no
-              LLM in the path.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section compare-axes">
-        <div class="section-heading">
-          <h2>Axis-by-axis</h2>
-          <p>
-            Both produce an AI-BOM. The difference is which question the
-            artifact answers.
-          </p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Axis</th>
-                <th>OWASP AIBOM Generator</th>
-                <th>SIGIL</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Input source</td>
-                <td>Hugging Face model ID (e.g. <code>google-bert/bert-base-uncased</code>)</td>
-                <td>Local Ollama store path (default <code>~/.ollama/models</code>)</td>
-              </tr>
-              <tr>
-                <td>Information source</td>
-                <td>Model card, configurations, repo files</td>
-                <td>Ollama OCI manifest + referenced blobs on disk</td>
-              </tr>
-              <tr>
-                <td>Integrity model</td>
-                <td>What the model card declares</td>
-                <td>Streaming SHA-256 of every blob vs. manifest digest</td>
-              </tr>
-              <tr>
-                <td>Output format</td>
-                <td>CycloneDX 1.6 JSON (SPDX AI Profile compatible)</td>
-                <td>SIGIL AI-BOM <code>schema_version: 1.1</code> (JSON + Markdown)</td>
-              </tr>
-              <tr>
-                <td>License detection</td>
-                <td>Model card <code>license</code> field</td>
-                <td>SPDX id from the Ollama license layer — 10 families by shortname or body match</td>
-              </tr>
-              <tr>
-                <td>Runtime exposure</td>
-                <td>Out of scope</td>
-                <td>API host + <code>/proc</code> listener classification</td>
-              </tr>
-              <tr>
-                <td>Native binary capability</td>
-                <td>Out of scope</td>
-                <td>x86_64 → SafeISA, external symbol → capability mapping</td>
-              </tr>
-              <tr>
-                <td>Verdict</td>
-                <td>AIBOM completeness score (0–100) + recommendations</td>
-                <td><code>PASS</code> / <code>WARN</code> / <code>FAIL</code> aggregated deterministically from analyzer-emitted finding severities (no LLM; YAML-policy path is separate, via <code>sigil assess</code> for native binaries)</td>
-              </tr>
-              <tr>
-                <td>Network egress</td>
-                <td>Yes — fetches from <code>huggingface.co</code></td>
-                <td>None — every byte read is local</td>
-              </tr>
-              <tr>
-                <td>Distribution</td>
-                <td>Python (<code>pip install -r requirements.txt</code>) + hosted web UI</td>
-                <td>Single static Rust binary</td>
-              </tr>
-              <tr>
-                <td>License (project)</td>
-                <td>NOASSERTION (see repo)</td>
-                <td>MIT</td>
-              </tr>
-              <tr>
-                <td>Project home</td>
-                <td>OWASP GenAI Security Project</td>
-                <td>Independent open-source</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="section split">
-        <div>
-          <h2>Claimed vs. hashed</h2>
-          <p>
-            The OWASP tool's strength is reach — give it a HF model ID and
-            it produces a standards-aligned AIBOM the rest of the ecosystem
-            can consume. Its honest limit is that it documents what the
-            model card declares; it does not verify that the bytes on a
-            reviewer's machine match the card.
-          </p>
-          <p>
-            SIGIL starts the other way around: it reads the Ollama
-            manifest already on disk, walks every layer, streams SHA-256,
-            and records the digest under the <code>license</code>,
-            <code>model</code>, <code>params</code>, and <code>config</code>
-            kinds — all keyed by the digest the manifest declared.
-          </p>
-        </div>
-        <div class="command-panel" aria-label="Two AI-BOMs side by side">
-          <pre><code># OWASP AIBOM Generator (input: HF model ID)
+<h2>Claimed vs. hashed</h2>
+<p>The OWASP tool's strength is reach — give it a HF model ID and it produces a standards-aligned AIBOM the rest of the ecosystem can consume. Its honest limit is that it documents what the model card declares; it does not verify that the bytes on a reviewer's machine match the card.</p>
+<p>SIGIL starts the other way around: it reads the Ollama manifest already on disk, walks every layer, streams SHA-256, and records each layer under the digest the manifest declared, with where its blob was found and what was read.</p>
+<pre># OWASP AIBOM Generator (input: HF model ID)
 $ python3 -m src.cli google-bert/bert-base-uncased \
-    --output bert.aibom.json
+--output bert.aibom.json
 # → bert.aibom.json   (CycloneDX 1.6, claimed metadata)
-
 # SIGIL (input: local Ollama store)
-$ sigil aibom generate --runtime ollama \
-    --model gemma4:e2b --format md --out out/aibom.md
-# → out/aibom.md   (SIGIL 1.1, hashed evidence)
+$ sigil inspect ollama --model gemma4:e2b --format aibom --out out/aibom.json
+# → out/aibom.json   (AI-BOM v2, hashed evidence, naming its session by SHA-256)</pre>
+<p>Specification example (golden example 14, <code>tool.version</code> 0.0.0-example), not a real system. An excerpt of SIGIL's AI-BOM v2 Markdown, as it is written:</p>
+<pre># SIGIL AI-BOM
 
-# Excerpt — SIGIL records digests under each kind:
-| Kind    | Size            | Digest            |
-|---------|-----------------|-------------------|
-| model   | 7162394016 B    | `sha256:4e30...`  |
-| license | 11355 B         | `sha256:7339...`  |</code></pre>
-        </div>
-      </section>
+| AI\-BOM |  |
+|---|---|
+| Schema | sigil\-aibom\/2 |
+| Mode | observe |
 
-      <section class="section split alt">
-        <div>
-          <h2>Standard schema vs. pinned schema</h2>
-          <p>
-            CycloneDX gives the OWASP tool broad downstream interop. SIGIL
-            uses its own <code>schema_version: 1.1</code> pinned by tests,
-            so JSON and Markdown share the same internal model and cannot
-            drift across renderings. The tradeoff is narrower interop
-            today; the upside is a schema small enough to review
-            end-to-end and stable enough to diff across review cycles.
-          </p>
-          <ul class="check-list">
-            <li>OWASP → CycloneDX 1.6 (ecosystem interop)</li>
-            <li>SIGIL → SIGIL AI-BOM 1.1 (pinned, JSON + Markdown one model)</li>
-            <li>CycloneDX export path is on the SIGIL roadmap</li>
-          </ul>
-        </div>
-        <div>
-          <h2>Use both — and diff them</h2>
-          <p>
-            The OWASP AIBOM documents the upstream declared model
-            metadata. The SIGIL AI-BOM documents the local realised
-            deployment. A diff between the two is meaningful evidence in a
-            governance review: "we adopted what HF said we were adopting,
-            and the bytes on disk still match."
-          </p>
-          <ul class="check-list">
-            <li>OWASP: what HF said about <code>gemma-4</code></li>
-            <li>SIGIL: what is in <code>~/.ollama/models</code> right now</li>
-            <li>Together: an upstream-vs-local audit pair</li>
-          </ul>
-        </div>
-      </section>
+## Outcome
 
-      <section class="section">
-        <div class="section-heading">
-          <h2>Anti-persona</h2>
-          <p>
-            Both tools have honest limits. SIGIL is not the right pick if
-            the surface you care about is a HF model card.
-          </p>
-        </div>
-        <div class="anti-persona">
-          <h3>When SIGIL is the wrong choice</h3>
-          <p>
-            If your AI footprint is entirely Hugging Face hosted and you do
-            not run Ollama, SIGIL has no Ollama store to inspect today. The
-            OWASP AIBOM Generator is the better fit. If your downstream
-            tooling is locked to CycloneDX, run the OWASP tool first and
-            revisit SIGIL when its CycloneDX export lands.
-          </p>
-        </div>
-      </section>
+**Verdict:** PASS · **Completeness:** COMPLETE
 
-      <section class="section docs-section">
-        <div class="section-heading">
-          <h2>Sources</h2>
-          <p>Facts above are checked against the linked projects.</p>
-        </div>
-        <div class="doc-links">
-          <a href="https://github.com/GenAI-Security-Project/aibom-generator">
-            <span>OWASP AIBOM Generator</span>
-            Repo · HF model card → CycloneDX 1.6 AIBOM · CLI + web UI.
-          </a>
-          <a href="https://genai.owasp.org/ai-sbom-initiative/">
-            <span>OWASP AIBOM Initiative</span>
-            Programme background and standards alignment.
-          </a>
-          <a href="https://cyclonedx.org/capabilities/mlbom/">
-            <span>CycloneDX ML-BOM</span>
-            Capability page and spec versions referenced by both tools.
-          </a>
-          <a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ai-bom-and-comparison.md">
-            <span>SIGIL AI-BOM contract</span>
-            Schema 1.1, enum reference, planned baseline-comparison direction.
-          </a>
-        </div>
-      </section>
-    </main>
+## Listeners
 
-    <footer class="site-footer">
-      <span>SIGIL is local-first and analysis-only.</span>
-      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
-    </footer>
-  </body>
+| Listener | Address | Port | Owner |
+|---|---|---|---|
+| listener\:tcp\/127\.0\.0\.1\:11434\#7001 | 127\.0\.0\.1 | 11434 | process 4242 \(start 1000\) |
+
+## Models
+
+| Model | Name | Provenance | Layers | License |
+|---|---|---|---|---|
+| model\:models\/registry\.ollama\.ai\/library\/m\/latest | m\:latest | registry\.ollama\.ai\/library\/m\:latest | 3 \(found 3\, absent 0\, unresolved 0\, not looked up 0\) | MIT |</pre>
+
+<h2>Standard schema vs. versioned schemas</h2>
+<p>CycloneDX gives the OWASP tool broad downstream interop. SIGIL writes its own versioned formats, the session (<code>sigil-session/1</code>) and the AI-BOM v2 (<code>sigil-aibom/2</code>), each with a JSON Schema. The Markdown and the AI-BOM are rendered from the one session, so they cannot drift. The tradeoff is narrower interop today; the upside is a format small enough to review end-to-end and stable enough to diff across review cycles.</p>
+<ul>
+<li>OWASP → CycloneDX 1.6 (ecosystem interop)</li>
+<li>SIGIL → the session and AI-BOM v2 (JSON + Markdown, one source)</li>
+<li>CycloneDX export path is on the SIGIL roadmap</li>
+</ul>
+
+<h2>Use both — and diff them</h2>
+<p>The OWASP AIBOM documents the upstream declared model metadata. The SIGIL AI-BOM documents the local realised deployment. A diff between the two is meaningful evidence in a governance review: "we adopted what HF said we were adopting, and the bytes on disk still match."</p>
+<ul>
+<li>OWASP: what HF said about <code>gemma-4</code></li>
+<li>SIGIL: what is in <code>~/.ollama/models</code> right now</li>
+<li>Together: an upstream-vs-local audit pair</li>
+</ul>
+
+<h2>When SIGIL is the wrong choice</h2>
+<p>Both tools have honest limits. SIGIL is not the right pick if the surface you care about is a HF model card.</p>
+<p>If your AI footprint is entirely Hugging Face hosted and you do not run Ollama, SIGIL has no Ollama store to inspect today. The OWASP AIBOM Generator is the better fit. If your downstream tooling is locked to CycloneDX, run the OWASP tool first and revisit SIGIL when its CycloneDX export lands.</p>
+
+<h2>Sources</h2>
+<p>Facts above are checked against the linked projects.</p>
+<ul>
+<li><a href="https://github.com/GenAI-Security-Project/aibom-generator">OWASP AIBOM Generator</a>: Repo · HF model card → CycloneDX 1.6 AIBOM · CLI + web UI.</li>
+<li><a href="https://genai.owasp.org/ai-sbom-initiative/">OWASP AIBOM Initiative</a>: Programme background and standards alignment.</li>
+<li><a href="https://cyclonedx.org/capabilities/mlbom/">CycloneDX ML-BOM</a>: Capability page and spec versions referenced by both tools.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ai-bom-and-comparison.md">SIGIL AI-BOM v2</a>: the projection of the session, and the planned baseline-comparison direction.</li>
+<li><a href="https://github.com/ultra-supara/SIGIL/blob/main/docs/ollama-inspection.md">SIGIL Ollama guide</a>: modes, outputs, and what is read.</li>
+</ul>
+</main>
+</body>
 </html>

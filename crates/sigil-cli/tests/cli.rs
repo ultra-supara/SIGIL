@@ -995,3 +995,235 @@ fn help_lists_the_aibom_format() {
     let r = run(&[&"session", &"render", &"--help"]);
     assert!(r.stdout.contains("aibom"), "{}", r.stdout);
 }
+
+// --- the documented commands (README, docs/ollama-inspection.md) ------------------------------
+
+/// The `cargo run … -p sigil-cli -- ARGS` commands of the fenced `bash` blocks of `markdown`, in
+/// order, as argument lists. A trailing `\` joins lines, and a token starting with `#` starts a
+/// comment.
+fn documented_commands(markdown: &str) -> Vec<Vec<String>> {
+    let mut commands = vec![];
+    let mut in_bash = false;
+    let mut pending = String::new();
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !in_bash {
+            in_bash = trimmed == "```bash";
+            continue;
+        }
+        if trimmed == "```" {
+            in_bash = false;
+            continue;
+        }
+        if let Some(head) = trimmed.strip_suffix('\\') {
+            pending.push_str(head);
+            pending.push(' ');
+            continue;
+        }
+        pending.push_str(trimmed);
+        let joined = std::mem::take(&mut pending);
+        let tokens: Vec<&str> = joined
+            .split_whitespace()
+            .take_while(|t| !t.starts_with('#'))
+            .collect();
+        if tokens.len() < 2 || tokens[0] != "cargo" || tokens[1] != "run" {
+            continue;
+        }
+        let Some(dash) = tokens.iter().position(|t| *t == "--") else {
+            continue;
+        };
+        if !tokens[2..dash].windows(2).any(|w| w == ["-p", "sigil-cli"]) {
+            continue;
+        }
+        commands.push(tokens[dash + 1..].iter().map(|t| t.to_string()).collect());
+    }
+    commands
+}
+
+/// `args` with the API probe pointed at `addr`: for a command with `--active`, any `--api-addr`
+/// the docs give (`--api-addr X` or `--api-addr=X`) is replaced. Other commands are unchanged.
+fn isolate_probe(args: &[String], addr: &str) -> Vec<String> {
+    if !args
+        .iter()
+        .any(|a| a == "--active" || a.starts_with("--active="))
+    {
+        return args.to_vec();
+    }
+    let mut out = vec![];
+    let mut value_follows = false;
+    for a in args {
+        if value_follows {
+            value_follows = false;
+        } else if a == "--api-addr" {
+            value_follows = true;
+        } else if !a.starts_with("--api-addr=") {
+            out.push(a.clone());
+        }
+    }
+    out.extend(["--api-addr".to_string(), addr.to_string()]);
+    out
+}
+
+/// A server on 127.0.0.1 that answers every request with an Ollama version, and counts them.
+fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let requests = std::sync::Arc::new(AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&requests);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                continue;
+            };
+            let mut request = vec![];
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(1) => request.push(byte[0]),
+                    _ => break,
+                }
+            }
+            // Counted before the reply, so the count is final when the CLI exits.
+            counted.fetch_add(1, Ordering::SeqCst);
+            let body = "{\"version\":\"0.0.0-docs\"}";
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (addr, requests)
+}
+
+/// Runs the commands of `doc` (relative to the workspace) in order, in one temporary directory,
+/// with `OLLAMA_MODELS` set to a store whose model has no license (one WARN finding). Each must
+/// exit 0, 3, or 4: never an execution error (1) or a usage error (2). Every API probe goes to a
+/// server of this test, which must see exactly one request per active command. Returns the
+/// number of commands and of active commands.
+fn run_documented(doc: &str) -> (usize, usize) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(doc);
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {doc}: {e}"));
+    let models = store(false);
+    let cwd = TempDir::new().unwrap();
+    let (server, requests) = counting_api_server();
+    let commands = documented_commands(&text);
+    let mut active = 0;
+    for documented in &commands {
+        let args: Vec<String> = documented
+            .iter()
+            .map(|a| a.replace("<FINDING-ID>", LICENSE_MISSING))
+            .collect();
+        assert!(
+            !args.iter().any(|a| a.contains('<') || a.contains('>')),
+            "{doc}: a placeholder is left in `sigil {}`",
+            args.join(" ")
+        );
+        // Counted from the docs, so a probe that escapes the server is a missing request.
+        active += usize::from(
+            args.iter()
+                .any(|a| a == "--active" || a.starts_with("--active=")),
+        );
+        // Never reach a real Ollama from a test, whatever address the docs give.
+        let args = isolate_probe(&args, &server);
+        let out = sigil()
+            .current_dir(cwd.path())
+            .env("OLLAMA_MODELS", models.path())
+            .args(&args)
+            .output()
+            .unwrap();
+        let code = out.status.code().unwrap();
+        assert!(
+            matches!(code, 0 | 3 | 4),
+            "{doc}: `sigil {}` exited {code}:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        active,
+        "{doc}: the probe server must see one request per active command"
+    );
+    (commands.len(), active)
+}
+
+#[test]
+fn every_documented_command_runs() {
+    let (readme, readme_active) = run_documented("README.md");
+    let (guide, guide_active) = run_documented("docs/ollama-inspection.md");
+    let n = readme + guide;
+    assert!(n >= 10, "only {n} documented commands were found");
+    assert!(
+        readme_active + guide_active >= 2,
+        "the docs' active commands were not found"
+    );
+}
+
+#[test]
+fn documented_probes_are_pointed_at_the_test_server() {
+    let v = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    let to = "127.0.0.1:5";
+    // An address the docs give is replaced, in either form.
+    assert_eq!(
+        isolate_probe(
+            &v(&[
+                "inspect",
+                "ollama",
+                "--active",
+                "api-probe",
+                "--api-addr",
+                "127.0.0.1:11434"
+            ]),
+            to
+        ),
+        v(&[
+            "inspect",
+            "ollama",
+            "--active",
+            "api-probe",
+            "--api-addr",
+            to
+        ])
+    );
+    assert_eq!(
+        isolate_probe(
+            &v(&[
+                "inspect",
+                "ollama",
+                "--active=api-probe",
+                "--api-addr=10.0.0.1",
+                "--allow-remote"
+            ]),
+            to
+        ),
+        v(&[
+            "inspect",
+            "ollama",
+            "--active=api-probe",
+            "--allow-remote",
+            "--api-addr",
+            to
+        ])
+    );
+    // Without one, it is added; a command without `--active` is left alone.
+    assert_eq!(
+        isolate_probe(&v(&["inspect", "ollama", "--active", "api-probe"]), to),
+        v(&[
+            "inspect",
+            "ollama",
+            "--active",
+            "api-probe",
+            "--api-addr",
+            to
+        ])
+    );
+    assert_eq!(
+        isolate_probe(&v(&["inspect", "ollama", "--out", "o"]), to),
+        v(&["inspect", "ollama", "--out", "o"])
+    );
+}

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
+# SIGIL 0.1 (the v0.1 CLI, AI-BOM schema 1.1). Kept as the record of how the 2026-H1 report in
+# this directory was produced. It does not run on SIGIL v2: v2 has no `aibom generate`, and its
+# AI-BOM is `sigil-aibom/2` (see README.md here).
+#
 # State of Local AI Audit — runner.
-# Pulls every Ollama tag listed in scripts/audit-models.txt and runs
+# Pulls every Ollama tag listed in reports/2026-h1/audit-models.txt and runs
 # `sigil aibom generate` against each. One AI-BOM JSON per model is written
 # under reports/2026-h1/raw/.
 #
 # Usage:
-#   ./scripts/audit-run.sh                              # default model list + out dir
-#   ./scripts/audit-run.sh path/to/models.txt           # custom model list
-#   ./scripts/audit-run.sh scripts/audit-models.txt out # custom out dir
+#   ./reports/2026-h1/audit-run.sh                              # default model list + out dir
+#   ./reports/2026-h1/audit-run.sh path/to/models.txt           # custom model list
+#   ./reports/2026-h1/audit-run.sh reports/2026-h1/audit-models.txt out # custom out dir
 #
 # Environment:
 #   MODELS_DIR  Path to the Ollama model store SIGIL should inspect.
@@ -22,7 +26,7 @@
 
 set -euo pipefail
 
-MODELS_FILE="${1:-scripts/audit-models.txt}"
+MODELS_FILE="${1:-reports/2026-h1/audit-models.txt}"
 OUT_DIR="${2:-reports/2026-h1/raw}"
 MODELS_DIR="${MODELS_DIR:-${OLLAMA_MODELS:-$HOME/.ollama/models}}"
 SKIP_PULL="${SKIP_PULL:-1}"
