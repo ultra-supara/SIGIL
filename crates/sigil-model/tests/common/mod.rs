@@ -132,6 +132,7 @@ pub fn base(required: &[&str]) -> Session {
         values: vec![],
         components: vec![],
         releases: vec![],
+        reference_matches: vec![],
         hints: vec![],
         code: vec![],
         relations: vec![],

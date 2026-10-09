@@ -282,6 +282,11 @@
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
+        "reference_matches": {
+          "description": "Placement-level comparisons with reference manifests (PR-4a). Optional on read (missing means empty); written only when non-empty.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/ReferenceMatch"}
+        },
         "hints": {"type": "array", "items": {"$ref": "#/$defs/FeatureHint"}},
         "code": {"type": "array", "items": {"$ref": "#/$defs/CodeFacts"}},
         "relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}},
@@ -317,6 +322,7 @@
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
+        "reference_matches": {"type": "array", "items": {"$ref": "#/$defs/ReferenceMatch"}},
         "hints": {"type": "array", "items": {"$ref": "#/$defs/FeatureHint"}},
         "code": {"type": "array", "items": {"$ref": "#/$defs/CodeFacts"}},
         "relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}},
@@ -664,9 +670,36 @@
         "PermissionDenied",
         "NotRegularFile",
         "Vanished",
-        "BudgetExceeded"
+        "BudgetExceeded",
+        "Dangling",
+        "LinkToDirectory",
+        "Directory"
       ]
     },
+    "ReferenceMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "release", "member", "instance", "result"],
+      "properties": {
+        "reference": {"$ref": "#/$defs/RefSetId"},
+        "release": {"type": "string", "minLength": 1},
+        "member": {"type": "string", "minLength": 1},
+        "instance": {"anyOf": [{"$ref": "#/$defs/InstanceId"}, {"type": "null"}]},
+        "result": {"$ref": "#/$defs/MemberResult"}
+      }
+    },
+    "MemberResult": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["File"], "properties": {"File": {"type": "object", "additionalProperties": false, "required": ["expected", "observed"], "properties": {"expected": {"$ref": "#/$defs/Sha256Hex"}, "observed": {"$ref": "#/$defs/Sha256Hex"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["Symlink"], "properties": {"Symlink": {"type": "object", "additionalProperties": false, "required": ["expected", "observed"], "properties": {"expected": {"$ref": "#/$defs/UntrustedText"}, "observed": {"$ref": "#/$defs/UntrustedText"}}}}},
+        {"type": "string", "enum": ["Directory"]},
+        {"type": "object", "additionalProperties": false, "required": ["KindDiffers"], "properties": {"KindDiffers": {"type": "object", "additionalProperties": false, "required": ["expected", "observed"], "properties": {"expected": {"$ref": "#/$defs/MemberKind"}, "observed": {"$ref": "#/$defs/EntryKind"}}}}},
+        {"type": "string", "enum": ["NotCompared"]},
+        {"type": "object", "additionalProperties": false, "required": ["Absent"], "properties": {"Absent": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"$ref": "#/$defs/MemberKind"}}}}}
+      ]
+    },
+    "MemberKind": {"type": "string", "enum": ["File", "Symlink", "Directory"]},
+    "EntryKind": {"type": "string", "enum": ["File", "Symlink", "Directory", "Special"]},
     "LinkHop": {
       "type": "object",
       "additionalProperties": false,

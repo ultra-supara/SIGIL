@@ -131,6 +131,12 @@ pub enum NotReadReason {
     Vanished,
     /// A file-count or byte budget was exhausted first.
     BudgetExceeded,
+    /// A symlink whose target does not exist. The link and its target text are recorded.
+    Dangling,
+    /// A symlink to a directory: recorded and not entered (the install walk).
+    LinkToDirectory,
+    /// A directory placement: listed and entered; it has no content to read.
+    Directory,
 }
 
 /// One symlink hop: the link, its target text, and the link's owner and mode.
