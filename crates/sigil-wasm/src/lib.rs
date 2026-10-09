@@ -6,7 +6,7 @@
 //! the visitor gives the page.
 //!
 //! - A session is validated (`Session::validate`) before it is shown, as `sigil session render`
-//!   does.
+//!   does, and an AI-BOM v2 (`AiBom::validate`): an inconsistent document is refused, not shown.
 //! - An AI-BOM v1 (SIGIL 0.1) is named, with where its format is described, instead of being
 //!   rendered.
 //!
@@ -94,11 +94,24 @@ pub fn render_session_markdown_inner(json: &str) -> Result<String, String> {
     Ok(render_session(&session))
 }
 
-/// The Markdown report of an AI-BOM v2.
+/// The Markdown report of an AI-BOM v2, after `AiBom::validate`.
 pub fn render_aibom_markdown_inner(json: &str) -> Result<String, String> {
     let value = parse(json, "aibom-v2")?;
     let bom: AiBom =
         serde_json::from_value(value).map_err(|e| format!("This is not a valid AI-BOM v2: {e}"))?;
+    if let Err(errors) = bom.validate() {
+        let shown: Vec<String> = errors.iter().take(5).map(ToString::to_string).collect();
+        let more = errors.len().saturating_sub(shown.len());
+        let tail = if more > 0 {
+            format!(" (and {more} more)")
+        } else {
+            String::new()
+        };
+        return Err(format!(
+            "The AI-BOM v2 fails validation: {}{tail}",
+            shown.join("; ")
+        ));
+    }
     Ok(aibom_markdown(&bom))
 }
 

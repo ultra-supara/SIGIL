@@ -18,5 +18,17 @@
   {
     "file": "not-json.json",
     "expect": "This is not valid JSON"
+  },
+  {
+    "file": "aibom-unknown-state.json",
+    "expect": "\"Bogus\" is not a coverage state"
+  },
+  {
+    "file": "aibom-empty-state.json",
+    "expect": "listed with no entries"
+  },
+  {
+    "file": "aibom-closed-disagrees.json",
+    "expect": "closed is true"
   }
 ]

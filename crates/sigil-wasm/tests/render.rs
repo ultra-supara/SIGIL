@@ -153,3 +153,41 @@ fn render_markdown_dispatches_on_the_kind() {
         "{err}"
     );
 }
+
+/// AI-BOM 14 with its first coverage summary's `states` and `closed` replaced.
+fn aibom_with(states: serde_json::Value, closed: bool) -> String {
+    let (_, text) = files("examples/aibom-v2")
+        .into_iter()
+        .find(|(n, _)| n == "14-store-and-runtime.json")
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    value["coverage"][0]["states"] = states;
+    value["coverage"][0]["closed"] = serde_json::json!(closed);
+    value.to_string()
+}
+
+#[test]
+fn an_inconsistent_aibom_is_refused_not_rendered() {
+    use serde_json::json;
+    use sigil_wasm::render_markdown_inner;
+    let cases = [
+        (
+            aibom_with(json!({"Bogus": 1}), false),
+            "\"Bogus\" is not a coverage state",
+        ),
+        (
+            aibom_with(json!({"Complete": 0}), false),
+            "listed with no entries",
+        ),
+        (aibom_with(json!({"Error": 1}), true), "closed is true"),
+    ];
+    for (json, says) in cases {
+        for err in [
+            render_aibom_markdown_inner(&json).unwrap_err(),
+            render_markdown_inner(&json).unwrap_err(),
+        ] {
+            assert!(err.contains("The AI-BOM v2 fails validation"), "{err}");
+            assert!(err.contains(says), "{err}");
+        }
+    }
+}

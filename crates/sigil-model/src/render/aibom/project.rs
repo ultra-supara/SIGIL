@@ -31,6 +31,9 @@ pub const STATE_NAMES: &[&str] = &[
     "Error",
 ];
 
+/// The states whose entries can close a check (`CoverageState::can_close`).
+pub const CLOSING_STATES: &[&str] = &["Complete", "NotPresent", "OutOfScope"];
+
 /// The name of a coverage state's variant (one of [`STATE_NAMES`]).
 pub fn state_name(state: &CoverageState) -> &'static str {
     match state {

@@ -1,0 +1,179 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "d5aa7e583a59b40086f36d14c6c42fbe3551791544ceeb888d3c1d12a7d5cc3f",
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [
+      {
+        "process": {
+          "pid": 4242,
+          "start_ticks": 1000,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        },
+        "roles": [
+          "ollama serve"
+        ],
+        "name": "ollama",
+        "exe": {
+          "NotObservable": "PermissionDenied"
+        }
+      }
+    ],
+    "listeners": [
+      {
+        "id": "listener:tcp/127.0.0.1:11434#7001",
+        "protocol": "Tcp",
+        "address": "127.0.0.1",
+        "port": 11434,
+        "socket_inode": 7001,
+        "owner": {
+          "Process": {
+            "process": {
+              "pid": 4242,
+              "start_ticks": 1000,
+              "boot_id": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        }
+      }
+    ],
+    "api": [
+      {
+        "id": "probe:api/127.0.0.1:11434",
+        "address": "127.0.0.1",
+        "port": 11434,
+        "at": "2026-10-07T07:00:01Z",
+        "result": {
+          "Answered": {
+            "status": 200,
+            "version": "0.30.6"
+          }
+        }
+      }
+    ],
+    "releases": []
+  },
+  "models": [
+    {
+      "id": "model:models/registry.ollama.ai/library/m/latest",
+      "name": "m:latest",
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "m",
+        "tag": "latest"
+      },
+      "layers": [
+        {
+          "role": "Config",
+          "media_type": null,
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "blob": {
+            "Found": {
+              "path": "/usr/share/ollama/.ollama/models/blobs/sha256-1111111111111111111111111111111111111111111111111111111111111111",
+              "content": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          }
+        },
+        {
+          "role": "Layer",
+          "media_type": "application/vnd.ollama.image.model",
+          "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+          "blob": {
+            "Found": {
+              "path": "/usr/share/ollama/.ollama/models/blobs/sha256-1212121212121212121212121212121212121212121212121212121212121212",
+              "content": "sha256:1212121212121212121212121212121212121212121212121212121212121212"
+            }
+          }
+        },
+        {
+          "role": "Layer",
+          "media_type": "application/vnd.ollama.image.license",
+          "digest": "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+          "blob": {
+            "Found": {
+              "path": "/usr/share/ollama/.ollama/models/blobs/sha256-1313131313131313131313131313131313131313131313131313131313131313",
+              "content": "sha256:1313131313131313131313131313131313131313131313131313131313131313"
+            }
+          }
+        }
+      ],
+      "license": {
+        "spdx": "MIT",
+        "excerpt": "MIT"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "sha256:1010101010101010101010101010101010101010101010101010101010101010",
+      "size": 400,
+      "format": "Other",
+      "paths": [
+        "/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/m/latest"
+      ],
+      "slices": []
+    },
+    {
+      "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 5,
+      "format": "Other",
+      "paths": [
+        "/usr/share/ollama/.ollama/models/blobs/sha256-1111111111111111111111111111111111111111111111111111111111111111"
+      ],
+      "slices": []
+    },
+    {
+      "id": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+      "size": 5,
+      "format": "Other",
+      "paths": [
+        "/usr/share/ollama/.ollama/models/blobs/sha256-1212121212121212121212121212121212121212121212121212121212121212"
+      ],
+      "slices": []
+    },
+    {
+      "id": "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+      "size": 5,
+      "format": "Other",
+      "paths": [
+        "/usr/share/ollama/.ollama/models/blobs/sha256-1313131313131313131313131313131313131313131313131313131313131313"
+      ],
+      "slices": []
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "runtime_api.version",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Complete": 0
+      }
+    }
+  ]
+}

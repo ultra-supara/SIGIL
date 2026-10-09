@@ -65,7 +65,7 @@ A session written before PR #76 has no `request.active` or `probes`. It hashes i
 - policy violations;
 - coverage.
 
-The browser viewer will use it through wasm (PR-3b-3b). The CLI's `--format md` renders the session itself, which has more detail.
+The browser viewer uses it through wasm (`crates/sigil-wasm`), after checking the AI-BOM (`AiBom::validate`): coverage summaries may name only coverage states, each with entries, and `closed` must agree with them. An inconsistent AI-BOM is refused, not shown. The CLI's `--format md` renders the session itself, which has more detail.
 
 ### Compatibility
 

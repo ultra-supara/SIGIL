@@ -7,13 +7,16 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
 use common::*;
 use sha2::{Digest, Sha256};
 use sigil_model::render;
-use sigil_model::render::aibom::{markdown, project, BomBlob, BomFinding, ReleaseBasisKind};
+use sigil_model::render::aibom::{
+    markdown, project, BomBlob, BomError, BomFinding, CheckSummary, ReleaseBasisKind,
+};
 use sigil_model::*;
 
 fn root() -> PathBuf {
@@ -525,4 +528,110 @@ fn entries_in_one_state_are_counted() {
     let bom = project(&s, sha(&s));
     assert_eq!(bom.coverage[0].states.get("Complete"), Some(&2));
     assert!(bom.coverage[0].closed);
+}
+
+// --- validation (#79 review): an AI-BOM is checked before it is shown -------------------------
+
+#[test]
+fn every_projection_validates() {
+    for (name, s) in session_examples() {
+        let bom = project(&s, sha(&s));
+        if let Err(errors) = bom.validate() {
+            panic!("{name}: {errors:?}");
+        }
+    }
+    let s = store_and_runtime();
+    assert_eq!(project(&s, sha(&s)).validate(), Ok(()));
+}
+
+/// The first coverage summary of `14-store-and-runtime`, changed by `change`.
+fn summary_changed(change: impl FnOnce(&mut CheckSummary)) -> AiBom {
+    let s = store_and_runtime();
+    let mut bom = project(&s, sha(&s));
+    change(&mut bom.coverage[0]);
+    bom
+}
+
+#[test]
+fn an_unknown_state_name_is_refused() {
+    let bom = summary_changed(|c| {
+        c.states = BTreeMap::from([("Bogus".to_string(), 1)]);
+        c.closed = false;
+    });
+    assert!(matches!(
+        bom.validate().unwrap_err().as_slice(),
+        [BomError::UnknownState { state, .. }] if state == "Bogus"
+    ));
+}
+
+#[test]
+fn a_state_without_entries_is_refused() {
+    let bom = summary_changed(|c| c.states = BTreeMap::from([("Complete".to_string(), 0)]));
+    let errors = bom.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, BomError::EmptyState { state, .. } if state == "Complete")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn closed_must_agree_with_the_states() {
+    // Closed, with an entry that cannot close.
+    let bom = summary_changed(|c| {
+        c.states = BTreeMap::from([("Error".to_string(), 1)]);
+        c.closed = true;
+    });
+    assert!(matches!(
+        bom.validate().unwrap_err().as_slice(),
+        [BomError::ClosedDisagrees { closed: true, .. }]
+    ));
+    // Closed with no entries at all.
+    let bom = summary_changed(|c| {
+        c.states.clear();
+        c.closed = true;
+    });
+    assert!(bom.validate().is_err());
+    // Open although every entry closes it.
+    let bom = summary_changed(|c| {
+        c.states = BTreeMap::from([("Complete".to_string(), 1), ("NotPresent".to_string(), 2)]);
+        c.closed = false;
+    });
+    assert!(matches!(
+        bom.validate().unwrap_err().as_slice(),
+        [BomError::ClosedDisagrees { closed: false, .. }]
+    ));
+    // Open with one entry that cannot close: consistent.
+    let bom = summary_changed(|c| {
+        c.states = BTreeMap::from([("Complete".to_string(), 1), ("Partial".to_string(), 1)]);
+        c.closed = false;
+    });
+    assert_eq!(bom.validate(), Ok(()));
+}
+
+#[test]
+fn the_closing_states_are_those_that_can_close_a_check() {
+    use sigil_model::render::aibom::{state_name, CLOSING_STATES};
+    let states = [
+        CoverageState::Complete,
+        CoverageState::Partial { missing: vec![] },
+        CoverageState::NotPresent {
+            evidence: vec![],
+            scope: String::new(),
+            basis: AbsenceBasis::ConnectionRefused,
+        },
+        CoverageState::OutOfScope { why: String::new() },
+        CoverageState::Unavailable {
+            why: Unavailability::NotFound,
+        },
+        CoverageState::Error { message: t("") },
+    ];
+    for state in states {
+        assert_eq!(
+            CLOSING_STATES.contains(&state_name(&state)),
+            state.can_close(),
+            "{state:?}"
+        );
+    }
 }
