@@ -104,7 +104,8 @@ fn identical_releases_are_both_candidates() {
 #[test]
 fn a_library_replaced_by_non_elf_bytes_matches_no_reference() {
     let d = install();
-    std::fs::write(d.path().join("lib/ollama/libggml.so.0.13.1"), b"replaced").unwrap();
+    // The member's size, other bytes: only the SHA-256 tells them apart.
+    std::fs::write(d.path().join("lib/ollama/libggml.so.0.13.1"), [b'x'; 64]).unwrap();
     let r = run(&d, &set(&[("a.json", manifest("vA", |_| {}))]));
     assert!(r.claim.is_none());
     assert!(
