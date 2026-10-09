@@ -142,6 +142,7 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 - [Model store](docs/model-store.md) and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
 - [Policy](docs/policy.md): the policy format and how the outcome is computed.
 - [ADR-002](docs/adr/ADR-002-execution-modes.md): execution modes and safety contracts.
+- [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md): why the v0.1 IR, SafeISA, and emulator were removed, and where each v0.1 capability went.
 - [AI-BOM and comparison](docs/ai-bom-and-comparison.md): the AI-BOM v2, how it names its session, and the comparison direction.
 - v0.1 references, to be updated: [overview](docs/sigil-overview.md), [Ollama inspection](docs/ollama-inspection.md), [architecture and safety](docs/architecture-and-safety.md).
 
