@@ -30,6 +30,30 @@ pub const SCHEMA: &str = "sigil-policy/1";
 
 const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
+/// What decides the audit scope: the mode, whether an active feature was requested, and whether
+/// an installation is inspected (an `install` root).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeInput {
+    pub mode: Mode,
+    pub active: bool,
+    pub install: bool,
+}
+
+impl ScopeInput {
+    /// What a recorded request implies: an active feature if it lists one, an installation if it
+    /// has an [`INSTALL_ROOT`](sigil_model::INSTALL_ROOT) root.
+    pub fn of(request: &sigil_model::RunRequest) -> ScopeInput {
+        ScopeInput {
+            mode: request.mode,
+            active: !request.active.is_empty(),
+            install: request
+                .roots
+                .iter()
+                .any(|r| r.id.as_str() == sigil_model::INSTALL_ROOT),
+        }
+    }
+}
+
 /// A loaded, validated policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
@@ -42,6 +66,8 @@ pub struct Policy {
     pub observe_audit: Vec<AuditScope>,
     /// Scopes added when an active feature is requested (`--active`).
     pub active_audit: Vec<AuditScope>,
+    /// Scopes added when an installation is inspected (`--install-dir`).
+    pub install_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.
     pub extra_required: Vec<CheckId>,
     pub open_questions: OqPolicy,
@@ -200,6 +226,7 @@ impl Policy {
         let audit = scopes(&raw.scope.audit)?;
         let observe_audit = scopes(&raw.scope.observe_audit)?;
         let active_audit = scopes(&raw.scope.active_audit)?;
+        let install_audit = scopes(&raw.scope.install_audit)?;
         let extra_required = raw
             .scope
             .extra_required
@@ -330,6 +357,7 @@ impl Policy {
             audit,
             observe_audit,
             active_audit,
+            install_audit,
             extra_required,
             open_questions,
             accept,
@@ -348,20 +376,33 @@ impl Policy {
         Policy::load(DEFAULT_POLICY)
     }
 
-    /// The audit scope requested in `mode`, with `active` features or without, and the checks it
-    /// requires (in catalog order, then `extra_required`, without repeats).
-    pub fn scope(&self, mode: Mode, active: bool) -> (Vec<AuditScope>, Vec<CheckId>) {
+    /// The audit scope requested for `input`, and the checks it requires (in catalog order, then
+    /// `extra_required`, without repeats). The assembler and `evaluate` both compute it, so a
+    /// session's required checks are what its own request implies.
+    pub fn scope(&self, input: &ScopeInput) -> (Vec<AuditScope>, Vec<CheckId>) {
+        let mode = input.mode;
         let mut audit: Vec<AuditScope> = vec![];
         let observe = match mode {
             Mode::Observe => self.observe_audit.as_slice(),
             Mode::Static => &[],
         };
-        let active = if active {
+        let active = if input.active {
             self.active_audit.as_slice()
         } else {
             &[]
         };
-        for scope in self.audit.iter().chain(observe).chain(active) {
+        let install = if input.install {
+            self.install_audit.as_slice()
+        } else {
+            &[]
+        };
+        for scope in self
+            .audit
+            .iter()
+            .chain(observe)
+            .chain(active)
+            .chain(install)
+        {
             if !audit.contains(scope) {
                 audit.push(scope.clone());
             }

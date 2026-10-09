@@ -109,7 +109,7 @@ pub const SCOPES: &[ScopeInfo] = &[
     },
     ScopeInfo {
         id: "runtime_artifacts",
-        checks: &["artifacts.discovery"],
+        checks: &["artifacts.discovery", "artifacts.release"],
     },
     ScopeInfo {
         id: "backend_loader",

@@ -15,7 +15,7 @@ use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
 use crate::observe;
 use crate::observe::proc::{ProcBudgets, ProcFacts};
-use crate::policy::{evaluate, EvaluateError, Policy};
+use crate::policy::{evaluate, EvaluateError, Policy, ScopeInput};
 
 /// What a static model-store inspection is asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,7 +155,11 @@ fn assemble(
     // The canonical path SafeFs opened, or the path as given when it could not be opened.
     let path = fs.root_path(&root).unwrap_or(&req.models_dir);
     let (mut findings, analysis_coverage) = model_store::analyze(&facts, &root);
-    let (audit, required_checks) = policy.scope(mode, !active.features.is_empty());
+    let (audit, required_checks) = policy.scope(&ScopeInput {
+        mode,
+        active: !active.features.is_empty(),
+        install: false,
+    });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
     let mut budgets = budgets(req);

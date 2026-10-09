@@ -32,6 +32,9 @@ pub(super) struct RawScope {
     pub observe_audit: Vec<String>,
     #[serde(default)]
     pub active_audit: Vec<String>,
+    /// Added in PR-4a: optional, so older policy files load unchanged.
+    #[serde(default)]
+    pub install_audit: Vec<String>,
     #[serde(default)]
     pub extra_required: Vec<String>,
 }

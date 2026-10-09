@@ -10,6 +10,8 @@ name = "default"
 audit = ["model_store"]
 observe_audit = ["exposure"]
 active_audit = ["runtime_api"]
+# When an installation is inspected (`--install-dir`): its files against the official manifests.
+install_audit = ["runtime_artifacts"]
 extra_required = []
 
 [open_questions]
