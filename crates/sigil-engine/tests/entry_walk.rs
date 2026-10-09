@@ -70,6 +70,9 @@ fn every_entry_is_listed_with_its_kind_and_links_are_not_followed() {
     .collect();
     assert_eq!(listed, expected);
     assert!(walk.entries.iter().all(|e| e.stat.is_some()));
+    // Links are entries, never directories to open: nothing was skipped or left unlisted.
+    assert!(walk.skipped.is_empty(), "{:?}", walk.skipped);
+    assert!(walk.unscanned.is_empty(), "{:?}", walk.unscanned);
     // `walk` itself is unaffected: it still lists only files.
     assert!(walk.files.is_empty());
 }

@@ -104,6 +104,17 @@ fn rejected(s: &Session, what: &str) {
     assert!(s.validate().is_err(), "must be rejected: {what}");
 }
 
+/// Rejected by a row error whose reason contains `why`, whatever else is also reported.
+fn rejected_row(s: &Session, why: &str) {
+    let errors = s.validate().unwrap_err();
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, sigil_model::ValidationError::ReferenceRow { why: w, .. } if w.contains(why))
+        ),
+        "{why}: {errors:?}"
+    );
+}
+
 fn set_state(s: &mut Session, check: &str, state: CoverageState) {
     for c in &mut s.coverage {
         if c.check.as_str() == check {
@@ -148,7 +159,7 @@ fn v6_a_kind_difference_must_name_the_observed_kind() {
         expected: MemberKind::Symlink,
         observed: EntryKind::Directory, // the instance is a regular file
     };
-    rejected(&s, "a fake KindDiffers");
+    rejected_row(&s, "KindDiffers must name the placement's own kind");
 }
 
 #[test]
@@ -185,7 +196,7 @@ fn v8_absent_only_after_a_complete_discovery_and_not_where_a_placement_is() {
             missing: vec!["x".into()],
         },
     );
-    rejected(&s, "Absent while discovery is not complete");
+    rejected_row(&s, "Absent while discovery is not complete");
     let mut s = base();
     let mut row = s.reference_matches[0].clone();
     row.instance = None;
@@ -194,7 +205,7 @@ fn v8_absent_only_after_a_complete_discovery_and_not_where_a_placement_is() {
     };
     row.release = "v0.30.7".into();
     s.reference_matches.push(row);
-    rejected(&s, "Absent where a placement exists");
+    rejected_row(&s, "Absent, but a placement is at the member's path");
 }
 
 #[test]
