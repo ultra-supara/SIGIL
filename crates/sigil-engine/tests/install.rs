@@ -382,3 +382,37 @@ fn the_same_tree_gives_the_same_facts() {
     assert_eq!(a.instances, b.instances);
     assert_eq!(a.artifacts, b.artifacts);
 }
+
+// --- container facts (PR-4b-1) -------------------------------------------------------------
+
+fn common_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name),
+    )
+    .unwrap()
+}
+
+#[test]
+fn elf_placements_get_their_facts_once_per_content() {
+    let d = install();
+    let so = common_fixture("elf/libdata.so");
+    std::fs::write(d.path().join("lib/ollama/libdata.so.1"), &so).unwrap();
+    std::fs::write(d.path().join("lib/ollama/cuda_v12/libdata-copy.so"), &so).unwrap();
+    let f = run(d.path(), InstallBudgets::default());
+    let parsed: Vec<_> = f
+        .binaries
+        .iter()
+        .filter(|b| {
+            let sigil_model::ContainerFacts::Elf(e) = &b.container;
+            e.soname.as_ref().and_then(|s| s.as_str()) == Some("libdata.so.1")
+        })
+        .collect();
+    assert_eq!(parsed.len(), 1, "one record for one content");
+    assert!(parsed[0].gaps.is_empty(), "{:?}", parsed[0].gaps);
+    // The synthetic 64-byte ELF headers of install() are parsed too, with gaps.
+    assert!(f.binaries.iter().any(|b| !b.gaps.is_empty()));
+    // Non-ELF content gets no record.
+    assert_eq!(f.binaries.len(), 3, "bin/ollama, libggml, libdata");
+}

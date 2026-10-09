@@ -32,7 +32,7 @@ mod walk;
 
 pub use path::{link_target, recorded, LinkTarget, PathError, RelPath};
 pub(crate) use read::instance_id;
-pub use read::{FileRead, ReadOutcome, ReadSpec};
+pub use read::{FileRead, ParseInput, ReadOutcome, ReadSpec};
 pub use walk::{Entry, EntryType, Skip, Walk, WalkError};
 
 /// Budgets that bound a scan (plan §4.9). Exceeding one is recorded, never fatal.

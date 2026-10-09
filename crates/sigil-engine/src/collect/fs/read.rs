@@ -16,6 +16,19 @@ use super::path::RelPath;
 use super::resolve::{mode, End, Strict};
 use super::SafeFs;
 
+/// What a parse sees (PR-4b-1): the open file, its size, the content's ID, and its first bytes.
+/// The parse runs after hashing and before the post-read checks, so the stability of the read
+/// covers it.
+pub struct ParseInput<'a> {
+    pub file: &'a std::fs::File,
+    pub size: u64,
+    pub artifact: &'a ArtifactId,
+    pub prefix: &'a [u8],
+}
+
+/// A parse run inside a read.
+type Hook<'h> = Option<&'h mut dyn FnMut(ParseInput<'_>)>;
+
 /// What to keep and how much to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadSpec {
@@ -170,7 +183,7 @@ impl SafeFs {
                     .as_ref()
                     .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
                 match self.open_at(parent, &name, OFlags::RDONLY | OFlags::NONBLOCK) {
-                    Ok(fd) => self.read_open(index, rel, place, fd, spec, false),
+                    Ok(fd) => self.read_open(index, rel, place, fd, spec, false, None),
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
                     }
@@ -223,6 +236,40 @@ impl SafeFs {
         spec: ReadSpec,
         discovered_by: Vec<DiscoverySource>,
     ) -> FileRead {
+        self.read_entry_hooked(root, rel, spec, discovered_by, None)
+    }
+
+    /// As [`SafeFs::read_entry`], and runs `parse` on the open file after hashing it, before the
+    /// post-read checks (PR-4b-1). The parse runs only when the whole file was hashed.
+    pub fn read_entry_with<P>(
+        &self,
+        root: &RootId,
+        rel: &RelPath,
+        spec: ReadSpec,
+        discovered_by: Vec<DiscoverySource>,
+        parse: impl FnOnce(ParseInput<'_>) -> P,
+    ) -> (FileRead, Option<P>) {
+        let mut parse = Some(parse);
+        let mut out = None;
+        let read = {
+            let mut hook = |input: ParseInput<'_>| {
+                if let Some(f) = parse.take() {
+                    out = Some(f(input));
+                }
+            };
+            self.read_entry_hooked(root, rel, spec, discovered_by, Some(&mut hook))
+        };
+        (read, out)
+    }
+
+    fn read_entry_hooked(
+        &self,
+        root: &RootId,
+        rel: &RelPath,
+        spec: ReadSpec,
+        discovered_by: Vec<DiscoverySource>,
+        hook: Hook<'_>,
+    ) -> FileRead {
         let Some(index) = self.root_index(root) else {
             return FileRead::failed(format!("unknown scan root {root}"));
         };
@@ -251,7 +298,7 @@ impl SafeFs {
                     .as_ref()
                     .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
                 match self.open_at(parent, &name, OFlags::RDONLY | OFlags::NONBLOCK) {
-                    Ok(fd) => self.read_open(index, rel, place, fd, spec, true),
+                    Ok(fd) => self.read_open(index, rel, place, fd, spec, true, hook),
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
                     }
@@ -274,8 +321,9 @@ impl SafeFs {
         }
     }
 
-    /// Streams the open file: limit, hash, prefix, then stability. `strict`: the path is checked
-    /// again afterwards without following symlinks.
+    /// Streams the open file: limit, hash, prefix, the hook, then stability. `strict`: the path is
+    /// checked again afterwards without following symlinks.
+    #[allow(clippy::too_many_arguments)]
     fn read_open(
         &self,
         index: usize,
@@ -284,6 +332,7 @@ impl SafeFs {
         fd: OwnedFd,
         spec: ReadSpec,
         strict: bool,
+        hook: Hook<'_>,
     ) -> FileRead {
         let st = match rustix::fs::fstat(&fd) {
             Ok(st) => st,
@@ -326,6 +375,18 @@ impl SafeFs {
             let room = spec.keep.saturating_sub(prefix.len()).min(n);
             prefix.extend_from_slice(&buffer[..room]);
         }
+        let artifact_id = match ArtifactId::new(format!("sha256:{:x}", hasher.finalize())) {
+            Ok(id) => id,
+            Err(e) => return FileRead::failed(e.to_string()),
+        };
+        if let Some(hook) = hook {
+            hook(ParseInput {
+                file: &file,
+                size: total,
+                artifact: &artifact_id,
+                prefix: &prefix,
+            });
+        }
         let after = match rustix::fs::fstat(file.as_fd()) {
             Ok(st) => Snapshot::of(&st),
             Err(e) => return FileRead::failed(e.to_string()),
@@ -348,10 +409,6 @@ impl SafeFs {
                 // It resolves to something else now (a directory, a link out of the roots, ...).
                 _ => Some((u64::MAX, u64::MAX)),
             }
-        };
-        let artifact_id = match ArtifactId::new(format!("sha256:{:x}", hasher.finalize())) {
-            Ok(id) => id,
-            Err(e) => return FileRead::failed(e.to_string()),
         };
         let artifact = Artifact {
             id: artifact_id.clone(),
