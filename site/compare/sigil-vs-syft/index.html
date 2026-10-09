@@ -35,7 +35,7 @@
 <tr><td>Verdict</td><td>None (inventory-first)</td><td>PASS / WARN / FAIL from findings and a TOML policy, with completeness (COMPLETE / INCOMPLETE) beside it; no LLM</td></tr>
 <tr><td>Subprocess spawn</td><td>Yes for some catalogers</td><td>None — /proc parsed directly</td></tr>
 <tr><td>Network egress</td><td>Yes when pulling OCI / matching vulns</td><td>None, unless the active API probe is asked for (one request to a literal address)</td></tr>
-<tr><td>Language / distribution</td><td>Go, single static binary</td><td>Rust, single static binary</td></tr>
+<tr><td>Language / distribution</td><td>Go, single static binary</td><td>Rust, a single CLI binary</td></tr>
 </tbody>
 </table>
 
@@ -72,7 +72,7 @@
 <ul>
 <li>Syft → CycloneDX 1.6 / 1.7 / SPDX</li>
 <li>SIGIL → the session and AI-BOM v2 (JSON + Markdown)</li>
-<li>Both → single static binary</li>
+<li>Both → a single CLI binary</li>
 </ul>
 
 <h2>Verdict path vs. inventory</h2>

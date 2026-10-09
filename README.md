@@ -11,7 +11,7 @@ cargo run -q -p sigil-cli -- inspect ollama --format md --out out/report.md
 # completeness: COMPLETE
 ```
 
-A single static Rust binary inventories the models in an Ollama store, verifies every blob against its manifest digest, records license layers, and, in observe mode, attributes the runtime's listening sockets. Every result has two parts: a **verdict** (PASS / WARN / FAIL) from a deterministic analyzer and a policy, and a **completeness** that says whether everything required was actually seen. What SIGIL could not see is never reported as absent. Nothing leaves your machine, and no LLM ever decides the verdict.
+A single Rust binary inventories the models in an Ollama store, verifies every blob against its manifest digest, records license layers, and, in observe mode, attributes the runtime's listening sockets. Every result has two parts: a **verdict** (PASS / WARN / FAIL) from a deterministic analyzer and a policy, and a **completeness** that says whether everything required was actually seen. What SIGIL could not see is never reported as absent. No telemetry and no uploads: static and observe modes perform no network I/O, and the optional active API probe makes one explicitly requested connection, to a remote address only when `--allow-remote` is set. No LLM ever decides the verdict.
 
 [Live site](https://ultra-supara.github.io/SIGIL/) · [Try the viewer in your browser](https://ultra-supara.github.io/SIGIL/viewer/) · [Compare to other tools](https://ultra-supara.github.io/SIGIL/compare/) · [State of Local AI Audit — 2026 H1](https://ultra-supara.github.io/SIGIL/reports/2026-h1/)
 

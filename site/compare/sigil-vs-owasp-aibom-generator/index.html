@@ -33,7 +33,7 @@
 <tr><td>Native binary capability</td><td>Out of scope</td><td>Planned: call-site evidence in the runtime's binaries (M1)</td></tr>
 <tr><td>Verdict</td><td>AIBOM completeness score (0–100) + recommendations</td><td>PASS / WARN / FAIL from findings and a TOML policy, with completeness (COMPLETE / INCOMPLETE: was every required check closed) beside it; no LLM</td></tr>
 <tr><td>Network egress</td><td>Yes — fetches from <code>huggingface.co</code></td><td>None — every byte read is local, unless the active API probe is asked for</td></tr>
-<tr><td>Distribution</td><td>Python (<code>pip install -r requirements.txt</code>) + hosted web UI</td><td>Single static Rust binary</td></tr>
+<tr><td>Distribution</td><td>Python (<code>pip install -r requirements.txt</code>) + hosted web UI</td><td>A single Rust CLI binary</td></tr>
 <tr><td>License (project)</td><td>NOASSERTION (see repo)</td><td>MIT</td></tr>
 <tr><td>Project home</td><td>OWASP GenAI Security Project</td><td>Independent open-source</td></tr>
 </tbody>
