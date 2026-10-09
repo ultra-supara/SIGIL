@@ -47,6 +47,7 @@ fn request(dir: &Path, filter: Option<&str>) -> StoreRequest {
         model_filter: filter.map(str::to_string),
         budgets: FsBudgets::default(),
         manifest_limit: DEFAULT_MANIFEST_LIMIT,
+        install: None,
     }
 }
 

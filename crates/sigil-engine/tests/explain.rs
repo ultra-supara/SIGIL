@@ -53,6 +53,7 @@ fn session_with(store: &Path, fake: &FakeProc, active: &ActiveInput) -> Session 
             model_filter: None,
             budgets: FsBudgets::default(),
             manifest_limit: DEFAULT_MANIFEST_LIMIT,
+            install: None,
         },
         proc_root: fake.path().to_path_buf(),
         proc_budgets: ProcBudgets::default(),

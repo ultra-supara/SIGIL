@@ -6,16 +6,19 @@ use std::path::PathBuf;
 
 use sigil_model::{
     ActiveFeature, ApiProbe, CheckId, Completeness, Coverage, CoverageState, KnowledgeRef, Mode,
-    ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion, Session, Timestamp,
-    ToolInfo, Unavailability, UntrustedText, Verdict,
+    ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion, Session,
+    SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict, ARTIFACTS_DISCOVERY,
+    ARTIFACTS_RELEASE, INSTALL_ROOT,
 };
 
-use crate::analyze::{exposure, model_store, runtime_api};
+use crate::analyze::{exposure, model_store, release, runtime_api};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
+use crate::collect::install::{self, InstallBudgets};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
 use crate::observe;
 use crate::observe::proc::{ProcBudgets, ProcFacts};
 use crate::policy::{evaluate, EvaluateError, Policy, ScopeInput};
+use crate::reference;
 
 /// What a static model-store inspection is asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +30,16 @@ pub struct StoreRequest {
     pub budgets: FsBudgets,
     /// The largest manifest read, in bytes.
     pub manifest_limit: u64,
+    /// The installation to inspect (`--install-dir`), if any.
+    pub install: Option<InstallRequest>,
+}
+
+/// An installation to inspect: its files against the embedded reference set (PR-4a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallRequest {
+    /// The install prefix: `bin/ollama` and `lib/ollama/` below it.
+    pub dir: PathBuf,
+    pub budgets: InstallBudgets,
 }
 
 /// The scan root of the model store.
@@ -43,6 +56,8 @@ pub enum InspectError {
     /// The assembled session fails `Session::validate` (a bug, reported rather than returned as
     /// a result).
     Invalid(Vec<String>),
+    /// The session's reference rows are not what the embedded set gives (a bug).
+    Reference(Vec<String>),
 }
 
 impl fmt::Display for InspectError {
@@ -53,6 +68,11 @@ impl fmt::Display for InspectError {
             InspectError::Invalid(errors) => {
                 write!(f, "the assembled session is invalid: {}", errors.join("; "))
             }
+            InspectError::Reference(errors) => write!(
+                f,
+                "the session's reference matches disagree with the embedded set: {}",
+                errors.join("; ")
+            ),
         }
     }
 }
@@ -158,11 +178,55 @@ fn assemble(
     let (audit, required_checks) = policy.scope(&ScopeInput {
         mode,
         active: !active.features.is_empty(),
-        install: false,
+        install: req.install.is_some(),
     });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
     let mut budgets = budgets(req);
+    let mut roots = vec![ScanRoot {
+        id: root,
+        path: recorded(path),
+    }];
+    let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
+    let mut knowledge = Vec::<KnowledgeRef>::new();
+    let (mut releases, mut reference_matches) = (vec![], vec![]);
+    if let Some(r) = &req.install {
+        let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
+        let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
+        let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
+        roots.push(ScanRoot {
+            id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
+            path: facts.root_path,
+        });
+        instances.extend(facts.instances);
+        for a in facts.artifacts {
+            if !artifacts.iter().any(|x| x.id == a.id) {
+                artifacts.push(a);
+            }
+        }
+        knowledge.push(set.knowledge());
+        budgets.extend(install_budgets(r.budgets));
+        coverage.push(facts.discovery);
+        coverage.push(result.coverage);
+        reference_matches = result.rows;
+        releases.extend(result.claim);
+    } else {
+        // A policy that requires the install's checks without one: skipped, so incomplete.
+        for check in &required_checks {
+            if [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE].contains(&check.as_str()) {
+                coverage.push(Coverage {
+                    check: check.clone(),
+                    scope: Ref::Audit,
+                    state: CoverageState::Skipped {
+                        by: SkipReason::Flag {
+                            flag: "--install-dir".to_string(),
+                        },
+                    },
+                    budget: None,
+                });
+            }
+        }
+    }
     let (mut processes, mut listeners) = (vec![], vec![]);
     if let Some((proc, proc_budgets)) = observed {
         let (exposure_findings, exposure_coverage) = exposure::analyze(&proc);
@@ -181,13 +245,10 @@ fn assemble(
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
-        knowledge: Vec::<KnowledgeRef>::new(),
+        knowledge,
         request: RunRequest {
             mode,
-            roots: vec![ScanRoot {
-                id: root,
-                path: recorded(path),
-            }],
+            roots,
             audit,
             required_checks,
             budgets,
@@ -196,16 +257,16 @@ fn assemble(
             active: active.features.clone(),
         },
         observation,
-        artifacts: facts.artifacts,
-        instances: facts.instances,
+        artifacts,
+        instances,
         models: facts.models,
         processes,
         listeners,
         probes: active.probes.clone(),
         values: vec![],
         components: vec![],
-        releases: vec![],
-        reference_matches: vec![],
+        releases,
+        reference_matches,
         hints: vec![],
         code: vec![],
         relations: vec![],
@@ -233,6 +294,11 @@ fn assemble(
     session.validate().map_err(|errors| {
         InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
     })?;
+    // What `validate` cannot re-derive: the rows are exactly the embedded set's.
+    if req.install.is_some() {
+        let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
+        reference::verify_reference_matches(&session, set).map_err(InspectError::Reference)?;
+    }
     Ok(session)
 }
 
@@ -280,5 +346,18 @@ fn budgets(req: &StoreRequest) -> BTreeMap<String, u64> {
         ("walk_depth".to_string(), u64::from(b.max_depth)),
         ("link_hops".to_string(), u64::from(b.max_link_hops)),
         ("manifest_bytes".to_string(), req.manifest_limit),
+    ])
+}
+
+/// The install scan's budgets, by the names `BudgetUse` reports with the `install_` prefix.
+fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
+    let fs = FsBudgets::default();
+    BTreeMap::from([
+        ("install_files_discovered".to_string(), b.files),
+        ("install_entries_listed".to_string(), b.entries),
+        ("install_directory_entries".to_string(), fs.max_dir_entries),
+        ("install_walk_depth".to_string(), u64::from(fs.max_depth)),
+        ("install_link_hops".to_string(), u64::from(fs.max_link_hops)),
+        ("install_bytes".to_string(), b.bytes),
     ])
 }

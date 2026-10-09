@@ -274,6 +274,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         model_filter: args.model.clone(),
         budgets: fs_budgets,
         manifest_limit,
+        install: None,
     };
     let tool = ToolInfo {
         name: "sigil".to_string(),
