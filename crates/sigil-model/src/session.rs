@@ -56,6 +56,10 @@ pub struct Session {
     /// only when non-empty, so sessions without an install keep their bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_matches: Vec<crate::reference::ReferenceMatch>,
+    /// Container facts per slice (PR-4b-1). Written only when non-empty, so sessions without
+    /// them keep their bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binaries: Vec<crate::binary::BinaryFacts>,
     /// B: feature presence.
     pub hints: Vec<FeatureHint>,
     /// C: code facts, one entry per analyzed slice.

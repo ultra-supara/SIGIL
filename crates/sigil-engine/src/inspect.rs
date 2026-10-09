@@ -268,6 +268,7 @@ fn assemble(
         components: vec![],
         releases,
         reference_matches,
+        binaries: vec![],
         hints: vec![],
         code: vec![],
         relations: vec![],
