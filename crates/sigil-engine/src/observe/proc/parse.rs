@@ -148,7 +148,7 @@ mod tests {
             .collect()
     }
 
-    // --- ported from v0.1 (sigil-core/src/runtime/listeners.rs) --------------------------------
+    // --- ported from v0.1 (sigil-core/src/runtime/listeners.rs, removed in PR-3b-3c-1) ---------
 
     #[test]
     fn parses_ipv4_loopback_listen_row() {

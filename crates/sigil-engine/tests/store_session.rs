@@ -230,7 +230,7 @@ fn provenance_unknown_is_reported_only_without_a_filter() {
     assert_eq!(s.request.model_filter.as_deref(), Some("m:latest"));
 }
 
-// --- v0.1 cases (sigil-core/tests/ollama.rs), on the v2 outcome ------------------------------
+// --- v0.1 cases (sigil-core/tests/ollama.rs, removed in PR-3b-3c-1), on the v2 outcome -------
 
 #[test]
 fn a_complete_store_passes_and_is_complete() {

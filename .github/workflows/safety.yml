@@ -42,12 +42,14 @@ jobs:
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-deny
+      - name: Cargo.lock matches the manifests
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Build-time bans (clippy disallowed types and methods)
         # Cached clippy results are not invalidated by clippy.toml edits, so the workspace crates
         # are cleaned first (dependencies stay cached).
         run: |
-          cargo clean -p sigil-core -p sigil-cli -p sigil-wasm -p sigil-model -p sigil-engine -p sigil-probe
-          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clean -p sigil-cli -p sigil-wasm -p sigil-model -p sigil-engine -p sigil-probe
+          cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build-time bans (crates)
         run: cargo deny check bans
       - name: Syscall safety tests and negative controls

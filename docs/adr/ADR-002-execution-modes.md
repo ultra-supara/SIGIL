@@ -1,6 +1,6 @@
 # ADR-002: Execution modes and safety contracts
 
-- **Status:** Accepted. PR-1 implemented the checks for C-1…C-6. PR-3b-1 replaced the v0.1 CLI with the v2 commands and the static / observe split. PR-3b-2 added the active mode: the API probe (`--active api-probe`) and its C-4 rule.
+- **Status:** Accepted. PR-1 implemented the checks for C-1…C-6. PR-3b-1 replaced the v0.1 CLI with the v2 commands and the static / observe split. PR-3b-2 added the active mode: the API probe (`--active api-probe`) and its C-4 rule. PR-3b-3c-1 removed `sigil-core` and its legacy API probe ([ADR-006](ADR-006-remove-ir-safeisa.md)).
 - **Date:** 2026-10-07
 - **Scope:** the SIGIL CLI and its engine crates on Linux.
 
@@ -71,9 +71,7 @@ These stop obvious, accidental use of forbidden APIs in **product code**. They a
 - Only crates whose **purpose** is a forbidden operation are banned. General-purpose crates such as `libc` are not banned. No product crate depends on them directly today; adding such a dependency to a product crate needs review against this ADR.
 - **Exceptions:**
   - Test code that must spawn processes (compiling fixtures, running the CLI, the safety harness) allows the C-1/C-4 lints at file level, with a reason.
-  - Product exceptions (C-4):
-    - the active API probe: a scoped `#[allow]` on `exchange` in `sigil-probe`, the one function that holds the `TcpStream`. Only the CLI depends on `sigil-probe`; `sigil-engine` and `sigil-model` keep the ban, so the engine cannot perform network I/O;
-    - the legacy API probe: a scoped `#[allow]` on `probe_ollama_version` in `sigil-core`. No command reaches it since PR-3b-1, and it is removed with `sigil-core` in PR-3b-3.
+  - The one product exception (C-4): the active API probe, a scoped `#[allow]` on `exchange` in `sigil-probe`, the one function that holds the `TcpStream`. Only the CLI depends on `sigil-probe`; `sigil-engine` and `sigil-model` keep the ban, so the engine cannot perform network I/O.
   - Any new product exception needs an ADR.
 
 #### 3b. Checked by syscall tests over exercised paths
