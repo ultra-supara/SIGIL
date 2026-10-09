@@ -124,6 +124,43 @@ fn static_markdown_writes_only_its_out() {
 }
 
 #[test]
+fn static_inspection_of_an_install_reads_only_its_roots() {
+    let case = "static_inspection_of_an_install_reads_only_its_roots";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let build = fx.tmp.path().join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    let Some(so) = fixtures::require(case, fixtures::shared_object(&build)) else {
+        return;
+    };
+    let models = fixtures::ollama_store(&fx.target);
+    let install = fixtures::ollama_install(&fx.target, &so);
+    let md = fx.out.join("report.md");
+    let args = os(&[
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--install-dir",
+        &install,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    let r = run("inspect-static-install", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(md.is_file());
+    assert!(r.stderr.contains("release: "), "{}", r.stderr);
+    assert_read_under(&r, &models);
+    assert_read_under(&r, &install.join("lib/ollama"));
+    // Reads only under `target/`, writes only --out, no exec, no load, no socket.
+    assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+}
+
+#[test]
 fn static_inspection_of_a_malformed_manifest() {
     if !require_tracer("static_inspection_of_a_malformed_manifest") {
         return;
