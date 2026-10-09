@@ -146,33 +146,30 @@ impl SafeFs {
         self.roots.iter().position(|r| r.id == *id)
     }
 
-    /// The entry at `rel`, by `lstat` of its last component: a symlink is not followed. `None`
-    /// when nothing is there or its directory cannot be reached.
-    pub fn entry_at(&self, root: &RootId, rel: &RelPath) -> Option<Entry> {
-        let index = self.root_index(root)?;
-        let parent = rel.parent()?;
-        let name = rel.name()?.to_string();
-        let fd = match self.resolve(index, &parent).end {
-            resolve::End::Dir { root: at, fd, .. } => self.dir_fd(at, fd).ok()?,
-            resolve::End::Entry {
-                root: at,
-                parent: grand,
-                name: dir_name,
-                lstat,
-                ..
-            } if rustix::fs::FileType::from_raw_mode(lstat.st_mode)
-                == rustix::fs::FileType::Directory =>
-            {
-                let grand = grand
-                    .as_ref()
-                    .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
-                self.open_dir(grand, &dir_name).ok()?
-            }
-            _ => return None,
+    /// The entry at `rel`, by `lstat` of its last component (PR-4a). No symlink is followed: the
+    /// last component is returned as it is, and a link among the others is
+    /// [`WalkError::LinkNotFollowed`].
+    pub fn entry_at(&self, root: &RootId, rel: &RelPath) -> Result<Entry, WalkError> {
+        let index = self
+            .root_index(root)
+            .ok_or_else(|| WalkError::Failed(format!("unknown scan root {root}")))?;
+        let (parent, name) = match self.resolve_strict(index, rel) {
+            resolve::Strict::Entry { parent, name, .. } => (parent, name),
+            resolve::Strict::Root => return Err(WalkError::NotADirectory),
+            resolve::Strict::Link { at } => return Err(WalkError::LinkNotFollowed { at }),
+            resolve::Strict::NotFound => return Err(WalkError::NotFound),
+            resolve::Strict::PermissionDenied => return Err(WalkError::PermissionDenied),
+            resolve::Strict::NotADirectory => return Err(WalkError::NotADirectory),
+            resolve::Strict::Failed(m) => return Err(WalkError::Failed(m)),
         };
-        match walk::entry_of(fd.as_fd(), &name, rel.clone()) {
-            Ok(entry) if entry.kind != EntryType::Vanished => Some(entry),
-            _ => None,
+        let parent = parent
+            .as_ref()
+            .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
+        match walk::entry_of(parent, &name, rel.clone()) {
+            Ok(entry) if entry.kind == EntryType::Vanished => Err(WalkError::NotFound),
+            Ok(entry) => Ok(entry),
+            Err(walk::Skip::PermissionDenied) => Err(WalkError::PermissionDenied),
+            Err(why) => Err(WalkError::Failed(format!("{why:?}"))),
         }
     }
 

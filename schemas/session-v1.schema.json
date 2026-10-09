@@ -671,8 +671,7 @@
         "NotRegularFile",
         "Vanished",
         "BudgetExceeded",
-        "Dangling",
-        "LinkToDirectory",
+        "NotFollowed",
         "Directory"
       ]
     },

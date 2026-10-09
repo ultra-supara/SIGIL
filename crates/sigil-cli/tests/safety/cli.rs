@@ -160,6 +160,71 @@ fn static_inspection_of_an_install_reads_only_its_roots() {
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
 }
 
+/// The run opened nothing under `dir`, and nothing relative to a directory under it.
+fn assert_never_opened_under(run: &TracedRun, dir: &Path) {
+    let dir = std::fs::canonicalize(dir).unwrap();
+    for e in &run.events {
+        if !matches!(e.name.as_str(), "openat" | "open" | "openat2") {
+            continue;
+        }
+        let under = |raw: &str| fd_path(raw).is_some_and(|p| p.starts_with(&dir));
+        let at = e.args.first().is_some_and(|a| under(a));
+        assert!(
+            !under(&e.ret) && !at,
+            "case `{}` opened under {}: {}",
+            run.case,
+            dir.display(),
+            e.raw
+        );
+    }
+}
+
+/// The #82 review's P1: a symlink in the install leads to `private/`, outside `bin/ollama` and
+/// `lib/ollama/`. Path A: `lib/ollama` itself is the link. Path B: a link inside `lib/ollama/`
+/// leads to a file there. Neither is followed: nothing under `private/` is opened.
+#[test]
+fn an_install_never_opens_what_its_links_lead_to() {
+    let case = "an_install_never_opens_what_its_links_lead_to";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let build = fx.tmp.path().join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    let Some(so) = fixtures::require(case, fixtures::shared_object(&build)) else {
+        return;
+    };
+    let models = fixtures::ollama_store(&fx.target);
+    for (name, path_a) in [("a", true), ("b", false)] {
+        let root = fx.target.join(name);
+        let install = fixtures::ollama_install(&root, &so);
+        let private = install.join("private");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join("credentials.txt"), b"secret").unwrap();
+        let lib = install.join("lib/ollama");
+        if path_a {
+            std::fs::remove_dir_all(&lib).unwrap();
+            std::os::unix::fs::symlink("../private", &lib).unwrap();
+        } else {
+            std::os::unix::fs::symlink("../../private/credentials.txt", lib.join("unexpected.so"))
+                .unwrap();
+        }
+        let args = os(&[
+            &"inspect",
+            &"ollama",
+            &"--models-dir",
+            &models,
+            &"--install-dir",
+            &install,
+        ]);
+        let r = run(&format!("inspect-install-links-{name}"), &fx, &refs(&args));
+        assert!(r.status.unwrap().success(), "{}", r.stderr);
+        assert_read_under(&r, &install.join("bin"));
+        assert_never_opened_under(&r, &private);
+        assert_clean(&r, &policy(&fx, &[], &["runtime"]));
+    }
+}
+
 #[test]
 fn static_inspection_of_a_malformed_manifest() {
     if !require_tracer("static_inspection_of_a_malformed_manifest") {

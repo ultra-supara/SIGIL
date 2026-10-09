@@ -1,6 +1,10 @@
 //! The installation's own files (PR-4a; plan §4.6.2): `bin/ollama` and every entry under
-//! `lib/ollama/` of `--install-dir`, through a SafeFs whose only root is the install. A link out
-//! of it, including into the models directory, leads outside every root and is not read.
+//! `lib/ollama/` of `--install-dir`, through a SafeFs whose only root is the install.
+//!
+//! No symlink is followed, wherever it leads: a symlink placement is its own `lstat` and target
+//! text, which is what a release lists for it, and a symlink at or on the way to either place
+//! leaves that place uninspected (a gap). So nothing outside the two places is read, inside the
+//! install or outside it.
 
 use std::path::Path;
 
@@ -19,7 +23,8 @@ use crate::binary::header;
 /// Budgets of the install scan, recorded with an `install_` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstallBudgets {
-    /// Entries listed (every kind), as `install_files_discovered`.
+    /// Entries found (`bin/ollama` and every entry under `lib/ollama/`), as
+    /// `install_files_discovered`.
     pub files: u64,
     /// Directory entries read, as `install_entries_listed`.
     pub entries: u64,
@@ -57,8 +62,8 @@ pub fn collect(dir: &Path, budgets: InstallBudgets) -> Result<InstallFacts, Stri
     collect_with(dir, budgets, &|_| {})
 }
 
-/// As [`collect`], calling `after_read` with each file's or link's path right after its read: the
-/// tests' way to change an entry between a link's two `readlinkat`.
+/// As [`collect`], calling `after_read` with each file's or link's path right after it was read:
+/// the tests' way to change an entry between a link's two `readlinkat`.
 fn collect_with(
     dir: &Path,
     budgets: InstallBudgets,
@@ -140,11 +145,21 @@ impl Collector<'_> {
     fn places(&mut self) -> Result<(), String> {
         let bin = RelPath::parse(BIN).map_err(|e| format!("{e:?}"))?;
         match self.fs.entry_at(&self.root, &bin) {
-            Some(entry) => {
+            Ok(entry) => {
                 self.found += 1;
-                self.entry(entry)?;
+                // `bin/ollama` counts against the file budget like every entry of the walk.
+                if self.fs.take_file() {
+                    self.entry(entry)?;
+                } else {
+                    let limit = self.fs.budgets.max_files;
+                    self.exceeded.push(BudgetUse {
+                        budget: "files_discovered".to_string(),
+                        used: limit,
+                        limit,
+                    });
+                }
             }
-            None => self.missing.push(format!("{BIN}: not found")),
+            Err(e) => self.place_missing(BIN, &e),
         }
         let lib = RelPath::parse(LIB).map_err(|e| format!("{e:?}"))?;
         match self.fs.walk_entries(&self.root, &lib) {
@@ -161,10 +176,26 @@ impl Collector<'_> {
                 }
                 self.exceeded.extend(walk.exceeded);
             }
-            Err(WalkError::NotFound) => self.missing.push(format!("{LIB}: not found")),
-            Err(e) => self.missing.push(format!("{LIB}: {e:?}")),
+            Err(e) => self.place_missing(LIB, &e),
         }
         Ok(())
+    }
+
+    /// A place that could not be inspected. A symlink at it, or on the way to it, is there but
+    /// not followed: a gap, not an absence.
+    fn place_missing(&mut self, place: &str, e: &WalkError) {
+        match e {
+            WalkError::NotFound => self.missing.push(format!("{place}: not found")),
+            WalkError::LinkNotFollowed { at } => {
+                self.found += 1;
+                self.missing
+                    .push(format!("{}: a symlink, not followed", at.display()));
+            }
+            other => {
+                self.found += 1;
+                self.missing.push(format!("{place}: {other:?}"));
+            }
+        }
     }
 
     fn state(&self) -> CoverageState {
@@ -195,10 +226,8 @@ impl Collector<'_> {
         let mut gaps = self.missing.clone();
         for i in &self.instances {
             if let InstanceContent::NotRead { why } = &i.content {
-                if !matches!(
-                    why,
-                    NotReadReason::Directory | NotReadReason::LinkToDirectory
-                ) {
+                // A directory has no content, and a symlink is observed by its target text.
+                if !matches!(why, NotReadReason::Directory | NotReadReason::NotFollowed) {
                     gaps.push(format!("{}: {why:?}", i.path.terminal_line()));
                 }
             }
@@ -222,7 +251,6 @@ impl Collector<'_> {
             EntryType::Directory => self.placed(
                 &entry,
                 vec![],
-                None,
                 InstanceContent::NotRead {
                     why: NotReadReason::Directory,
                 },
@@ -230,28 +258,27 @@ impl Collector<'_> {
             EntryType::Special => self.placed(
                 &entry,
                 vec![],
-                None,
                 InstanceContent::NotRead {
                     why: NotReadReason::NotRegularFile,
                 },
             ),
-            EntryType::File => self.read(&entry, None),
-            EntryType::Symlink { target } => self.read(&entry, Some(target)),
+            EntryType::File => self.read(&entry),
+            EntryType::Symlink { target } => self.link(&entry, &target),
         }
     }
 
-    /// A placement that is not read: a directory, a special file, a dangling link, or a file over
-    /// the byte budget.
+    /// A placement that is not read: a directory, a special file, a symlink, or a file over the
+    /// byte budget. A symlink's `resolved` is its target text: it was not followed further.
     fn placed(
         &mut self,
         entry: &Entry,
         link_chain: Vec<LinkHop>,
-        resolved: Option<UntrustedText>,
         content: InstanceContent,
     ) -> Result<(), String> {
         let Some(stat) = entry.stat else {
             return Ok(());
         };
+        let resolved = link_chain.first().map(|hop| hop.target.clone());
         self.instances.push(FileInstance {
             id: instance_id(&self.root, &entry.rel)?,
             root: self.root.clone(),
@@ -275,21 +302,55 @@ impl Collector<'_> {
         UntrustedText::from_bytes(path)
     }
 
-    /// Reads a file, or the file a symlink leads to, within the cumulative byte budget.
-    fn read(&mut self, entry: &Entry, link_text: Option<String>) -> Result<(), String> {
+    /// A symlink: its own `lstat` and its target text, compared as such. It is never followed,
+    /// wherever it leads, so nothing outside the two places is read through it. It is stable if a
+    /// second `readlinkat` gives the same text.
+    fn link(&mut self, entry: &Entry, target: &str) -> Result<(), String> {
+        let Some(stat) = entry.stat else {
+            return Ok(());
+        };
+        let hop = LinkHop {
+            path: self.path(&entry.rel),
+            target: UntrustedText::new(target),
+            uid: stat.uid,
+            mode: stat.mode,
+        };
+        self.placed(
+            entry,
+            vec![hop],
+            InstanceContent::NotRead {
+                why: NotReadReason::NotFollowed,
+            },
+        )?;
+        (self.after_read)(&entry.rel);
+        let unchanged = matches!(
+            self.fs.entry_at(&self.root, &entry.rel).map(|e| e.kind),
+            Ok(EntryType::Symlink { target: now }) if now == target
+        );
+        if !unchanged {
+            if let Some(last) = self.instances.last_mut() {
+                last.stability = Stability::ChangedDuringRead;
+            }
+            self.errors
+                .push(format!("{}: ChangedDuringRead", entry.rel.display()));
+        }
+        Ok(())
+    }
+
+    /// Reads a regular file, without following any symlink, within the cumulative byte budget.
+    fn read(&mut self, entry: &Entry) -> Result<(), String> {
         let left = self.budget.saturating_sub(self.used);
         if left == 0 {
             self.bytes_exceeded = true;
             return self.placed(
                 entry,
                 vec![],
-                None,
                 InstanceContent::NotRead {
                     why: NotReadReason::BudgetExceeded,
                 },
             );
         }
-        let read = self.fs.read_file(
+        let read = self.fs.read_entry(
             &self.root,
             &entry.rel,
             ReadSpec {
@@ -299,52 +360,23 @@ impl Collector<'_> {
             vec![DiscoverySource::Walk],
         );
         (self.after_read)(&entry.rel);
-        let Some(mut instance) = read.instance else {
-            match (&link_text, &read.outcome) {
-                // Nothing at the link's end: a dangling link, kept with its target text.
-                (Some(target), ReadOutcome::NotFound) => {
-                    let (uid, mode) = entry.stat.as_ref().map_or((0, 0), |s| (s.uid, s.mode));
-                    let hop = LinkHop {
-                        path: self.path(&entry.rel),
-                        target: UntrustedText::new(target.clone()),
-                        uid,
-                        mode,
-                    };
-                    self.placed(
-                        entry,
-                        vec![hop],
-                        Some(UntrustedText::new(target.clone())),
-                        InstanceContent::NotRead {
-                            why: NotReadReason::Dangling,
-                        },
-                    )?;
-                    self.recheck_link(entry, link_text.as_deref());
-                }
-                (_, outcome) => self
-                    .errors
-                    .push(format!("{}: {outcome:?}", entry.rel.display())),
-            }
+        let Some(instance) = read.instance else {
+            self.errors
+                .push(format!("{}: {:?}", entry.rel.display(), read.outcome));
             return Ok(());
         };
+        // Listed as a regular file: anything else now changed during the scan.
+        if instance.content
+            == (InstanceContent::NotRead {
+                why: NotReadReason::NotRegularFile,
+            })
+        {
+            self.errors
+                .push(format!("{}: no longer a regular file", entry.rel.display()));
+            return Ok(());
+        }
         if let ReadOutcome::LimitExceeded { .. } = read.outcome {
             self.bytes_exceeded = true;
-        }
-        // A link to a directory: recorded, not entered.
-        if link_text.is_some()
-            && instance.content
-                == (InstanceContent::NotRead {
-                    why: NotReadReason::NotRegularFile,
-                })
-            && rustix::fs::FileType::from_raw_mode(instance.stat.mode)
-                == rustix::fs::FileType::Directory
-        {
-            instance.content = InstanceContent::NotRead {
-                why: NotReadReason::LinkToDirectory,
-            };
-        }
-        // A link is stable only if its target text is the same after the read.
-        if !self.link_unchanged(entry, link_text.as_deref()) {
-            instance.stability = Stability::ChangedDuringRead;
         }
         if instance.stability != Stability::NoChangeDetected {
             self.errors
@@ -376,28 +408,6 @@ impl Collector<'_> {
         self.instances.push(instance);
         Ok(())
     }
-
-    /// Whether a link (if `before` is its target text) still has that text.
-    fn link_unchanged(&self, entry: &Entry, before: Option<&str>) -> bool {
-        let Some(before) = before else {
-            return true;
-        };
-        matches!(
-            self.fs.entry_at(&self.root, &entry.rel).map(|e| e.kind),
-            Some(EntryType::Symlink { target }) if target == before
-        )
-    }
-
-    /// For a dangling link: marks it changed, and an error, if its text changed meanwhile.
-    fn recheck_link(&mut self, entry: &Entry, before: Option<&str>) {
-        if !self.link_unchanged(entry, before) {
-            if let Some(last) = self.instances.last_mut() {
-                last.stability = Stability::ChangedDuringRead;
-            }
-            self.errors
-                .push(format!("{}: ChangedDuringRead", entry.rel.display()));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -408,8 +418,8 @@ mod tests {
 
     use super::{collect_with, InstallBudgets};
 
-    /// A link retargeted between its two `readlinkat`: the file read through it is unchanged, so
-    /// only the second `readlinkat` can see it.
+    /// A link retargeted between its two `readlinkat`: its target is never read, so only the
+    /// second `readlinkat` can see the change.
     #[test]
     fn a_symlink_retargeted_during_the_read_is_unstable() {
         let d = tempfile::TempDir::new().unwrap();

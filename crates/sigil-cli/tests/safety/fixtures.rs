@@ -84,7 +84,7 @@ pub fn ollama_store(root: &Path) -> PathBuf {
 
 /// An Ollama installation (`install/`): `bin/ollama` and `lib/ollama/` hold copies of the real
 /// shared object `so` (which must never be loaded), a symlink to it, a subdirectory, a dangling
-/// link, and a link out of the install into `root/models` (which must not be followed). Returns
+/// link, and a link out of the install into `root/models`. No link is followed. Returns
 /// `install/`.
 pub fn ollama_install(root: &Path, so: &Path) -> PathBuf {
     let install = root.join("install");

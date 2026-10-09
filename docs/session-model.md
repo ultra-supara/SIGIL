@@ -405,7 +405,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Active probes | `ActiveFeature`, `ApiProbe`, `ProbeResult`, `ProbePhase` | What `--active` asked for (`request.active`) and how each probe ended. A refused connection is an observation (`NotPresent` with basis `ConnectionRefused`); a timeout is not |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
-| Reference matches | `ReferenceMatch`, `MemberResult`, `MemberKind`, `EntryKind` | One placement of the install root, or one member absent from it, compared with one release of a reference set. A placement that was not read says why (`NotReadReason`, which gained `Directory`, `LinkToDirectory`, and `Dangling` in PR-4a) |
+| Reference matches | `ReferenceMatch`, `MemberResult`, `MemberKind`, `EntryKind` | One placement of the install root, or one member absent from it, compared with one release of a reference set. A placement that was not read says why (`NotReadReason`, which gained `Directory` and `NotFollowed`, a symlink of the install, in PR-4a) |
 | B: presence | `FeatureHint`, `Signal` | A feature signal exists |
 | C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice |
 | Relations | `Relation` (`Declares`, `Candidate`, `SymbolCandidate`, `ProfileMatch`, `SearchPath`, `Spawns`), `ObligationResult`, `BindingPremise` | Dependencies, profile obligations, search paths, topology, binding |

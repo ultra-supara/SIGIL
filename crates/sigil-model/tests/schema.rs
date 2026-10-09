@@ -274,8 +274,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("NotReadReason", NotReadReason::NotRegularFile),
         sample("NotReadReason", NotReadReason::Vanished),
         sample("NotReadReason", NotReadReason::BudgetExceeded),
-        sample("NotReadReason", NotReadReason::Dangling),
-        sample("NotReadReason", NotReadReason::LinkToDirectory),
+        sample("NotReadReason", NotReadReason::NotFollowed),
         sample("NotReadReason", NotReadReason::Directory),
         sample(
             "MemberResult",

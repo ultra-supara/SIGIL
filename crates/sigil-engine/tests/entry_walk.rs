@@ -3,7 +3,7 @@
 
 use std::os::unix::fs::symlink;
 
-use sigil_engine::collect::fs::{EntryType, FsBudgets, RelPath, SafeFs};
+use sigil_engine::collect::fs::{EntryType, FsBudgets, RelPath, SafeFs, WalkError};
 use sigil_model::RootId;
 use tempfile::TempDir;
 
@@ -115,7 +115,43 @@ fn entry_at_returns_one_entry_without_following_it() {
         )
         .unwrap();
     assert_eq!(file.kind, EntryType::File);
+    assert_eq!(
+        fs.entry_at(&root, &RelPath::parse("bin/ollama").unwrap()),
+        Err(WalkError::NotFound)
+    );
+    // A link on the way is not followed.
+    assert_eq!(
+        fs.entry_at(
+            &root,
+            &RelPath::parse("lib/ollama/cuda/libcudart.so.12.8.90").unwrap()
+        ),
+        Err(WalkError::LinkNotFollowed {
+            at: RelPath::parse("lib/ollama/cuda").unwrap()
+        })
+    );
+}
+
+#[test]
+fn a_walk_does_not_start_through_a_link() {
+    let d = tree();
+    let (fs, root) = fs_for(&d, FsBudgets::default());
+    symlink("ollama", d.path().join("lib/alias")).unwrap();
+    for (start, at) in [
+        ("lib/alias", "lib/alias"),
+        ("lib/ollama/cuda", "lib/ollama/cuda"),
+        ("lib/alias/cuda_v12", "lib/alias"),
+    ] {
+        assert_eq!(
+            fs.walk_entries(&root, &RelPath::parse(start).unwrap())
+                .map(|w| w.entries.len()),
+            Err(WalkError::LinkNotFollowed {
+                at: RelPath::parse(at).unwrap()
+            }),
+            "{start}"
+        );
+    }
+    // `walk` (the model store's) still follows links inside the roots.
     assert!(fs
-        .entry_at(&root, &RelPath::parse("bin/ollama").unwrap())
-        .is_none());
+        .walk(&root, &RelPath::parse("lib/alias").unwrap())
+        .is_ok());
 }

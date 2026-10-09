@@ -16,24 +16,29 @@ separate questions:
 
 | Item | Read | Not read |
 |---|---|---|
-| `bin/ollama` | Its `lstat`, and its contents hashed as a stream (through a symlink, the target's) | — |
-| `lib/ollama/` | Every entry, at any depth, each with its `lstat`. Regular files and link targets are hashed as streams | — |
-| Symlinks | The target text (`readlinkat`), resolved or not. A link to a file inside the install is read through | A link to a directory is recorded and not entered. A link out of `PREFIX` is recorded and not read. A dangling link is recorded with its target text |
+| `bin/ollama` | Its `lstat`, and, for a regular file, its contents hashed as a stream | — |
+| `lib/ollama/` | Every entry, at any depth, each with its `lstat`. Regular files are hashed as streams | — |
+| Symlinks | Their own `lstat` and target text (`readlinkat`): that is what a release lists for a link | **Never followed**, wherever they lead: inside `lib/ollama/`, elsewhere in `PREFIX`, or outside it. A link to a directory is not entered, and the file a link names is not opened through it |
 | Anything else under `PREFIX` | — | Never opened (`bin/` other than `ollama`, `share/`, …) |
 
-- **Its own root.** The installation is the scan root `install`, on its own SafeFs. A link from
-  the installation into the model store, or anywhere outside `PREFIX`, leads outside every root of
-  that SafeFs: it is recorded, and the file is not read.
+- **No symlink is followed, to the places or in them.** Every directory on the way to `bin/ollama`
+  and `lib/ollama/`, and every file read, is opened with `O_NOFOLLOW`. If `bin`, `lib`, or
+  `lib/ollama` is itself a symlink, that place is not inspected and discovery says so
+  (`lib/ollama: a symlink, not followed`). So nothing outside the two places is read, even inside
+  `PREFIX`.
+- **Its own root.** The installation is the scan root `install`, on its own SafeFs, separate from
+  the model store's.
 - **The first 64 bytes** of each file give its format. An ELF file is recorded with its type and
-  architecture, and one slice. The format does not affect matching.
-- **A link is stable** only if its target text is the same before and after the read. Otherwise the
+  architecture, and one slice. The format does not affect matching. When the same bytes are also a
+  model blob, the one artifact keeps the ELF format and slice.
+- **A link is stable** only if a second `readlinkat` gives the same target text. Otherwise the
   placement is `ChangedDuringRead`, as is a file whose `fstat` changed during its read.
 - **The budgets** (`--budget`, with `--install-dir` only) are recorded in `request.budgets` with an
   `install_` prefix:
 
   | Budget | Default | What it bounds |
   |---|---|---|
-  | `install_files_discovered` | 4096 | Entries returned by the walk, of every kind |
+  | `install_files_discovered` | 4096 | Entries found: `bin/ollama`, and every entry under `lib/ollama/` of every kind |
   | `install_entries_listed` | 16384 | Directory entries read |
   | `install_bytes` | 64 GiB | Bytes read for hashing, **summed over the whole install**. Once reached, no further read begins, and a read that would cross it is abandoned |
 
@@ -98,7 +103,8 @@ path:
 | `bin/ollama` of v0.30.6, `lib/ollama/` empty | `[v0.30.6]` | `Partial` (members absent) |
 | A library replaced by any other bytes, ELF or not | none | `Partial` (`matches no reference`) |
 | `bin/ollama` of v0.30.5 and a library only v0.30.6 has | none | `Partial` (`mixed install`) |
-| A dangling link with the official target text | none (discovery `Partial`) | `Partial` (`discovery incomplete`) |
+| A link with the official target text whose target file is missing | `[v0.30.6]` (the link matches by text) | `Partial` (the file is absent) |
+| `lib/ollama` replaced by a symlink to a copy elsewhere | none (discovery `Partial`) | `Partial` (`discovery incomplete`) |
 
 The summary line says the same:
 
@@ -122,7 +128,7 @@ Both checks belong to the scope `runtime_artifacts`, which the default policy au
 | `Unavailable(NotFound)` | `PREFIX` does not exist, or has neither `bin/ollama` nor `lib/ollama/` |
 | `Unavailable(PermissionDenied)` | `PREFIX` cannot be opened |
 | `BudgetExceeded` | An `install_*` budget ran out |
-| `Partial { missing }` | One place is missing (`<place>: not found`); an entry was not read (`<path>: <reason>`: a dangling link, a link out of the install, a FIFO, …); or a directory was not fully listed. A directory, and a link to one, are not gaps |
+| `Partial { missing }` | One place is missing (`<place>: not found`), or is reached through a symlink (`<path>: a symlink, not followed`); an entry was not read (`<path>: <reason>`: a FIFO, a permission, …); or a directory was not fully listed. A directory and a symlink are not gaps: both are observed in full |
 | `Error { message }` | An entry vanished, or changed, during the scan |
 
 **`artifacts.release`** (same scope):

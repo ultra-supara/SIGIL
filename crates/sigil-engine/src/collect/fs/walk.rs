@@ -15,7 +15,7 @@ use sigil_model::{BudgetUse, RootId, StatInfo};
 
 use super::path::RelPath;
 use super::read::{stat_info, Snapshot};
-use super::resolve::End;
+use super::resolve::{End, Strict};
 use super::SafeFs;
 
 /// The result of [`SafeFs::walk`]. Every list is sorted.
@@ -118,6 +118,11 @@ pub enum WalkError {
     PermissionDenied,
     NotADirectory,
     OutsideRoots,
+    /// [`SafeFs::walk_entries`] and [`SafeFs::entry_at`] only: a component of the path, at `at`,
+    /// is a symlink, which they do not follow.
+    LinkNotFollowed {
+        at: RelPath,
+    },
     Failed(String),
 }
 
@@ -174,6 +179,9 @@ impl SafeFs {
     /// symlinks with their target text (never followed, so a link to a directory is not entered
     /// and a dangling link is kept), and specials. An entry gone between `readdir` and `lstat` is
     /// [`EntryType::Vanished`]. Each entry counts against the file budget.
+    ///
+    /// No symlink is followed to reach `dir` either: a link among its components, or `dir` itself
+    /// being a link, is [`WalkError::LinkNotFollowed`].
     pub fn walk_entries(&self, root: &RootId, dir: &RelPath) -> Result<Walk, WalkError> {
         self.walk_with(root, dir, true)
     }
@@ -182,33 +190,11 @@ impl SafeFs {
         let index = self
             .root_index(root)
             .ok_or_else(|| WalkError::Failed(format!("unknown scan root {root}")))?;
-        // A link can lead into another scan root: the directory is opened in the root the path
-        // resolved to, while the walk keeps reporting paths under `dir` in `root`.
-        let start = match self.resolve(index, dir).end {
-            End::Dir { root: at, fd, .. } => self.dir_fd(at, fd),
-            End::Entry {
-                root: at,
-                parent,
-                name,
-                lstat,
-                ..
-            } if FileType::from_raw_mode(lstat.st_mode) == FileType::Directory => {
-                let parent = parent
-                    .as_ref()
-                    .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
-                self.open_dir(parent, &name)
-            }
-            End::Entry { .. } | End::NotADirectory => return Err(WalkError::NotADirectory),
-            End::NotFound => return Err(WalkError::NotFound),
-            End::OutsideRoots { .. } => return Err(WalkError::OutsideRoots),
-            End::PermissionDenied => return Err(WalkError::PermissionDenied),
-            End::TooManyHops => return Err(WalkError::Failed("too many symlink hops".into())),
-            End::Failed(m) => return Err(WalkError::Failed(m)),
-        }
-        .map_err(|e| match e {
-            Errno::ACCESS | Errno::PERM => WalkError::PermissionDenied,
-            other => WalkError::Failed(other.to_string()),
-        })?;
+        let start = if entries {
+            self.strict_dir(index, dir)?
+        } else {
+            self.start_dir(index, dir)?
+        };
         let mut walker = Walker {
             fs: self,
             root: index,
@@ -232,6 +218,69 @@ impl SafeFs {
         Ok(walker.finish())
     }
 
+    /// The start of `walk`: `dir` resolved with symlinks followed. A link can lead into another
+    /// scan root: the directory is opened in the root the path resolved to, while the walk keeps
+    /// reporting paths under `dir` in `root`.
+    fn start_dir(&self, index: usize, dir: &RelPath) -> Result<OwnedFd, WalkError> {
+        match self.resolve(index, dir).end {
+            End::Dir { root: at, fd, .. } => self.dir_fd(at, fd),
+            End::Entry {
+                root: at,
+                parent,
+                name,
+                lstat,
+                ..
+            } if FileType::from_raw_mode(lstat.st_mode) == FileType::Directory => {
+                let parent = parent
+                    .as_ref()
+                    .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
+                self.open_dir(parent, &name)
+            }
+            End::Entry { .. } | End::NotADirectory => return Err(WalkError::NotADirectory),
+            End::NotFound => return Err(WalkError::NotFound),
+            End::OutsideRoots { .. } => return Err(WalkError::OutsideRoots),
+            End::PermissionDenied => return Err(WalkError::PermissionDenied),
+            End::TooManyHops => return Err(WalkError::Failed("too many symlink hops".into())),
+            End::Failed(m) => return Err(WalkError::Failed(m)),
+        }
+        .map_err(|e| match e {
+            Errno::ACCESS | Errno::PERM => WalkError::PermissionDenied,
+            other => WalkError::Failed(other.to_string()),
+        })
+    }
+
+    /// The start of `walk_entries`: `dir` resolved without following any symlink.
+    fn strict_dir(&self, index: usize, dir: &RelPath) -> Result<OwnedFd, WalkError> {
+        let opened = match self.resolve_strict(index, dir) {
+            Strict::Root => self.dir_fd(index, None),
+            Strict::Entry {
+                parent,
+                name,
+                lstat,
+            } => match FileType::from_raw_mode(lstat.st_mode) {
+                FileType::Directory => {
+                    let parent = parent
+                        .as_ref()
+                        .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
+                    self.open_dir(parent, &name)
+                }
+                FileType::Symlink => return Err(WalkError::LinkNotFollowed { at: dir.clone() }),
+                _ => return Err(WalkError::NotADirectory),
+            },
+            Strict::Link { at } => return Err(WalkError::LinkNotFollowed { at }),
+            Strict::NotFound => return Err(WalkError::NotFound),
+            Strict::PermissionDenied => return Err(WalkError::PermissionDenied),
+            Strict::NotADirectory => return Err(WalkError::NotADirectory),
+            Strict::Failed(m) => return Err(WalkError::Failed(m)),
+        };
+        opened.map_err(|e| match e {
+            Errno::ACCESS | Errno::PERM => WalkError::PermissionDenied,
+            // It turned into a link after its `lstat`.
+            Errno::LOOP => WalkError::LinkNotFollowed { at: dir.clone() },
+            other => WalkError::Failed(other.to_string()),
+        })
+    }
+
     /// An fd on a directory reached as a whole (`None` is the root's own fd).
     pub(crate) fn dir_fd(&self, root: usize, fd: Option<OwnedFd>) -> Result<OwnedFd, Errno> {
         match fd {
@@ -245,7 +294,7 @@ impl SafeFs {
     }
 
     /// Counts one more discovered file; `false` once the budget is exhausted.
-    fn take_file(&self) -> bool {
+    pub(crate) fn take_file(&self) -> bool {
         let seen = self.files_seen.get();
         if seen >= self.budgets.max_files {
             return false;

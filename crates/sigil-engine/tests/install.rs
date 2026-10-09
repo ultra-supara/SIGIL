@@ -4,6 +4,7 @@
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
 use sigil_engine::collect::install::{collect, InstallBudgets, InstallFacts};
 use sigil_model::{CoverageState, EntryKind, FileInstance, Format, InstanceContent, NotReadReason};
 use tempfile::TempDir;
@@ -104,42 +105,70 @@ fn bin_ollama_and_every_entry_under_lib_ollama_are_placements() {
         .all(|a| matches!(a.format, Format::Elf { .. }) == (a.slices.len() == 1)));
 }
 
-#[test]
-fn a_dangling_link_keeps_its_target_text_and_opens_discovery() {
-    let d = install();
-    symlink("missing.so", d.path().join("lib/ollama/dangling.so")).unwrap();
-    let f = run(d.path(), InstallBudgets::default());
-    let i = find(&f, "lib/ollama/dangling.so");
-    assert_eq!(i.link_chain[0].target.as_str(), Some("missing.so"));
-    assert_eq!(
-        i.content,
-        InstanceContent::NotRead {
-            why: NotReadReason::Dangling
-        }
-    );
-    assert!(
-        matches!(&f.discovery.state, CoverageState::Partial { missing } if missing.iter().any(|m| m.contains("dangling.so"))),
-        "{:?}",
-        f.discovery.state
-    );
+/// `PREFIX/private/credentials.txt`: inside the install, outside both places. Nothing may read it.
+const SECRET: &[u8] = b"credentials outside bin/ollama and lib/ollama";
+
+fn with_private(d: &TempDir) {
+    std::fs::create_dir_all(d.path().join("private")).unwrap();
+    std::fs::write(d.path().join("private/credentials.txt"), SECRET).unwrap();
+}
+
+/// Nothing was read under `private/`: no placement there, and no artifact with its bytes.
+fn private_untouched(f: &InstallFacts) {
+    let secret = format!("sha256:{:x}", Sha256::digest(SECRET));
+    assert!(f.artifacts.iter().all(|a| a.id.as_str() != secret));
+    assert!(f
+        .instances
+        .iter()
+        .all(|i| !member(f, i).starts_with("private")));
 }
 
 #[test]
-fn a_link_to_a_directory_is_recorded_not_entered_and_is_not_a_gap() {
+fn links_are_their_target_text_and_never_followed() {
     let d = install();
-    symlink("cuda_v12", d.path().join("lib/ollama/cuda")).unwrap();
+    with_private(&d);
+    let models = TempDir::new().unwrap();
+    std::fs::write(models.path().join("blob"), b"x").unwrap();
+    let lib = d.path().join("lib/ollama");
+    // The review's path B: a link inside the install, to a file outside both places.
+    symlink("../../private/credentials.txt", lib.join("unexpected.so")).unwrap();
+    symlink("missing.so", lib.join("dangling.so")).unwrap();
+    symlink("cuda_v12", lib.join("cuda")).unwrap();
+    symlink(models.path().join("blob"), lib.join("libout.so")).unwrap();
     let f = run(d.path(), InstallBudgets::default());
-    let i = find(&f, "lib/ollama/cuda");
-    assert_eq!(
-        i.content,
-        InstanceContent::NotRead {
-            why: NotReadReason::LinkToDirectory
-        }
-    );
+    for (path, target) in [
+        ("lib/ollama/unexpected.so", "../../private/credentials.txt"),
+        ("lib/ollama/dangling.so", "missing.so"),
+        ("lib/ollama/cuda", "cuda_v12"),
+        ("lib/ollama/libggml.so.0", "libggml.so.0.13.1"),
+    ] {
+        let i = find(&f, path);
+        assert_eq!(i.entry_kind(), EntryKind::Symlink, "{path}");
+        assert_eq!(i.link_chain.len(), 1, "{path}");
+        assert_eq!(i.link_chain[0].target.as_str(), Some(target), "{path}");
+        assert_eq!(
+            i.content,
+            InstanceContent::NotRead {
+                why: NotReadReason::NotFollowed
+            },
+            "{path}"
+        );
+        // Not followed: `resolved` is the target text itself.
+        assert_eq!(
+            i.resolved.as_ref().and_then(|r| r.as_str()),
+            Some(target),
+            "{path}"
+        );
+    }
+    let out = find(&f, "lib/ollama/libout.so");
+    assert_eq!(out.content, find(&f, "lib/ollama/cuda").content);
+    // A link to a directory is not entered.
     assert!(f
         .instances
         .iter()
         .all(|i| !member(&f, i).starts_with("lib/ollama/cuda/")));
+    private_untouched(&f);
+    // A link is observed in full by its target text: not a gap.
     assert!(
         matches!(f.discovery.state, CoverageState::Complete),
         "{:?}",
@@ -148,24 +177,109 @@ fn a_link_to_a_directory_is_recorded_not_entered_and_is_not_a_gap() {
 }
 
 #[test]
-fn a_link_out_of_the_install_root_is_not_read() {
+fn a_symlink_at_or_on_the_way_to_a_place_is_not_followed() {
+    // The review's path A: `lib/ollama` itself is a link to a directory outside both places.
     let d = install();
-    let models = TempDir::new().unwrap();
-    std::fs::write(models.path().join("blob"), b"x").unwrap();
-    symlink(
-        models.path().join("blob"),
-        d.path().join("lib/ollama/libout.so"),
-    )
-    .unwrap();
+    with_private(&d);
+    std::fs::remove_dir_all(d.path().join("lib/ollama")).unwrap();
+    symlink("../private", d.path().join("lib/ollama")).unwrap();
     let f = run(d.path(), InstallBudgets::default());
-    let i = find(&f, "lib/ollama/libout.so");
+    private_untouched(&f);
+    assert!(
+        matches!(&f.discovery.state, CoverageState::Partial { missing } if missing.iter().any(|m| m == "lib/ollama: a symlink, not followed")),
+        "{:?}",
+        f.discovery.state
+    );
+
+    // A link on the way: `lib` and `bin` are links.
+    let d = install();
+    with_private(&d);
+    std::fs::create_dir_all(d.path().join("private/ollama")).unwrap();
+    std::fs::write(d.path().join("private/ollama/libx.so"), SECRET).unwrap();
+    std::fs::write(d.path().join("private/ollama-bin"), SECRET).unwrap();
+    std::fs::remove_dir_all(d.path().join("lib")).unwrap();
+    std::fs::remove_dir_all(d.path().join("bin")).unwrap();
+    symlink("private", d.path().join("lib")).unwrap();
+    symlink("private", d.path().join("bin")).unwrap();
+    let f = run(d.path(), InstallBudgets::default());
+    private_untouched(&f);
+    assert!(f.instances.is_empty(), "{:?}", f.instances);
+    let CoverageState::Partial { missing } = &f.discovery.state else {
+        panic!("{:?}", f.discovery.state);
+    };
     assert_eq!(
-        i.content,
+        missing,
+        &[
+            "bin: a symlink, not followed",
+            "lib: a symlink, not followed"
+        ]
+    );
+
+    // `bin/ollama` itself a link: a symlink placement, its target not read.
+    let d = install();
+    with_private(&d);
+    std::fs::remove_file(d.path().join("bin/ollama")).unwrap();
+    symlink("../private/credentials.txt", d.path().join("bin/ollama")).unwrap();
+    let f = run(d.path(), InstallBudgets::default());
+    private_untouched(&f);
+    assert_eq!(find(&f, "bin/ollama").entry_kind(), EntryKind::Symlink);
+}
+
+#[test]
+fn bin_ollama_counts_against_the_file_budget() {
+    // One entry under lib/ollama and bin/ollama: two entries, over a budget of one.
+    let d = TempDir::new().unwrap();
+    std::fs::create_dir_all(d.path().join("bin")).unwrap();
+    std::fs::create_dir_all(d.path().join("lib/ollama")).unwrap();
+    std::fs::write(d.path().join("bin/ollama"), elf(2)).unwrap();
+    std::fs::write(d.path().join("lib/ollama/libggml.so"), elf(3)).unwrap();
+    let budget = |files| InstallBudgets {
+        files,
+        ..InstallBudgets::default()
+    };
+    let f = run(d.path(), budget(1));
+    assert!(
+        matches!(&f.discovery.state, CoverageState::BudgetExceeded { budget, .. } if budget == "install_files_discovered"),
+        "{:?}",
+        f.discovery.state
+    );
+    assert_eq!(f.instances.len(), 1);
+    let f = run(d.path(), budget(2));
+    assert!(
+        matches!(f.discovery.state, CoverageState::Complete),
+        "{:?}",
+        f.discovery.state
+    );
+    let f = run(d.path(), budget(0));
+    assert!(f.instances.is_empty());
+    assert!(matches!(
+        f.discovery.state,
+        CoverageState::BudgetExceeded { .. }
+    ));
+}
+
+#[test]
+fn a_symlink_keeps_its_kind_and_text_when_the_byte_budget_is_spent() {
+    let d = install();
+    let f = run(
+        d.path(),
+        InstallBudgets {
+            bytes: 0,
+            ..InstallBudgets::default()
+        },
+    );
+    let link = find(&f, "lib/ollama/libggml.so.0");
+    assert_eq!(link.entry_kind(), EntryKind::Symlink);
+    assert_eq!(
+        link.link_chain[0].target.as_str(),
+        Some("libggml.so.0.13.1")
+    );
+    assert_eq!(
+        find(&f, "bin/ollama").content,
         InstanceContent::NotRead {
-            why: NotReadReason::OutsideScanRoots
+            why: NotReadReason::BudgetExceeded
         }
     );
-    assert!(matches!(f.discovery.state, CoverageState::Partial { .. }));
 }
 
 #[test]
@@ -173,12 +287,12 @@ fn install_bytes_is_cumulative() {
     let d = install();
     std::fs::write(d.path().join("lib/ollama/big1"), vec![1u8; 100]).unwrap();
     std::fs::write(d.path().join("lib/ollama/big2"), vec![2u8; 100]).unwrap();
-    // Every read: bin/ollama 64, cudart 7, big1 100, big2 100, libggml 64, and the link's target
-    // (libggml again) 64 = 399. Each file fits within 349; all of them together do not.
+    // Every read: bin/ollama 64, cudart 7, big1 100, big2 100, and libggml 64 = 335 (the link is
+    // not read). Each file fits within 300; all of them together do not.
     let f = run(
         d.path(),
         InstallBudgets {
-            bytes: 349,
+            bytes: 300,
             ..InstallBudgets::default()
         },
     );
@@ -187,7 +301,7 @@ fn install_bytes_is_cumulative() {
         "{:?}",
         f.discovery.state
     );
-    assert!(f.bytes_read <= 349);
+    assert!(f.bytes_read <= 300);
     let unread = f
         .instances
         .iter()

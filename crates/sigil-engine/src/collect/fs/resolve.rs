@@ -53,6 +53,41 @@ pub(crate) enum End {
     Failed(String),
 }
 
+/// The result of resolving a path without following any symlink ([`SafeFs::resolve_strict`]).
+pub(crate) enum Strict {
+    /// The last component, by its own `lstat` (a symlink included, not followed): `parent` is the
+    /// fd of the directory holding it (`None` for the root's own fd).
+    Entry {
+        parent: Option<OwnedFd>,
+        name: String,
+        lstat: Stat,
+    },
+    /// The path is the root itself.
+    Root,
+    /// A component before the last is a symlink, at `at`: it is not followed.
+    Link {
+        at: RelPath,
+    },
+    NotFound,
+    PermissionDenied,
+    /// A component before the last is not a directory.
+    NotADirectory,
+    Failed(String),
+}
+
+impl Strict {
+    fn from_errno(e: Errno) -> Strict {
+        match e {
+            Errno::NOENT => Strict::NotFound,
+            Errno::ACCESS | Errno::PERM => Strict::PermissionDenied,
+            Errno::NOTDIR => Strict::NotADirectory,
+            // `O_NOFOLLOW` / `RESOLVE_NO_SYMLINKS` met a link that the `lstat` just before did not.
+            Errno::LOOP => Strict::Failed("a component changed into a symlink".into()),
+            other => Strict::Failed(other.to_string()),
+        }
+    }
+}
+
 impl End {
     fn from_errno(e: Errno) -> End {
         match e {
@@ -92,6 +127,50 @@ impl SafeFs {
             }
         }
         rustix::fs::openat(parent, name, flags, Mode::empty())
+    }
+
+    /// Resolves `rel` in root `root` without following any symlink (PR-4a, the install): every
+    /// directory on the way is `lstat`ed and opened with `O_NOFOLLOW`, and the last component is
+    /// only `lstat`ed. Nothing outside the path itself is opened or examined.
+    pub(crate) fn resolve_strict(&self, root: usize, rel: &RelPath) -> Strict {
+        let parts = rel.components();
+        let Some((last, dirs)) = parts.split_last() else {
+            return Strict::Root;
+        };
+        let mut stack: Vec<(String, OwnedFd)> = vec![];
+        for name in dirs {
+            if name == "." || name == ".." {
+                return Strict::Failed(format!("{name} in a path that is resolved strictly"));
+            }
+            let parent = parent_fd(self, root, &stack);
+            let lstat = match rustix::fs::statat(parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(st) => st,
+                Err(e) => return Strict::from_errno(e),
+            };
+            match FileType::from_raw_mode(lstat.st_mode) {
+                FileType::Symlink => {
+                    let mut at: Vec<String> = stack.iter().map(|(n, _)| n.clone()).collect();
+                    at.push(name.clone());
+                    return Strict::Link {
+                        at: RelPath::from_components(at),
+                    };
+                }
+                FileType::Directory => match self.open_dir(parent, name) {
+                    Ok(fd) => stack.push((name.clone(), fd)),
+                    Err(e) => return Strict::from_errno(e),
+                },
+                _ => return Strict::NotADirectory,
+            }
+        }
+        let parent = parent_fd(self, root, &stack);
+        match rustix::fs::statat(parent, last.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(lstat) => Strict::Entry {
+                parent: stack.pop().map(|(_, fd)| fd),
+                name: last.clone(),
+                lstat,
+            },
+            Err(e) => Strict::from_errno(e),
+        }
     }
 
     /// Resolves `rel` in root `root`, following and recording symlinks (plan §4.6.2).
@@ -373,5 +452,46 @@ mod tests {
             "not a directory"
         );
         assert_eq!(end(&f.fs.resolve(0, &RelPath::root())).0, "dir 0:");
+    }
+
+    /// `resolve_strict`'s end, shortly.
+    fn strict(f: &Fixture, path: &str) -> String {
+        let path = if path.is_empty() {
+            RelPath::root()
+        } else {
+            rel(path)
+        };
+        match f.fs.resolve_strict(0, &path) {
+            Strict::Entry { name, lstat, .. } => {
+                format!("{name} {:?}", FileType::from_raw_mode(lstat.st_mode))
+            }
+            Strict::Root => "root".into(),
+            Strict::Link { at } => format!("link at {}", at.display()),
+            Strict::NotFound => "not found".into(),
+            Strict::PermissionDenied => "permission denied".into(),
+            Strict::NotADirectory => "not a directory".into(),
+            Strict::Failed(m) => m,
+        }
+    }
+
+    #[test]
+    fn strict_resolution_follows_no_link() {
+        let f = fixture();
+        fs::create_dir_all(f.a.path().join("private")).unwrap();
+        fs::write(f.a.path().join("private/secret"), b"s").unwrap();
+        symlink("../private", f.a.path().join("lib/linked")).unwrap();
+        symlink("ollama", f.a.path().join("lib/alias")).unwrap();
+        assert_eq!(
+            strict(&f, "lib/ollama/libggml.so"),
+            "libggml.so RegularFile"
+        );
+        // A link as the last component is `lstat`ed, not followed.
+        assert_eq!(strict(&f, "lib/linked"), "linked Symlink");
+        // A link before the last component ends the resolution where it is.
+        assert_eq!(strict(&f, "lib/linked/secret"), "link at lib/linked");
+        assert_eq!(strict(&f, "lib/alias/libggml.so"), "link at lib/alias");
+        assert_eq!(strict(&f, "lib/nope/x"), "not found");
+        assert_eq!(strict(&f, "lib/ollama/libggml.so/x"), "not a directory");
+        assert_eq!(strict(&f, ""), "root");
     }
 }

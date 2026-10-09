@@ -47,7 +47,7 @@ cargo run -p sigil-cli -- rules
 ## Options
 
 - `--models-dir <dir>`: the model store (default `$OLLAMA_MODELS`, else `~/.ollama/models`). `--model <name>` inventories one model.
-- `--install-dir <prefix>`: the installation, for example `/usr/local` for the official install script. SIGIL reads `bin/ollama` and `lib/ollama/` under it, and nothing else, and compares each file with the release manifests of Ollama v0.30.5 to v0.30.7 embedded in SIGIL. That is a comparison with the official archives' contents, not a signature check ([runtime artifacts](runtime-artifacts.md)). Without it, the installation is not inspected.
+- `--install-dir <prefix>`: the installation, for example `/usr/local` for the official install script. SIGIL reads `bin/ollama` and `lib/ollama/` under it, and nothing else: it follows no symlink there. It compares each file with the release manifests of Ollama v0.30.5 to v0.30.7 embedded in SIGIL. That is a comparison with the official archives' contents, not a signature check ([runtime artifacts](runtime-artifacts.md)). Without it, the installation is not inspected.
 - `--policy <file>`: a policy (TOML, [policy](policy.md)) that sets the audit scope, rule actions with reasons and expiry, and accepted assumptions. Without it, the built-in policy applies.
 - `--policy-time now|RFC3339`: the instant at which policy expiry is judged (default `now`).
 - `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`, `manifest_bytes`). Budgets that run out leave the result incomplete, never silently clean. With `--install-dir`, the installation has its own: `install_files_discovered`, `install_entries_listed`, and `install_bytes` (summed over the whole installation, default 64 GiB).

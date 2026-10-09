@@ -70,8 +70,7 @@ fn a_session_without_reference_matches_reads_and_writes_without_them() {
 #[test]
 fn the_new_not_read_reasons_are_json_names() {
     for (reason, name) in [
-        (NotReadReason::Dangling, "\"Dangling\""),
-        (NotReadReason::LinkToDirectory, "\"LinkToDirectory\""),
+        (NotReadReason::NotFollowed, "\"NotFollowed\""),
         (NotReadReason::Directory, "\"Directory\""),
     ] {
         assert_eq!(serde_json::to_string(&reason).unwrap(), name);
