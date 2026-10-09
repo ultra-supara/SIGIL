@@ -12,7 +12,7 @@ fn ids<T: std::fmt::Display>(items: &[T]) -> Vec<String> {
 fn the_default_policy_requires_only_implemented_scopes() {
     let policy = Policy::builtin_default().unwrap();
     assert_eq!(policy.name, "default");
-    let (audit, required) = policy.scope(Mode::Static);
+    let (audit, required) = policy.scope(Mode::Static, false);
     assert_eq!(ids(&audit), ["model_store"]);
     assert_eq!(
         ids(&required),
@@ -22,7 +22,7 @@ fn the_default_policy_requires_only_implemented_scopes() {
             "model_store.license"
         ]
     );
-    let (audit, required) = policy.scope(Mode::Observe);
+    let (audit, required) = policy.scope(Mode::Observe, false);
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert_eq!(
         ids(&required),
@@ -78,7 +78,7 @@ reason    = "The RPC backend is outside the internal standard"
 #[test]
 fn the_plan_example_loads() {
     let policy = Policy::load(PLAN_EXAMPLE).unwrap();
-    let (_, required) = policy.scope(Mode::Static);
+    let (_, required) = policy.scope(Mode::Static, false);
     assert_eq!(
         ids(&required),
         [
@@ -124,7 +124,7 @@ principals = ["root", "uid:1000"]
 extra_groups = ["gid:27"]
 "#;
     let policy = Policy::load(text).unwrap();
-    let (_, required) = policy.scope(Mode::Static);
+    let (_, required) = policy.scope(Mode::Static, false);
     assert_eq!(required.last().unwrap().as_str(), "exposure.binds");
     assert_eq!(policy.open_questions.treatment, OqTreatment::Warn);
     assert_eq!(ids(&policy.accept), ["A-3"]);
@@ -290,4 +290,27 @@ fn the_documented_example_loads() {
     let policy = Policy::load(&block).unwrap();
     assert_eq!(policy.rules.len(), 2);
     assert_eq!(policy.deny.len(), 1);
+}
+
+#[test]
+fn an_active_feature_adds_the_active_scopes() {
+    let policy = Policy::builtin_default().unwrap();
+    assert_eq!(ids(&policy.active_audit), ["runtime_api"]);
+    let (audit, required) = policy.scope(Mode::Static, true);
+    assert_eq!(ids(&audit), ["model_store", "runtime_api"]);
+    assert_eq!(required.last().unwrap().as_str(), "runtime_api.version");
+    let (audit, _) = policy.scope(Mode::Observe, true);
+    assert_eq!(ids(&audit), ["model_store", "exposure", "runtime_api"]);
+    // Without an active feature, the active scopes are not requested.
+    let (audit, required) = policy.scope(Mode::Observe, false);
+    assert_eq!(ids(&audit), ["model_store", "exposure"]);
+    assert!(!ids(&required).contains(&"runtime_api.version".to_string()));
+    // A policy may leave them out, and must name known scopes.
+    let base = "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\naudit = [\"model_store\"]\n";
+    let none = Policy::load(&format!("{base}active_audit = []\n")).unwrap();
+    assert_eq!(ids(&none.scope(Mode::Static, true).0), ["model_store"]);
+    assert!(matches!(
+        Policy::load(&format!("{base}active_audit = [\"nope\"]\n")),
+        Err(PolicyError::UnknownScope(s)) if s == "nope"
+    ));
 }

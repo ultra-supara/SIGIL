@@ -8,6 +8,12 @@
 //! - **Records that describe the same thing agree.** A check result agrees with the obligation
 //!   result it decides; a `ProfileMismatch` names obligations that failed; a mapping listed in
 //!   load facts is one recorded for its process.
+//! - **Active probes match the request.** Each requested target is a canonical IP address, is
+//!   loopback unless remote targets were allowed, and has exactly one probe; each probe was
+//!   requested and is identified by its target. `runtime_api.version` coverage is scoped to a
+//!   probe, every probe has it, and it closes the check only as the probe's outcome supports:
+//!   `Complete` on a 200 answer with a version, `NotPresent` on a refused connection, never
+//!   `OutOfScope`. A refused connection is evidence for that check only, citing refused probes.
 //! - **Claims do not exceed their evidence.** A condition names the record that decides it and is
 //!   `Met` or `NotMet` only as that record settles (plan §4.4.9, [`Session::settles`]); a finding
 //!   has every condition established; an identity status is not stronger than its assertions;
@@ -22,11 +28,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::access::PrincipalClaim;
 use crate::artifact::{InstanceContent, ProcessExe, ProcessRef};
 use crate::code::{ArgValue, CallTarget, CheckResult, CheckUnknown, CodeFacts};
-use crate::coverage::CoverageState;
+use crate::coverage::{AbsenceBasis, CoverageState};
 use crate::evidence::{
     Basis, ConfigRef, EvidenceRef, Loc, Observability, ProfileRuleRef, Ref, Support, Tri,
     UnknownReason,
@@ -37,11 +44,12 @@ use crate::finding::{
 };
 use crate::id::{
     ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ListenerId,
-    ModelId, ObligationId, OpenQuestionId, PremiseId, ProcessRole, ProfileRef, SliceId,
+    ModelId, ObligationId, OpenQuestionId, PremiseId, ProbeId, ProcessRole, ProfileRef, SliceId,
 };
 use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
 use crate::model::{digest_hex, BlobLookup};
+use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
 use crate::relation::{
     BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
 };
@@ -72,6 +80,34 @@ pub enum ValidationError {
     LicenseInconsistent { model: ModelId },
     /// A listener's address is not an IP address.
     ListenerAddressInvalid { listener: ListenerId },
+    /// A requested active target is not the canonical text of a specified IP address with a
+    /// non-zero port.
+    ActiveTargetInvalid { target: String },
+    /// A requested non-loopback target without `allow_remote`.
+    RemoteNotAllowed { target: String },
+    /// A probe's address is not a valid target, or its ID is not `probe:api/<address>:<port>`.
+    ProbeTargetInvalid { probe: ProbeId },
+    /// A probe that no requested feature asked for.
+    ProbeNotRequested { probe: ProbeId },
+    /// A requested probe with no record.
+    ProbeMissing { probe: ProbeId },
+    /// Coverage of `runtime_api.version` on a probe closes the check, but the probe's outcome
+    /// does not support that: `Complete` needs a 200 answer with a version, `NotPresent` a
+    /// refused connection, and a requested probe is never out of scope.
+    CoverageContradictsProbe {
+        check: CheckId,
+        probe: ProbeId,
+        why: &'static str,
+    },
+    /// An absence resting on a refused connection whose evidence names no probe, or a probe that
+    /// was not refused.
+    RefusalNotObserved { check: CheckId },
+    /// `runtime_api.version` coverage on something other than a probe: it is about one probe.
+    ScopeNotAProbe { check: CheckId },
+    /// A probe without its `runtime_api.version` coverage.
+    ProbeUncovered { probe: ProbeId },
+    /// An absence on a refused connection for a check other than `runtime_api.version`.
+    RefusalForAnotherCheck { check: CheckId },
     /// A mapping recorded under a process it does not belong to.
     MappingOfAnotherProcess { pid: u32, at: String },
     /// An identity status stronger than the assertions support.
@@ -181,6 +217,34 @@ impl fmt::Display for ValidationError {
             ListenerAddressInvalid { listener } => {
                 write!(f, "listeners[{listener}]: the address must be an IPv4 or IPv6 address")
             }
+            ActiveTargetInvalid { target } => {
+                write!(f, "request.active: target {target:?} must be the canonical text of a specified IP address and a non-zero port")
+            }
+            RemoteNotAllowed { target } => {
+                write!(f, "request.active: target {target} is not loopback, so it needs allow_remote")
+            }
+            ProbeTargetInvalid { probe } => {
+                write!(f, "probes[{probe}]: the address must be a valid target and the ID probe:api/<address>:<port>")
+            }
+            ProbeNotRequested { probe } => write!(f, "probes[{probe}]: no requested feature asked for it"),
+            ProbeMissing { probe } => write!(f, "request.active: the requested probe {probe} has no record"),
+            CoverageContradictsProbe { check, probe, why } => {
+                write!(f, "coverage[{check}] on {probe}: {why}")
+            }
+            ScopeNotAProbe { check } => {
+                write!(f, "coverage[{check}]: it is about one probe, so it must be scoped to a probe")
+            }
+            ProbeUncovered { probe } => {
+                write!(f, "probes[{probe}]: no runtime_api.version coverage")
+            }
+            RefusalForAnotherCheck { check } => write!(
+                f,
+                "coverage[{check}]: a refused connection is evidence for runtime_api.version only"
+            ),
+            RefusalNotObserved { check } => write!(
+                f,
+                "coverage[{check}]: an absence on a refused connection must cite probes, each refused"
+            ),
             LicenseInconsistent { model } => {
                 write!(f, "models[{model}]: the license must be the text read from the license layer's blob")
             }
@@ -286,6 +350,7 @@ struct Validator<'a> {
     instances: BTreeSet<&'a str>,
     models: BTreeSet<&'a str>,
     listeners: BTreeSet<&'a str>,
+    probes: BTreeSet<&'a str>,
     values: BTreeSet<&'a str>,
     access: BTreeSet<&'a str>,
     assumptions: BTreeSet<&'a str>,
@@ -293,6 +358,14 @@ struct Validator<'a> {
     refsets: BTreeSet<&'a str>,
     processes: Vec<&'a ProcessRef>,
     code: BTreeMap<&'a str, CodeIndex<'a>>,
+}
+
+/// The target `address:port` names, when `address` is the canonical text of a specified IP
+/// address and `port` is not zero.
+fn probe_target(address: &str, port: u16) -> Option<SocketAddr> {
+    let ip = address.parse::<IpAddr>().ok()?;
+    (ip.to_string() == address && !ip.is_unspecified() && port != 0)
+        .then(|| SocketAddr::new(ip, port))
 }
 
 /// Collects IDs, reporting duplicates.
@@ -360,6 +433,7 @@ impl<'a> Validator<'a> {
             "listener",
             s.listeners.iter().map(|l| l.id.as_str()),
         );
+        let probes = unique(&mut errors, "probe", s.probes.iter().map(|p| p.id.as_str()));
         let values = unique(&mut errors, "value", s.values.iter().map(|v| v.id.as_str()));
         let access = unique(
             &mut errors,
@@ -425,6 +499,7 @@ impl<'a> Validator<'a> {
             instances,
             models,
             listeners,
+            probes,
             values,
             access,
             assumptions,
@@ -437,6 +512,15 @@ impl<'a> Validator<'a> {
 
     /// The keys other records are referred to by, or that must have one entry each.
     fn unique_record_keys(s: &Session, errors: &mut Vec<ValidationError>) {
+        unique_keys(
+            errors,
+            "active feature",
+            s.request.active.iter().map(|feature| match feature {
+                ActiveFeature::ApiProbe { address, port, .. } => {
+                    format!("api-probe {address}:{port}")
+                }
+            }),
+        );
         unique_keys(
             errors,
             "knowledge",
@@ -522,6 +606,8 @@ impl<'a> Validator<'a> {
         self.models();
         self.processes();
         self.listeners();
+        self.probes();
+        self.probe_coverage();
         for value in &s.values {
             let at = format!("values[{}]", value.id);
             self.origin(&value.origin, &at);
@@ -650,6 +736,12 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn probe(&mut self, id: &ProbeId, at: &str) {
+        if !self.probes.contains(id.as_str()) {
+            self.dangling("probe", id.as_str(), at);
+        }
+    }
+
     fn model(&mut self, id: &ModelId, at: &str) {
         if !self.models.contains(id.as_str()) {
             self.dangling("model", id.as_str(), at);
@@ -742,6 +834,7 @@ impl<'a> Validator<'a> {
             EvidenceRef::ProfileRule(rule) => self.profile_rule(rule, at),
             EvidenceRef::Model { model } => self.model(model, at),
             EvidenceRef::Listener { listener } => self.listener(listener, at),
+            EvidenceRef::Probe { probe } => self.probe(probe, at),
         }
     }
 
@@ -759,6 +852,7 @@ impl<'a> Validator<'a> {
             Ref::Process(p) => self.process(p, at),
             Ref::Model(m) => self.model(m, at),
             Ref::Listener(l) => self.listener(l, at),
+            Ref::Probe(p) => self.probe(p, at),
         }
     }
 
@@ -891,6 +985,146 @@ impl<'a> Validator<'a> {
             }
             if let crate::listener::ListenerOwner::Process { process } = &listener.owner {
                 self.process(process, &at);
+            }
+        }
+    }
+
+    /// Each requested target is valid, loopback unless allowed remote, and probed exactly once;
+    /// each probe was requested and is identified by its target.
+    fn probes(&mut self) {
+        let s = self.s;
+        let mut requested = BTreeSet::new();
+        for feature in &s.request.active {
+            let ActiveFeature::ApiProbe {
+                address,
+                port,
+                allow_remote,
+            } = feature;
+            let Some(target) = probe_target(address, *port) else {
+                self.errors.push(ValidationError::ActiveTargetInvalid {
+                    target: format!("{address}:{port}"),
+                });
+                continue;
+            };
+            if !allow_remote && !is_loopback(target.ip()) {
+                self.errors.push(ValidationError::RemoteNotAllowed {
+                    target: target.to_string(),
+                });
+            }
+            requested.insert(ProbeId::api(target));
+        }
+        for probe in &s.probes {
+            let identified = probe_target(&probe.address, probe.port)
+                .is_some_and(|target| ProbeId::api(target) == probe.id);
+            if !identified {
+                self.errors.push(ValidationError::ProbeTargetInvalid {
+                    probe: probe.id.clone(),
+                });
+            } else if !requested.contains(&probe.id) {
+                self.errors.push(ValidationError::ProbeNotRequested {
+                    probe: probe.id.clone(),
+                });
+            }
+        }
+        for probe in requested {
+            if !self.probes.contains(probe.as_str()) {
+                self.errors.push(ValidationError::ProbeMissing { probe });
+            }
+        }
+    }
+
+    /// `runtime_api.version` coverage is about one probe: it is scoped to a probe, every probe
+    /// has it, and it closes the check only as that probe's outcome supports. A refused
+    /// connection is evidence for that check only, and rests on refused probes. A gap never
+    /// contradicts an outcome.
+    fn probe_coverage(&mut self) {
+        let s = self.s;
+        let outcome = |id: &ProbeId| s.probes.iter().find(|p| p.id == *id).map(|p| &p.result);
+        for probe in &s.probes {
+            let covered = s.coverage.iter().any(|c| {
+                c.check.as_str() == RUNTIME_API_VERSION && c.scope == Ref::Probe(probe.id.clone())
+            });
+            if !covered {
+                self.errors.push(ValidationError::ProbeUncovered {
+                    probe: probe.id.clone(),
+                });
+            }
+        }
+        for c in &s.coverage {
+            let version = c.check.as_str() == RUNTIME_API_VERSION;
+            if let CoverageState::NotPresent {
+                evidence,
+                basis: AbsenceBasis::ConnectionRefused,
+                ..
+            } = &c.state
+            {
+                if !version {
+                    self.errors.push(ValidationError::RefusalForAnotherCheck {
+                        check: c.check.clone(),
+                    });
+                }
+                let probes: Vec<&ProbeId> = evidence
+                    .iter()
+                    .filter_map(|e| match e {
+                        EvidenceRef::Probe { probe } => Some(probe),
+                        _ => None,
+                    })
+                    .collect();
+                let refused = !probes.is_empty()
+                    && probes
+                        .iter()
+                        .all(|p| matches!(outcome(p), Some(ProbeResult::Refused)));
+                if !refused {
+                    self.errors.push(ValidationError::RefusalNotObserved {
+                        check: c.check.clone(),
+                    });
+                }
+            }
+            if !version {
+                continue;
+            }
+            let Ref::Probe(id) = &c.scope else {
+                self.errors.push(ValidationError::ScopeNotAProbe {
+                    check: c.check.clone(),
+                });
+                continue;
+            };
+            // An unknown probe is reported as dangling.
+            let Some(result) = outcome(id) else {
+                continue;
+            };
+            let why = match (&c.state, result) {
+                (
+                    CoverageState::Complete,
+                    ProbeResult::Answered {
+                        status: 200,
+                        version: Some(_),
+                    },
+                ) => None,
+                (CoverageState::Complete, _) => Some("Complete needs a 200 answer with a version"),
+                (
+                    CoverageState::NotPresent {
+                        evidence,
+                        basis: AbsenceBasis::ConnectionRefused,
+                        ..
+                    },
+                    ProbeResult::Refused,
+                ) => (!evidence.contains(&EvidenceRef::Probe { probe: id.clone() }))
+                    .then_some("the absence must cite the probe it rests on"),
+                (CoverageState::NotPresent { .. }, _) => {
+                    Some("NotPresent needs a refused connection, on the basis ConnectionRefused")
+                }
+                (CoverageState::OutOfScope { .. }, _) => {
+                    Some("a requested probe is never out of scope")
+                }
+                _ => None,
+            };
+            if let Some(why) = why {
+                self.errors.push(ValidationError::CoverageContradictsProbe {
+                    check: c.check.clone(),
+                    probe: id.clone(),
+                    why,
+                });
             }
         }
     }

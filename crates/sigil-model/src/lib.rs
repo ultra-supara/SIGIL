@@ -35,6 +35,7 @@ pub mod identity;
 pub mod listener;
 pub mod load;
 pub mod model;
+pub mod probe;
 pub mod relation;
 pub mod render;
 pub mod session;
@@ -71,7 +72,7 @@ pub use id::{
     AccessId, AnalyzerRef, ArtifactId, AssumptionId, AtomName, AuditScope, CallId, CheckId,
     ComponentKey, CondId, Date, FeatureKey, FindingId, FnId, GroundTruthRef, IdError, IdProblem,
     InstanceId, ListenerId, ModelId, ObligationId, OpenQuestionId, PolicyRuleRef, PremiseId,
-    ProcessRole, ProfileRef, ProfileRuleId, RefSetId, RootId, RuleId, Sha256Hex, SliceId,
+    ProbeId, ProcessRole, ProfileRef, ProfileRuleId, RefSetId, RootId, RuleId, Sha256Hex, SliceId,
     Timestamp, ValueId,
 };
 pub use identity::{
@@ -87,6 +88,7 @@ pub use model::{
     digest_hex, BlobLookup, LayerRole, LicenseText, Model, ModelLayer, ModelProvenance,
     LICENSE_MEDIA_TYPE,
 };
+pub use probe::{is_loopback, target, ActiveFeature, ApiProbe, ProbePhase, ProbeResult};
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,
     RuleSupport, RuleSupportRef, SearchDir, SearchRule,

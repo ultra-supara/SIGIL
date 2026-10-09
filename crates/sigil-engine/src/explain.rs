@@ -9,8 +9,8 @@
 use std::fmt;
 
 use sigil_model::render::{
-    action, completeness, coverage_state, kind, not_observable, severity, subject, treatment,
-    verdict as verdict_name, Shown,
+    action, completeness, coverage_state, kind, not_observable, probe_result, severity, subject,
+    treatment, verdict as verdict_name, Shown,
 };
 use sigil_model::{
     Action, Completeness, CondEvidence, CondState, EvidenceRef, Finding, ListenerOwner,
@@ -328,6 +328,11 @@ fn cond_evidence(e: &CondEvidence) -> String {
 /// One evidence reference, resolved to the session's facts where they are recorded.
 fn evidence(s: &Session, e: &EvidenceRef) -> Shown {
     match e {
+        EvidenceRef::Probe { probe } => match s.probes.iter().find(|p| p.id == *probe) {
+            Some(p) => Shown::own(format!("probe {probe} at {}: ", p.at))
+                .and_shown(probe_result(&p.result)),
+            None => Shown::own(format!("probe {probe} (not recorded)")),
+        },
         EvidenceRef::Listener { listener } => {
             match s.listeners.iter().find(|l| l.id == *listener) {
                 Some(l) => {

@@ -100,6 +100,14 @@ The rule then yields an open question at most.
   - its address is an IP address;
   - a listener owned by a process names a recorded process;
   - a listener counts as an `Observed` fact for a condition.
+- **An active probe matches the request (ADR-002 active mode):**
+  - each requested target is the canonical text of a specified IP address with a non-zero port, and is loopback unless `allow_remote` is set;
+  - each requested target has exactly one probe, and each probe was requested;
+  - a probe's ID is `probe:api/<address>:<port>`, with an IPv6 address in brackets;
+  - `runtime_api.version` coverage is about one probe: it is scoped to a probe (never the audit, a root, or anything else), and every probe has it, so it cannot be moved or dropped to escape the next rule;
+  - a probe's `runtime_api.version` coverage closes the check only as its outcome supports: `Complete` needs a 200 answer with a version, `NotPresent` a refused connection on the basis `ConnectionRefused` that cites the probe, and a requested probe is never `OutOfScope` (a timed-out probe therefore never closes it). A gap never contradicts an outcome;
+  - the basis `ConnectionRefused` is used only for `runtime_api.version`, and cites probes, each refused;
+  - a probe is not an `Observed` fact for a condition: no finding rests on it.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -373,6 +381,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Model store | `Model`, `ModelProvenance`, `ModelLayer`, `LayerRole`, `BlobLookup`, `LicenseText` | One manifest, what its path says, its layers as written with how each blob lookup ended, and the license text read |
 | Process observation | `ProcessObs`, `ProcessRef`, `MappingObs`, `NsInode` | What was seen in a process at an instant: its name, arguments, executable, network namespace, whether its fds could be listed, and its mappings |
 | Listeners | `Listener`, `Protocol`, `ListenerOwner` | Listening sockets in SIGIL's network namespace, and who holds each one as far as the readable fd tables show. Never attributed by port |
+| Active probes | `ActiveFeature`, `ApiProbe`, `ProbeResult`, `ProbePhase` | What `--active` asked for (`request.active`) and how each probe ended. A refused connection is an observation (`NotPresent` with basis `ConnectionRefused`); a timeout is not |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
 | B: presence | `FeatureHint`, `Signal` | A feature signal exists |
@@ -399,6 +408,17 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
   - unresolved premises;
   - a model's layers (manifest order).
 - Timestamps are kept. `ObservationMeta` is recorded but is not part of analysis, and `Outcome.policy_time` is an input that re-analysis reuses.
+
+## Fields added to `sigil-session/1`
+
+A field added after sessions without it were written is optional on read, so those sessions still load. A missing one reads as empty. SIGIL always writes it, so a session it writes has every field.
+
+| Field | Added in | Missing reads as |
+|---|---|---|
+| `request.active` | PR-3b-2 | `[]` (nothing active requested) |
+| `probes` | PR-3b-2 | `[]` (no probe) |
+
+The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
 ## Not in the model yet
 

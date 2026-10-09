@@ -6,7 +6,7 @@ use std::path::Path;
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, ExplainError, Format};
-use sigil_engine::inspect::{observe_session, ObserveRequest, StoreRequest};
+use sigil_engine::inspect::{observe_session, ActiveInput, ObserveRequest, StoreRequest};
 use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::RULES;
 use sigil_engine::policy::Policy;
@@ -43,6 +43,10 @@ fn store(d: &Path, path: &str, license: bool) {
 }
 
 fn session(store: &Path, fake: &FakeProc) -> Session {
+    session_with(store, fake, &ActiveInput::default())
+}
+
+fn session_with(store: &Path, fake: &FakeProc, active: &ActiveInput) -> Session {
     let req = ObserveRequest {
         store: StoreRequest {
             models_dir: store.to_path_buf(),
@@ -55,6 +59,7 @@ fn session(store: &Path, fake: &FakeProc) -> Session {
     };
     observe_session(
         &req,
+        active,
         &Policy::builtin_default().unwrap(),
         ToolInfo {
             name: "sigil".to_string(),
@@ -230,4 +235,34 @@ fn input_text_is_escaped_in_every_format() {
         "an escape reached the terminal:\n{text}"
     );
     assert!(text.contains("\\u{001B}"), "{text}");
+}
+
+#[test]
+fn a_probe_is_explained_in_the_coverage() {
+    let d = TempDir::new().unwrap();
+    let fake = FakeProc::new();
+    let target: std::net::SocketAddr = "127.0.0.1:11434".parse().unwrap();
+    let active = ActiveInput {
+        features: vec![ActiveFeature::ApiProbe {
+            address: "127.0.0.1".to_string(),
+            port: 11434,
+            allow_remote: false,
+        }],
+        probes: vec![ApiProbe {
+            id: ProbeId::api(target),
+            address: "127.0.0.1".to_string(),
+            port: 11434,
+            at: Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+            result: ProbeResult::Refused,
+        }],
+        budgets: Default::default(),
+    };
+    let s = session_with(d.path(), &fake, &active);
+    let text = explain::coverage(&s, Format::Text);
+    assert!(text.contains("runtime_api.version"), "{text}");
+    assert!(text.contains("probe:api/127.0.0.1:11434"), "{text}");
+    assert!(
+        text.contains("connection refused at 127.0.0.1:11434 from this host"),
+        "{text}"
+    );
 }

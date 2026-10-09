@@ -96,7 +96,8 @@ pub fn evaluate(
     if !changed.is_empty() {
         return Err(EvaluateError::AssumptionsChanged(changed));
     }
-    let (_, required) = policy.scope(session.request.mode);
+    let active = !session.request.active.is_empty();
+    let (_, required) = policy.scope(session.request.mode, active);
     let set = |checks: &[CheckId]| checks.iter().cloned().collect::<BTreeSet<CheckId>>();
     if set(&required) != set(&session.request.required_checks) {
         return Err(EvaluateError::RequiredChecksChanged {

@@ -23,6 +23,7 @@ impl Session {
     pub fn canonicalize(&mut self) {
         sort_json(&mut self.knowledge);
         sort_json(&mut self.request.roots);
+        sort_json(&mut self.request.active);
         self.request.audit.sort();
         self.request.required_checks.sort();
         self.observation.capabilities.sort();
@@ -42,6 +43,7 @@ impl Session {
         }
         sort_json(&mut self.processes);
         sort_json(&mut self.listeners);
+        sort_json(&mut self.probes);
         for value in &mut self.values {
             sort_json(&mut value.applies_to);
         }

@@ -1721,3 +1721,564 @@ fn a_listener_is_an_observation() {
         Some(Settles::Either)
     );
 }
+
+// --- Active probes (PR-3b-2) ------------------------------------------------------------------
+
+fn api_feature(address: &str, port: u16, allow_remote: bool) -> ActiveFeature {
+    ActiveFeature::ApiProbe {
+        address: address.to_string(),
+        port,
+        allow_remote,
+    }
+}
+
+fn api_probe(id_text: &str, address: &str, port: u16, result: ProbeResult) -> ApiProbe {
+    ApiProbe {
+        id: id(id_text),
+        address: address.to_string(),
+        port,
+        at: ts("2026-10-07T07:00:01Z"),
+        result,
+    }
+}
+
+/// The `runtime_api.version` coverage every probe has, as a gap that no outcome contradicts.
+fn undecided(probe: &str) -> Coverage {
+    coverage(
+        "runtime_api.version",
+        Ref::Probe(id(probe)),
+        CoverageState::Error {
+            message: t("not decided in this test"),
+        },
+    )
+}
+
+/// A refused probe of 127.0.0.1:11434, which closes `runtime_api.version` as not present.
+fn with_refused_probe() -> Session {
+    let mut s = base(&["runtime_api.version"]);
+    s.request
+        .active
+        .push(api_feature("127.0.0.1", 11434, false));
+    let probe = api_probe(
+        "probe:api/127.0.0.1:11434",
+        "127.0.0.1",
+        11434,
+        ProbeResult::Refused,
+    );
+    s.coverage.push(coverage(
+        "runtime_api.version",
+        Ref::Probe(probe.id.clone()),
+        CoverageState::NotPresent {
+            evidence: vec![EvidenceRef::Probe {
+                probe: probe.id.clone(),
+            }],
+            scope: "127.0.0.1:11434 from this host".to_string(),
+            basis: AbsenceBasis::ConnectionRefused,
+        },
+    ));
+    s.probes.push(probe);
+    s
+}
+
+#[test]
+fn a_refused_probe_closes_its_check() {
+    let s = round_trip(&with_refused_probe());
+    assert_valid(&s);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+}
+
+#[test]
+fn probe_ids_name_their_target() {
+    assert_eq!(
+        ProbeId::api("127.0.0.1:11434".parse().unwrap()).as_str(),
+        "probe:api/127.0.0.1:11434"
+    );
+    assert_eq!(
+        ProbeId::api("[::1]:8080".parse().unwrap()).as_str(),
+        "probe:api/[::1]:8080"
+    );
+}
+
+#[test]
+fn every_probe_outcome_is_a_valid_record() {
+    let results = [
+        ProbeResult::Answered {
+            status: 200,
+            version: Some(t("0.12.3")),
+        },
+        ProbeResult::Answered {
+            status: 404,
+            version: None,
+        },
+        ProbeResult::TimedOut {
+            phase: ProbePhase::Read,
+        },
+        ProbeResult::TooLarge { limit: 65536 },
+        ProbeResult::Malformed {
+            why: "transfer-encoding not supported".to_string(),
+        },
+        ProbeResult::Failed {
+            message: t("Network is unreachable (os error 101)"),
+        },
+    ];
+    for result in results {
+        let mut s = base(&[]);
+        s.request.active.push(api_feature("::1", 11434, false));
+        s.probes
+            .push(api_probe("probe:api/[::1]:11434", "::1", 11434, result));
+        s.coverage.push(undecided("probe:api/[::1]:11434"));
+        assert_valid(&round_trip(&s));
+    }
+}
+
+#[test]
+fn a_remote_target_needs_allow_remote() {
+    let mut s = base(&[]);
+    s.request
+        .active
+        .push(api_feature("192.0.2.1", 11434, false));
+    s.probes.push(api_probe(
+        "probe:api/192.0.2.1:11434",
+        "192.0.2.1",
+        11434,
+        ProbeResult::Refused,
+    ));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::RemoteNotAllowed { target } if target == "192.0.2.1:11434"),
+        "a remote target without allow_remote",
+    );
+    s.request.active[0] = api_feature("192.0.2.1", 11434, true);
+    s.coverage.push(undecided("probe:api/192.0.2.1:11434"));
+    assert_valid(&s);
+    // IPv4-mapped loopback is loopback.
+    let mut s = base(&[]);
+    s.request
+        .active
+        .push(api_feature("::ffff:127.0.0.1", 11434, false));
+    s.probes.push(api_probe(
+        "probe:api/[::ffff:127.0.0.1]:11434",
+        "::ffff:127.0.0.1",
+        11434,
+        ProbeResult::Refused,
+    ));
+    s.coverage
+        .push(undecided("probe:api/[::ffff:127.0.0.1]:11434"));
+    assert_valid(&s);
+}
+
+#[test]
+fn a_requested_target_is_a_canonical_specified_address() {
+    for (address, port) in [
+        ("::0:1", 11434),
+        ("0.0.0.0", 11434),
+        ("::", 1),
+        ("localhost", 11434),
+        ("127.0.0.1", 0),
+    ] {
+        let mut s = base(&[]);
+        s.request.active.push(api_feature(address, port, true));
+        assert_rejected(
+            &s,
+            |e| matches!(e, ValidationError::ActiveTargetInvalid { .. }),
+            &format!("target {address}:{port}"),
+        );
+    }
+}
+
+#[test]
+fn probes_and_requests_match_one_to_one() {
+    // Requested, not recorded.
+    let mut s = with_refused_probe();
+    s.probes.clear();
+    s.coverage.clear();
+    s.request.required_checks.clear();
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ProbeMissing { probe } if probe.as_str() == "probe:api/127.0.0.1:11434"),
+        "a requested probe with no record",
+    );
+    // Recorded, not requested.
+    let mut s = with_refused_probe();
+    s.request.active.clear();
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ProbeNotRequested { .. }),
+        "a probe nobody asked for",
+    );
+    // Recorded twice.
+    let mut s = with_refused_probe();
+    let copy = s.probes[0].clone();
+    s.probes.push(copy);
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::DuplicateId { kind: "probe", .. }),
+        "a duplicate probe",
+    );
+    // Requested twice.
+    let mut s = with_refused_probe();
+    let copy = s.request.active[0].clone();
+    s.request.active.push(copy);
+    assert_rejected(
+        &s,
+        |e| {
+            matches!(
+                e,
+                ValidationError::DuplicateId {
+                    kind: "active feature",
+                    ..
+                }
+            )
+        },
+        "a duplicate request",
+    );
+}
+
+#[test]
+fn a_probe_is_identified_by_its_target() {
+    // The ID names another port.
+    let mut s = with_refused_probe();
+    s.probes[0].port = 11435;
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ProbeTargetInvalid { .. }),
+        "an ID that does not match its target",
+    );
+    // A non-canonical address.
+    let mut s = base(&[]);
+    s.request.active.push(api_feature("::1", 11434, false));
+    s.probes.push(api_probe(
+        "probe:api/[::1]:11434",
+        "0:0:0:0:0:0:0:1",
+        11434,
+        ProbeResult::Refused,
+    ));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ProbeTargetInvalid { .. }),
+        "a non-canonical probe address",
+    );
+}
+
+#[test]
+fn probe_references_resolve() {
+    let mut s = with_refused_probe();
+    s.coverage[0].scope = Ref::Probe(id("probe:api/127.0.0.1:1"));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::Dangling { kind: "probe", .. }),
+        "a scope naming an unknown probe",
+    );
+    let mut s = with_refused_probe();
+    if let CoverageState::NotPresent { evidence, .. } = &mut s.coverage[0].state {
+        evidence[0] = EvidenceRef::Probe {
+            probe: id("probe:api/127.0.0.1:1"),
+        };
+    }
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::Dangling { kind: "probe", .. }),
+        "evidence naming an unknown probe",
+    );
+}
+
+#[test]
+fn a_probe_is_not_an_observation_for_a_condition() {
+    let s = with_refused_probe();
+    let probe = EvidenceRef::Probe {
+        probe: s.probes[0].id.clone(),
+    };
+    assert_eq!(
+        s.settles(&CondEvidence::Observed { facts: vec![probe] }),
+        Some(Settles::Neither)
+    );
+}
+
+// --- A probe's coverage agrees with its outcome (#76 review) ---------------------------------
+
+/// `with_refused_probe`, with the probe's outcome replaced by `result`.
+fn probe_ended(result: ProbeResult) -> Session {
+    let mut s = with_refused_probe();
+    s.probes[0].result = result;
+    s
+}
+
+fn contradicts(e: &ValidationError) -> bool {
+    matches!(e, ValidationError::CoverageContradictsProbe { .. })
+}
+
+#[test]
+fn a_timed_out_probe_never_closes_its_check() {
+    for phase in [ProbePhase::Connect, ProbePhase::Write, ProbePhase::Read] {
+        // The refused-connection absence kept after the outcome changed.
+        let s = probe_ended(ProbeResult::TimedOut { phase });
+        assert_rejected(
+            &s,
+            contradicts,
+            "NotPresent(ConnectionRefused) for a timeout",
+        );
+        // Or `Complete`.
+        let mut s = probe_ended(ProbeResult::TimedOut { phase });
+        s.coverage[0].state = CoverageState::Complete;
+        assert_rejected(&s, contradicts, "Complete for a timeout");
+    }
+}
+
+#[test]
+fn complete_needs_a_200_answer_with_a_version() {
+    for (result, valid) in [
+        (
+            ProbeResult::Answered {
+                status: 200,
+                version: Some(t("0.12.3")),
+            },
+            true,
+        ),
+        (
+            ProbeResult::Answered {
+                status: 200,
+                version: None,
+            },
+            false,
+        ),
+        (
+            ProbeResult::Answered {
+                status: 404,
+                version: None,
+            },
+            false,
+        ),
+        (ProbeResult::Refused, false),
+        (ProbeResult::TooLarge { limit: 65536 }, false),
+        (
+            ProbeResult::Malformed {
+                why: "transfer-encoding not supported".to_string(),
+            },
+            false,
+        ),
+        (
+            ProbeResult::Failed {
+                message: t("Network is unreachable (os error 101)"),
+            },
+            false,
+        ),
+    ] {
+        let mut s = probe_ended(result.clone());
+        s.coverage[0].state = CoverageState::Complete;
+        if valid {
+            assert_valid(&s);
+        } else {
+            assert_rejected(&s, contradicts, &format!("Complete for {result:?}"));
+        }
+    }
+}
+
+#[test]
+fn a_probe_is_not_present_only_on_its_own_refusal() {
+    // Refused, but the absence rests on another basis.
+    let mut s = with_refused_probe();
+    if let CoverageState::NotPresent { basis, .. } = &mut s.coverage[0].state {
+        *basis = AbsenceBasis::SymbolsAbsent {
+            names: vec!["x".to_string()],
+        };
+    }
+    assert_rejected(&s, contradicts, "a probe's absence on another basis");
+    // A refusal cited without the probe as evidence.
+    let mut s = with_refused_probe();
+    if let CoverageState::NotPresent { evidence, .. } = &mut s.coverage[0].state {
+        evidence.clear();
+    }
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::RefusalNotObserved { .. }),
+        "a refusal without its probe",
+    );
+    // A refusal resting on a probe that answered.
+    let mut s = with_refused_probe();
+    s.request.active.push(ActiveFeature::ApiProbe {
+        address: "::1".to_string(),
+        port: 11434,
+        allow_remote: false,
+    });
+    s.probes.push(api_probe(
+        "probe:api/[::1]:11434",
+        "::1",
+        11434,
+        ProbeResult::Answered {
+            status: 200,
+            version: Some(t("0.12.3")),
+        },
+    ));
+    s.coverage.push(coverage(
+        "runtime_api.version",
+        Ref::Audit,
+        CoverageState::NotPresent {
+            evidence: vec![EvidenceRef::Probe {
+                probe: id("probe:api/[::1]:11434"),
+            }],
+            scope: "[::1]:11434 from this host".to_string(),
+            basis: AbsenceBasis::ConnectionRefused,
+        },
+    ));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::RefusalNotObserved { .. }),
+        "a refusal resting on an answered probe",
+    );
+}
+
+#[test]
+fn a_probe_is_not_present_on_another_probe_refusal() {
+    // Both probes were refused, but the first one's absence cites only the second.
+    let mut s = with_refused_probe();
+    s.request.active.push(api_feature("::1", 11434, false));
+    s.probes.push(api_probe(
+        "probe:api/[::1]:11434",
+        "::1",
+        11434,
+        ProbeResult::Refused,
+    ));
+    if let CoverageState::NotPresent { evidence, .. } = &mut s.coverage[0].state {
+        *evidence = vec![EvidenceRef::Probe {
+            probe: id("probe:api/[::1]:11434"),
+        }];
+    }
+    assert_rejected(&s, contradicts, "an absence citing another probe");
+}
+
+#[test]
+fn a_requested_probe_is_never_out_of_scope() {
+    let mut s = with_refused_probe();
+    s.coverage[0].state = CoverageState::OutOfScope {
+        why: "not asked".to_string(),
+    };
+    assert_rejected(&s, contradicts, "OutOfScope for a requested probe");
+}
+
+#[test]
+fn a_gap_never_contradicts_a_probe() {
+    for result in [
+        ProbeResult::Refused,
+        ProbeResult::Answered {
+            status: 200,
+            version: Some(t("0.12.3")),
+        },
+        ProbeResult::TimedOut {
+            phase: ProbePhase::Read,
+        },
+    ] {
+        let mut s = base(&[]);
+        s.request
+            .active
+            .push(api_feature("127.0.0.1", 11434, false));
+        let probe = api_probe("probe:api/127.0.0.1:11434", "127.0.0.1", 11434, result);
+        s.coverage.push(coverage(
+            "runtime_api.version",
+            Ref::Probe(probe.id.clone()),
+            CoverageState::Error { message: t("x") },
+        ));
+        s.probes.push(probe);
+        assert_valid(&s);
+    }
+}
+
+// --- runtime_api.version cannot move off its probe; a refusal is evidence for it only ---------
+
+/// `with_refused_probe`, with its outcome `result` and its coverage moved to `scope` as `state`.
+fn moved(result: ProbeResult, scope: Ref, state: CoverageState) -> Session {
+    let mut s = with_refused_probe();
+    s.probes[0].result = result;
+    s.coverage[0].scope = scope;
+    s.coverage[0].state = state;
+    s
+}
+
+#[test]
+fn moving_runtime_api_coverage_off_the_probe_is_refused() {
+    let timed_out = ProbeResult::TimedOut {
+        phase: ProbePhase::Read,
+    };
+    let root = Ref::Root(id("install"));
+    let refusal = CoverageState::NotPresent {
+        evidence: vec![EvidenceRef::Probe {
+            probe: id("probe:api/127.0.0.1:11434"),
+        }],
+        scope: "127.0.0.1:11434 from this host".to_string(),
+        basis: AbsenceBasis::ConnectionRefused,
+    };
+    // A timed-out probe, its check closed on the audit or a root instead of on the probe.
+    for scope in [Ref::Audit, root] {
+        for state in [CoverageState::Complete, refusal.clone()] {
+            let s = moved(timed_out.clone(), scope.clone(), state.clone());
+            assert_rejected(
+                &s,
+                |e| matches!(e, ValidationError::ScopeNotAProbe { .. }),
+                &format!("{state:?} on {scope:?}"),
+            );
+            assert_rejected(
+                &s,
+                |e| matches!(e, ValidationError::ProbeUncovered { .. }),
+                "a probe left without its coverage",
+            );
+        }
+    }
+    // Even a gap belongs on the probe.
+    let s = moved(
+        timed_out,
+        Ref::Audit,
+        CoverageState::Error { message: t("x") },
+    );
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ScopeNotAProbe { .. }),
+        "a gap on the audit",
+    );
+}
+
+#[test]
+fn every_probe_has_its_runtime_api_coverage() {
+    // A second probe that timed out, its coverage dropped: the first one's closes the check.
+    let mut s = with_refused_probe();
+    s.request.active.push(api_feature("::1", 11434, false));
+    s.probes.push(api_probe(
+        "probe:api/[::1]:11434",
+        "::1",
+        11434,
+        ProbeResult::TimedOut {
+            phase: ProbePhase::Connect,
+        },
+    ));
+    assert_rejected(
+        &s,
+        |e| matches!(e, ValidationError::ProbeUncovered { probe } if probe.as_str() == "probe:api/[::1]:11434"),
+        "a timed-out probe without coverage",
+    );
+}
+
+#[test]
+fn a_refused_connection_is_evidence_for_runtime_api_version_only() {
+    let refusal = CoverageState::NotPresent {
+        evidence: vec![EvidenceRef::Probe {
+            probe: id("probe:api/127.0.0.1:11434"),
+        }],
+        scope: "127.0.0.1:11434 from this host".to_string(),
+        basis: AbsenceBasis::ConnectionRefused,
+    };
+    for scope in [
+        Ref::Audit,
+        Ref::Root(id("install")),
+        Ref::Probe(id("probe:api/127.0.0.1:11434")),
+    ] {
+        let mut s = with_refused_probe();
+        s.coverage.push(coverage(
+            "model_store.inventory",
+            scope.clone(),
+            refusal.clone(),
+        ));
+        assert_rejected(
+            &s,
+            |e| matches!(e, ValidationError::RefusalForAnotherCheck { check } if check.as_str() == "model_store.inventory"),
+            &format!("a refusal as absence for model_store.inventory on {scope:?}"),
+        );
+    }
+}

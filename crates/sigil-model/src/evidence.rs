@@ -17,7 +17,7 @@ use crate::artifact::ProcessRef;
 use crate::id::{
     AccessId, AnalyzerRef, ArtifactId, AssumptionId, CallId, CheckId, ComponentKey, FnId,
     GroundTruthRef, InstanceId, ListenerId, ModelId, ObligationId, PolicyRuleRef, PremiseId,
-    ProcessRole, ProfileRef, ProfileRuleId, RootId, SliceId, ValueId,
+    ProbeId, ProcessRole, ProfileRef, ProfileRuleId, RootId, SliceId, ValueId,
 };
 use crate::relation::RuleSupportRef;
 use crate::text::UntrustedText;
@@ -76,6 +76,8 @@ pub enum EvidenceRef {
     Model { model: ModelId },
     /// A listening socket as read from `/proc/net/tcp{,6}`: an observation.
     Listener { listener: ListenerId },
+    /// An active probe and its outcome.
+    Probe { probe: ProbeId },
 }
 
 /// A location inside a binary slice.
@@ -265,4 +267,6 @@ pub enum Ref {
     Model(ModelId),
     /// A listening socket.
     Listener(ListenerId),
+    /// An active probe (its target, from this host).
+    Probe(ProbeId),
 }

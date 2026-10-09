@@ -27,6 +27,12 @@
       "maxLength": 1024,
       "pattern": "^listener:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
     },
+    "ProbeId": {
+      "description": "An active probe: probe:api/<address>:<port>, with an IPv6 address in brackets.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^probe:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
     "ModelId": {
       "description": "A model in a model store: model:<root id>/<manifest path under manifests/>.",
       "type": "string",
@@ -268,6 +274,11 @@
         "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
         "listeners": {"type": "array", "items": {"$ref": "#/$defs/Listener"}},
+        "probes": {
+          "description": "Active probes (request.active). Added to sigil-session/1 in PR-3b-2: optional on read (missing means empty), always written by SIGIL.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/ApiProbe"}
+        },
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
@@ -302,6 +313,7 @@
         "models": {"type": "array", "items": {"$ref": "#/$defs/Model"}},
         "processes": {"type": "array", "items": {"$ref": "#/$defs/ProcessObs"}},
         "listeners": {"type": "array", "items": {"$ref": "#/$defs/Listener"}},
+        "probes": {"type": "array", "items": {"$ref": "#/$defs/ApiProbe"}},
         "values": {"type": "array", "items": {"$ref": "#/$defs/ProcessValue"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
@@ -363,10 +375,62 @@
         "model_filter": {
           "description": "Only the model with this display name is inventoried (exact match); null for all.",
           "anyOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "active": {
+          "description": "Active features explicitly requested (--active); empty for none. Added to sigil-session/1 in PR-3b-2: optional on read (missing means empty), always written by SIGIL.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/ActiveFeature"}
         }
       }
     },
     "Mode": {"type": "string", "enum": ["Static", "Observe"]},
+    "ActiveFeature": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ApiProbe"],
+          "properties": {
+            "ApiProbe": {
+              "description": "--active api-probe: one GET /api/version to address:port. address is the canonical text of an IP address; a non-loopback address needs allow_remote.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["address", "port", "allow_remote"],
+              "properties": {
+                "address": {"type": "string"},
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "allow_remote": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ApiProbe": {
+      "description": "One API probe and its outcome (ADR-002 active mode).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "address", "port", "at", "result"],
+      "properties": {
+        "id": {"$ref": "#/$defs/ProbeId"},
+        "address": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "at": {"$ref": "#/$defs/Timestamp"},
+        "result": {"$ref": "#/$defs/ProbeResult"}
+      }
+    },
+    "ProbeResult": {
+      "description": "How a probe ended. Refused is an observation (nothing answers there); a timeout is not.",
+      "oneOf": [
+        {"type": "string", "enum": ["Refused"]},
+        {"type": "object", "additionalProperties": false, "required": ["Answered"], "properties": {"Answered": {"type": "object", "additionalProperties": false, "required": ["status", "version"], "properties": {"status": {"type": "integer", "minimum": 0, "maximum": 65535}, "version": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["TimedOut"], "properties": {"TimedOut": {"type": "object", "additionalProperties": false, "required": ["phase"], "properties": {"phase": {"$ref": "#/$defs/ProbePhase"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["TooLarge"], "properties": {"TooLarge": {"type": "object", "additionalProperties": false, "required": ["limit"], "properties": {"limit": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["Malformed"], "properties": {"Malformed": {"type": "object", "additionalProperties": false, "required": ["why"], "properties": {"why": {"type": "string"}}}}},
+        {"type": "object", "additionalProperties": false, "required": ["Failed"], "properties": {"Failed": {"type": "object", "additionalProperties": false, "required": ["message"], "properties": {"message": {"$ref": "#/$defs/UntrustedText"}}}}}
+      ]
+    },
+    "ProbePhase": {"type": "string", "enum": ["Connect", "Write", "Read"]},
     "ScanRoot": {
       "type": "object",
       "additionalProperties": false,
@@ -970,6 +1034,19 @@
               "properties": {"listener": {"$ref": "#/$defs/ListenerId"}}
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Probe"],
+          "properties": {
+            "Probe": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["probe"],
+              "properties": {"probe": {"$ref": "#/$defs/ProbeId"}}
+            }
+          }
         }
       ]
     },
@@ -1454,6 +1531,12 @@
           "additionalProperties": false,
           "required": ["Listener"],
           "properties": {"Listener": {"$ref": "#/$defs/ListenerId"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Probe"],
+          "properties": {"Probe": {"$ref": "#/$defs/ProbeId"}}
         }
       ]
     },
@@ -3158,7 +3241,8 @@
               "properties": {"reference": {"$ref": "#/$defs/ArtifactId"}}
             }
           }
-        }
+        },
+        {"type": "string", "enum": ["ConnectionRefused"]}
       ]
     },
     "SkipReason": {

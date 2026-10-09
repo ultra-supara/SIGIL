@@ -40,6 +40,8 @@ pub struct Policy {
     pub audit: Vec<AuditScope>,
     /// Scopes added in observe mode.
     pub observe_audit: Vec<AuditScope>,
+    /// Scopes added when an active feature is requested (`--active`).
+    pub active_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.
     pub extra_required: Vec<CheckId>,
     pub open_questions: OqPolicy,
@@ -197,6 +199,7 @@ impl Policy {
         };
         let audit = scopes(&raw.scope.audit)?;
         let observe_audit = scopes(&raw.scope.observe_audit)?;
+        let active_audit = scopes(&raw.scope.active_audit)?;
         let extra_required = raw
             .scope
             .extra_required
@@ -326,6 +329,7 @@ impl Policy {
             sha256: sha256_hex(text)?,
             audit,
             observe_audit,
+            active_audit,
             extra_required,
             open_questions,
             accept,
@@ -344,15 +348,20 @@ impl Policy {
         Policy::load(DEFAULT_POLICY)
     }
 
-    /// The audit scope requested in `mode`, and the checks it requires (in catalog order, then
-    /// `extra_required`, without repeats).
-    pub fn scope(&self, mode: Mode) -> (Vec<AuditScope>, Vec<CheckId>) {
+    /// The audit scope requested in `mode`, with `active` features or without, and the checks it
+    /// requires (in catalog order, then `extra_required`, without repeats).
+    pub fn scope(&self, mode: Mode, active: bool) -> (Vec<AuditScope>, Vec<CheckId>) {
         let mut audit: Vec<AuditScope> = vec![];
         let observe = match mode {
             Mode::Observe => self.observe_audit.as_slice(),
             Mode::Static => &[],
         };
-        for scope in self.audit.iter().chain(observe) {
+        let active = if active {
+            self.active_audit.as_slice()
+        } else {
+            &[]
+        };
+        for scope in self.audit.iter().chain(observe).chain(active) {
             if !audit.contains(scope) {
                 audit.push(scope.clone());
             }

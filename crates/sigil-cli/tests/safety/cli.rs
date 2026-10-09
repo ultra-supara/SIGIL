@@ -42,6 +42,7 @@ fn policy(fx: &Fixture, outputs: &[&Path], scopes: &[&'static str]) -> Policy {
         allowed_writes: outputs.iter().map(|p| p.to_path_buf()).collect(),
         proc_scopes: scopes.to_vec(),
         cwd: fx.tmp.path().to_path_buf(),
+        network: None,
     }
 }
 
@@ -226,4 +227,92 @@ fn rules_reads_nothing() {
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     assert!(r.stdout.contains("exposure.bind_public"), "{}", r.stdout);
     assert_clean(&r, &policy(&fx, &[], &["runtime"]));
+}
+
+// --- the active API probe (ADR-002 active C-4) ------------------------------------------------
+
+/// A server in this test process (not traced) that answers one `/api/version` request.
+fn api_server() -> std::net::SocketAddr {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = vec![];
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => request.push(byte[0]),
+                _ => break,
+            }
+        }
+        let body = "{\"version\":\"0.12.3\"}";
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+    });
+    addr
+}
+
+/// Runs `inspect ollama --active api-probe --api-addr <dest>` under strace and checks it with the
+/// probe's destination allowed. Without it, the same trace must break C-4: the case really
+/// exercised the network.
+fn probe_case(case: &str, dest: std::net::SocketAddr, expect: &str) {
+    let fx = fixture();
+    let models = fixtures::ollama_store(&fx.target);
+    let addr = dest.to_string();
+    let args = os(&[
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--active",
+        &"api-probe",
+        &"--api-addr",
+        &addr,
+    ]);
+    let r = run(case, &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(r.stderr.contains(expect), "{}", r.stderr);
+    assert_read_under(&r, &models);
+    let allowed = Policy {
+        network: Some(dest),
+        ..policy(&fx, &[], &["runtime"])
+    };
+    assert_clean(&r, &allowed);
+    let v = check(&r, &policy(&fx, &[], &["runtime"]));
+    assert!(
+        v.iter()
+            .any(|x| x.contract == Contract::C4NoNetwork && x.syscall == "connect"),
+        "the probe's connect is missing from the trace:\n{}",
+        report(&r, &v)
+    );
+}
+
+#[test]
+fn active_api_probe_connects_only_to_its_destination() {
+    if !require_tracer("active_api_probe_connects_only_to_its_destination") {
+        return;
+    }
+    probe_case(
+        "inspect-active-api-probe",
+        api_server(),
+        "answered (HTTP 200), version 0.12.3",
+    );
+}
+
+#[test]
+fn active_api_probe_refused() {
+    if !require_tracer("active_api_probe_refused") {
+        return;
+    }
+    let dest = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    probe_case("inspect-active-api-probe-refused", dest, "→ refused");
 }

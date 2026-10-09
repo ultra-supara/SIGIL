@@ -13,12 +13,14 @@ use crate::session::Session;
 use crate::text::UntrustedText;
 
 use super::{
-    action, completeness, coverage_state, kind, mode, not_observable, subject, treatment, verdict,
+    action, active_feature, completeness, coverage_state, kind, mode, not_observable, probe_result,
+    subject, treatment, verdict,
 };
+use crate::probe::target;
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
-/// that does not close, and the models, listeners, and processes observed. The other lists are
-/// counted. The same session gives the same bytes.
+/// that does not close, the models, listeners, and processes observed, and the runtime API when
+/// it was probed. The other lists are counted. The same session gives the same bytes.
 pub fn render_session(s: &Session) -> String {
     let mut out = String::from("# SIGIL session\n\n");
     run(&mut out, s);
@@ -30,6 +32,7 @@ pub fn render_session(s: &Session) -> String {
     models(&mut out, s);
     listeners(&mut out, s);
     processes(&mut out, s);
+    runtime_api(&mut out, s);
     others(&mut out, s);
     out
 }
@@ -96,6 +99,10 @@ fn run(out: &mut String, s: &Session) {
     }
     if let Some(model) = &r.model_filter {
         rows.push(vec![esc("Model filter"), esc(model)]);
+    }
+    if !r.active.is_empty() {
+        let features: Vec<String> = r.active.iter().map(active_feature).collect();
+        rows.push(vec![esc("Active"), esc(&features.join(", "))]);
     }
     rows.push(vec![
         esc("Observed"),
@@ -332,6 +339,26 @@ fn process_row(p: &ProcessObs) -> Vec<String> {
         exe,
         esc(&fd_table),
     ]
+}
+
+/// The API probes (active mode). Nothing when none was requested.
+fn runtime_api(out: &mut String, s: &Session) {
+    if s.probes.is_empty() {
+        return;
+    }
+    section(out, "Runtime API");
+    let rows = s
+        .probes
+        .iter()
+        .map(|p| {
+            vec![
+                esc(&target(&p.address, p.port)),
+                esc(p.at.as_str()),
+                probe_result(&p.result).markdown(),
+            ]
+        })
+        .collect();
+    table(out, &["Target", "Attempted at", "Outcome"], rows);
 }
 
 fn others(out: &mut String, s: &Session) {

@@ -1,5 +1,6 @@
 //! The safety contracts C-1..C-6 (ADR-002) as rules over a traced run.
 
+use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 
 use crate::trace::{fd_path, field, flags, str_arg, Event, TracedRun};
@@ -13,7 +14,8 @@ pub enum Contract {
     C2NoDlopen,
     /// C-3: never mmap an inspected target file; read it with read/pread.
     C3NoMmap,
-    /// C-4: static/observe perform no network I/O (any socket family).
+    /// C-4: static/observe perform no network I/O (any socket family); with `--active api-probe`,
+    /// only the probe's one TCP connection to its destination.
     C4NoNetwork,
     /// C-5: read-only; writes only to the outputs the caller named.
     C5ReadOnly,
@@ -47,6 +49,7 @@ pub struct Violation {
 }
 
 /// What a run is allowed to do.
+#[derive(Clone)]
 pub struct Policy {
     /// The program under test (its first execve is startup, and its own text mapping is allowed).
     pub binary: PathBuf,
@@ -58,6 +61,9 @@ pub struct Policy {
     pub proc_scopes: Vec<&'static str>,
     /// Working directory of the traced process at start.
     pub cwd: PathBuf,
+    /// The one TCP destination the run may connect to (`--active api-probe`, ADR-002 active C-4);
+    /// `None` forbids every socket operation.
+    pub network: Option<SocketAddr>,
 }
 
 /// Every syscall a rule below inspects. `trace::trace_expr` traces all of them.
@@ -361,6 +367,101 @@ fn short(s: &str) -> String {
     }
 }
 
+/// A TCP socket as an fd annotation shows it: its inode before it connects (`3<TCP:[1234]>`),
+/// or its peer after (`3<TCP:[127.0.0.1:5->127.0.0.1:11434]>`, `3<TCPv6:[[::1]:5->[::1]:11434]>`).
+#[derive(Debug, PartialEq, Eq)]
+enum TcpNote {
+    Inode(String),
+    Peer(Option<SocketAddr>),
+}
+
+fn tcp_note(raw: &str) -> Option<TcpNote> {
+    let raw = raw.trim();
+    let inner = raw[raw.find('<')? + 1..].strip_suffix('>')?;
+    let body = inner
+        .strip_prefix("TCP:[")
+        .or_else(|| inner.strip_prefix("TCPv6:["))?
+        .strip_suffix(']')?;
+    Some(match body.split_once("->") {
+        Some((_, peer)) => TcpNote::Peer(peer.parse().ok()),
+        None => TcpNote::Inode(body.to_string()),
+    })
+}
+
+/// The destination of a `connect` sockaddr, as strace prints it with `-xx`:
+/// `{sa_family=AF_INET, sin_port=htons(N), sin_addr=inet_addr("…")}` or
+/// `{sa_family=AF_INET6, sin6_port=htons(N), …, inet_pton(AF_INET6, "…", &sin6_addr), sin6_scope_id=0}`.
+fn sockaddr(raw: &str) -> Option<SocketAddr> {
+    let port = |name: &str| -> Option<u16> {
+        field(raw, name)?
+            .strip_prefix("htons(")?
+            .strip_suffix(')')?
+            .parse()
+            .ok()
+    };
+    let quoted = |s: &str| -> Option<String> { Some(str_arg(s)?.to_str()?.to_string()) };
+    match field(raw, "sa_family")? {
+        "AF_INET" => {
+            let addr = field(raw, "sin_addr")?
+                .strip_prefix("inet_addr(")?
+                .strip_suffix(')')?;
+            let ip: std::net::Ipv4Addr = quoted(addr)?.parse().ok()?;
+            Some(SocketAddr::new(ip.into(), port("sin_port")?))
+        }
+        "AF_INET6" => {
+            if field(raw, "sin6_scope_id") != Some("0") {
+                return None;
+            }
+            let at = raw.find("inet_pton(AF_INET6, ")? + "inet_pton(AF_INET6, ".len();
+            let ip: std::net::Ipv6Addr = quoted(&raw[at..])?.parse().ok()?;
+            Some(SocketAddr::new(ip.into(), port("sin6_port")?))
+        }
+        _ => None,
+    }
+}
+
+/// Whether socket call `e` is part of the API probe's one connection to `dest` (ADR-002 active
+/// C-4): one `socket(AF_INET|AF_INET6, SOCK_STREAM)` of `dest`'s family, a `connect` of that
+/// socket to `dest`, and option, send, receive, name, and shutdown calls on it. `probe_socket`
+/// keeps the socket's inode from its creation.
+fn probe_allows(e: &Event, dest: SocketAddr, probe_socket: &mut Option<String>) -> bool {
+    let fd = e.args.first().and_then(|a| tcp_note(a));
+    let ours = match &fd {
+        Some(TcpNote::Inode(inode)) => probe_socket.as_deref() == Some(inode.as_str()),
+        Some(TcpNote::Peer(peer)) => probe_socket.is_some() && *peer == Some(dest),
+        None => false,
+    };
+    match e.name.as_str() {
+        "socket" => {
+            let family = if dest.is_ipv4() {
+                "AF_INET"
+            } else {
+                "AF_INET6"
+            };
+            let stream = e
+                .args
+                .get(1)
+                .is_some_and(|t| flags(t).contains(&"SOCK_STREAM"));
+            let Some(TcpNote::Inode(inode)) = tcp_note(&e.ret) else {
+                return false;
+            };
+            if probe_socket.is_some() || e.args.first().map(|a| a.trim()) != Some(family) || !stream
+            {
+                return false;
+            }
+            *probe_socket = Some(inode);
+            true
+        }
+        "connect" => ours && e.args.get(1).and_then(|a| sockaddr(a)) == Some(dest),
+        // A connected TCP socket ignores a destination address; one given is refused anyway.
+        "sendto" => ours && e.args.get(4).map(|a| a.trim()) == Some("NULL"),
+        "recvfrom" | "setsockopt" | "getsockopt" | "getpeername" | "getsockname" | "shutdown" => {
+            ours
+        }
+        _ => false,
+    }
+}
+
 pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
     let binary = forms(&p.binary);
     let targets: Vec<PathBuf> = p.targets.iter().flat_map(|t| forms(t)).collect();
@@ -417,6 +518,8 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
         });
     };
     let mut cwd: std::collections::HashMap<u32, PathBuf> = std::collections::HashMap::new();
+    // The inode of the probe's socket, once `socket()` created it.
+    let mut probe_socket: Option<String> = None;
     for e in &run.events {
         let here = cwd.entry(e.pid).or_insert_with(|| p.cwd.clone()).clone();
         let name = e.name.as_str();
@@ -479,6 +582,9 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
                     }
                 }
             }
+            _ if NETWORK.contains(&name)
+                && p.network
+                    .is_some_and(|dest| probe_allows(e, dest, &mut probe_socket)) => {}
             _ if NETWORK.contains(&name) => push(
                 Contract::C4NoNetwork,
                 e,
@@ -632,7 +738,116 @@ mod tests {
             allowed_writes: vec![PathBuf::from("/fx/out/report.md")],
             proc_scopes: scopes.to_vec(),
             cwd: PathBuf::from("/fx"),
+            network: None,
         }
+    }
+
+    fn probing(dest: &str) -> Policy {
+        Policy {
+            network: Some(dest.parse().unwrap()),
+            ..policy(&["runtime"])
+        }
+    }
+
+    /// The API probe's syscalls as strace prints them (recorded from real runs), to `ip:port`.
+    fn probe_lines(v6: bool, port: u16) -> Vec<(u32, String)> {
+        let (family, tcp, addr, peer) = if v6 {
+            let addr = format!(
+                "{{sa_family=AF_INET6, sin6_port=htons({port}), sin6_flowinfo=htonl(0), inet_pton(AF_INET6, \"{}\", &sin6_addr), sin6_scope_id=0}}",
+                hex("::1")
+            );
+            (
+                "AF_INET6",
+                "TCPv6",
+                addr,
+                format!("[[::1]:56826->[::1]:{port}]"),
+            )
+        } else {
+            let addr = format!(
+                "{{sa_family=AF_INET, sin_port=htons({port}), sin_addr=inet_addr(\"{}\")}}",
+                hex("127.0.0.1")
+            );
+            (
+                "AF_INET",
+                "TCP",
+                addr,
+                format!("[127.0.0.1:45118->127.0.0.1:{port}]"),
+            )
+        };
+        let len = if v6 { 28 } else { 16 };
+        vec![
+            (10, format!("socket({family}, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_IP) = 3<{tcp}:[1174694]>")),
+            (10, format!("connect(3<{tcp}:[1174694]>, {addr}, {len}) = -1 EINPROGRESS (Operation now in progress)")),
+            (10, format!("getsockopt(3<{tcp}:[1174694]>, SOL_SOCKET, SO_ERROR, [0], [4]) = 0")),
+            (10, format!("setsockopt(3<{tcp}:{peer}>, SOL_SOCKET, SO_SNDTIMEO_OLD, \"\\x01\", 16) = 0")),
+            (10, format!("sendto(3<{tcp}:{peer}>, \"\\x47\\x45\\x54\"..., 122, MSG_NOSIGNAL, NULL, 0) = 122")),
+            (10, format!("setsockopt(3<{tcp}:{peer}>, SOL_SOCKET, SO_RCVTIMEO_OLD, \"\\x01\", 16) = 0")),
+            (10, format!("recvfrom(3<{tcp}:{peer}>, \"\\x48\\x54\"..., 4096, 0, NULL, NULL) = 59")),
+        ]
+    }
+
+    fn network_violations(run: &TracedRun, p: &Policy) -> Vec<(Contract, String)> {
+        found(&check(run, p))
+            .into_iter()
+            .filter(|x| x.0 == Contract::C4NoNetwork)
+            .collect()
+    }
+
+    #[test]
+    fn c4_the_probe_to_its_destination_is_allowed() {
+        let run = with(&probe_lines(false, 11434));
+        assert_eq!(
+            network_violations(&run, &probing("127.0.0.1:11434")),
+            vec![]
+        );
+        let run = with(&probe_lines(true, 11434));
+        assert_eq!(network_violations(&run, &probing("[::1]:11434")), vec![]);
+        // The same trace without an allowed destination: every socket call is a violation.
+        let all = network_violations(&run, &policy(&["runtime"]));
+        assert_eq!(all.len(), 7, "{all:?}");
+    }
+
+    #[test]
+    fn c4_another_destination_is_a_violation() {
+        let run = with(&probe_lines(false, 11434));
+        let v = network_violations(&run, &probing("127.0.0.1:11435"));
+        // Connecting elsewhere, and every call on the connected socket.
+        assert!(
+            v.contains(&(Contract::C4NoNetwork, "connect".to_string())),
+            "{v:?}"
+        );
+        assert!(
+            v.contains(&(Contract::C4NoNetwork, "sendto".to_string())),
+            "{v:?}"
+        );
+        // The family must match the destination too.
+        let v = network_violations(&run, &probing("[::1]:11434"));
+        assert!(
+            v.contains(&(Contract::C4NoNetwork, "socket".to_string())),
+            "{v:?}"
+        );
+    }
+
+    #[test]
+    fn c4_only_one_stream_socket_and_no_server_calls() {
+        let mut lines = probe_lines(false, 11434);
+        lines.extend([
+            (10, "socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_IP) = 4<TCP:[2000]>".to_string()),
+            (10, "socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 5<UDP:[2001]>".to_string()),
+            (10, "bind(3<TCP:[127.0.0.1:45118->127.0.0.1:11434]>, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr(\"\\x30\")}, 16) = 0".to_string()),
+            (10, "listen(3<TCP:[127.0.0.1:45118->127.0.0.1:11434]>, 1) = 0".to_string()),
+            (10, "sendmsg(3<TCP:[127.0.0.1:45118->127.0.0.1:11434]>, {msg_name=NULL}, 0) = 1".to_string()),
+            (10, "sendto(3<TCP:[127.0.0.1:45118->127.0.0.1:11434]>, \"\\x47\", 1, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr(\"\\x31\")}, 16) = 1".to_string()),
+            (10, "recvfrom(6<TCP:[127.0.0.1:1->127.0.0.1:2]>, \"\\x48\", 1, 0, NULL, NULL) = 1".to_string()),
+        ]);
+        let run = with(&lines);
+        let v = network_violations(&run, &probing("127.0.0.1:11434"));
+        let names: Vec<&str> = v.iter().map(|x| x.1.as_str()).collect();
+        assert_eq!(
+            names,
+            ["socket", "socket", "bind", "listen", "sendmsg", "sendto", "recvfrom"],
+            "{v:?}"
+        );
     }
 
     /// A compliant run: exec of the binary, ld.so mappings, Rust std's /proc/self/maps, a thread,

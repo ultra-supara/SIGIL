@@ -138,3 +138,114 @@ fn an_empty_session_still_has_an_outcome() {
     assert!(md.contains("**Verdict:** PASS"), "{md}");
     assert!(md.contains("\n## Findings\n\nNone.\n"), "{md}");
 }
+
+/// A session that probed 127.0.0.1:11434, answered with `version`.
+fn probed(version: UntrustedText) -> Session {
+    let mut s = base(&[]);
+    s.request.active.push(ActiveFeature::ApiProbe {
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        allow_remote: false,
+    });
+    s.probes.push(ApiProbe {
+        id: id("probe:api/127.0.0.1:11434"),
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        at: ts("2026-10-07T07:00:01Z"),
+        result: ProbeResult::Answered {
+            status: 200,
+            version: Some(version),
+        },
+    });
+    s
+}
+
+#[test]
+fn a_probe_is_shown_with_its_target_and_outcome() {
+    let md = render_session(&probed(t("0.12.3")));
+    assert!(md.contains("\n## Runtime API\n"), "{md}");
+    let shown = |text: &str| t(text).markdown_inline();
+    let row = md
+        .lines()
+        .find(|l| l.contains(&shown("127.0.0.1:11434")) && l.contains("answered"))
+        .unwrap_or_else(|| panic!("no probe row:\n{md}"));
+    assert!(row.contains(&shown("0.12.3")), "{row}");
+    // The run names the active feature.
+    assert!(
+        md.lines().any(|l| l.starts_with("| Active |")
+            && l.contains(&shown("api-probe 127.0.0.1:11434"))),
+        "{md}"
+    );
+    assert_eq!(md, render_session(&probed(t("0.12.3"))));
+}
+
+#[test]
+fn without_a_probe_there_is_no_runtime_api_section() {
+    let md = render_session(&base(&[]));
+    assert!(!md.contains("Runtime API"), "{md}");
+    assert!(!md.contains("| Active |"), "{md}");
+}
+
+#[test]
+fn a_hostile_version_forms_no_markdown_or_html() {
+    let md = render_session(&probed(t(HOSTILE)));
+    assert!(md.contains(&t(HOSTILE).markdown_inline()), "{md}");
+    for raw in ["<script>", "](http", "x|y", "`code`"] {
+        assert!(!md.contains(raw), "{raw:?} reached the report:\n{md}");
+    }
+    assert!(!md.contains('\u{202E}'));
+    assert!(!md.lines().any(|l| l.starts_with("# heading")), "{md}");
+}
+
+#[test]
+fn every_probe_outcome_has_a_label() {
+    use sigil_model::render::probe_result;
+    let cases = [
+        (ProbeResult::Refused, "refused"),
+        (
+            ProbeResult::TimedOut {
+                phase: ProbePhase::Connect,
+            },
+            "timed out (connect)",
+        ),
+        (
+            ProbeResult::Answered {
+                status: 404,
+                version: None,
+            },
+            "answered (HTTP 404), no version",
+        ),
+        (
+            ProbeResult::TooLarge { limit: 65536 },
+            "response over 65536 bytes",
+        ),
+        (
+            ProbeResult::Malformed {
+                why: "transfer-encoding not supported".to_string(),
+            },
+            "unreadable response: transfer-encoding not supported",
+        ),
+        (
+            ProbeResult::Failed {
+                message: t("Connection reset by peer"),
+            },
+            "failed: Connection reset by peer",
+        ),
+    ];
+    for (result, label) in cases {
+        assert_eq!(probe_result(&result).terminal(), label);
+    }
+}
+
+#[test]
+fn a_refused_connection_is_shown_as_such() {
+    let state = CoverageState::NotPresent {
+        evidence: vec![],
+        scope: "127.0.0.1:11434 from this host".to_string(),
+        basis: AbsenceBasis::ConnectionRefused,
+    };
+    assert_eq!(
+        sigil_model::render::coverage_state(&state).terminal(),
+        "not present: connection refused at 127.0.0.1:11434 from this host"
+    );
+}

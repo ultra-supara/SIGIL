@@ -31,6 +31,8 @@ pub(super) struct RawScope {
     #[serde(default)]
     pub observe_audit: Vec<String>,
     #[serde(default)]
+    pub active_audit: Vec<String>,
+    #[serde(default)]
     pub extra_required: Vec<String>,
 }
 

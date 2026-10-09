@@ -1,0 +1,298 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.1.0",
+    "git_rev": null
+  },
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "sigil-policy/1",
+      "sha256": "c533404255e67cd9508613136805e9258ec94dbb9694f057dcd340dffc094b24"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [
+      {
+        "id": "models",
+        "path": "/tmp/claude-1000/-home-ultrasupara-go-src-github-com-project-SIGIL/4d377861-da4f-46e1-aec8-a195d8b95e34/scratchpad/pr75fx/unlicensed"
+      }
+    ],
+    "audit": [
+      "model_store"
+    ],
+    "required_checks": [
+      "model_store.integrity",
+      "model_store.inventory",
+      "model_store.license"
+    ],
+    "budgets": {
+      "directory_entries": 16384,
+      "entries_listed": 65536,
+      "files_discovered": 4096,
+      "link_hops": 40,
+      "manifest_bytes": 1048576,
+      "walk_depth": 32
+    },
+    "observe_env": false,
+    "model_filter": null
+  },
+  "observation": {
+    "started_at": "2026-10-08T13:49:50Z",
+    "finished_at": "2026-10-08T13:49:50Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "",
+    "kernel": "7.0.12+kali-amd64",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:0e9c8489502296ebbf71420830ad4682ea608cd2d7d64aafd1419f4bfb4e110f",
+      "size": 352,
+      "format": "Other",
+      "slices": []
+    },
+    {
+      "id": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "size": 2,
+      "format": "Other",
+      "slices": []
+    },
+    {
+      "id": "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c",
+      "size": 7,
+      "format": "Other",
+      "slices": []
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:models/blobs/sha256-44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "root": "models",
+      "path": "/tmp/claude-1000/-home-ultrasupara-go-src-github-com-project-SIGIL/4d377861-da4f-46e1-aec8-a195d8b95e34/scratchpad/pr75fx/unlicensed/blobs/sha256-44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        }
+      },
+      "stat": {
+        "dev": 41,
+        "ino": 1001099,
+        "mode": 33204,
+        "uid": 1000,
+        "gid": 1000,
+        "size": 2,
+        "mtime_ns": 1791467390826646711,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        {
+          "Manifest": {
+            "manifest": "inst:models/manifests/registry.ollama.ai/library/tiny/latest"
+          }
+        }
+      ]
+    },
+    {
+      "id": "inst:models/blobs/sha256-9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c",
+      "root": "models",
+      "path": "/tmp/claude-1000/-home-ultrasupara-go-src-github-com-project-SIGIL/4d377861-da4f-46e1-aec8-a195d8b95e34/scratchpad/pr75fx/unlicensed/blobs/sha256-9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+        }
+      },
+      "stat": {
+        "dev": 41,
+        "ino": 1001094,
+        "mode": 33204,
+        "uid": 1000,
+        "gid": 1000,
+        "size": 7,
+        "mtime_ns": 1791467390826611930,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        {
+          "Manifest": {
+            "manifest": "inst:models/manifests/registry.ollama.ai/library/tiny/latest"
+          }
+        }
+      ]
+    },
+    {
+      "id": "inst:models/manifests/registry.ollama.ai/library/tiny/latest",
+      "root": "models",
+      "path": "/tmp/claude-1000/-home-ultrasupara-go-src-github-com-project-SIGIL/4d377861-da4f-46e1-aec8-a195d8b95e34/scratchpad/pr75fx/unlicensed/manifests/registry.ollama.ai/library/tiny/latest",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:0e9c8489502296ebbf71420830ad4682ea608cd2d7d64aafd1419f4bfb4e110f"
+        }
+      },
+      "stat": {
+        "dev": 41,
+        "ino": 1001100,
+        "mode": 33204,
+        "uid": 1000,
+        "gid": 1000,
+        "size": 352,
+        "mtime_ns": 1791467390826676221,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Walk"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "id": "model:models/registry.ollama.ai/library/tiny/latest",
+      "name": "tiny:latest",
+      "manifest": "inst:models/manifests/registry.ollama.ai/library/tiny/latest",
+      "provenance": {
+        "registry": "registry.ollama.ai",
+        "namespace": "library",
+        "model": "tiny",
+        "tag": "latest"
+      },
+      "layers": [
+        {
+          "role": "Config",
+          "media_type": "application/vnd.docker.container.image.v1+json",
+          "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "blob": {
+            "Found": {
+              "instance": "inst:models/blobs/sha256-44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+            }
+          }
+        },
+        {
+          "role": "Layer",
+          "media_type": "application/vnd.ollama.image.model",
+          "digest": "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c",
+          "blob": {
+            "Found": {
+              "instance": "inst:models/blobs/sha256-9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+            }
+          }
+        }
+      ],
+      "license": null
+    }
+  ],
+  "processes": [],
+  "listeners": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "hints": [],
+  "code": [],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "model_store.integrity",
+      "scope": {
+        "Model": "model:models/registry.ollama.ai/library/tiny/latest"
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "model_store.inventory",
+      "scope": {
+        "Root": "models"
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "model_store.license",
+      "scope": {
+        "Model": "model:models/registry.ollama.ai/library/tiny/latest"
+      },
+      "state": "Complete",
+      "budget": null
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding:model.license_missing@model:models/registry.ollama.ai/library/tiny/latest",
+      "rule": "model.license_missing",
+      "kind": "Integrity",
+      "subject": {
+        "Model": "model:models/registry.ollama.ai/library/tiny/latest"
+      },
+      "summary": "A manifest has no license layer",
+      "conditions": [
+        {
+          "id": "license_layer_absent",
+          "state": {
+            "Met": {
+              "evidence": {
+                "Observed": {
+                  "facts": [
+                    {
+                      "Instance": {
+                        "instance": "inst:models/manifests/registry.ollama.ai/library/tiny/latest"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "unresolved": []
+        }
+      ],
+      "evidence": [
+        {
+          "Model": {
+            "model": "model:models/registry.ollama.ai/library/tiny/latest"
+          }
+        },
+        {
+          "Instance": {
+            "instance": "inst:models/manifests/registry.ollama.ai/library/tiny/latest"
+          }
+        }
+      ],
+      "limits": [],
+      "default_severity": "Warn",
+      "decision": {
+        "action": "Warn",
+        "source": "default:model.license_missing",
+        "reason": null,
+        "expires": null
+      }
+    }
+  ],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Warn",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 1,
+    "policy_time": "2026-10-08T13:49:50Z"
+  }
+}

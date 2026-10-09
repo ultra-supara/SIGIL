@@ -104,6 +104,10 @@ pub const SCOPES: &[ScopeInfo] = &[
         checks: &["exposure.binds"],
     },
     ScopeInfo {
+        id: "runtime_api",
+        checks: &["runtime_api.version"],
+    },
+    ScopeInfo {
         id: "runtime_artifacts",
         checks: &["artifacts.discovery"],
     },

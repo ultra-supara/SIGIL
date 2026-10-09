@@ -43,6 +43,7 @@ fn policy_for(s: &Session, body: &str) -> Policy {
     let mut p = policy(body);
     p.audit.clear();
     p.observe_audit.clear();
+    p.active_audit.clear();
     p.extra_required = s.request.required_checks.clone();
     p
 }
@@ -447,7 +448,7 @@ fn a_change_in_required_checks_requires_reanalysis() {
 fn a_canonical_round_trip_keeps_a_session_evaluable_with_the_same_policy() {
     let policy = Policy::builtin_default().unwrap();
     let mut s = example("01-complete-pass");
-    let (audit, required) = policy.scope(s.request.mode);
+    let (audit, required) = policy.scope(s.request.mode, false);
     s.request.audit = audit;
     s.request.required_checks = required.clone();
     let time = s.outcome.policy_time.clone();
@@ -546,4 +547,25 @@ fn the_verdict_is_the_highest_action_whatever_its_source() {
     );
     run(&mut s, &body);
     assert_eq!(s.outcome.verdict, Verdict::Fail);
+}
+
+#[test]
+fn an_active_request_changed_after_assembly_is_refused() {
+    let policy = Policy::builtin_default().unwrap();
+    let mut s = example("01-complete-pass");
+    let (audit, required) = policy.scope(s.request.mode, false);
+    s.request.audit = audit;
+    s.request.required_checks = required;
+    // The required checks were derived without the probe; a request that now lists one needs
+    // `runtime_api.version` too.
+    s.request.active.push(ActiveFeature::ApiProbe {
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        allow_remote: false,
+    });
+    let time = s.outcome.policy_time.clone();
+    assert!(matches!(
+        evaluate(&mut s, &policy, time),
+        Err(EvaluateError::RequiredChecksChanged { .. })
+    ));
 }

@@ -1118,6 +1118,7 @@ dependencies = [
  "sha2",
  "sigil-engine",
  "sigil-model",
+ "sigil-probe",
  "tempfile",
 ]
 
@@ -1156,6 +1157,14 @@ dependencies = [
  "jsonschema",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sigil-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sigil-model",
 ]
 
 [[package]]

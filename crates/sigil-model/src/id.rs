@@ -280,6 +280,19 @@ string_id!(
     |k, v| check_prefixed(k, v, "listener:")
 );
 string_id!(
+    /// An active probe: `probe:api/<address>:<port>`, with an IPv6 address in brackets.
+    ProbeId,
+    |k, v| check_prefixed(k, v, "probe:")
+);
+
+impl ProbeId {
+    /// The ID of the API probe of `target`.
+    pub fn api(target: core::net::SocketAddr) -> Self {
+        Self(format!("probe:api/{target}"))
+    }
+}
+
+string_id!(
     /// A function inside one slice's [`crate::CodeFacts`], e.g. `fn:0xecb0`.
     FnId,
     |k, v| check_prefixed(k, v, "fn:")
