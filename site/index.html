@@ -24,7 +24,7 @@
 
 <h2>Modes</h2>
 <ul>
-<li><strong>static</strong> (default): reads files under the model store only.</li>
+<li><strong>static</strong> (default): reads files under the model store, and with <code>--install-dir</code> the installation's <code>bin/ollama</code> and <code>lib/ollama/</code>, compared with the official release manifests.</li>
 <li><strong>observe</strong>: also reads the allowlisted <code>/proc</code> entries, to attribute the runtime's listening sockets.</li>
 <li><strong>active</strong> (<code>--active api-probe</code>, off by default): also sends one <code>GET /api/version</code> to a literal address.</li>
 </ul>

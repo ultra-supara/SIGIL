@@ -17,8 +17,10 @@
 )]
 
 pub mod analyze;
+pub mod binary;
 pub mod collect;
 pub mod explain;
 pub mod inspect;
 pub mod observe;
 pub mod policy;
+pub mod reference;

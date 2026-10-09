@@ -101,7 +101,8 @@ pub struct FileInstance {
     pub path: UntrustedText,
     /// Every symlink hop, in resolution order. Empty when the path is not a symlink.
     pub link_chain: Vec<LinkHop>,
-    /// The final path after following `link_chain`; `None` exactly when `link_chain` is empty.
+    /// The final path after following `link_chain`; `None` exactly when `link_chain` is empty. For
+    /// a link that was not followed (`OutsideScanRoots`, `NotFollowed`), its target text.
     pub resolved: Option<UntrustedText>,
     /// Whether the contents were read, and if not, why.
     pub content: InstanceContent,
@@ -131,6 +132,11 @@ pub enum NotReadReason {
     Vanished,
     /// A file-count or byte budget was exhausted first.
     BudgetExceeded,
+    /// A symlink of the install walk: its own `lstat` and target text are recorded, and it is not
+    /// followed, wherever it leads (PR-4a).
+    NotFollowed,
+    /// A directory placement: listed and entered; it has no content to read.
+    Directory,
 }
 
 /// One symlink hop: the link, its target text, and the link's owner and mode.

@@ -1,7 +1,7 @@
 //! Loading `sigil-policy/1` (plan §4.7): what loads, what the default requires, and every input
 //! that must be fatal rather than silently ignored.
 
-use sigil_engine::policy::{catalog, Policy, PolicyError, TrustedPrincipal};
+use sigil_engine::policy::{catalog, Policy, PolicyError, ScopeInput, TrustedPrincipal};
 use sigil_model::{Action, KnowledgeKind, Mode, OqTreatment, RuleId};
 
 fn ids<T: std::fmt::Display>(items: &[T]) -> Vec<String> {
@@ -12,7 +12,11 @@ fn ids<T: std::fmt::Display>(items: &[T]) -> Vec<String> {
 fn the_default_policy_requires_only_implemented_scopes() {
     let policy = Policy::builtin_default().unwrap();
     assert_eq!(policy.name, "default");
-    let (audit, required) = policy.scope(Mode::Static, false);
+    let (audit, required) = policy.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+    });
     assert_eq!(ids(&audit), ["model_store"]);
     assert_eq!(
         ids(&required),
@@ -22,7 +26,11 @@ fn the_default_policy_requires_only_implemented_scopes() {
             "model_store.license"
         ]
     );
-    let (audit, required) = policy.scope(Mode::Observe, false);
+    let (audit, required) = policy.scope(&ScopeInput {
+        mode: Mode::Observe,
+        active: false,
+        install: false,
+    });
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert_eq!(
         ids(&required),
@@ -78,7 +86,11 @@ reason    = "The RPC backend is outside the internal standard"
 #[test]
 fn the_plan_example_loads() {
     let policy = Policy::load(PLAN_EXAMPLE).unwrap();
-    let (_, required) = policy.scope(Mode::Static, false);
+    let (_, required) = policy.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+    });
     assert_eq!(
         ids(&required),
         [
@@ -86,6 +98,7 @@ fn the_plan_example_loads() {
             "model_store.integrity",
             "model_store.license",
             "artifacts.discovery",
+            "artifacts.release",
             "loader.identify",
             "loader.search_paths",
         ]
@@ -124,7 +137,11 @@ principals = ["root", "uid:1000"]
 extra_groups = ["gid:27"]
 "#;
     let policy = Policy::load(text).unwrap();
-    let (_, required) = policy.scope(Mode::Static, false);
+    let (_, required) = policy.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+    });
     assert_eq!(required.last().unwrap().as_str(), "exposure.binds");
     assert_eq!(policy.open_questions.treatment, OqTreatment::Warn);
     assert_eq!(ids(&policy.accept), ["A-3"]);
@@ -296,21 +313,73 @@ fn the_documented_example_loads() {
 fn an_active_feature_adds_the_active_scopes() {
     let policy = Policy::builtin_default().unwrap();
     assert_eq!(ids(&policy.active_audit), ["runtime_api"]);
-    let (audit, required) = policy.scope(Mode::Static, true);
+    let (audit, required) = policy.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: true,
+        install: false,
+    });
     assert_eq!(ids(&audit), ["model_store", "runtime_api"]);
     assert_eq!(required.last().unwrap().as_str(), "runtime_api.version");
-    let (audit, _) = policy.scope(Mode::Observe, true);
+    let (audit, _) = policy.scope(&ScopeInput {
+        mode: Mode::Observe,
+        active: true,
+        install: false,
+    });
     assert_eq!(ids(&audit), ["model_store", "exposure", "runtime_api"]);
     // Without an active feature, the active scopes are not requested.
-    let (audit, required) = policy.scope(Mode::Observe, false);
+    let (audit, required) = policy.scope(&ScopeInput {
+        mode: Mode::Observe,
+        active: false,
+        install: false,
+    });
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert!(!ids(&required).contains(&"runtime_api.version".to_string()));
     // A policy may leave them out, and must name known scopes.
     let base = "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\naudit = [\"model_store\"]\n";
     let none = Policy::load(&format!("{base}active_audit = []\n")).unwrap();
-    assert_eq!(ids(&none.scope(Mode::Static, true).0), ["model_store"]);
+    assert_eq!(
+        ids(&none
+            .scope(&ScopeInput {
+                mode: Mode::Static,
+                active: true,
+                install: false
+            })
+            .0),
+        ["model_store"]
+    );
     assert!(matches!(
         Policy::load(&format!("{base}active_audit = [\"nope\"]\n")),
         Err(PolicyError::UnknownScope(s)) if s == "nope"
     ));
+}
+
+#[test]
+fn the_install_adds_runtime_artifacts_and_its_two_checks() {
+    use sigil_engine::policy::ScopeInput;
+    let policy = Policy::builtin_default().unwrap();
+    let base = ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+    };
+    let (audit, required) = policy.scope(&base);
+    let (audit_i, required_i) = policy.scope(&ScopeInput {
+        install: true,
+        ..base
+    });
+    assert!(!audit.iter().any(|a| a.as_str() == "runtime_artifacts"));
+    assert!(audit_i.iter().any(|a| a.as_str() == "runtime_artifacts"));
+    let extra: Vec<&str> = required_i
+        .iter()
+        .filter(|c| !required.contains(c))
+        .map(|c| c.as_str())
+        .collect();
+    assert_eq!(extra, ["artifacts.discovery", "artifacts.release"]);
+}
+
+#[test]
+fn a_policy_without_install_audit_still_loads() {
+    let text = "schema = \"sigil-policy/1\"\nname = \"old\"\n[scope]\naudit = [\"model_store\"]\n";
+    let policy = Policy::load(text).unwrap();
+    assert!(policy.install_audit.is_empty());
 }

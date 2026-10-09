@@ -31,7 +31,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::access::PrincipalClaim;
-use crate::artifact::{InstanceContent, ProcessExe, ProcessRef};
+use crate::artifact::{FileInstance, InstanceContent, ProcessExe, ProcessRef, Stability};
 use crate::code::{ArgValue, CallTarget, CheckResult, CheckUnknown, CodeFacts};
 use crate::coverage::{AbsenceBasis, CoverageState};
 use crate::evidence::{
@@ -44,12 +44,16 @@ use crate::finding::{
 };
 use crate::id::{
     ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ListenerId,
-    ModelId, ObligationId, OpenQuestionId, PremiseId, ProbeId, ProcessRole, ProfileRef, SliceId,
+    ModelId, ObligationId, OpenQuestionId, PremiseId, ProbeId, ProcessRole, ProfileRef, RootId,
+    SliceId,
 };
 use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
 use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
+use crate::reference::{
+    EntryKind, MemberResult, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
+};
 use crate::relation::{
     BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
 };
@@ -198,6 +202,26 @@ pub enum ValidationError {
     GapNotCountAsGap { question: OpenQuestionId },
     /// `Incomplete` with nothing missing.
     IncompleteWithoutReason,
+    /// A reference-match row disagrees with its placement, its reference, or discovery
+    /// (V1–V8; PR-4a).
+    ReferenceRow {
+        release: String,
+        member: String,
+        why: &'static str,
+    },
+    /// A release claim by reference matches whose candidates differ from the releases every
+    /// placement matches (V10).
+    ReleaseCandidates {
+        product: ComponentKey,
+        recorded: Vec<String>,
+        derived: Vec<String>,
+    },
+    /// A release claim by reference matches whose files are not exactly the placements, or that
+    /// was made while discovery was not complete (V10).
+    ReleaseBasisIncomplete { product: ComponentKey },
+    /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
+    /// (V11).
+    ReleaseCoverage { complete: bool },
 }
 
 impl fmt::Display for ValidationError {
@@ -316,6 +340,20 @@ impl fmt::Display for ValidationError {
                 write!(f, "outcome: gaps lists {question}, which is not an open question treated as a gap")
             }
             IncompleteWithoutReason => write!(f, "outcome: Incomplete with no missing check and no gap"),
+            ReferenceRow { release, member, why } => write!(f, "reference_matches[{release} {member}]: {why}"),
+            ReleaseCandidates { product, recorded, derived } => write!(
+                f,
+                "releases[{product}]: candidates {recorded:?}, but every placement matches {derived:?}"
+            ),
+            ReleaseBasisIncomplete { product } => write!(
+                f,
+                "releases[{product}]: the basis must list every install placement, after a complete discovery"
+            ),
+            ReleaseCoverage { complete } => write!(
+                f,
+                "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
+                if *complete { "Complete" } else { "not Complete" }
+            ),
         }
     }
 }
@@ -636,6 +674,7 @@ impl<'a> Validator<'a> {
                 }
             }
         }
+        self.reference_matches();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -1230,6 +1269,168 @@ impl<'a> Validator<'a> {
                     subject: claim.subject.clone(),
                     component: claim.component.clone(),
                     status: claim.status,
+                });
+            }
+        }
+    }
+
+    /// V1–V11 (PR-4a): reference rows against their placements, the release claim, and coverage.
+    fn reference_matches(&mut self) {
+        let s = self.s;
+        let install = RootId::new(INSTALL_ROOT).ok();
+        let root_path: Option<Vec<u8>> = s
+            .request
+            .roots
+            .iter()
+            .find(|r| Some(&r.id) == install.as_ref())
+            .map(|r| r.path.as_bytes().to_vec());
+        let path_of = |member: &str| -> Option<Vec<u8>> {
+            root_path.as_ref().map(|root| {
+                let mut path = root.clone();
+                path.push(b'/');
+                path.extend_from_slice(member.as_bytes());
+                path
+            })
+        };
+        let placements: Vec<&FileInstance> = s
+            .instances
+            .iter()
+            .filter(|i| Some(&i.root) == install.as_ref())
+            .collect();
+        let state = |check: &str| {
+            s.coverage
+                .iter()
+                .find(|c| c.check.as_str() == check)
+                .map(|c| &c.state)
+        };
+        let discovery_complete =
+            matches!(state(ARTIFACTS_DISCOVERY), Some(CoverageState::Complete));
+        let mut seen = BTreeSet::new();
+        for row in &s.reference_matches {
+            let error = |why| ValidationError::ReferenceRow {
+                release: row.release.clone(),
+                member: row.member.clone(),
+                why,
+            };
+            self.refset(
+                row.reference.as_str(),
+                &format!("reference_matches[{} {}]", row.release, row.member),
+            ); // V1
+            if !seen.insert((&row.reference, &row.release, &row.member)) {
+                self.errors.push(ValidationError::DuplicateId {
+                    kind: "reference match",
+                    id: format!("{} {} {}", row.reference, row.release, row.member),
+                }); // V9
+            }
+            let at_member = path_of(&row.member);
+            let absent = matches!(row.result, MemberResult::Absent { .. });
+            match (&row.instance, absent) {
+                (None, true) => {
+                    if !discovery_complete {
+                        self.errors
+                            .push(error("Absent while discovery is not complete"));
+                        // V8
+                    }
+                    if placements
+                        .iter()
+                        .any(|i| Some(i.path.as_bytes()) == at_member.as_deref())
+                    {
+                        self.errors
+                            .push(error("Absent, but a placement is at the member's path"));
+                        // V8
+                    }
+                }
+                (Some(id), false) => {
+                    let Some(i) = placements.iter().find(|i| i.id == *id) else {
+                        self.errors
+                            .push(error("the instance is not a placement of the install root")); // V2
+                        continue;
+                    };
+                    if Some(i.path.as_bytes()) != at_member.as_deref() {
+                        self.errors
+                            .push(error("the member is not the placement's path"));
+                        // V2
+                    }
+                    if let Some(why) = row_disagrees(&row.result, i) {
+                        self.errors.push(error(why)); // V3–V7
+                    }
+                }
+                _ => self.errors.push(error(
+                    "an instance is given exactly for rows that are not Absent",
+                )), // V2
+            }
+        }
+        self.release_by_rows(&placements, discovery_complete, &path_of);
+        if let Some(release) = state(ARTIFACTS_RELEASE) {
+            let complete = matches!(release, CoverageState::Complete);
+            let claimed: Vec<&crate::identity::ReleaseClaim> = s
+                .releases
+                .iter()
+                .filter(|c| matches!(c.basis, ReleaseBasis::ReferenceMatches { .. }))
+                .collect();
+            let nothing_absent = claimed.iter().all(|c| {
+                !s.reference_matches.iter().any(|r| {
+                    matches!(r.result, MemberResult::Absent { .. })
+                        && c.candidates.contains(&r.release)
+                })
+            });
+            let holds = !claimed.is_empty() && discovery_complete && nothing_absent;
+            if complete != holds {
+                self.errors
+                    .push(ValidationError::ReleaseCoverage { complete }); // V11
+            }
+        }
+    }
+
+    /// V10: a claim by reference matches covers every placement, and its candidates are exactly
+    /// the releases that every placement matches.
+    fn release_by_rows(
+        &mut self,
+        placements: &[&FileInstance],
+        discovery_complete: bool,
+        path_of: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) {
+        let s = self.s;
+        for claim in &s.releases {
+            let ReleaseBasis::ReferenceMatches { reference, files } = &claim.basis else {
+                continue;
+            };
+            let mut all: Vec<&str> = placements.iter().map(|i| i.id.as_str()).collect();
+            all.sort_unstable();
+            let mut listed: Vec<&str> = files.iter().map(|f| f.as_str()).collect();
+            listed.sort_unstable();
+            if listed != all || !discovery_complete {
+                self.errors.push(ValidationError::ReleaseBasisIncomplete {
+                    product: claim.product.clone(),
+                });
+            }
+            let releases: BTreeSet<&String> = s
+                .reference_matches
+                .iter()
+                .filter(|r| r.reference == *reference)
+                .map(|r| &r.release)
+                .collect();
+            let matched = |release: &String, i: &FileInstance| {
+                s.reference_matches.iter().any(|r| {
+                    r.reference == *reference
+                        && r.release == *release
+                        && r.instance.as_ref() == Some(&i.id)
+                        && path_of(&r.member).as_deref() == Some(i.path.as_bytes())
+                        && r.result.matches()
+                })
+            };
+            let derived: Vec<String> = releases
+                .into_iter()
+                .filter(|r| !placements.is_empty() && placements.iter().all(|i| matched(r, i)))
+                .cloned()
+                .collect();
+            let mut recorded = claim.candidates.clone();
+            recorded.sort();
+            if recorded != derived {
+                self.errors.push(ValidationError::ReleaseCandidates {
+                    product: claim.product.clone(),
+                    recorded,
+                    derived,
                 });
             }
         }
@@ -2051,4 +2252,50 @@ fn states<'s>(s: &'s Session, check: &'s CheckId) -> impl Iterator<Item = &'s Co
         .iter()
         .filter(move |c| c.check == *check)
         .map(|c| &c.state)
+}
+
+/// Why `result` cannot be a row for placement `i` (V3–V7), if it cannot.
+fn row_disagrees(result: &MemberResult, i: &FileInstance) -> Option<&'static str> {
+    let stable = i.stability == Stability::NoChangeDetected;
+    let kind = i.entry_kind();
+    let unread_file =
+        kind == EntryKind::File && matches!(i.content, InstanceContent::NotRead { .. });
+    let comparable = stable && !unread_file;
+    let ok = match result {
+        MemberResult::File { observed, .. } => {
+            comparable
+                && kind == EntryKind::File
+                && matches!(&i.content, InstanceContent::Read { artifact }
+                    if artifact.as_str().strip_prefix("sha256:") == Some(observed.as_str()))
+        }
+        MemberResult::Symlink { observed, .. } => {
+            comparable
+                && kind == EntryKind::Symlink
+                && i.link_chain
+                    .first()
+                    .is_some_and(|hop| hop.target == *observed)
+        }
+        MemberResult::Directory => comparable && kind == EntryKind::Directory,
+        MemberResult::KindDiffers { expected, observed } => {
+            comparable && *observed == kind && kind.member() != Some(*expected)
+        }
+        MemberResult::NotCompared => !comparable,
+        MemberResult::Absent { .. } => false,
+    };
+    (!ok).then_some(match result {
+        MemberResult::File { .. } => {
+            "a File row needs a stable, read regular file with that SHA-256"
+        }
+        MemberResult::Symlink { .. } => {
+            "a Symlink row needs a stable symlink with that target text"
+        }
+        MemberResult::Directory => "a Directory row needs a stable directory",
+        MemberResult::KindDiffers { .. } => {
+            "KindDiffers must name the placement's own kind, which differs"
+        }
+        MemberResult::NotCompared => {
+            "NotCompared is only for an unstable placement or an unread file"
+        }
+        MemberResult::Absent { .. } => "Absent has no instance",
+    })
 }

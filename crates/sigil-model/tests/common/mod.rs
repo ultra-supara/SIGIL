@@ -132,6 +132,7 @@ pub fn base(required: &[&str]) -> Session {
         values: vec![],
         components: vec![],
         releases: vec![],
+        reference_matches: vec![],
         hints: vec![],
         code: vec![],
         relations: vec![],
@@ -1255,6 +1256,17 @@ pub fn conflicting_identity() -> Session {
         basis: ReleaseBasis::ReferenceMatches {
             reference: id("ollama-official"),
             files: vec![g.inst.clone()],
+        },
+    });
+    // PR-4a: the per-placement comparison that the claim rests on.
+    s.reference_matches.push(ReferenceMatch {
+        reference: id("ollama-official"),
+        release: "v0.30.6".to_string(),
+        member: "lib/ollama/libggml.so.0.13.1".to_string(),
+        instance: Some(g.inst.clone()),
+        result: MemberResult::File {
+            expected: id(&hex(0x11)),
+            observed: id(&hex(0x11)),
         },
     });
     pass_complete(&mut s);

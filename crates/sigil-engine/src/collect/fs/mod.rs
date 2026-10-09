@@ -19,7 +19,7 @@
 //! root, `open` plus what `std::fs::canonicalize` needs. All are read-only (contract C-5).
 
 use std::cell::Cell;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use rustix::fs::{Mode, OFlags};
@@ -31,8 +31,9 @@ mod resolve;
 mod walk;
 
 pub use path::{link_target, recorded, LinkTarget, PathError, RelPath};
+pub(crate) use read::instance_id;
 pub use read::{FileRead, ReadOutcome, ReadSpec};
-pub use walk::{Skip, Walk, WalkError};
+pub use walk::{Entry, EntryType, Skip, Walk, WalkError};
 
 /// Budgets that bound a scan (plan §4.9). Exceeding one is recorded, never fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +144,33 @@ impl SafeFs {
 
     pub(crate) fn root_index(&self, id: &RootId) -> Option<usize> {
         self.roots.iter().position(|r| r.id == *id)
+    }
+
+    /// The entry at `rel`, by `lstat` of its last component (PR-4a). No symlink is followed: the
+    /// last component is returned as it is, and a link among the others is
+    /// [`WalkError::LinkNotFollowed`].
+    pub fn entry_at(&self, root: &RootId, rel: &RelPath) -> Result<Entry, WalkError> {
+        let index = self
+            .root_index(root)
+            .ok_or_else(|| WalkError::Failed(format!("unknown scan root {root}")))?;
+        let (parent, name) = match self.resolve_strict(index, rel) {
+            resolve::Strict::Entry { parent, name, .. } => (parent, name),
+            resolve::Strict::Root => return Err(WalkError::NotADirectory),
+            resolve::Strict::Link { at } => return Err(WalkError::LinkNotFollowed { at }),
+            resolve::Strict::NotFound => return Err(WalkError::NotFound),
+            resolve::Strict::PermissionDenied => return Err(WalkError::PermissionDenied),
+            resolve::Strict::NotADirectory => return Err(WalkError::NotADirectory),
+            resolve::Strict::Failed(m) => return Err(WalkError::Failed(m)),
+        };
+        let parent = parent
+            .as_ref()
+            .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
+        match walk::entry_of(parent, &name, rel.clone()) {
+            Ok(entry) if entry.kind == EntryType::Vanished => Err(WalkError::NotFound),
+            Ok(entry) => Ok(entry),
+            Err(walk::Skip::PermissionDenied) => Err(WalkError::PermissionDenied),
+            Err(why) => Err(WalkError::Failed(format!("{why:?}"))),
+        }
     }
 
     pub(crate) fn canonical_roots(&self) -> Vec<PathBuf> {

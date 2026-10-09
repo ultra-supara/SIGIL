@@ -57,6 +57,7 @@ impl Session {
             release.candidates.sort();
         }
         sort_json(&mut self.releases);
+        sort_json(&mut self.reference_matches);
         sort_json(&mut self.hints);
         for facts in &mut self.code {
             sort_json(&mut facts.functions);

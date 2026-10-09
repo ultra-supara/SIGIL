@@ -143,6 +143,8 @@ fn unavailable(e: WalkError) -> CoverageState {
         },
         WalkError::NotADirectory => error("manifests is not a directory"),
         WalkError::OutsideRoots => error("manifests leads outside the scan roots"),
+        // Only `walk_entries` and `entry_at` refuse links; the store uses `walk`.
+        WalkError::LinkNotFollowed { .. } => error("a symlink on the way to manifests"),
         WalkError::Failed(message) => error(&message),
     }
 }

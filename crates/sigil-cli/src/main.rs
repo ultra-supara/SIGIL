@@ -1,9 +1,10 @@
 //! `sigil`: the v2 command line (plan §4.8).
 //!
 //! - `inspect ollama` inspects an Ollama installation: its model store, and, in observe mode,
-//!   the runtime's listening sockets. With `--active api-probe` it also asks the runtime's API
-//!   for its version (one request to a literal address, loopback unless `--allow-remote`). It
-//!   writes the session (or its Markdown) and a summary.
+//!   the runtime's listening sockets. With `--install-dir` it compares the installation's files
+//!   with the embedded official release manifests. With `--active api-probe` it also asks the
+//!   runtime's API for its version (one request to a literal address, loopback unless
+//!   `--allow-remote`). It writes the session (or its Markdown) and a summary.
 //! - `session render` renders a saved session, as Markdown or as its AI-BOM v2.
 //! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
 //! - `rules` lists the detection rules.
@@ -22,15 +23,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
 use sigil_engine::collect::fs::FsBudgets;
+use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, Format as ExplainFormat};
 use sigil_engine::inspect::{
-    observe_session, store_session, ActiveInput, ObserveRequest, StoreRequest,
+    observe_session, store_session, ActiveInput, InstallRequest, ObserveRequest, StoreRequest,
 };
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::RULES;
 use sigil_engine::policy::Policy;
+use sigil_engine::reference;
 use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
@@ -38,8 +41,9 @@ use sigil_model::render::{
     verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
-    is_loopback, target, ActiveFeature, Completeness, Mode, Session, Sha256Hex, Timestamp,
-    ToolInfo, UntrustedText, Verdict,
+    is_loopback, target, ActiveFeature, Completeness, CoverageState, KnowledgeKind, MemberKind,
+    MemberResult, Mode, ReleaseBasis, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText,
+    Verdict, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -86,6 +90,10 @@ struct OllamaArgs {
     /// The model store [default: $OLLAMA_MODELS, else ~/.ollama/models].
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
+    /// An Ollama installation prefix: bin/ollama and lib/ollama/ are compared with the official
+    /// release manifests embedded in SIGIL [default: not inspected].
+    #[arg(long, value_name = "DIR")]
+    install_dir: Option<PathBuf>,
     /// Inventory only the model with this display name (e.g. llama3.2:latest).
     #[arg(long, value_name = "NAME")]
     model: Option<String>,
@@ -101,7 +109,7 @@ struct OllamaArgs {
     /// The document written.
     #[arg(long, value_enum, default_value = "session")]
     format: DocFormat,
-    /// Write the document here instead of stdout (outside the models directory).
+    /// Write the document here instead of stdout (outside the models and install directories).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Exit with 3 when the verdict reaches this level.
@@ -262,18 +270,25 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     } else {
         None
     };
-    let (fs_budgets, manifest_limit, proc_budgets, probe_options) =
-        budgets(&args.budgets, mode, probing)?;
+    let given = budgets(&args.budgets, mode, probing, args.install_dir.is_some())?;
     if let Some(out) = &args.out {
-        check_out(out, &models_dir)?;
+        let mut roots = vec![(models_dir.as_path(), "models")];
+        if let Some(dir) = &args.install_dir {
+            roots.push((dir.as_path(), "install"));
+        }
+        check_out(out, &roots)?;
     }
     let policy = load_policy(args.policy.as_deref())?;
 
     let store = StoreRequest {
         models_dir,
         model_filter: args.model.clone(),
-        budgets: fs_budgets,
-        manifest_limit,
+        budgets: given.fs,
+        manifest_limit: given.manifest_limit,
+        install: args.install_dir.clone().map(|dir| InstallRequest {
+            dir,
+            budgets: given.install,
+        }),
     };
     let tool = ToolInfo {
         name: "sigil".to_string(),
@@ -287,7 +302,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             target,
             ProbeOptions {
                 allow_remote: args.allow_remote,
-                ..probe_options
+                ..given.probe
             },
         )?,
         None => ActiveInput::default(),
@@ -298,7 +313,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             &ObserveRequest {
                 store,
                 proc_root: proc_root.to_path_buf(),
-                proc_budgets,
+                proc_budgets: given.proc,
             },
             &active,
             &policy,
@@ -472,16 +487,22 @@ fn probe_maximum(key: &str) -> u64 {
     }
 }
 
+/// The budgets of one run.
+struct Budgets {
+    fs: FsBudgets,
+    manifest_limit: u64,
+    proc: ProcBudgets,
+    probe: ProbeOptions,
+    install: InstallBudgets,
+}
+
 /// The budgets, by the names the session records in `request.budgets`.
-fn budgets(
-    given: &[String],
-    mode: Mode,
-    probing: bool,
-) -> Result<(FsBudgets, u64, ProcBudgets, ProbeOptions), Failure> {
+fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result<Budgets, Failure> {
     let mut fs_budgets = FsBudgets::default();
     let mut manifest_limit = DEFAULT_MANIFEST_LIMIT;
     let mut proc_budgets = ProcBudgets::default();
     let mut probe_options = ProbeOptions::default();
+    let mut install_budgets = InstallBudgets::default();
     for entry in given {
         let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
         let Some((key, value)) = entry.split_once('=') else {
@@ -519,35 +540,48 @@ fn budgets(
             "api_connect_ms" => probe_options.connect_timeout = Duration::from_millis(value),
             "api_io_ms" => probe_options.io_deadline = Duration::from_millis(value),
             "api_response_bytes" => probe_options.max_response = value,
+            "install_files_discovered" | "install_entries_listed" | "install_bytes" if !install => {
+                return Err(usage("this budget applies to --install-dir only"));
+            }
+            "install_files_discovered" => install_budgets.files = value,
+            "install_entries_listed" => install_budgets.entries = value,
+            "install_bytes" => install_budgets.bytes = value,
             _ => {
                 return Err(usage(
                     "unknown budget; known: files_discovered, entries_listed, directory_entries, \
                      walk_depth, link_hops, manifest_bytes, in observe mode processes_listed, \
-                     fds_per_process, tcp_table_bytes, and with --active api-probe \
-                     api_connect_ms, api_io_ms, api_response_bytes",
+                     fds_per_process, tcp_table_bytes, with --active api-probe \
+                     api_connect_ms, api_io_ms, api_response_bytes, and with --install-dir \
+                     install_files_discovered, install_entries_listed, install_bytes",
                 ))
             }
         }
     }
-    Ok((fs_budgets, manifest_limit, proc_budgets, probe_options))
+    Ok(Budgets {
+        fs: fs_budgets,
+        manifest_limit,
+        proc: proc_budgets,
+        probe: probe_options,
+        install: install_budgets,
+    })
 }
 
-/// `--out` must not lie inside the models directory (C-5): SIGIL never writes under a scan root.
-fn check_out(out: &Path, models_dir: &Path) -> Result<(), Failure> {
-    let models = resolved(models_dir).map_err(|e| {
-        Failure::Usage(format!(
-            "the models directory {}: {e}",
-            shown_path(models_dir)
-        ))
-    })?;
+/// `--out` must not lie inside a scan root, given with its name (`models`, `install`) (C-5):
+/// SIGIL never writes under a scan root.
+fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<(), Failure> {
     let out =
         resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
-    if out.starts_with(&models) {
-        return Err(Failure::Usage(format!(
-            "--out {} is inside the models directory {}; SIGIL never writes under a scan root",
-            shown_path(&out),
-            shown_path(&models)
-        )));
+    for (dir, name) in roots {
+        let root = resolved(dir).map_err(|e| {
+            Failure::Usage(format!("the {name} directory {}: {e}", shown_path(dir)))
+        })?;
+        if out.starts_with(&root) {
+            return Err(Failure::Usage(format!(
+                "--out {} is inside the {name} directory {}; SIGIL never writes under a scan root",
+                shown_path(&out),
+                shown_path(&root)
+            )));
+        }
     }
     Ok(())
 }
@@ -652,6 +686,7 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
         .map(|root| format!("{} ({})", root.path.terminal_line(), root.id))
         .collect();
     lines.push(format!("roots: {}", roots.join(", ")));
+    lines.extend(release_line(s));
     for p in &s.probes {
         lines.push(format!(
             "api probe: {} → {}",
@@ -731,10 +766,109 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
     eprintln!("{}", lines.join("\n"));
 }
 
+/// `release: …` for a session with an install root (PR-4a).
+fn release_line(s: &Session) -> Option<String> {
+    s.request
+        .roots
+        .iter()
+        .find(|r| r.id.as_str() == INSTALL_ROOT)?;
+    let state = |check: &str| {
+        s.coverage
+            .iter()
+            .find(|c| c.check.as_str() == check)
+            .map(|c| &c.state)
+    };
+    if matches!(
+        state(ARTIFACTS_DISCOVERY),
+        Some(CoverageState::Unavailable { .. })
+    ) {
+        return Some("release: install not found".to_string());
+    }
+    let Some(claim) = s
+        .releases
+        .iter()
+        .find(|c| matches!(c.basis, ReleaseBasis::ReferenceMatches { .. }))
+    else {
+        let why = match state(ARTIFACTS_RELEASE) {
+            Some(CoverageState::Partial { missing }) if missing.len() == 1 => "1 reason".into(),
+            Some(CoverageState::Partial { missing }) => format!("{} reasons", missing.len()),
+            Some(other) => coverage_state(other).terminal(),
+            None => "no coverage entry".to_string(),
+        };
+        return Some(format!(
+            "release: not established ({why}; sigil explain --coverage)"
+        ));
+    };
+    let tag = claim.candidates.first()?;
+    let rows = || s.reference_matches.iter().filter(|r| r.release == *tag);
+    let part = |kind: MemberKind, name: &str| {
+        let present = rows()
+            .filter(|r| r.instance.is_some() && r.result.matches())
+            .filter(|r| match &r.result {
+                MemberResult::File { .. } => kind == MemberKind::File,
+                MemberResult::Symlink { .. } => kind == MemberKind::Symlink,
+                MemberResult::Directory => kind == MemberKind::Directory,
+                _ => false,
+            })
+            .count();
+        let absent = rows()
+            .filter(|r| r.result == MemberResult::Absent { kind })
+            .count();
+        format!("{present}/{} {name}", present + absent)
+    };
+    let counts = format!(
+        "{}, {}, {}",
+        part(MemberKind::File, "files"),
+        part(MemberKind::Symlink, "symlinks"),
+        part(MemberKind::Directory, "directories")
+    );
+    let candidates = claim.candidates.join(", ");
+    Some(
+        if matches!(state(ARTIFACTS_RELEASE), Some(CoverageState::Complete)) {
+            format!("release: ollama {candidates} ({counts} reference-matched; nothing absent)")
+        } else {
+            format!("release: content matches {candidates} ({counts} present); incomplete")
+        },
+    )
+}
+
 // --- session render, explain, rules -----------------------------------------------------------
+
+/// Re-verifies the reference rows of a saved session that names the embedded set: `validate`
+/// cannot re-derive them (PR-4a §3.3). A session made with another set is noted on stderr.
+fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
+    let refs: Vec<_> = session
+        .knowledge
+        .iter()
+        .filter(|k| k.kind == KnowledgeKind::ReferenceManifest)
+        .collect();
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let set = reference::official().map_err(|e| Failure::Run(format!("the embedded set: {e}")))?;
+    if !refs.iter().any(|k| k.sha256 == set.sha256) {
+        eprintln!(
+            "note: reference matches were made with another reference set and are not re-verified"
+        );
+        return Ok(());
+    }
+    reference::verify_reference_matches(session, set).map_err(|errors| {
+        let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
+        let more = match errors.len().saturating_sub(5) {
+            0 => String::new(),
+            n => format!(" (and {n} more)"),
+        };
+        Failure::Run(format!(
+            "{}: the session's reference matches disagree with the embedded reference set: {}{more}",
+            shown_path(path),
+            first.join("; ")
+        ))
+    })
+}
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
     let session = load_session(&args.session)?;
+    reverify(&session, &args.session)?;
     let document = match args.format {
         RenderFormat::Md => render_session(&session),
         RenderFormat::Aibom => aibom_json(&session)?.0,
@@ -744,6 +878,7 @@ fn render(args: &RenderArgs) -> Result<(), Failure> {
 
 fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
     let session = load_session(&args.session)?;
+    reverify(&session, &args.session)?;
     let format = match args.format {
         TextFormat::Text => ExplainFormat::Text,
         TextFormat::Md => ExplainFormat::Markdown,
@@ -945,5 +1080,61 @@ mod tests {
         assert_eq!(civil_from_days(11_016), (2000, 2, 29));
         assert_eq!(civil_from_days(20_734), (2026, 10, 8));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    /// Golden example 12: one placement matching v0.30.6, a claim for it.
+    fn example_12() -> sigil_model::Session {
+        serde_json::from_str(include_str!(
+            "../../../schemas/examples/session-v1/12-conflicting-identity.json"
+        ))
+        .unwrap()
+    }
+
+    fn set_release(s: &mut sigil_model::Session, state: sigil_model::CoverageState) {
+        s.coverage
+            .retain(|c| c.check.as_str() != sigil_model::ARTIFACTS_RELEASE);
+        s.coverage.push(sigil_model::Coverage {
+            check: sigil_model::CheckId::new(sigil_model::ARTIFACTS_RELEASE).unwrap(),
+            scope: sigil_model::Ref::Audit,
+            state,
+            budget: None,
+        });
+    }
+
+    #[test]
+    fn the_release_line_names_the_claim_and_its_counts() {
+        use sigil_model::{CoverageState, MemberKind, MemberResult};
+        let mut s = example_12();
+        set_release(&mut s, CoverageState::Complete);
+        assert_eq!(
+            super::release_line(&s).unwrap(),
+            "release: ollama v0.30.6 (1/1 files, 0/0 symlinks, 0/0 directories reference-matched; \
+             nothing absent)"
+        );
+        let mut absent = s.reference_matches[0].clone();
+        absent.member = "bin/ollama".to_string();
+        absent.instance = None;
+        absent.result = MemberResult::Absent {
+            kind: MemberKind::File,
+        };
+        s.reference_matches.push(absent);
+        set_release(
+            &mut s,
+            CoverageState::Partial {
+                missing: vec!["v0.30.6: 1 files absent".to_string()],
+            },
+        );
+        assert_eq!(
+            super::release_line(&s).unwrap(),
+            "release: content matches v0.30.6 (1/2 files, 0/0 symlinks, 0/0 directories \
+             present); incomplete"
+        );
+        s.releases.clear();
+        assert_eq!(
+            super::release_line(&s).unwrap(),
+            "release: not established (1 reason; sigil explain --coverage)"
+        );
+        s.request.roots.clear();
+        assert_eq!(super::release_line(&s), None);
     }
 }

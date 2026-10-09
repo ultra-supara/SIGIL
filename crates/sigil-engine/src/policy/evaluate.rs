@@ -24,7 +24,7 @@ use sigil_model::{
     Verdict,
 };
 
-use super::Policy;
+use super::{Policy, ScopeInput};
 
 /// Something the operator should know about how the policy applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,8 +96,7 @@ pub fn evaluate(
     if !changed.is_empty() {
         return Err(EvaluateError::AssumptionsChanged(changed));
     }
-    let active = !session.request.active.is_empty();
-    let (_, required) = policy.scope(session.request.mode, active);
+    let (_, required) = policy.scope(&ScopeInput::of(&session.request));
     let set = |checks: &[CheckId]| checks.iter().cloned().collect::<BTreeSet<CheckId>>();
     if set(&required) != set(&session.request.required_checks) {
         return Err(EvaluateError::RequiredChecksChanged {

@@ -13,7 +13,7 @@ use sigil_model::{
 };
 
 use super::path::RelPath;
-use super::resolve::{mode, End};
+use super::resolve::{mode, End, Strict};
 use super::SafeFs;
 
 /// What to keep and how much to read.
@@ -170,7 +170,7 @@ impl SafeFs {
                     .as_ref()
                     .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
                 match self.open_at(parent, &name, OFlags::RDONLY | OFlags::NONBLOCK) {
-                    Ok(fd) => self.read_open(index, rel, place, fd, spec),
+                    Ok(fd) => self.read_open(index, rel, place, fd, spec, false),
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
                     }
@@ -211,7 +211,71 @@ impl SafeFs {
         }
     }
 
-    /// Streams the open file: limit, hash, prefix, then stability.
+    /// Reads the regular file `rel` under root `root` without following any symlink (PR-4a, the
+    /// install): every directory on the way and the file itself are opened with `O_NOFOLLOW`, and
+    /// the path is checked again the same way after the read. A symlink anywhere on the path is
+    /// never opened, so nothing outside the path is read. Never fails: every problem is an
+    /// outcome, and a path that is not a regular file now is `NotRead { NotRegularFile }`.
+    pub fn read_entry(
+        &self,
+        root: &RootId,
+        rel: &RelPath,
+        spec: ReadSpec,
+        discovered_by: Vec<DiscoverySource>,
+    ) -> FileRead {
+        let Some(index) = self.root_index(root) else {
+            return FileRead::failed(format!("unknown scan root {root}"));
+        };
+        let id = match instance_id(root, rel) {
+            Ok(id) => id,
+            Err(e) => return FileRead::failed(e),
+        };
+        let place = Placement {
+            id,
+            root: root.clone(),
+            path: rel.recorded_under(&self.roots[index].path),
+            link_chain: vec![],
+            resolved: None,
+            discovered_by,
+        };
+        match self.resolve_strict(index, rel) {
+            Strict::Entry {
+                parent,
+                name,
+                lstat,
+            } => {
+                if FileType::from_raw_mode(lstat.st_mode) != FileType::RegularFile {
+                    return place.not_read(&lstat, NotReadReason::NotRegularFile);
+                }
+                let parent = parent
+                    .as_ref()
+                    .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
+                match self.open_at(parent, &name, OFlags::RDONLY | OFlags::NONBLOCK) {
+                    Ok(fd) => self.read_open(index, rel, place, fd, spec, true),
+                    Err(Errno::ACCESS | Errno::PERM) => {
+                        place.not_read(&lstat, NotReadReason::PermissionDenied)
+                    }
+                    Err(Errno::NOENT) => place.not_read(&lstat, NotReadReason::Vanished),
+                    Err(Errno::LOOP) => FileRead::failed("it changed into a symlink".into()),
+                    Err(e) => FileRead::failed(e.to_string()),
+                }
+            }
+            Strict::Link { at } => {
+                FileRead::failed(format!("{} is a symlink, not followed", at.display()))
+            }
+            Strict::NotFound => FileRead::without_instance(ReadOutcome::NotFound),
+            Strict::PermissionDenied => {
+                FileRead::without_instance(ReadOutcome::NotRead(NotReadReason::PermissionDenied))
+            }
+            Strict::Root | Strict::NotADirectory => {
+                FileRead::failed("a path component is not a directory".into())
+            }
+            Strict::Failed(message) => FileRead::failed(message),
+        }
+    }
+
+    /// Streams the open file: limit, hash, prefix, then stability. `strict`: the path is checked
+    /// again afterwards without following symlinks.
     fn read_open(
         &self,
         index: usize,
@@ -219,6 +283,7 @@ impl SafeFs {
         place: Placement,
         fd: OwnedFd,
         spec: ReadSpec,
+        strict: bool,
     ) -> FileRead {
         let st = match rustix::fs::fstat(&fd) {
             Ok(st) => st,
@@ -265,11 +330,24 @@ impl SafeFs {
             Ok(st) => Snapshot::of(&st),
             Err(e) => return FileRead::failed(e.to_string()),
         };
-        let now = match self.resolve(index, rel).end {
-            End::Entry { lstat, .. } => Some((Snapshot::of(&lstat).dev, Snapshot::of(&lstat).ino)),
-            End::NotFound => None,
-            // It resolves to something else now (a directory, a link out of the roots, ...).
-            _ => Some((u64::MAX, u64::MAX)),
+        let now = if strict {
+            match self.resolve_strict(index, rel) {
+                Strict::Entry { lstat, .. } => {
+                    Some((Snapshot::of(&lstat).dev, Snapshot::of(&lstat).ino))
+                }
+                Strict::NotFound => None,
+                // It is reached through a link now, or is no longer reached at all.
+                _ => Some((u64::MAX, u64::MAX)),
+            }
+        } else {
+            match self.resolve(index, rel).end {
+                End::Entry { lstat, .. } => {
+                    Some((Snapshot::of(&lstat).dev, Snapshot::of(&lstat).ino))
+                }
+                End::NotFound => None,
+                // It resolves to something else now (a directory, a link out of the roots, ...).
+                _ => Some((u64::MAX, u64::MAX)),
+            }
         };
         let artifact_id = match ArtifactId::new(format!("sha256:{:x}", hasher.finalize())) {
             Ok(id) => id,

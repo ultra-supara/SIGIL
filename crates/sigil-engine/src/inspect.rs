@@ -5,17 +5,20 @@ use std::fmt;
 use std::path::PathBuf;
 
 use sigil_model::{
-    ActiveFeature, ApiProbe, CheckId, Completeness, Coverage, CoverageState, KnowledgeRef, Mode,
-    ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion, Session, Timestamp,
-    ToolInfo, Unavailability, UntrustedText, Verdict,
+    ActiveFeature, ApiProbe, Artifact, CheckId, Completeness, Coverage, CoverageState, Format,
+    KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion,
+    Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict,
+    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
 };
 
-use crate::analyze::{exposure, model_store, runtime_api};
+use crate::analyze::{exposure, model_store, release, runtime_api};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
+use crate::collect::install::{self, InstallBudgets};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
 use crate::observe;
 use crate::observe::proc::{ProcBudgets, ProcFacts};
-use crate::policy::{evaluate, EvaluateError, Policy};
+use crate::policy::{evaluate, EvaluateError, Policy, ScopeInput};
+use crate::reference;
 
 /// What a static model-store inspection is asked to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +30,16 @@ pub struct StoreRequest {
     pub budgets: FsBudgets,
     /// The largest manifest read, in bytes.
     pub manifest_limit: u64,
+    /// The installation to inspect (`--install-dir`), if any.
+    pub install: Option<InstallRequest>,
+}
+
+/// An installation to inspect: its files against the embedded reference set (PR-4a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallRequest {
+    /// The install prefix: `bin/ollama` and `lib/ollama/` below it.
+    pub dir: PathBuf,
+    pub budgets: InstallBudgets,
 }
 
 /// The scan root of the model store.
@@ -43,6 +56,8 @@ pub enum InspectError {
     /// The assembled session fails `Session::validate` (a bug, reported rather than returned as
     /// a result).
     Invalid(Vec<String>),
+    /// The session's reference rows are not what the embedded set gives (a bug).
+    Reference(Vec<String>),
 }
 
 impl fmt::Display for InspectError {
@@ -53,6 +68,11 @@ impl fmt::Display for InspectError {
             InspectError::Invalid(errors) => {
                 write!(f, "the assembled session is invalid: {}", errors.join("; "))
             }
+            InspectError::Reference(errors) => write!(
+                f,
+                "the session's reference matches disagree with the embedded set: {}",
+                errors.join("; ")
+            ),
         }
     }
 }
@@ -155,10 +175,59 @@ fn assemble(
     // The canonical path SafeFs opened, or the path as given when it could not be opened.
     let path = fs.root_path(&root).unwrap_or(&req.models_dir);
     let (mut findings, analysis_coverage) = model_store::analyze(&facts, &root);
-    let (audit, required_checks) = policy.scope(mode, !active.features.is_empty());
+    let (audit, required_checks) = policy.scope(&ScopeInput {
+        mode,
+        active: !active.features.is_empty(),
+        install: req.install.is_some(),
+    });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
     let mut budgets = budgets(req);
+    let mut roots = vec![ScanRoot {
+        id: root,
+        path: recorded(path),
+    }];
+    let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
+    let mut knowledge = Vec::<KnowledgeRef>::new();
+    let (mut releases, mut reference_matches) = (vec![], vec![]);
+    if let Some(r) = &req.install {
+        let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
+        let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
+        let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
+        roots.push(ScanRoot {
+            id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
+            path: facts.root_path,
+        });
+        instances.extend(facts.instances);
+        for a in facts.artifacts {
+            match artifacts.iter_mut().find(|x| x.id == a.id) {
+                Some(known) => merge(known, a).map_err(|e| InspectError::Invalid(vec![e]))?,
+                None => artifacts.push(a),
+            }
+        }
+        knowledge.push(set.knowledge());
+        budgets.extend(install_budgets(r.budgets));
+        coverage.push(facts.discovery);
+        coverage.push(result.coverage);
+        reference_matches = result.rows;
+        releases.extend(result.claim);
+    } else {
+        // A policy that requires the install's checks without one: skipped, so incomplete.
+        for check in &required_checks {
+            if [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE].contains(&check.as_str()) {
+                coverage.push(Coverage {
+                    check: check.clone(),
+                    scope: Ref::Audit,
+                    state: CoverageState::Skipped {
+                        by: SkipReason::Flag {
+                            flag: "--install-dir".to_string(),
+                        },
+                    },
+                    budget: None,
+                });
+            }
+        }
+    }
     let (mut processes, mut listeners) = (vec![], vec![]);
     if let Some((proc, proc_budgets)) = observed {
         let (exposure_findings, exposure_coverage) = exposure::analyze(&proc);
@@ -177,13 +246,10 @@ fn assemble(
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
-        knowledge: Vec::<KnowledgeRef>::new(),
+        knowledge,
         request: RunRequest {
             mode,
-            roots: vec![ScanRoot {
-                id: root,
-                path: recorded(path),
-            }],
+            roots,
             audit,
             required_checks,
             budgets,
@@ -192,15 +258,16 @@ fn assemble(
             active: active.features.clone(),
         },
         observation,
-        artifacts: facts.artifacts,
-        instances: facts.instances,
+        artifacts,
+        instances,
         models: facts.models,
         processes,
         listeners,
         probes: active.probes.clone(),
         values: vec![],
         components: vec![],
-        releases: vec![],
+        releases,
+        reference_matches,
         hints: vec![],
         code: vec![],
         relations: vec![],
@@ -228,6 +295,11 @@ fn assemble(
     session.validate().map_err(|errors| {
         InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
     })?;
+    // What `validate` cannot re-derive: the rows are exactly the embedded set's.
+    if req.install.is_some() {
+        let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
+        reference::verify_reference_matches(&session, set).map_err(InspectError::Reference)?;
+    }
     Ok(session)
 }
 
@@ -276,4 +348,81 @@ fn budgets(req: &StoreRequest) -> BTreeMap<String, u64> {
         ("link_hops".to_string(), u64::from(b.max_link_hops)),
         ("manifest_bytes".to_string(), req.manifest_limit),
     ])
+}
+
+/// One content read under two roots: the same bytes, so the same size, and the format and slices
+/// that either reading identified. The model store does not parse executables, so an ELF found
+/// there too keeps the install's ELF format and slice. Two readings that identified different
+/// formats are a bug.
+fn merge(known: &mut Artifact, other: Artifact) -> Result<(), String> {
+    let plain = |a: &Artifact| a.format == Format::Other && a.slices.is_empty();
+    if known.size != other.size {
+        return Err(format!("artifact {}: read with two sizes", known.id));
+    }
+    if plain(known) {
+        *known = other;
+    } else if !plain(&other) && (known.format != other.format || known.slices != other.slices) {
+        return Err(format!("artifact {}: read as two formats", known.id));
+    }
+    Ok(())
+}
+
+/// The install scan's budgets, by the names `BudgetUse` reports with the `install_` prefix.
+fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
+    let fs = FsBudgets::default();
+    BTreeMap::from([
+        ("install_files_discovered".to_string(), b.files),
+        ("install_entries_listed".to_string(), b.entries),
+        ("install_directory_entries".to_string(), fs.max_dir_entries),
+        ("install_walk_depth".to_string(), u64::from(fs.max_depth)),
+        ("install_link_hops".to_string(), u64::from(fs.max_link_hops)),
+        ("install_bytes".to_string(), b.bytes),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use sigil_model::{Arch, ArtifactId, ElfType, Format, Slice, SliceId};
+
+    use super::{merge, Artifact};
+
+    fn artifact(format: Format, sliced: bool, size: u64) -> Artifact {
+        let id = ArtifactId::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let slices = if sliced {
+            vec![Slice {
+                id: SliceId::from_parts(&id, Arch::X86_64, 0),
+                arch: Arch::X86_64,
+                offset: 0,
+                size,
+                sha256: sigil_model::Sha256Hex::new("a".repeat(64)).unwrap(),
+            }]
+        } else {
+            vec![]
+        };
+        Artifact {
+            id,
+            size,
+            format,
+            slices,
+        }
+    }
+
+    #[test]
+    fn the_identified_reading_of_one_content_is_kept() {
+        let elf = || artifact(Format::Elf { kind: ElfType::Dyn }, true, 64);
+        let plain = || artifact(Format::Other, false, 64);
+        // Whichever was read first, the ELF reading is kept.
+        let mut known = plain();
+        merge(&mut known, elf()).unwrap();
+        assert_eq!(known, elf());
+        let mut known = elf();
+        merge(&mut known, plain()).unwrap();
+        assert_eq!(known, elf());
+        let mut known = elf();
+        merge(&mut known, elf()).unwrap();
+        assert_eq!(known, elf());
+        // Readings that disagree are a bug, not a choice.
+        assert!(merge(&mut elf(), artifact(Format::MachO, false, 64)).is_err());
+        assert!(merge(&mut plain(), artifact(Format::Other, false, 65)).is_err());
+    }
 }

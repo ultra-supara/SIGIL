@@ -82,6 +82,24 @@ pub fn ollama_store(root: &Path) -> PathBuf {
     models
 }
 
+/// An Ollama installation (`install/`): `bin/ollama` and `lib/ollama/` hold copies of the real
+/// shared object `so` (which must never be loaded), a symlink to it, a subdirectory, a dangling
+/// link, and a link out of the install into `root/models`. No link is followed. Returns
+/// `install/`.
+pub fn ollama_install(root: &Path, so: &Path) -> PathBuf {
+    let install = root.join("install");
+    let lib = install.join("lib/ollama");
+    fs::create_dir_all(install.join("bin")).unwrap();
+    fs::create_dir_all(lib.join("cuda_v12")).unwrap();
+    fs::copy(so, install.join("bin/ollama")).unwrap();
+    fs::copy(so, lib.join("libggml-cpu.so")).unwrap();
+    fs::copy(so, lib.join("cuda_v12/libggml-cuda.so")).unwrap();
+    std::os::unix::fs::symlink("libggml-cpu.so", lib.join("libggml-cpu.so.0")).unwrap();
+    std::os::unix::fs::symlink("missing.so", lib.join("libdangling.so")).unwrap();
+    std::os::unix::fs::symlink("../../../models", lib.join("models")).unwrap();
+    install
+}
+
 /// A store whose only manifest is not JSON (an untrusted, malformed input).
 pub fn malformed_store(root: &Path) -> PathBuf {
     let models = root.join("models");

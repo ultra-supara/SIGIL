@@ -36,6 +36,7 @@ pub mod listener;
 pub mod load;
 pub mod model;
 pub mod probe;
+pub mod reference;
 pub mod relation;
 pub mod render;
 pub mod session;
@@ -89,6 +90,10 @@ pub use model::{
     LICENSE_MEDIA_TYPE,
 };
 pub use probe::{is_loopback, target, ActiveFeature, ApiProbe, ProbePhase, ProbeResult};
+pub use reference::{
+    EntryKind, MemberKind, MemberResult, ReferenceMatch, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
+    INSTALL_ROOT,
+};
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,
     RuleSupport, RuleSupportRef, SearchDir, SearchRule,

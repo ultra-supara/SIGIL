@@ -1064,6 +1064,27 @@ fn isolate_probe(args: &[String], addr: &str) -> Vec<String> {
     out
 }
 
+/// `args` with any `--install-dir` (`--install-dir X` or `--install-dir=X`) pointed at `dir`, so
+/// that no test reads a real installation.
+fn isolate_install(args: &[String], dir: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut value_follows = false;
+    for a in args {
+        if value_follows {
+            value_follows = false;
+            out.push(dir.to_string());
+        } else if a == "--install-dir" {
+            value_follows = true;
+            out.push(a.clone());
+        } else if a.starts_with("--install-dir=") {
+            out.push(format!("--install-dir={dir}"));
+        } else {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
 /// A server on 127.0.0.1 that answers every request with an Ollama version, and counts them.
 fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
@@ -1101,14 +1122,15 @@ fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsi
 /// Runs the commands of `doc` (relative to the workspace) in order, in one temporary directory,
 /// with `OLLAMA_MODELS` set to a store whose model has no license (one WARN finding). Each must
 /// exit 0, 3, or 4: never an execution error (1) or a usage error (2). Every API probe goes to a
-/// server of this test, which must see exactly one request per active command. Returns the
-/// number of commands and of active commands.
+/// server of this test, which must see exactly one request per active command, and every
+/// `--install-dir` to a synthetic tree. Returns the number of commands and of active commands.
 fn run_documented(doc: &str) -> (usize, usize) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(doc);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {doc}: {e}"));
     let models = store(false);
+    let install = install_tree();
     let cwd = TempDir::new().unwrap();
     let (server, requests) = counting_api_server();
     let commands = documented_commands(&text);
@@ -1130,6 +1152,8 @@ fn run_documented(doc: &str) -> (usize, usize) {
         );
         // Never reach a real Ollama from a test, whatever address the docs give.
         let args = isolate_probe(&args, &server);
+        // Nor a real installation.
+        let args = isolate_install(&args, install.path().to_str().unwrap());
         let out = sigil()
             .current_dir(cwd.path())
             .env("OLLAMA_MODELS", models.path())
@@ -1224,6 +1248,199 @@ fn documented_probes_are_pointed_at_the_test_server() {
     );
     assert_eq!(
         isolate_probe(&v(&["inspect", "ollama", "--out", "o"]), to),
+        v(&["inspect", "ollama", "--out", "o"])
+    );
+}
+
+// --- --install-dir (PR-4a) ---------------------------------------------------------------------
+
+/// A synthetic installation: no file is an official one, so the release is not established.
+fn install_tree() -> TempDir {
+    let d = TempDir::new().unwrap();
+    fs::create_dir_all(d.path().join("bin")).unwrap();
+    fs::create_dir_all(d.path().join("lib/ollama")).unwrap();
+    fs::write(d.path().join("bin/ollama"), b"not the official binary").unwrap();
+    fs::write(d.path().join("lib/ollama/libggml.so.0.13.1"), b"lib").unwrap();
+    d
+}
+
+#[test]
+fn install_dir_adds_the_install_root_and_its_summary_line() {
+    let models = store(true);
+    let install = install_tree();
+    let r = inspect(models.path(), &[&"--install-dir", &install.path()]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s
+        .request
+        .roots
+        .iter()
+        .any(|root| root.id.as_str() == "install"));
+    assert!(s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == "artifacts.release"));
+    assert!(
+        r.stderr.contains("release: not established ("),
+        "{}",
+        r.stderr
+    );
+    let r = inspect(models.path(), &[&"--install-dir", &"/nonexistent/sigil"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("release: install not found"),
+        "{}",
+        r.stderr
+    );
+    // Without --install-dir there is no release line.
+    let r = inspect(models.path(), &[]);
+    assert!(!r.stderr.contains("release:"), "{}", r.stderr);
+}
+
+#[test]
+fn out_inside_the_install_dir_is_a_usage_error_and_writes_nothing() {
+    let models = store(true);
+    let install = install_tree();
+    let out = install.path().join("report.md");
+    let r = inspect(
+        models.path(),
+        &[
+            &"--install-dir",
+            &install.path(),
+            &"--format",
+            &"md",
+            &"--out",
+            &out,
+        ],
+    );
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("inside the install directory"),
+        "{}",
+        r.stderr
+    );
+    assert!(!out.exists());
+}
+
+#[test]
+fn install_budgets_apply_with_install_dir_only() {
+    let models = store(true);
+    let install = install_tree();
+    let r = inspect(
+        models.path(),
+        &[
+            &"--install-dir",
+            &install.path(),
+            &"--budget",
+            &"install_bytes=0",
+            &"--budget",
+            &"install_files_discovered=7",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.budgets["install_bytes"], 0);
+    assert_eq!(s.request.budgets["install_files_discovered"], 7);
+    let discovery = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == "artifacts.discovery")
+        .unwrap();
+    assert!(
+        matches!(&discovery.state, CoverageState::BudgetExceeded { budget, .. } if budget == "install_bytes"),
+        "{discovery:?}"
+    );
+    let r = inspect(models.path(), &[&"--budget", &"install_bytes=1"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("--install-dir"), "{}", r.stderr);
+    // The depth and hop limits of the install walk are fixed.
+    let r = inspect(
+        models.path(),
+        &[
+            &"--install-dir",
+            &install.path(),
+            &"--budget",
+            &"install_walk_depth=3",
+        ],
+    );
+    assert_eq!(r.code, 2, "{}", r.stderr);
+}
+
+#[test]
+fn a_saved_install_session_is_reverified_by_render_and_explain() {
+    let models = store(true);
+    let install = install_tree();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(run(&[&"session", &"render", &path]).code, 0);
+    assert_eq!(run(&[&"explain", &path, &"--verdict"]).code, 0);
+    // Tamper with one expected value: validate still passes, the verifier does not.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let rows = v["reference_matches"].as_array_mut().unwrap();
+    let absent = rows
+        .iter_mut()
+        .find(|r| r["result"]["Absent"]["kind"] == "File")
+        .unwrap();
+    absent["result"] = serde_json::json!({"Absent": {"kind": "Directory"}});
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("disagree with the embedded reference set"),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(run(&[&"explain", &path, &"--verdict"]).code, 1);
+}
+
+#[test]
+fn a_session_made_with_another_reference_set_is_rendered_with_a_note() {
+    let models = store(true);
+    let install = install_tree();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for k in v["knowledge"].as_array_mut().unwrap() {
+        if k["kind"] == "ReferenceManifest" {
+            k["sha256"] = serde_json::Value::from("0".repeat(64));
+        }
+    }
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stderr.contains("another reference set"), "{}", r.stderr);
+}
+
+#[test]
+fn documented_install_dirs_are_pointed_at_the_test_tree() {
+    let v = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        isolate_install(
+            &v(&["inspect", "ollama", "--install-dir", "/usr/local"]),
+            "/t"
+        ),
+        v(&["inspect", "ollama", "--install-dir", "/t"])
+    );
+    assert_eq!(
+        isolate_install(&v(&["inspect", "ollama", "--install-dir=/usr/local"]), "/t"),
+        v(&["inspect", "ollama", "--install-dir=/t"])
+    );
+    assert_eq!(
+        isolate_install(&v(&["inspect", "ollama", "--out", "o"]), "/t"),
         v(&["inspect", "ollama", "--out", "o"])
     );
 }

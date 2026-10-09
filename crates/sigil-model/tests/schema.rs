@@ -66,6 +66,8 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         ExtractMethod => "ExtractMethod", SigState => "SigState", IdentityStatus => "IdentityStatus",
         VersionAssertion => "VersionAssertion", VersionSource => "VersionSource", ReleaseClaim => "ReleaseClaim",
         ReleaseBasis => "ReleaseBasis", FeatureHint => "FeatureHint", Signal => "Signal",
+        ReferenceMatch => "ReferenceMatch", MemberResult => "MemberResult", MemberKind => "MemberKind",
+        EntryKind => "EntryKind",
         CodeFacts => "CodeFacts", CallRef => "CallRef", FnRef => "FnRef", Function => "Function",
         BoundsSource => "BoundsSource", CallSite => "CallSite", CallKind => "CallKind", CallTarget => "CallTarget",
         ImportVia => "ImportVia", Reg => "Reg", ArgValue => "ArgValue", ValueUnknown => "ValueUnknown",
@@ -102,9 +104,15 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
     ]
 }
 
-/// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2). They are
-/// optional on read, where a missing one is an empty list, and always written.
-const OPTIONAL_ON_READ: &[(&str, &str)] = &[("RunRequest", "active"), ("Session", "probes")];
+/// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a).
+/// They are optional on read, where a missing one is an empty list. `active` and `probes` are
+/// always written; `reference_matches` only when non-empty, so sessions without an install keep
+/// their bytes.
+const OPTIONAL_ON_READ: &[(&str, &str)] = &[
+    ("RunRequest", "active"),
+    ("Session", "probes"),
+    ("Session", "reference_matches"),
+];
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
 const MODEL: &str = "model:models/registry.ollama.ai/library/m/latest";
@@ -266,6 +274,41 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("NotReadReason", NotReadReason::NotRegularFile),
         sample("NotReadReason", NotReadReason::Vanished),
         sample("NotReadReason", NotReadReason::BudgetExceeded),
+        sample("NotReadReason", NotReadReason::NotFollowed),
+        sample("NotReadReason", NotReadReason::Directory),
+        sample(
+            "MemberResult",
+            MemberResult::File {
+                expected: Sha256Hex::new("a".repeat(64)).unwrap(),
+                observed: Sha256Hex::new("a".repeat(64)).unwrap(),
+            },
+        ),
+        sample(
+            "MemberResult",
+            MemberResult::Symlink {
+                expected: UntrustedText::new("libggml.so.0"),
+                observed: UntrustedText::new("libggml.so.0"),
+            },
+        ),
+        sample("MemberResult", MemberResult::Directory),
+        sample(
+            "MemberResult",
+            MemberResult::KindDiffers {
+                expected: MemberKind::File,
+                observed: EntryKind::Special,
+            },
+        ),
+        sample("MemberResult", MemberResult::NotCompared),
+        sample(
+            "MemberResult",
+            MemberResult::Absent {
+                kind: MemberKind::Symlink,
+            },
+        ),
+        sample("MemberKind", MemberKind::Directory),
+        sample("EntryKind", EntryKind::File),
+        sample("EntryKind", EntryKind::Symlink),
+        sample("EntryKind", EntryKind::Directory),
         sample("Stability", Stability::ChangedDuringRead),
         sample("Stability", Stability::Vanished),
         sample(

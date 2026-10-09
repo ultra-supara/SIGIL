@@ -52,6 +52,10 @@ pub struct Session {
     pub components: Vec<ComponentClaim>,
     /// A: release identity (always a set).
     pub releases: Vec<ReleaseClaim>,
+    /// Placement-level comparisons with reference manifests (PR-4a). Optional on read; written
+    /// only when non-empty, so sessions without an install keep their bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_matches: Vec<crate::reference::ReferenceMatch>,
     /// B: feature presence.
     pub hints: Vec<FeatureHint>,
     /// C: code facts, one entry per analyzed slice.

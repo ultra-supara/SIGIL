@@ -3,6 +3,7 @@
 
 pub mod exposure;
 pub mod model_store;
+pub mod release;
 pub mod runtime_api;
 
 use sigil_model::{
