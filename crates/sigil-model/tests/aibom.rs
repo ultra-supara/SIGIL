@@ -496,9 +496,10 @@ fn hostile_text_forms_no_markdown_or_html() {
 #[test]
 fn an_artifact_found_twice_lists_both_paths_sorted() {
     let mut s = with_model();
-    // A copy of the first blob, placed where its path sorts first.
+    // A copy of the first blob whose path sorts first but whose ID sorts last, so canonical
+    // (ID) order alone would list it second.
     let mut copy = s.instances[1].clone();
-    copy.id = id("inst:models/a/copy");
+    copy.id = id("inst:models/zz-copy");
     copy.path = t("/a/copy");
     let artifact = match &copy.content {
         InstanceContent::Read { artifact } => artifact.clone(),
