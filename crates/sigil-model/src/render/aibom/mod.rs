@@ -221,7 +221,7 @@ pub enum BomError {
     /// A state listed with no entries.
     EmptyState { check: CheckId, state: String },
     /// `closed` disagrees with the states: a check is closed exactly when it has entries and every
-    /// one is in a [`CLOSING_STATES`] state.
+    /// state listed is one of [`CLOSING_STATES`].
     ClosedDisagrees { check: CheckId, closed: bool },
 }
 
@@ -248,8 +248,9 @@ impl AiBom {
     ///
     /// - Each coverage summary names only coverage states ([`STATE_NAMES`]), each with at least
     ///   one entry.
-    /// - `closed` agrees with the states: true exactly when there are entries and every one is in
-    ///   a closing state ([`CLOSING_STATES`]).
+    /// - `closed` agrees with the states: true exactly when there are entries and every state
+    ///   listed is a closing state ([`CLOSING_STATES`]). (A state with no entries is already an
+    ///   error.)
     pub fn validate(&self) -> Result<(), Vec<BomError>> {
         let mut errors = vec![];
         for c in &self.coverage {
@@ -267,12 +268,12 @@ impl AiBom {
                     });
                 }
             }
-            let closes = !c.states.is_empty()
-                && c.states
-                    .iter()
-                    .all(|(state, count)| *count == 0 || CLOSING_STATES.contains(&state.as_str()));
             let entries: u64 = c.states.values().map(|n| u64::from(*n)).sum();
-            if c.closed != (closes && entries > 0) {
+            let closes = entries > 0
+                && c.states
+                    .keys()
+                    .all(|state| CLOSING_STATES.contains(&state.as_str()));
+            if c.closed != closes {
                 errors.push(BomError::ClosedDisagrees {
                     check: c.check.clone(),
                     closed: c.closed,

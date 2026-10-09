@@ -191,3 +191,19 @@ fn an_inconsistent_aibom_is_refused_not_rendered() {
         }
     }
 }
+
+#[test]
+fn a_refusal_shows_the_first_five_errors_and_counts_the_rest() {
+    use serde_json::json;
+    let seven: serde_json::Map<String, serde_json::Value> =
+        (1..=7).map(|i| (format!("S{i}"), json!(1))).collect();
+    let err = render_aibom_markdown_inner(&aibom_with(seven.into(), false)).unwrap_err();
+    assert!(err.contains("\"S5\" is not a coverage state"), "{err}");
+    assert!(!err.contains("\"S6\""), "{err}");
+    assert!(
+        err.ends_with("is not a coverage state (and 2 more)"),
+        "{err}"
+    );
+    let one = render_aibom_markdown_inner(&aibom_with(json!({"S1": 1}), false)).unwrap_err();
+    assert!(one.ends_with("\"S1\" is not a coverage state"), "{one}");
+}

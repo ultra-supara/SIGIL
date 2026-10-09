@@ -76,24 +76,26 @@ fn parse(json: &str, wanted: &str) -> Result<Value, String> {
     }
 }
 
+/// "The {what} fails validation: …", with the first five errors.
+fn fails_validation(what: &str, errors: &[impl std::fmt::Display]) -> String {
+    let shown: Vec<String> = errors.iter().take(5).map(ToString::to_string).collect();
+    let more = errors.len() - shown.len();
+    let tail = if more > 0 {
+        format!(" (and {more} more)")
+    } else {
+        String::new()
+    };
+    format!("The {what} fails validation: {}{tail}", shown.join("; "))
+}
+
 /// The Markdown report of a session, after `Session::validate`.
 pub fn render_session_markdown_inner(json: &str) -> Result<String, String> {
     let value = parse(json, "session")?;
     let session: Session =
         serde_json::from_value(value).map_err(|e| format!("This is not a valid session: {e}"))?;
-    if let Err(errors) = session.validate() {
-        let shown: Vec<String> = errors.iter().take(5).map(ToString::to_string).collect();
-        let more = errors.len().saturating_sub(shown.len());
-        let tail = if more > 0 {
-            format!(" (and {more} more)")
-        } else {
-            String::new()
-        };
-        return Err(format!(
-            "The session fails validation: {}{tail}",
-            shown.join("; ")
-        ));
-    }
+    session
+        .validate()
+        .map_err(|errors| fails_validation("session", &errors))?;
     Ok(render_session(&session))
 }
 
@@ -102,19 +104,8 @@ pub fn render_aibom_markdown_inner(json: &str) -> Result<String, String> {
     let value = parse(json, "aibom-v2")?;
     let bom: AiBom =
         serde_json::from_value(value).map_err(|e| format!("This is not a valid AI-BOM v2: {e}"))?;
-    if let Err(errors) = bom.validate() {
-        let shown: Vec<String> = errors.iter().take(5).map(ToString::to_string).collect();
-        let more = errors.len().saturating_sub(shown.len());
-        let tail = if more > 0 {
-            format!(" (and {more} more)")
-        } else {
-            String::new()
-        };
-        return Err(format!(
-            "The AI-BOM v2 fails validation: {}{tail}",
-            shown.join("; ")
-        ));
-    }
+    bom.validate()
+        .map_err(|errors| fails_validation("AI-BOM v2", &errors))?;
     Ok(aibom_markdown(&bom))
 }
 
