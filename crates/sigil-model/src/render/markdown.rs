@@ -257,6 +257,107 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
             out.push_str("\n\n");
         }
     }
+    binaries(out, s, &root.id, &prefix);
+}
+
+/// The container facts of the install's binaries (PR-4b-1): one row per record. Gaps are in the
+/// Coverage section.
+fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u8]) {
+    if s.binaries.is_empty() {
+        return;
+    }
+    out.push_str(&esc("Binaries:"));
+    out.push_str("\n\n");
+    let rows = s
+        .binaries
+        .iter()
+        .map(|b| {
+            let artifact = s
+                .artifacts
+                .iter()
+                .find(|a| a.slices.iter().any(|x| x.id == b.slice));
+            let path = artifact
+                .and_then(|a| {
+                    s.instances
+                        .iter()
+                        .filter(|i| {
+                            i.root == *root
+                                && i.content
+                                    == InstanceContent::Read {
+                                        artifact: a.id.clone(),
+                                    }
+                        })
+                        .filter_map(|i| i.path.as_bytes().strip_prefix(prefix))
+                        .min()
+                })
+                .map(|rest| UntrustedText::from_bytes(rest.to_vec()))
+                .unwrap_or_else(|| UntrustedText::new(b.slice.as_str()));
+            let arch = artifact
+                .and_then(|a| a.slices.iter().find(|x| x.id == b.slice))
+                .map(|x| match x.arch {
+                    crate::artifact::Arch::X86_64 => "x86_64",
+                    crate::artifact::Arch::Aarch64 => "aarch64",
+                    crate::artifact::Arch::Other => "other",
+                })
+                .unwrap_or("-");
+            let kind = match artifact.map(|a| &a.format) {
+                Some(crate::artifact::Format::Elf { kind }) => format!("{kind:?}"),
+                _ => "-".to_string(),
+            };
+            let crate::binary::ContainerFacts::Elf(elf) = &b.container;
+            let text =
+                |t: &UntrustedText| t.as_str().map_or_else(|| t.terminal_line(), str::to_string);
+            let soname = elf.soname.as_ref().map_or_else(|| "-".to_string(), text);
+            let needed = if elf.needed.is_empty() {
+                "-".to_string()
+            } else {
+                elf.needed.iter().map(text).collect::<Vec<_>>().join(", ")
+            };
+            let mut notes = vec![];
+            if let Some(id) = &elf.build_id {
+                notes.push(format!(
+                    "build-id {}",
+                    id.chars().take(12).collect::<String>()
+                ));
+            }
+            for d in &elf.data {
+                let value = match &d.value {
+                    crate::binary::DataValue::Text(t) => text(t),
+                    crate::binary::DataValue::Int(n) => n.to_string(),
+                    crate::binary::DataValue::Unknown { .. } => "?".to_string(),
+                };
+                notes.push(format!("{}={value}", d.symbol));
+            }
+            if let Some(go) = &b.go {
+                let path = go.path.as_ref().map(text).unwrap_or_default();
+                notes.push(
+                    format!("go {} {path}", text(&go.version))
+                        .trim_end()
+                        .to_string(),
+                );
+            }
+            vec![
+                path.markdown_inline(),
+                esc(&format!("{kind} {arch}")),
+                esc(&soname),
+                esc(&needed),
+                esc(&format!("{} / {}", elf.exports, elf.imports.len())),
+                esc(&notes.join("; ")),
+            ]
+        })
+        .collect();
+    table(
+        out,
+        &[
+            "Path",
+            "Type",
+            "SONAME",
+            "NEEDED",
+            "Exports / imports",
+            "Notes",
+        ],
+        rows,
+    );
 }
 
 /// A placement's short SHA-256, its first link target, or why it was not read.
