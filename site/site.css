@@ -1,0 +1,4 @@
+body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 1rem auto; padding: 0 1rem; line-height: 1.5; }
+table { border-collapse: collapse; margin-bottom: 1rem; }
+th, td { border: 1px solid #999; padding: 0.2rem 0.4rem; text-align: left; vertical-align: top; }
+pre { overflow-x: auto; white-space: pre-wrap; }

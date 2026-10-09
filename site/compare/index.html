@@ -1,134 +1,23 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SIGIL vs other AI-BOM and model audit tools</title>
-    <meta
-      name="description"
-      content="Honest comparisons between SIGIL and adjacent tools — Anchore Syft, Ollama / Hugging Face built-ins, and the OWASP AIBOM Generator."
-    />
-    <link rel="stylesheet" href="../styles.css" />
-  </head>
-  <body class="sakura-page compare-page">
-    <div class="site-noise"></div>
-    <div class="site-bg"></div>
-
-    <header class="site-header">
-      <a class="brand" href="../" aria-label="SIGIL home">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">SIGIL</span>
-      </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="../#platform">Platform</a>
-        <a href="../#research">Research</a>
-        <a href="../#tools">Tools</a>
-        <a href="./" aria-current="page">Compare</a>
-        <a href="../reports/2026-h1/">2026 H1</a>
-        <a href="../viewer/">Viewer</a>
-        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
-      </nav>
-    </header>
-
-    <main id="top">
-      <section class="page-hero">
-        <div class="hero-copy">
-          <p class="definition">Compare</p>
-          <h1>SIGIL next to the tools you would otherwise reach for.</h1>
-          <p class="lead">
-            AI-BOM and local-model tooling has moved fast in the last twelve
-            months. These pages are honest about what each tool covers, where
-            SIGIL extends the surface, and where another tool is the right pick.
-          </p>
-        </div>
-        <figure class="hero-visual" aria-label="SIGIL comparison visual">
-          <div class="sigil-orb" aria-hidden="true">
-            <div class="sigil-ring ring-a"></div>
-            <div class="sigil-ring ring-b"></div>
-            <div class="sigil-ring ring-c"></div>
-            <div class="sigil-kanji">印</div>
-            <div class="sigil-axis axis-x"></div>
-            <div class="sigil-axis axis-y"></div>
-            <div class="sigil-axis axis-d1"></div>
-            <div class="sigil-axis axis-d2"></div>
-          </div>
-
-          <div class="floating-label label-one">
-            <span>COMPARE</span>
-            <strong>EVIDENCE AXES</strong>
-          </div>
-
-          <div class="floating-label label-two">
-            <span>VERDICT</span>
-            <strong>SIGIL ONLY</strong>
-          </div>
-
-          <div class="terminal-card" aria-hidden="true">
-            <div class="terminal-top">
-              <span></span>
-              <span></span>
-              <span></span>
-              <strong>sigil://compare</strong>
-            </div>
-
-            <div class="terminal-body comparison-terminal">
-              <p><b>[sigil]</b> AI-BOM + runtime + capability evidence</p>
-              <p><em>[syft]</em> CycloneDX ML-BOM, no runtime verdict</p>
-              <p><em>[builtins]</em> integrity only, no exposure model</p>
-              <p><em>[owasp]</em> Hugging Face metadata to CycloneDX</p>
-              <p><b>[ok]</b> verdict boundary stays explicit.</p>
-            </div>
-          </div>
-          <figcaption class="visually-hidden">SIGIL emits a PASS/WARN/FAIL verdict; the three adjacent tools (Anchore Syft, vendor built-ins, OWASP AIBOM Generator) do not.</figcaption>
-        </figure>
-      </section>
-
-      <section class="section">
-        <div class="section-heading">
-          <p class="definition">Three comparisons</p>
-          <h2>Read across the same axes.</h2>
-          <p>
-            Each page leads with a short verdict box (when to use which)
-            and a shared-axis evidence table. An anti-persona section at
-            the bottom names when SIGIL is the wrong choice.
-          </p>
-        </div>
-        <div class="compare-index-grid">
-          <a class="compare-index-card" href="./sigil-vs-syft/">
-            <span class="tag">SBOM family</span>
-            <h3>SIGIL vs Anchore Syft</h3>
-            <p>
-              Syft 1.38+ catalogs GGUF models into CycloneDX ML-BOM components.
-              The most direct comparison — same artifact family, different
-              evidence scope and verdict model.
-            </p>
-          </a>
-          <a class="compare-index-card" href="./sigil-vs-builtins/">
-            <span class="tag">Vendor built-ins</span>
-            <h3>SIGIL vs Ollama / Hugging Face built-ins</h3>
-            <p>
-              The tools users reach for first:
-              <code>ollama show</code> and <code>hf cache verify</code>. They
-              verify integrity and show configuration, but emit no BOM,
-              classify no exposure, and detect no license families.
-            </p>
-          </a>
-          <a class="compare-index-card" href="./sigil-vs-owasp-aibom-generator/">
-            <span class="tag">Institutional reference</span>
-            <h3>SIGIL vs OWASP AIBOM Generator</h3>
-            <p>
-              OWASP's official AIBOM tool generates CycloneDX 1.6 from a
-              Hugging Face model ID. Same artifact name, different input source
-              and integrity model.
-            </p>
-          </a>
-        </div>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <span>SIGIL is local-first and analysis-only.</span>
-      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
-    </footer>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>SIGIL vs other AI-BOM and model audit tools</title>
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<nav><a href="../">SIGIL</a> · <a href="../compare/">Compare</a> · <a href="../reports/2026-h1/">2026 H1 report</a> · <a href="../viewer/">Viewer</a> · <a href="https://github.com/ultra-supara/SIGIL">GitHub</a></nav>
+<main>
+<h1>SIGIL vs other AI-BOM and model audit tools</h1>
+<p>These pages say what each tool covers, where SIGIL extends the surface, and where another tool is the right pick. Each one has a short "when to use which", a table across the same evidence axes, and a section on when SIGIL is the wrong choice.</p>
+<ul>
+<li><a href="./sigil-vs-syft/">SIGIL vs Anchore Syft</a>: Syft 1.38+ catalogs GGUF models into CycloneDX ML-BOM components. Same artifact family, different evidence scope and verdict model.</li>
+<li><a href="./sigil-vs-builtins/">SIGIL vs Ollama / Hugging Face built-ins</a>: <code>ollama show</code> and <code>hf cache verify</code> verify integrity and show configuration, but emit no BOM, classify no exposure, and detect no license families.</li>
+<li><a href="./sigil-vs-owasp-aibom-generator/">SIGIL vs OWASP AIBOM Generator</a>: OWASP's AIBOM tool generates CycloneDX 1.6 from a Hugging Face model ID. Same artifact name, different input source and integrity model.</li>
+</ul>
+<p>SIGIL gives a PASS / WARN / FAIL verdict, with a completeness beside it; the three adjacent tools give no verdict.</p>
+</main>
+</body>
 </html>
