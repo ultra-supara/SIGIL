@@ -6,13 +6,18 @@
 //! | Outcome | State |
 //! |---|---|
 //! | answered 200 with a version | `Complete` |
-//! | connection refused | `NotPresent` at the target from this host (`ConnectionRefused`) |
+//! | connection refused | `NotPresent` at the target from SIGIL's network namespace (`ConnectionRefused`) |
 //! | response over the byte limit | `BudgetExceeded` (`api_response_bytes`) |
 //! | another status, no version, or a response SIGIL does not read | `Unsupported`: not the Ollama API as SIGIL reads it |
 //! | timed out, or another I/O error | `Error` |
 //!
 //! A refusal is an observation: nothing answers there. A timeout is not: something may answer
 //! later, or a firewall may drop the connection, so the check stays open.
+//!
+//! What a probe covers (PR-3b-2 design §6.1): one request to that address from SIGIL's network
+//! namespace. A version is the endpoint's own claim. A refusal closes only "is the version at
+//! this endpoint known": it says nothing about a runtime in another namespace or on another
+//! host, and nothing about whether a runtime is safe.
 
 use sigil_model::{
     target, AbsenceBasis, ApiProbe, CheckId, Coverage, CoverageState, EvidenceRef, ProbePhase,
@@ -58,7 +63,7 @@ fn state(probe: &ApiProbe) -> CoverageState {
             evidence: vec![EvidenceRef::Probe {
                 probe: probe.id.clone(),
             }],
-            scope: format!("{target} from this host"),
+            scope: format!("{target} from SIGIL's network namespace"),
             basis: AbsenceBasis::ConnectionRefused,
         },
         ProbeResult::TooLarge { limit } => CoverageState::BudgetExceeded {

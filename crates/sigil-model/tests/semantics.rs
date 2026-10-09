@@ -1772,7 +1772,7 @@ fn with_refused_probe() -> Session {
             evidence: vec![EvidenceRef::Probe {
                 probe: probe.id.clone(),
             }],
-            scope: "127.0.0.1:11434 from this host".to_string(),
+            scope: "127.0.0.1:11434 from SIGIL's network namespace".to_string(),
             basis: AbsenceBasis::ConnectionRefused,
         },
     ));
@@ -2116,7 +2116,7 @@ fn a_probe_is_not_present_only_on_its_own_refusal() {
             evidence: vec![EvidenceRef::Probe {
                 probe: id("probe:api/[::1]:11434"),
             }],
-            scope: "[::1]:11434 from this host".to_string(),
+            scope: "[::1]:11434 from SIGIL's network namespace".to_string(),
             basis: AbsenceBasis::ConnectionRefused,
         },
     ));
@@ -2203,7 +2203,7 @@ fn moving_runtime_api_coverage_off_the_probe_is_refused() {
         evidence: vec![EvidenceRef::Probe {
             probe: id("probe:api/127.0.0.1:11434"),
         }],
-        scope: "127.0.0.1:11434 from this host".to_string(),
+        scope: "127.0.0.1:11434 from SIGIL's network namespace".to_string(),
         basis: AbsenceBasis::ConnectionRefused,
     };
     // A timed-out probe, its check closed on the audit or a root instead of on the probe.
@@ -2261,7 +2261,7 @@ fn a_refused_connection_is_evidence_for_runtime_api_version_only() {
         evidence: vec![EvidenceRef::Probe {
             probe: id("probe:api/127.0.0.1:11434"),
         }],
-        scope: "127.0.0.1:11434 from this host".to_string(),
+        scope: "127.0.0.1:11434 from SIGIL's network namespace".to_string(),
         basis: AbsenceBasis::ConnectionRefused,
     };
     for scope in [

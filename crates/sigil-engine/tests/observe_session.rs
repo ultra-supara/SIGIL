@@ -49,6 +49,15 @@ fn session(store: &Path, fake: &FakeProc) -> Session {
 }
 
 fn session_with(store: &Path, fake: &FakeProc, observation: ObservationMeta) -> Session {
+    session_active(store, fake, observation, &ActiveInput::default())
+}
+
+fn session_active(
+    store: &Path,
+    fake: &FakeProc,
+    observation: ObservationMeta,
+    active: &ActiveInput,
+) -> Session {
     let req = ObserveRequest {
         store: StoreRequest {
             models_dir: store.to_path_buf(),
@@ -61,7 +70,7 @@ fn session_with(store: &Path, fake: &FakeProc, observation: ObservationMeta) -> 
     };
     let s = observe_session(
         &req,
-        &ActiveInput::default(),
+        active,
         &Policy::builtin_default().unwrap(),
         ToolInfo {
             name: "sigil".to_string(),
@@ -220,6 +229,80 @@ fn a_runtime_in_another_network_namespace_is_incomplete() {
         (s.outcome.verdict, s.outcome.completeness.clone()),
         (Verdict::Pass, missing_binds())
     );
+}
+
+/// The observation scope of the API probe (PR-3b-2 design §6.1): a refusal of 127.0.0.1:11434
+/// from SIGIL's network namespace says nothing about a runtime in another one.
+#[test]
+fn a_refused_probe_says_nothing_about_a_runtime_in_another_network_namespace() {
+    let store = TempDir::new().unwrap();
+    good_store(store.path());
+    let fake = FakeProc::new();
+    fake.process(&Proc {
+        net_ns: 999,
+        ..serve(&[])
+    });
+    let target: std::net::SocketAddr = "127.0.0.1:11434".parse().unwrap();
+    let active = ActiveInput {
+        features: vec![ActiveFeature::ApiProbe {
+            address: "127.0.0.1".to_string(),
+            port: 11434,
+            allow_remote: false,
+        }],
+        probes: vec![ApiProbe {
+            id: ProbeId::api(target),
+            address: "127.0.0.1".to_string(),
+            port: 11434,
+            at: Timestamp::new("2026-10-08T00:00:00Z").unwrap(),
+            result: ProbeResult::Refused,
+        }],
+        budgets: Default::default(),
+    };
+    let s = session_active(store.path(), &fake, observation(), &active);
+
+    // The runtime stays recorded, and its binds stay open: it is in another namespace.
+    let runtime = s
+        .processes
+        .iter()
+        .find(|p| p.roles.iter().any(|r| r.as_str() == "ollama serve"))
+        .expect("the runtime is recorded");
+    let binds = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == BINDS && c.scope == Ref::Process(runtime.process.clone()))
+        .expect("the runtime's binds coverage");
+    assert!(
+        matches!(&binds.state, CoverageState::Partial { missing } if missing.iter().any(|m| m == "listeners in another network namespace")),
+        "{:?}",
+        binds.state
+    );
+    // The refusal closes only "is the version at this endpoint known", from SIGIL's namespace.
+    let version = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == "runtime_api.version")
+        .expect("runtime_api.version coverage");
+    assert!(
+        matches!(&version.state, CoverageState::NotPresent { scope, .. } if scope == "127.0.0.1:11434 from SIGIL's network namespace"),
+        "{:?}",
+        version.state
+    );
+    // Nothing infers that the runtime is absent or safe: no finding, and the result is incomplete
+    // because of the runtime, not closed by the probe.
+    assert!(s.findings.is_empty());
+    assert_eq!(
+        (s.outcome.verdict, s.outcome.completeness.clone()),
+        (Verdict::Pass, missing_binds())
+    );
+    // The report and the explanation state the probe's limits.
+    let note = sigil_model::render::PROBE_SCOPE_NOTE;
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(
+        md.contains(&UntrustedText::new(note).markdown_inline()),
+        "{md}"
+    );
+    let coverage = sigil_engine::explain::coverage(&s, sigil_engine::explain::Format::Text);
+    assert!(coverage.contains(note), "{coverage}");
 }
 
 // --- the request -------------------------------------------------------------------------------

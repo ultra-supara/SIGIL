@@ -14,7 +14,7 @@ use crate::text::UntrustedText;
 
 use super::{
     action, active_feature, completeness, coverage_state, kind, mode, not_observable, probe_result,
-    subject, treatment, verdict,
+    subject, treatment, verdict, PROBE_SCOPE_NOTE,
 };
 use crate::probe::target;
 
@@ -359,6 +359,8 @@ fn runtime_api(out: &mut String, s: &Session) {
         })
         .collect();
     table(out, &["Target", "Attempted at", "Outcome"], rows);
+    out.push_str(&esc(PROBE_SCOPE_NOTE));
+    out.push_str("\n\n");
 }
 
 fn others(out: &mut String, s: &Session) {

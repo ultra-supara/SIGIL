@@ -8,9 +8,10 @@
 
 use std::fmt;
 
+use sigil_model::probe::RUNTIME_API_VERSION;
 use sigil_model::render::{
     action, completeness, coverage_state, kind, not_observable, probe_result, severity, subject,
-    treatment, verdict as verdict_name, Shown,
+    treatment, verdict as verdict_name, Shown, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
     Action, Completeness, CondEvidence, CondState, EvidenceRef, Finding, ListenerOwner,
@@ -284,6 +285,9 @@ pub fn coverage(s: &Session, format: Format) -> String {
             );
         }
         doc.end();
+        if check.as_str() == RUNTIME_API_VERSION && !s.probes.is_empty() {
+            doc.para(Shown::own(PROBE_SCOPE_NOTE));
+        }
     }
     doc.finish()
 }

@@ -8,7 +8,8 @@
 //!   DNS query is involved. Proxy settings are ignored. A non-loopback target is refused unless
 //!   the caller allows remote targets.
 //! - **How much:** a connect timeout, one deadline for writing the request and reading the
-//!   response together, and a byte limit on the response (head and body).
+//!   response together (the socket timeout is reset to the time left before every `write` and
+//!   `read`), and a byte limit on the response (head and body). Each bound has a maximum.
 //! - **What:** plain HTTP/1.1 only, with no TLS and no redirects (see [`http`]).
 
 #![forbid(unsafe_code)]
@@ -53,6 +54,14 @@ impl Default for ProbeOptions {
     }
 }
 
+/// The largest connect timeout a probe accepts (`api_connect_ms`).
+pub const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest I/O deadline a probe accepts (`api_io_ms`).
+pub const MAX_IO_DEADLINE: Duration = Duration::from_secs(60);
+/// The largest response a probe reads (`api_response_bytes`): the buffer, and the parser's
+/// rescans after each read, grow with it.
+pub const MAX_RESPONSE: u64 = 1 << 20;
+
 /// Why a probe was not attempted. Nothing touches the network in these cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeError {
@@ -62,6 +71,9 @@ pub enum ProbeError {
     InvalidTarget(SocketAddr),
     /// A timeout or the byte limit is zero.
     ZeroBound,
+    /// A timeout or the byte limit is above its maximum ([`MAX_CONNECT_TIMEOUT`],
+    /// [`MAX_IO_DEADLINE`], [`MAX_RESPONSE`]).
+    BoundTooLarge,
 }
 
 impl std::fmt::Display for ProbeError {
@@ -78,6 +90,9 @@ impl std::fmt::Display for ProbeError {
                 "{target} is not a probe target (unspecified address, port 0, or scope ID)"
             ),
             ProbeError::ZeroBound => write!(f, "a probe timeout or byte limit is zero"),
+            ProbeError::BoundTooLarge => {
+                write!(f, "a probe timeout or byte limit is above its maximum")
+            }
         }
     }
 }
@@ -100,6 +115,12 @@ pub fn probe_version(
     if opts.connect_timeout.is_zero() || opts.io_deadline.is_zero() || opts.max_response == 0 {
         return Err(ProbeError::ZeroBound);
     }
+    if opts.connect_timeout > MAX_CONNECT_TIMEOUT
+        || opts.io_deadline > MAX_IO_DEADLINE
+        || opts.max_response > MAX_RESPONSE
+    {
+        return Err(ProbeError::BoundTooLarge);
+    }
     Ok(ApiProbe {
         id: ProbeId::api(target),
         address: target.ip().to_string(),
@@ -120,14 +141,9 @@ fn exchange(target: SocketAddr, opts: &ProbeOptions) -> ProbeResult {
     };
     let deadline = Instant::now() + opts.io_deadline;
 
-    let Some(left) = time_left(deadline) else {
-        return timed_out(ProbePhase::Write);
-    };
-    if let Err(e) = stream.set_write_timeout(Some(left)) {
-        return failed(&e);
-    }
-    if let Err(e) = stream.write_all(&http::request(target)) {
-        return io_failure(&e, ProbePhase::Write);
+    let set_timeout = |s: &mut _, left| std::net::TcpStream::set_write_timeout(s, Some(left));
+    if let Err(result) = send(&mut stream, set_timeout, &http::request(target), deadline) {
+        return result;
     }
 
     // At most one byte more than the limit is read, to tell "at the limit" from "over it".
@@ -177,6 +193,31 @@ fn exchange(target: SocketAddr, opts: &ProbeOptions) -> ProbeResult {
     }
 }
 
+/// Writes all of `data` before `deadline`. The write timeout is set to the time left before each
+/// `write`, as the read loop does, so several partial writes cannot together overrun the
+/// deadline.
+fn send<W: Write>(
+    w: &mut W,
+    mut set_timeout: impl FnMut(&mut W, Duration) -> io::Result<()>,
+    data: &[u8],
+    deadline: Instant,
+) -> Result<(), ProbeResult> {
+    let mut sent = 0;
+    while sent < data.len() {
+        let Some(left) = time_left(deadline) else {
+            return Err(timed_out(ProbePhase::Write));
+        };
+        set_timeout(w, left).map_err(|e| failed(&e))?;
+        match w.write(&data[sent..]) {
+            Ok(0) => return Err(failed(&io::Error::from(io::ErrorKind::WriteZero))),
+            Ok(n) => sent += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(io_failure(&e, ProbePhase::Write)),
+        }
+    }
+    Ok(())
+}
+
 /// The time left before `deadline`, if any.
 fn time_left(deadline: Instant) -> Option<Duration> {
     deadline
@@ -199,5 +240,94 @@ fn io_failure(e: &io::Error, phase: ProbePhase) -> ProbeResult {
 fn failed(e: &io::Error) -> ProbeResult {
     ProbeResult::Failed {
         message: UntrustedText::new(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    /// A writer that accepts one byte per `write`, after `pause`.
+    struct Drip {
+        accepted: Vec<u8>,
+        pause: Duration,
+        timeouts: Vec<Duration>,
+        zero: bool,
+    }
+
+    impl Drip {
+        fn new(pause: Duration) -> Drip {
+            Drip {
+                accepted: vec![],
+                pause,
+                timeouts: vec![],
+                zero: false,
+            }
+        }
+    }
+
+    impl Write for Drip {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            thread::sleep(self.pause);
+            if self.zero || buf.is_empty() {
+                return Ok(0);
+            }
+            self.accepted.push(buf[0]);
+            Ok(1)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn record(w: &mut Drip, left: Duration) -> io::Result<()> {
+        w.timeouts.push(left);
+        Ok(())
+    }
+
+    #[test]
+    fn each_write_gets_the_time_left() {
+        let mut w = Drip::new(Duration::from_millis(40));
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let started = Instant::now();
+        let result = send(&mut w, record, b"0123456789", deadline);
+        assert_eq!(
+            result,
+            Err(ProbeResult::TimedOut {
+                phase: ProbePhase::Write
+            })
+        );
+        // Partial writes cannot together overrun the deadline.
+        assert!(w.accepted.len() < 10, "{:?}", w.accepted);
+        assert!(started.elapsed() < Duration::from_millis(300));
+        // The timeout was set before each write, each time to less than before; with no time
+        // left, nothing more was written.
+        assert_eq!(w.timeouts.len(), w.accepted.len(), "{:?}", w.timeouts);
+        assert!(
+            w.timeouts.windows(2).all(|p| p[1] < p[0]),
+            "{:?}",
+            w.timeouts
+        );
+    }
+
+    #[test]
+    fn a_fast_writer_sends_everything() {
+        let mut w = Drip::new(Duration::ZERO);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert_eq!(send(&mut w, record, b"0123", deadline), Ok(()));
+        assert_eq!(w.accepted, b"0123");
+    }
+
+    #[test]
+    fn a_writer_that_takes_nothing_fails() {
+        let mut w = Drip::new(Duration::ZERO);
+        w.zero = true;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert!(matches!(
+            send(&mut w, record, b"0123", deadline),
+            Err(ProbeResult::Failed { .. })
+        ));
     }
 }
