@@ -1,0 +1,128 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "ea5411db1b6908e4f666748ef0d1a9c35d975aa9ff33ff41e56d78f752c9a4c7",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "exposure.binds"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 1,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libggml.so.0.13.1"
+      ],
+      "slices": [
+        {
+          "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "components": [
+            {
+              "component": "ggml",
+              "status": "ReferenceMatched",
+              "versions": [
+                "0.13.1"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "size": 512,
+      "format": "Other",
+      "paths": [
+        "/etc/systemd/system/ollama.service"
+      ],
+      "slices": []
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding:loader.candidate_or_library_replaceable@lib/ollama/libggml.so.0.13.1",
+      "rule": "loader.candidate_or_library_replaceable",
+      "kind": "Loader",
+      "subject": {
+        "Instance": "inst:lib/ollama/libggml.so.0.13.1"
+      },
+      "summary": "Anyone can replace libggml.so.0.13.1, which the per-model llama-server binds to (specification example)",
+      "default_severity": "Fail",
+      "decision": {
+        "action": "Fail",
+        "source": "default:loader.candidate_or_library_replaceable",
+        "reason": null,
+        "expires": null
+      },
+      "limits": [
+        "ACLs were evaluated only where readable"
+      ]
+    }
+  ],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "exposure.binds",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Skipped": 1
+      }
+    },
+    {
+      "check": "loader.identify",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    }
+  ]
+}

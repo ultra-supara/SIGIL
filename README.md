@@ -27,6 +27,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 
 - **The session** (`sigil-session/1`, [schema](schemas/session-v1.schema.json)): every fact observed, every finding with the facts it rests on, what each check covered, and the outcome. Canonical JSON, so two runs over the same input give the same bytes. Diff it across review cycles.
 - **Markdown**: the outcome, findings, open coverage, models, listeners, and processes, for the review ticket. Every input-derived string is escaped.
+- **The AI-BOM v2** (`sigil-aibom/2`, [schema](schemas/aibom-v2.schema.json)): a compact projection of the session for reviewers and downstream tools (outcome, runtime, models, artifacts and components, findings, coverage summary). It names its session by SHA-256, so every line traces back to the evidence.
 - **`sigil explain`**: why a finding fired (its facts, the policy decision, and the fix), or how the verdict and completeness were reached.
 
 | Surface | Evidence captured |
@@ -70,6 +71,10 @@ cargo run -p sigil-cli -- inspect ollama --mode observe --out out/session.json
 
 # Active: also ask the runtime's API for its version (one request to 127.0.0.1:11434)
 cargo run -p sigil-cli -- inspect ollama --active api-probe --out out/session.json
+
+# AI-BOM v2: from an inspection, or from a saved session (which it names by SHA-256)
+cargo run -p sigil-cli -- inspect ollama --format aibom --out out/aibom.json
+cargo run -p sigil-cli -- session render out/session.json --format aibom --out out/aibom.json
 
 # Explain a saved session: one finding, the verdict, or the coverage
 cargo run -p sigil-cli -- explain out/session.json --verdict
@@ -121,13 +126,14 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 - Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
 - Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
 - The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
-- CLI: `inspect ollama` (static, observe, and the active API probe), `session render`, `explain`, `rules`.
+- AI-BOM v2 (`sigil-aibom/2`): the projection, its JSON Schema, and its Markdown.
+- CLI: `inspect ollama` (static, observe, and the active API probe; session, Markdown, or AI-BOM output), `session render` (Markdown or AI-BOM), `explain`, `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path, with the active probe held to one connection to its destination.
 
 **Not yet**
 
 - Binary analysis of the runtime's executables and libraries (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
-- AI-BOM v2 and the browser viewer on v2 sessions.
+- The browser viewer on v2 sessions and AI-BOM v2 (PR-3b-3b).
 - Runtimes beyond Ollama, and baseline comparison.
 
 ## Documentation
@@ -136,7 +142,8 @@ SIGIL grows from single-runtime inspection into local AI environment **compariso
 - [Model store](docs/model-store.md) and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
 - [Policy](docs/policy.md): the policy format and how the outcome is computed.
 - [ADR-002](docs/adr/ADR-002-execution-modes.md): execution modes and safety contracts.
-- v0.1 references, to be updated with AI-BOM v2: [overview](docs/sigil-overview.md), [Ollama inspection](docs/ollama-inspection.md), [AI-BOM and comparison](docs/ai-bom-and-comparison.md), [architecture and safety](docs/architecture-and-safety.md).
+- [AI-BOM and comparison](docs/ai-bom-and-comparison.md): the AI-BOM v2, how it names its session, and the comparison direction.
+- v0.1 references, to be updated: [overview](docs/sigil-overview.md), [Ollama inspection](docs/ollama-inspection.md), [architecture and safety](docs/architecture-and-safety.md).
 
 ## License
 

@@ -1,7 +1,9 @@
 //! Renderers of a session (plan §4.3, §4.10). Pure: no I/O, so they also run in the browser
 //! viewer. Every value they show goes through the [`UntrustedText`] escape API.
 
+pub mod aibom;
 pub mod markdown;
+mod md;
 
 use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
 use crate::evidence::{NotObservable, Ref};

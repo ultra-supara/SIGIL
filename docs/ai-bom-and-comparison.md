@@ -15,115 +15,64 @@ Local LLM deployments can change without a package manager or central inventory:
 
 An AI-BOM gives SIGIL a stable record to compare against later.
 
-## Current AI-BOM Output
+## AI-BOM v2
 
-SIGIL currently emits:
+The source of truth is the **session** (`sigil-session/1`, [docs/session-model.md](session-model.md)): every fact observed, every finding with the facts it rests on, and what each check covered. The AI-BOM v2 (`schema: "sigil-aibom/2"`) is a compact projection of a session for reviewers and downstream tools. It is defined by `sigil_model::render::aibom` and specified in [`schemas/aibom-v2.schema.json`](../schemas/aibom-v2.schema.json) (JSON Schema draft 2020-12, self-contained, strict).
 
-- JSON evidence from `runtime inspect ollama --out <path>` (always the AI-BOM JSON contract)
-- JSON or Markdown from `aibom generate --runtime ollama --format {json,md} --out <path>`
+```bash
+# From an inspection: the AI-BOM only (the session itself is not saved)
+sigil inspect ollama --format aibom --out out/aibom.json
 
-The two paths produce the **same** AI-BOM model — JSON and Markdown never diverge. Markdown is a rendering of the JSON, not a separate report.
-
-## Schema (implemented)
-
-The AI-BOM JSON is a stable, versioned contract produced from a runtime-agnostic `AiBom` model (`crates/sigil-core/src/aibom.rs`).
-The contract is formally specified in [`schemas/aibom-v1.schema.json`](../schemas/aibom-v1.schema.json) (JSON Schema draft 2020-12, self-contained, strict `additionalProperties: false`).
-
-The schema captures:
-
-- `schema_version` is explicit (currently `"1.1"`). Minor bumps are additive; major bumps are breaking.
-- Enum values are stabilized and pinned by tests: `verdict`, `severity`, `category`, `api_exposure`, `status`, `exposure.class`.
-- Required vs optional fields are defined. Optional fields are omitted when absent.
-- Findings carry a `category` (`runtime` | `model` | `binary`). `binary` is reserved for native-binary findings and is not yet produced by the Ollama path.
-
-### Top-level shape
-
-```json
-{
-  "schema_version": "1.1",
-  "tool": { "name": "sigil", "version": "0.1.0" },
-  "runtime": {
-    "name": "ollama",
-    "host": "http://127.0.0.1:11434",
-    "models_dir": "/home/you/.ollama/models",
-    "api_exposure": "not_probed",
-    "status": "not_probed",
-    "exposure": {
-      "class": "unknown",
-      "source": "disabled",
-      "observed": []
-    }
-  },
-  "models": [
-    {
-      "name": "gemma4:e2b",
-      "manifest_path": "/home/you/.ollama/models/manifests/registry.ollama.ai/library/gemma4/e2b",
-      "files": [
-        { "digest": "sha256:4e30…", "path": "…", "size": 7162394016, "sha256": "4e30…", "kind": "model" },
-        { "digest": "sha256:c6bc…", "path": "…", "size": 473,         "sha256": "c6bc…", "kind": "config" },
-        { "digest": "sha256:7339…", "path": "…", "size": 11355,       "sha256": "7339…", "kind": "license" },
-        { "digest": "sha256:5638…", "path": "…", "size": 42,          "sha256": "5638…", "kind": "params" }
-      ],
-      "provenance": {
-        "registry": "registry.ollama.ai",
-        "namespace": "library",
-        "model": "gemma4",
-        "tag": "e2b",
-        "config_digest": "sha256:c6bc…",
-        "layer_digests": ["sha256:4e30…", "sha256:c6bc…", "sha256:7339…", "sha256:5638…"]
-      },
-      "license": {
-        "digest": "sha256:7339…",
-        "size": 11355,
-        "spdx_id": "Apache-2.0",
-        "text_excerpt": "Apache License\n  Version 2.0, January 2004..."
-      }
-    }
-  ],
-  "findings": [],
-  "verdict": "PASS"
-}
+# From a saved session: keep the session as the evidence, derive the AI-BOM from it
+sigil inspect ollama --out out/session.json
+sigil session render out/session.json --format aibom --out out/aibom.json
 ```
 
-### Enum values
+### It names its session
 
-| Field | Values |
+`session.sha256` is the SHA-256 of the session's canonical JSON (`Session::to_canonical_json`). A session SIGIL saved hashes to its file, so the AI-BOM points at the exact evidence behind every line. `inspect --format aibom` does not save the session, and its summary prints the hash and says so. To keep the evidence, also write the session (`--format session`).
+
+A session written before PR #76 has no `request.active` or `probes`. It hashes in its upgraded form, with both added as empty lists, which differs from its file's bytes.
+
+### Shape
+
+| Field | Holds |
 |---|---|
-| `verdict` | `PASS` / `WARN` / `FAIL` |
-| `findings[].severity` | `WARN` / `FAIL` |
-| `findings[].category` | `runtime` / `model` / `binary` |
-| `runtime.api_exposure` | `not_probed` / `localhost` / `network` / `public_bind` / `unavailable` |
-| `runtime.status` | `not_probed` / `reachable` / `unreachable` |
-| `runtime.exposure.class` | `localhost` / `lan` / `public_bind` / `docker_published` / `proxy` / `unknown` |
+| `schema` | `"sigil-aibom/2"` |
+| `tool` | name, version, git revision |
+| `session` | `schema` (`sigil-session/1`), `sha256`, `mode`, `started_at`, the applied `policy` (id, version, SHA-256) |
+| `outcome` | `verdict` (PASS / WARN / FAIL) and `completeness` (COMPLETE / INCOMPLETE with the open checks), side by side, plus the confirmed counts |
+| `runtime` | `processes` (PID, start, roles, name, executable), `listeners` (address, port, socket, owner), `api` (each API probe and how it ended), `releases` (product, candidates, the kind of basis) |
+| `models` | id, name, provenance (registry / namespace / model / tag), layers (role, media type, digest, and where the blob was found with the content read there, or that it is absent, unresolved, or not looked up), license (SPDX id, excerpt) |
+| `artifacts` | each file content: SHA-256 id, size, format, the paths it was found at, and per architecture slice the components identified in it (with `IdentityStatus` and versions) |
+| `findings` | id, rule, kind, subject, summary, default severity, the policy decision, limits |
+| `policy_violations` | policy rule, subject, decision |
+| `coverage` | per check: whether it is required, whether it is closed, and its entries per coverage state |
 
-### Provenance (required)
+- Evidence, identity assertions, finding conditions, code facts, relations, and load facts are not copied. Follow `session.sha256` to the session for them.
+- Input-derived text (names, paths, versions, OS messages) stays **untrusted text**: a string when it is UTF-8, `{"hex": …}` otherwise. Consumers must escape it before display.
+- An API probe in `runtime.api` is the endpoint's own claim, from SIGIL's network namespace. A refusal there says nothing about a runtime in another namespace or on another host.
 
-Each model entry carries provenance parsed from the Ollama manifest path:
+### Markdown
 
-- `registry`, `namespace`, `model`, `tag` — `Option<String>` to leave room for runtimes that cannot populate all four. Ollama populates all four when the manifest path has the expected `<registry>/<namespace>/<model>/<tag>` shape. When the path is too shallow, the model is skipped from `models[]` and an `ollama.provenance_unknown` `WARN` finding is emitted (never `FAIL`).
-- `config_digest` — optional, set when the manifest has a `config` descriptor.
-- `layer_digests` — always present (may be empty), full digest lineage of declared layers.
+`sigil_model::render::aibom::markdown` renders an AI-BOM as Markdown, with the same escaping as the session report. Its sections:
+- a header;
+- the outcome;
+- the runtime API (with the probe's limits), processes, listeners, and releases;
+- models;
+- artifacts;
+- findings;
+- policy violations;
+- coverage.
 
-### License (optional)
+The browser viewer will use it through wasm (PR-3b-3b). The CLI's `--format md` renders the session itself, which has more detail.
 
-License metadata is recommended but not required:
+### Compatibility
 
-- `digest`, `size` — pointing at the `application/vnd.ollama.image.license` layer.
-- `spdx_id` — optional. Detected from the first line (fast path) or from body-text signature matching against ten well-known licenses. See [Ollama Inspection](ollama-inspection.md#license--spdx-detection) for the full detection table. When the body cannot be unambiguously identified, `spdx_id` is omitted rather than guessed.
-- `text_excerpt` — up to 256 bytes of trimmed body text, so a human reviewer can confirm the detection.
-
-When the manifest has no license layer, `license` is omitted and an `ollama.license_missing` `WARN` finding is emitted (never `FAIL`).
-
-## Markdown View
-
-The Markdown view is rendered from the same `AiBom` model. See the [Ollama Inspection example](ollama-inspection.md#example-ai-bom-markdown) for a real sample. Structure:
-
-- Banner: `# SIGIL AI-BOM: [PASS|WARN|FAIL]`
-- Schema + tool header
-- `## Runtime` — property table
-- `### Observed binds` — only when listeners were inspected
-- `## Models` — one model card per entry with License / Provenance / Manifest + a Layers table
-- `## Findings` — empty placeholder or severity / category / id / message / evidence table
+- AI-BOM v2 is a new major version. It is not a superset of v1, and a v1 document is refused.
+- [`schemas/aibom-v1.schema.json`](../schemas/aibom-v1.schema.json) stays for the reports SIGIL 0.1 wrote.
+- Within `sigil-aibom/2`, every field is always written and required.
+- Types shared with the session are copied from `session-v1.schema.json`, and a test keeps them equal.
 
 ## Planned Comparison Work
 
@@ -137,14 +86,13 @@ Future comparison should answer:
 - Did a custom model's Modelfile or adapter chain change?
 - Do current findings violate local policy?
 
-A possible future command shape:
+Comparison will work on sessions, with AI-BOMs as their summaries, so that every difference can be traced to evidence. A possible future command shape:
 
 ```bash
-sigil compare \
-  --baseline baseline/aibom.json \
-  --current out/current-aibom.json \
-  --policy examples/policies/local-llm.yml
+sigil compare --baseline baseline/session.json --current out/session.json
 ```
+
+AI-BOM comparison and baseline drift detection are tracked in issue #16.
 
 ## Runtime Comparison
 
@@ -167,6 +115,4 @@ Candidate future runtimes:
 - text-generation-inference
 - Other local OpenAI-compatible endpoints
 
-A future runtime implements its own mapping into the `AiBom` model and reuses the same struct and enum definitions, so downstream consumers and baselines keep working without schema changes.
-
-The AI-BOM JSON contract is formally specified in [`schemas/aibom-v1.schema.json`](../schemas/aibom-v1.schema.json) (JSON Schema draft 2020-12). Downstream consumers can validate AI-BOM JSON against this schema directly. AI-BOM comparison / baseline drift detection is tracked in issue #16.
+A future runtime records its facts in the same session model. The AI-BOM projection then gains what that runtime needs, with a new schema version if a field changes meaning.

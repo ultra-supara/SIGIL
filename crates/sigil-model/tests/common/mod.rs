@@ -1317,5 +1317,163 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("11-reference-verified", reference_verified()),
         ("12-conflicting-identity", conflicting_identity()),
         ("13-loader-slice-spec-example", loader_slice_spec_example()),
+        ("14-store-and-runtime", store_and_runtime()),
     ]
+}
+
+// --- Model store and runtime (moved from tests/semantics.rs for the AI-BOM examples) -----------
+
+pub const LICENSE_MEDIA: &str = "application/vnd.ollama.image.license";
+pub const MODELS_DIR: &str = "/usr/share/ollama/.ollama/models";
+
+/// Adds a blob read from `blobs/sha256-<hex>` under the models root; returns its digest, instance,
+/// and artifact.
+pub fn add_blob(s: &mut Session, byte: u8, ino: u64) -> (String, InstanceId, ArtifactId) {
+    let h = hex(byte);
+    let artifact: ArtifactId = id(&format!("sha256:{h}"));
+    let inst: InstanceId = id(&format!("inst:models/blobs/sha256-{h}"));
+    s.artifacts.push(Artifact {
+        id: artifact.clone(),
+        size: 5,
+        format: Format::Other,
+        slices: vec![],
+    });
+    let path = format!("{MODELS_DIR}/blobs/sha256-{h}");
+    s.instances
+        .push(instance(&inst, "models", &path, &artifact, ino));
+    (format!("sha256:{h}"), inst, artifact)
+}
+
+pub fn layer(role: LayerRole, media: Option<&str>, digest: &str, blob: BlobLookup) -> ModelLayer {
+    ModelLayer {
+        role,
+        media_type: media.map(t),
+        digest: t(digest),
+        blob,
+    }
+}
+
+pub fn found(instance: &InstanceId) -> BlobLookup {
+    BlobLookup::Found {
+        instance: instance.clone(),
+    }
+}
+
+/// One model under a `models` root: a config, the weights, and an MIT license layer, all read.
+pub fn with_model() -> Session {
+    let mut s = base(&[]);
+    s.request.roots.push(ScanRoot {
+        id: id("models"),
+        path: t(MODELS_DIR),
+    });
+    let manifest_art: ArtifactId = id(&format!("sha256:{}", hex(0x10)));
+    s.artifacts.push(Artifact {
+        id: manifest_art.clone(),
+        size: 400,
+        format: Format::Other,
+        slices: vec![],
+    });
+    let manifest: InstanceId = id("inst:models/manifests/registry.ollama.ai/library/m/latest");
+    s.instances.push(instance(
+        &manifest,
+        "models",
+        &format!("{MODELS_DIR}/manifests/registry.ollama.ai/library/m/latest"),
+        &manifest_art,
+        10,
+    ));
+    let (config, config_blob, _) = add_blob(&mut s, 0x11, 11);
+    let (weights, weights_blob, _) = add_blob(&mut s, 0x12, 12);
+    let (license, license_blob, license_art) = add_blob(&mut s, 0x13, 13);
+    s.models.push(Model {
+        id: id("model:models/registry.ollama.ai/library/m/latest"),
+        name: t("m:latest"),
+        manifest,
+        provenance: ModelProvenance {
+            registry: t("registry.ollama.ai"),
+            namespace: Some(t("library")),
+            model: t("m"),
+            tag: t("latest"),
+        },
+        layers: vec![
+            layer(LayerRole::Config, None, &config, found(&config_blob)),
+            layer(
+                LayerRole::Layer,
+                Some("application/vnd.ollama.image.model"),
+                &weights,
+                found(&weights_blob),
+            ),
+            layer(
+                LayerRole::Layer,
+                Some(LICENSE_MEDIA),
+                &license,
+                found(&license_blob),
+            ),
+        ],
+        license: Some(LicenseText {
+            artifact: license_art,
+            spdx: Some("MIT".to_string()),
+            excerpt: t("MIT"),
+        }),
+    });
+    s
+}
+
+/// The `ollama serve` process of the runtime examples.
+pub fn runtime_process() -> ProcessRef {
+    ProcessRef {
+        pid: 4242,
+        start_ticks: 1000,
+        boot_id: "00000000-0000-4000-8000-000000000000".to_string(),
+    }
+}
+
+/// Example 14: a model store and a running runtime (observe mode with the API probe). One model
+/// (config, weights, MIT license), `ollama serve` listening on loopback, and a probe of it that
+/// answered with a version.
+pub fn store_and_runtime() -> Session {
+    let mut s = with_model();
+    s.request.mode = Mode::Observe;
+    s.processes.push(ProcessObs {
+        process: runtime_process(),
+        at: ts("2026-10-07T07:00:01Z"),
+        roles: ids(&["ollama serve"]),
+        exe: ProcessExe::NotObservable(NotObservable::PermissionDenied),
+        mappings: vec![],
+        name: Some(t("ollama")),
+        argv: Some(vec![t("/usr/local/bin/ollama"), t("serve")]),
+        net_ns: NsInode::Inode(4026531840),
+        fd_table: Observability::Observed,
+    });
+    s.listeners.push(Listener {
+        id: id("listener:tcp/127.0.0.1:11434#7001"),
+        protocol: Protocol::Tcp,
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        socket_inode: 7001,
+        owner: ListenerOwner::Process {
+            process: runtime_process(),
+        },
+    });
+    s.request.active.push(ActiveFeature::ApiProbe {
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        allow_remote: false,
+    });
+    let probe = ProbeId::api("127.0.0.1:11434".parse().unwrap());
+    s.probes.push(ApiProbe {
+        id: probe.clone(),
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        at: ts("2026-10-07T07:00:01Z"),
+        result: ProbeResult::Answered {
+            status: 200,
+            version: Some(t("0.30.6")),
+        },
+    });
+    s.coverage.push(coverage(
+        "runtime_api.version",
+        Ref::Probe(probe),
+        CoverageState::Complete,
+    ));
+    s
 }

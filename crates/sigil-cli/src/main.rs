@@ -4,7 +4,7 @@
 //!   the runtime's listening sockets. With `--active api-probe` it also asks the runtime's API
 //!   for its version (one request to a literal address, loopback unless `--allow-remote`). It
 //!   writes the session (or its Markdown) and a summary.
-//! - `session render` renders a saved session.
+//! - `session render` renders a saved session, as Markdown or as its AI-BOM v2.
 //! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
 //! - `rules` lists the detection rules.
 //!
@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use sha2::{Digest, Sha256};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, Format as ExplainFormat};
@@ -30,14 +31,15 @@ use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::RULES;
 use sigil_engine::policy::Policy;
+use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
     action, completeness, coverage_state, mode as mode_name, probe_result, severity, subject,
     verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
-    is_loopback, target, ActiveFeature, Completeness, Mode, Session, Timestamp, ToolInfo,
-    UntrustedText, Verdict,
+    is_loopback, target, ActiveFeature, Completeness, Mode, Session, Sha256Hex, Timestamp,
+    ToolInfo, UntrustedText, Verdict,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -138,6 +140,8 @@ enum DocFormat {
     Session,
     /// The session as Markdown.
     Md,
+    /// The AI-BOM v2 (JSON): a projection of the session, which it names by SHA-256.
+    Aibom,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -167,6 +171,8 @@ struct RenderArgs {
 enum RenderFormat {
     /// Markdown.
     Md,
+    /// The AI-BOM v2 (JSON): a projection of the session, which it names by SHA-256.
+    Aibom,
 }
 
 #[derive(Debug, Args)]
@@ -307,14 +313,18 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         session.observation.finished_at = finished;
     }
 
+    let mut unsaved = None;
     let document = match args.format {
-        DocFormat::Session => session
-            .to_canonical_json()
-            .map_err(|e| Failure::Run(format!("the session cannot be serialized: {e}")))?,
+        DocFormat::Session => canonical_json(&session)?,
         DocFormat::Md => render_session(&session),
+        DocFormat::Aibom => {
+            let (json, sha256) = aibom_json(&session)?;
+            unsaved = Some(sha256);
+            json
+        }
     };
     emit(&document, args.out.as_deref())?;
-    summary(&session, args.out.as_deref());
+    summary(&session, args.out.as_deref(), unsaved.as_ref());
 
     let failed = match args.fail_on {
         Some(FailOn::Warn) => session.outcome.verdict >= Verdict::Warn,
@@ -595,8 +605,28 @@ fn load_policy(path: Option<&Path>) -> Result<Policy, Failure> {
     })
 }
 
-/// The header and summary, to stderr (plan §4.8).
-fn summary(s: &Session, out: Option<&Path>) {
+/// The session as SIGIL writes it.
+fn canonical_json(s: &Session) -> Result<String, Failure> {
+    s.to_canonical_json()
+        .map_err(|e| Failure::Run(format!("the session cannot be serialized: {e}")))
+}
+
+/// The AI-BOM v2 of `s` (pretty JSON with a trailing newline), and the SHA-256 of the session's
+/// canonical JSON that it carries. A session SIGIL saved hashes to its file.
+fn aibom_json(s: &Session) -> Result<(String, Sha256Hex), Failure> {
+    let digest = Sha256::digest(canonical_json(s)?.as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let sha256 = Sha256Hex::new(hex).map_err(|e| Failure::Run(format!("the session hash: {e}")))?;
+    let bom = project(s, sha256.clone());
+    let mut json = serde_json::to_string_pretty(&bom)
+        .map_err(|e| Failure::Run(format!("the AI-BOM cannot be serialized: {e}")))?;
+    json.push('\n');
+    Ok((json, sha256))
+}
+
+/// The header and summary, to stderr (plan §4.8). `unsaved` is the hash of a session that was
+/// written only as its AI-BOM.
+fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
     let r = &s.request;
     let audit: Vec<&str> = r.audit.iter().map(|a| a.as_str()).collect();
     let mut header = format!(
@@ -690,6 +720,11 @@ fn summary(s: &Session, out: Option<&Path>) {
         "note: model blob hashing is unbounded by default (its I/O grows with model size)"
             .to_string(),
     );
+    if let Some(sha256) = unsaved {
+        lines.push(format!(
+            "session sha256: {sha256} (not saved: write it with --format session to keep the evidence)"
+        ));
+    }
     if let Some(out) = out {
         lines.push(format!("wrote {}", shown_path(out)));
     }
@@ -702,6 +737,7 @@ fn render(args: &RenderArgs) -> Result<(), Failure> {
     let session = load_session(&args.session)?;
     let document = match args.format {
         RenderFormat::Md => render_session(&session),
+        RenderFormat::Aibom => aibom_json(&session)?.0,
     };
     emit(&document, args.out.as_deref())
 }

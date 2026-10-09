@@ -1275,101 +1275,6 @@ fn the_ten_sentences_are_representable_without_message_strings() {
 
 // --- Models: facts only, every status derived (PR-3a-2) ---------------------------------------
 
-const LICENSE_MEDIA: &str = "application/vnd.ollama.image.license";
-const MODELS_DIR: &str = "/usr/share/ollama/.ollama/models";
-
-/// Adds a blob read from `blobs/sha256-<hex>` under the models root; returns its digest, instance,
-/// and artifact.
-fn add_blob(s: &mut Session, byte: u8, ino: u64) -> (String, InstanceId, ArtifactId) {
-    let h = hex(byte);
-    let artifact: ArtifactId = id(&format!("sha256:{h}"));
-    let inst: InstanceId = id(&format!("inst:models/blobs/sha256-{h}"));
-    s.artifacts.push(Artifact {
-        id: artifact.clone(),
-        size: 5,
-        format: Format::Other,
-        slices: vec![],
-    });
-    let path = format!("{MODELS_DIR}/blobs/sha256-{h}");
-    s.instances
-        .push(instance(&inst, "models", &path, &artifact, ino));
-    (format!("sha256:{h}"), inst, artifact)
-}
-
-fn layer(role: LayerRole, media: Option<&str>, digest: &str, blob: BlobLookup) -> ModelLayer {
-    ModelLayer {
-        role,
-        media_type: media.map(t),
-        digest: t(digest),
-        blob,
-    }
-}
-
-fn found(instance: &InstanceId) -> BlobLookup {
-    BlobLookup::Found {
-        instance: instance.clone(),
-    }
-}
-
-/// One model under a `models` root: a config, the weights, and an MIT license layer, all read.
-fn with_model() -> Session {
-    let mut s = base(&[]);
-    s.request.roots.push(ScanRoot {
-        id: id("models"),
-        path: t(MODELS_DIR),
-    });
-    let manifest_art: ArtifactId = id(&format!("sha256:{}", hex(0x10)));
-    s.artifacts.push(Artifact {
-        id: manifest_art.clone(),
-        size: 400,
-        format: Format::Other,
-        slices: vec![],
-    });
-    let manifest: InstanceId = id("inst:models/manifests/registry.ollama.ai/library/m/latest");
-    s.instances.push(instance(
-        &manifest,
-        "models",
-        &format!("{MODELS_DIR}/manifests/registry.ollama.ai/library/m/latest"),
-        &manifest_art,
-        10,
-    ));
-    let (config, config_blob, _) = add_blob(&mut s, 0x11, 11);
-    let (weights, weights_blob, _) = add_blob(&mut s, 0x12, 12);
-    let (license, license_blob, license_art) = add_blob(&mut s, 0x13, 13);
-    s.models.push(Model {
-        id: id("model:models/registry.ollama.ai/library/m/latest"),
-        name: t("m:latest"),
-        manifest,
-        provenance: ModelProvenance {
-            registry: t("registry.ollama.ai"),
-            namespace: Some(t("library")),
-            model: t("m"),
-            tag: t("latest"),
-        },
-        layers: vec![
-            layer(LayerRole::Config, None, &config, found(&config_blob)),
-            layer(
-                LayerRole::Layer,
-                Some("application/vnd.ollama.image.model"),
-                &weights,
-                found(&weights_blob),
-            ),
-            layer(
-                LayerRole::Layer,
-                Some(LICENSE_MEDIA),
-                &license,
-                found(&license_blob),
-            ),
-        ],
-        license: Some(LicenseText {
-            artifact: license_art,
-            spdx: Some("MIT".to_string()),
-            excerpt: t("MIT"),
-        }),
-    });
-    s
-}
-
 #[test]
 fn a_model_records_facts_that_resolve() {
     let s = round_trip(&with_model());
@@ -1578,14 +1483,6 @@ fn only_sha256_with_64_lowercase_hex_digits_is_a_digest() {
 }
 
 // --- Listeners and process facts (PR-3a-3) ----------------------------------------------------
-
-fn runtime_process() -> ProcessRef {
-    ProcessRef {
-        pid: 4242,
-        start_ticks: 1000,
-        boot_id: "00000000-0000-4000-8000-000000000000".to_string(),
-    }
-}
 
 /// `ollama serve` listening on 0.0.0.0:11434, its fd table read, its exe not readable.
 fn with_listener() -> Session {

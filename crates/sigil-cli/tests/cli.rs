@@ -916,3 +916,82 @@ fn the_probe_target_is_checked_before_anything_runs() {
         assert!(r.stdout.is_empty(), "{}", r.stdout);
     }
 }
+
+// --- AI-BOM v2 (PR-3b-3a) ---------------------------------------------------------------------
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn aibom_of(text: &str) -> sigil_model::AiBom {
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("not an AI-BOM v2 ({e}):\n{text}"))
+}
+
+#[test]
+fn inspect_writes_an_aibom_linked_to_its_session() {
+    let d = store(false);
+    let r = inspect(d.path(), &[&"--format", &"aibom"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let bom = aibom_of(&r.stdout);
+    assert_eq!(bom.schema, sigil_model::render::aibom::AiBomSchema::V2);
+    assert_eq!(bom.outcome.verdict, Verdict::Warn);
+    assert_eq!(bom.models.len(), 1);
+    // The summary names the session's hash, and says the session itself was not saved.
+    let line = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("session sha256: "))
+        .unwrap_or_else(|| panic!("no session hash line:\n{}", r.stderr));
+    assert!(line.contains(bom.session.sha256.as_str()), "{line}");
+    assert!(line.contains("--format session"), "{line}");
+    // The document is pretty JSON with a trailing newline.
+    assert!(r.stdout.ends_with("}\n"));
+
+    let out = TempDir::new().unwrap();
+    let path = out.path().join("bom.json");
+    let r = inspect(d.path(), &[&"--format", &"aibom", &"--out", &path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    aibom_of(&fs::read_to_string(&path).unwrap());
+}
+
+#[test]
+fn session_render_gives_the_aibom_of_a_saved_session() {
+    let (_dir, path) = saved_warn();
+    let r = run(&[&"session", &"render", &path, &"--format", &"aibom"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let bom = aibom_of(&r.stdout);
+    // A session SIGIL saved hashes to its file.
+    assert_eq!(
+        bom.session.sha256.as_str(),
+        sha256_hex(&fs::read(&path).unwrap())
+    );
+    assert_eq!(bom.findings.len(), 1);
+    // Markdown is still the session's report.
+    let r = run(&[&"session", &"render", &path, &"--format", &"md"]);
+    assert!(r.stdout.starts_with("# SIGIL session\n"), "{}", r.stdout);
+}
+
+#[test]
+fn an_aibom_of_a_session_written_before_pr76_hashes_its_upgraded_form() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-model/tests/fixtures/pre-pr76/warn.json");
+    let r = run(&[&"session", &"render", &path, &"--format", &"aibom"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let bom = aibom_of(&r.stdout);
+    let file = fs::read(&path).unwrap();
+    let session: Session = serde_json::from_slice(&file).unwrap();
+    let upgraded = session.to_canonical_json().unwrap();
+    assert_eq!(bom.session.sha256.as_str(), sha256_hex(upgraded.as_bytes()));
+    assert_ne!(bom.session.sha256.as_str(), sha256_hex(&file));
+}
+
+#[test]
+fn help_lists_the_aibom_format() {
+    let r = run(&[&"inspect", &"ollama", &"--help"]);
+    assert!(r.stdout.contains("aibom"), "{}", r.stdout);
+    let r = run(&[&"session", &"render", &"--help"]);
+    assert!(r.stdout.contains("aibom"), "{}", r.stdout);
+}

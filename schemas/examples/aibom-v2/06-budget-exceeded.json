@@ -1,0 +1,91 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "14e3c5acb8f40e1c1a88344c729175a2fe2262e694baf07b7cc6a3593573eac4",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "identity.strings"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libggml.so.0.13.1"
+      ],
+      "slices": [
+        {
+          "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "components": [
+            {
+              "component": "ggml",
+              "status": "ReferenceMatched",
+              "versions": [
+                "0.13.1"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "identity.strings",
+      "required": true,
+      "closed": false,
+      "states": {
+        "BudgetExceeded": 1
+      }
+    }
+  ]
+}
