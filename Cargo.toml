@@ -2,7 +2,6 @@
 members = [
     "crates/sigil-core",
     "crates/sigil-cli",
-    "crates/sigil-aibom-wasm",
     "crates/sigil-model",
     "crates/sigil-engine",
     "crates/sigil-probe",
