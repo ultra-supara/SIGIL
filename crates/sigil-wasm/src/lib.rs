@@ -102,6 +102,25 @@ pub fn render_aibom_markdown_inner(json: &str) -> Result<String, String> {
     Ok(aibom_markdown(&bom))
 }
 
+/// The Markdown report of a session or an AI-BOM v2, whichever `json` is.
+pub fn render_markdown_inner(json: &str) -> Result<String, String> {
+    let value: Value =
+        serde_json::from_str(json).map_err(|e| format!("This is not valid JSON: {e}"))?;
+    match kind(&value) {
+        "session" => render_session_markdown_inner(json),
+        "aibom-v2" => render_aibom_markdown_inner(json),
+        "aibom-v1" => Err(V1_MESSAGE.to_string()),
+        _ => Err(match value.get("schema").and_then(Value::as_str) {
+            Some(other) => format!(
+                "This file has \"schema\": {other:?}; this viewer reads {SESSION_SCHEMA} and {AIBOM_SCHEMA}."
+            ),
+            None => format!(
+                "This file has no \"schema\"; this viewer reads {SESSION_SCHEMA} and {AIBOM_SCHEMA}."
+            ),
+        }),
+    }
+}
+
 /// The HTML of a report's Markdown (`sigil_model::render::html::from_markdown`).
 pub fn markdown_html_inner(md: &str) -> String {
     from_markdown(md)
@@ -111,6 +130,13 @@ pub fn markdown_html_inner(md: &str) -> String {
 #[wasm_bindgen]
 pub fn detect(json: &str) -> String {
     detect_inner(json).to_string()
+}
+
+/// The Markdown report of a session (validated first) or an AI-BOM v2, whichever `json` is; an
+/// error that says what it is otherwise.
+#[wasm_bindgen]
+pub fn render_markdown(json: &str) -> Result<String, JsError> {
+    render_markdown_inner(json).map_err(|e| JsError::new(&e))
 }
 
 /// The Markdown report of a session (validated first).

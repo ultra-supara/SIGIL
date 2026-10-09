@@ -2,31 +2,51 @@
 /* eslint-disable */
 
 /**
- * Schema version this wasm build was compiled against. Exposed so the viewer
- * can render a small caption and so a stale wasm artifact in `site/viewer/pkg/`
- * is obvious from the page rather than from byte diffs.
+ * What the input is: `session`, `aibom-v2`, `aibom-v1`, or `unknown`.
  */
-export function aibom_schema_version(): string;
+export function detect(json: string): string;
 
 /**
- * Parse an AI-BOM JSON string and return the rendered Markdown report.
- *
- * On invalid JSON (or schema mismatch — serde returns the same error for
- * both), the JS-visible `Error` carries the underlying `serde_json` message
- * so the viewer can show it inline instead of crashing.
+ * The HTML of a report's Markdown: only h1 h2 p ul li table thead tbody tr th td strong, no
+ * attributes, all text escaped.
+ */
+export function markdown_html(md: string): string;
+
+/**
+ * The Markdown report of an AI-BOM v2.
  */
 export function render_aibom_markdown(json: string): string;
+
+/**
+ * The Markdown report of a session (validated first) or an AI-BOM v2, whichever `json` is; an
+ * error that says what it is otherwise.
+ */
+export function render_markdown(json: string): string;
+
+/**
+ * The Markdown report of a session (validated first).
+ */
+export function render_session_markdown(json: string): string;
+
+/**
+ * The formats this viewer reads.
+ */
+export function versions(): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly aibom_schema_version: () => [number, number];
+    readonly detect: (a: number, b: number) => [number, number];
+    readonly markdown_html: (a: number, b: number) => [number, number];
     readonly render_aibom_markdown: (a: number, b: number) => [number, number, number, number];
+    readonly render_markdown: (a: number, b: number) => [number, number, number, number];
+    readonly render_session_markdown: (a: number, b: number) => [number, number, number, number];
+    readonly versions: () => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }

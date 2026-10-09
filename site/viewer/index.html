@@ -1,202 +1,26 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SIGIL AI-BOM viewer — runs in your browser</title>
-    <meta
-      name="description"
-      content="Drop a SIGIL AI-BOM JSON into the page and see the rendered report. The same Rust renderer that ships in the CLI, compiled to wasm32 and running on the client. No upload, no signup, no network call."
-    />
-    <link rel="stylesheet" href="../styles.css" />
-    <link rel="stylesheet" href="./viewer.css" />
-  </head>
-  <body class="sakura-page viewer-page">
-    <div class="site-noise"></div>
-    <div class="site-bg"></div>
-
-    <header class="site-header">
-      <a class="brand" href="../" aria-label="SIGIL home">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">SIGIL</span>
-      </a>
-      <nav class="nav" aria-label="Primary navigation">
-        <a href="../#platform">Platform</a>
-        <a href="../#research">Research</a>
-        <a href="../#tools">Tools</a>
-        <a href="../compare/">Compare</a>
-        <a href="../reports/2026-h1/">2026 H1</a>
-        <a href="./" aria-current="page">Viewer</a>
-        <a href="https://github.com/ultra-supara/SIGIL">GitHub</a>
-      </nav>
-    </header>
-
-    <main id="top">
-      <section class="page-hero">
-        <div class="hero-copy">
-          <p class="definition">Viewer</p>
-          <h1>Drop an AI-BOM. See the report.</h1>
-          <p class="lead">
-            The SIGIL CLI's Markdown renderer, compiled to <code>wasm32</code> and
-            running on the client. Drop a <code>*.aibom.json</code> below — the
-            rendered report is byte-identical to what <code>sigil aibom generate
-            --format md</code> writes to disk for the same input. No upload, no
-            signup, no network call after the page is cached.
-          </p>
-          <dl class="proof-strip" aria-label="Viewer properties">
-            <div>
-              <dt>Renderer</dt>
-              <dd id="schema-caption">Schema —</dd>
-            </div>
-            <div>
-              <dt>Network</dt>
-              <dd>Zero egress</dd>
-            </div>
-            <div>
-              <dt>Source of truth</dt>
-              <dd><code>sigil-core</code></dd>
-            </div>
-          </dl>
-        </div>
-        <figure class="hero-visual" aria-label="SIGIL AI-BOM viewer visual">
-          <div class="sigil-orb" aria-hidden="true">
-            <div class="sigil-ring ring-a"></div>
-            <div class="sigil-ring ring-b"></div>
-            <div class="sigil-ring ring-c"></div>
-            <div class="sigil-kanji">印</div>
-            <div class="sigil-axis axis-x"></div>
-            <div class="sigil-axis axis-y"></div>
-            <div class="sigil-axis axis-d1"></div>
-            <div class="sigil-axis axis-d2"></div>
-          </div>
-
-          <div class="floating-label label-one">
-            <span>VIEWER</span>
-            <strong>CLIENT SIDE</strong>
-          </div>
-
-          <div class="floating-label label-two">
-            <span>SCHEMA</span>
-            <strong>AI-BOM 1.1</strong>
-          </div>
-
-          <div class="terminal-card" aria-hidden="true">
-            <div class="terminal-top">
-              <span></span>
-              <span></span>
-              <span></span>
-              <strong>sigil://viewer</strong>
-            </div>
-
-            <div class="terminal-body">
-              <p><em>$</em> load sample/pass.aibom.json</p>
-              <p><b>[schema]</b> 1.1 validated in browser</p>
-              <p><b>[runtime]</b> ollama · localhost exposure</p>
-              <p><b>[model]</b> gemma4:e2b · Apache-2.0</p>
-              <p><b>[ok]</b> markdown rendered without upload.</p>
-            </div>
-          </div>
-          <figcaption class="visually-hidden">Example SIGIL AI-BOM excerpt: PASS verdict, schema 1.1, runtime ollama on localhost, gemma4:e2b under Apache-2.0.</figcaption>
-        </figure>
-      </section>
-
-      <section class="section viewer-section">
-        <div class="viewer-controls">
-          <div
-            class="dropzone"
-            id="dropzone"
-            tabindex="0"
-            role="button"
-            aria-label="Drop an AI-BOM JSON file here, or press Enter to pick one"
-          >
-            <p class="dropzone-title">Drop a <code>.aibom.json</code> here</p>
-            <p class="dropzone-or">
-              or
-              <label class="dropzone-pick">
-                <input
-                  id="filepicker"
-                  type="file"
-                  accept=".json,application/json"
-                  hidden
-                />
-                <span>choose a file</span>
-              </label>
-            </p>
-            <p class="dropzone-hint">
-              Files never leave your machine. The wasm module is the only thing
-              that reads them.
-            </p>
-          </div>
-          <div class="samples">
-            <p class="samples-label">Or load a real <code>aibom generate</code> output:</p>
-            <div class="samples-buttons">
-              <button class="sample-button sample-pass" data-sample="pass" type="button">
-                <span class="sample-verdict">[PASS]</span>
-                <span class="sample-label">Load PASS sample</span>
-              </button>
-              <button class="sample-button sample-warn" data-sample="warn" type="button">
-                <span class="sample-verdict">[WARN]</span>
-                <span class="sample-label">Load WARN sample</span>
-              </button>
-              <button class="sample-button sample-fail" data-sample="fail" type="button">
-                <span class="sample-verdict">[FAIL]</span>
-                <span class="sample-label">Load FAIL sample</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div
-          class="error-banner"
-          id="error"
-          role="alert"
-          aria-live="polite"
-          hidden
-        ></div>
-
-        <div class="output-wrap" id="output-wrap" hidden>
-          <div class="output-meta">
-            <span class="output-source" id="output-source"></span>
-            <button class="output-copy" id="copy-md" type="button">
-              Copy Markdown
-            </button>
-          </div>
-          <article class="report-output" id="output" aria-live="polite"></article>
-        </div>
-
-        <div class="output-placeholder" id="placeholder">
-          <p>
-            Nothing rendered yet. Drop a file above, or pick a sample to see the
-            same Markdown the CLI would write.
-          </p>
-        </div>
-      </section>
-
-      <section class="section viewer-determinism">
-        <div class="section-heading">
-          <p class="definition">Determinism</p>
-          <h2>One renderer, two surfaces.</h2>
-          <p>
-            <code>render_ai_bom</code> in
-            <code>crates/sigil-core/src/aibom.rs</code> is a pure function of
-            the parsed <code>AiBom</code> struct — no I/O, no clocks, no
-            globals. The wasm crate exposes a single entry point that calls
-            it. A native Rust test in
-            <code>crates/sigil-aibom-wasm/tests/determinism.rs</code> asserts
-            wasm-rendered output is byte-for-byte equal to the native render
-            for every committed sample, and CI runs the committed
-            <code>.wasm</code> against the same fixtures so the deployed
-            bundle cannot drift from the source.
-          </p>
-        </div>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <span>SIGIL is local-first and analysis-only.</span>
-      <a href="https://github.com/ultra-supara/SIGIL">github.com/ultra-supara/SIGIL</a>
-    </footer>
-
-    <script type="module" src="./viewer.js"></script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>SIGIL viewer</title>
+<link rel="stylesheet" href="viewer.css">
+<script type="module" src="viewer.js"></script>
+</head>
+<body>
+<h1>SIGIL viewer</h1>
+<p>Shows the report of a SIGIL session (<code>sigil-session/1</code>) or AI-BOM v2 (<code>sigil-aibom/2</code>), with the CLI's own renderers compiled to WebAssembly. The file stays in your browser: nothing is uploaded.</p>
+<p><label>File: <input type="file" id="file" accept=".json,application/json"></label></p>
+<p>Specification examples (not measurements):
+<button type="button" data-sample="session-14-store-and-runtime.json">Session: PASS, with runtime and API probe</button>
+<button type="button" data-sample="session-04-fail-incomplete.json">Session: FAIL, INCOMPLETE</button>
+<button type="button" data-sample="aibom-14-store-and-runtime.json">AI-BOM v2: PASS</button>
+<button type="button" data-sample="aibom-04-fail-incomplete.json">AI-BOM v2: FAIL, INCOMPLETE</button>
+</p>
+<p id="error" role="alert" hidden></p>
+<p id="actions" hidden><button type="button" id="copy">Copy Markdown</button> <span id="source"></span></p>
+<div id="report"></div>
+<p><a href="../">SIGIL</a> · <a href="https://github.com/ultra-supara/SIGIL">Source</a></p>
+</body>
 </html>

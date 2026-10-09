@@ -118,3 +118,38 @@ fn other_input_is_refused_with_a_reason() {
     let err = render_session_markdown_inner(bom).unwrap_err();
     assert!(err.contains("an AI-BOM v2"), "{err}");
 }
+
+#[test]
+fn render_markdown_dispatches_on_the_kind() {
+    use sigil_wasm::render_markdown_inner;
+    for (name, text) in files("examples/session-v1") {
+        assert_eq!(
+            render_markdown_inner(&text),
+            render_session_markdown_inner(&text),
+            "{name}"
+        );
+    }
+    for (name, text) in files("examples/aibom-v2") {
+        assert_eq!(
+            render_markdown_inner(&text),
+            render_aibom_markdown_inner(&text),
+            "{name}"
+        );
+    }
+    let cases = [
+        (V1, "AI-BOM v1"),
+        ("{not json", "not valid JSON"),
+        (r#"{"schema": "sigil-session/2"}"#, "\"sigil-session/2\""),
+        (r#"{"hello": 1}"#, "no \"schema\""),
+    ];
+    for (input, says) in cases {
+        let err = render_markdown_inner(input).unwrap_err();
+        assert!(err.contains(says), "{input}: {err}");
+    }
+    // An unknown schema names both formats the viewer reads.
+    let err = render_markdown_inner(r#"{"schema": "x"}"#).unwrap_err();
+    assert!(
+        err.contains("sigil-session/1") && err.contains("sigil-aibom/2"),
+        "{err}"
+    );
+}

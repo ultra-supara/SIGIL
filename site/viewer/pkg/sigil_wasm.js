@@ -1,30 +1,48 @@
-/* @ts-self-types="./sigil_aibom_wasm.d.ts" */
+/* @ts-self-types="./sigil_wasm.d.ts" */
 
 /**
- * Schema version this wasm build was compiled against. Exposed so the viewer
- * can render a small caption and so a stale wasm artifact in `site/viewer/pkg/`
- * is obvious from the page rather than from byte diffs.
+ * What the input is: `session`, `aibom-v2`, `aibom-v1`, or `unknown`.
+ * @param {string} json
  * @returns {string}
  */
-export function aibom_schema_version() {
-    let deferred1_0;
-    let deferred1_1;
+export function detect(json) {
+    let deferred2_0;
+    let deferred2_1;
     try {
-        const ret = wasm.aibom_schema_version();
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.detect(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
         return getStringFromWasm0(ret[0], ret[1]);
     } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
 }
 
 /**
- * Parse an AI-BOM JSON string and return the rendered Markdown report.
- *
- * On invalid JSON (or schema mismatch — serde returns the same error for
- * both), the JS-visible `Error` carries the underlying `serde_json` message
- * so the viewer can show it inline instead of crashing.
+ * The HTML of a report's Markdown: only h1 h2 p ul li table thead tbody tr th td strong, no
+ * attributes, all text escaped.
+ * @param {string} md
+ * @returns {string}
+ */
+export function markdown_html(md) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(md, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.markdown_html(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * The Markdown report of an AI-BOM v2.
  * @param {string} json
  * @returns {string}
  */
@@ -48,6 +66,76 @@ export function render_aibom_markdown(json) {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
+
+/**
+ * The Markdown report of a session (validated first) or an AI-BOM v2, whichever `json` is; an
+ * error that says what it is otherwise.
+ * @param {string} json
+ * @returns {string}
+ */
+export function render_markdown(json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.render_markdown(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * The Markdown report of a session (validated first).
+ * @param {string} json
+ * @returns {string}
+ */
+export function render_session_markdown(json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.render_session_markdown(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * The formats this viewer reads.
+ * @returns {string}
+ */
+export function versions() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.versions();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -67,7 +155,7 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./sigil_aibom_wasm_bg.js": import0,
+        "./sigil_wasm_bg.js": import0,
     };
 }
 
@@ -233,7 +321,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('sigil_aibom_wasm_bg.wasm', import.meta.url);
+        module_or_path = new URL('sigil_wasm_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
