@@ -348,6 +348,8 @@ fn a_malformed_sentinel_or_an_unterminated_line_is_a_gap_not_empty_modinfo() {
             "no sentinel",
             inline_raw("go1.2", b"path\tp\nmod\tm\tv1\t\n"),
         ),
+        // A valid sentinel ends the content with a newline, so an unterminated last line is a
+        // malformed sentinel too.
         (
             "unterminated",
             inline_piece("go1.2", "path\tp\nmod\tm\tv1\t"),

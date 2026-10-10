@@ -204,7 +204,7 @@ session, read from the file's own bytes. They are observations, not identity.
   - **The search:** to its end, at 16-aligned virtual addresses, in 64 KiB chunks from an aligned start.
   - **What is read:** both formats (inline and pointer) in either byte order, Go's sentinel
     stripping, and its modinfo lines (`path`, `mod`, `dep`, `=>`, `build`). Where Go would read
-    a malformed sentinel or an unterminated last line as "no modules", SIGIL records a gap.
+    a malformed sentinel (an unterminated last line is one) as "no modules", SIGIL records a gap.
   - **What it is:** the binary's own claims about how it was built.
 - **Output limits.** A malformed file cannot multiply a few input bytes into many values: each
   fact is built within its limit, so nothing beyond it is ever held (the relocation table keeps

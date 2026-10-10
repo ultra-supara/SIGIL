@@ -278,7 +278,9 @@ fn build(at: Loc, version: Vec<u8>, modinfo: &[u8]) -> Result<GoBuildInfo, Strin
     }
     let mut last: Option<Last> = None;
     let mut rest = strip_sentinel(modinfo);
-    // Go reads a malformed sentinel as no modinfo; SIGIL says it could not read it.
+    // Go reads a malformed sentinel as no modinfo; SIGIL says it could not read it. A valid
+    // sentinel ends the content with a newline, so no line is ever left unterminated after it:
+    // an unterminated last line is a malformed sentinel.
     if rest.is_empty() && !modinfo.is_empty() {
         return Err("modinfo without its sentinel".to_string());
     }
@@ -327,9 +329,6 @@ fn build(at: Loc, version: Vec<u8>, modinfo: &[u8]) -> Result<GoBuildInfo, Strin
         } else {
             return Err("unknown line kind".to_string());
         }
-    }
-    if !rest.is_empty() {
-        return Err("an unterminated modinfo line".to_string());
     }
     Ok(info)
 }
