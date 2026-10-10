@@ -1,6 +1,9 @@
 //! The assembled session with container facts (PR-4b-1): it validates and verifies, and
 //! `artifacts.container` follows spec §4.6.
 
+mod common;
+
+use common::elf::{set_dynamic, without_known_symbols, DT_RELASZ};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
@@ -125,6 +128,24 @@ fn a_gap_makes_the_check_partial_with_the_path() {
             .iter()
             .any(|m| m.starts_with("lib/ollama/libbroken.so: ")),
         "{missing:?}"
+    );
+}
+
+/// The review of the PR-4b-1 plan: a relocation table size that is not whole entries keeps the
+/// check from `Complete` even in a file with no known data symbol.
+#[test]
+fn a_malformed_relocation_size_makes_the_check_partial_without_data_symbols() {
+    let d = install();
+    let mut bytes = without_known_symbols(&fixture("elf/libdata.so"));
+    set_dynamic(&mut bytes, DT_RELASZ, 241);
+    std::fs::write(d.path().join("lib/ollama/libbad.so"), bytes).unwrap();
+    let s = session(d.path());
+    let CoverageState::Partial { missing } = container(&s) else {
+        panic!("{:?}", container(&s));
+    };
+    assert_eq!(
+        missing,
+        &["lib/ollama/libbad.so: dynamic: malformed: DT_RELASZ is not a whole number of entries"]
     );
 }
 

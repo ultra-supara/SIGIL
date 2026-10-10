@@ -204,3 +204,49 @@ fn a_known_symbol_defined_twice_has_no_single_value() {
         p.gaps
     );
 }
+
+/// The review of the PR-4b-1 plan: the loader walks a relocation table up to its size, so a size
+/// that is not a whole number of entries ends in a partial entry SIGIL would not see, and an entry
+/// size other than `Elf64_Rela`'s is refused by the loader. Each is a gap, and the values that
+/// rest on the tables are `Unknown`.
+#[test]
+fn relocation_table_sizes_must_be_whole_entries_of_the_rela_size() {
+    for (tag, value, gap) in [
+        (
+            DT_RELASZ,
+            241,
+            "dynamic: malformed: DT_RELASZ is not a whole number of entries",
+        ),
+        (
+            DT_PLTRELSZ,
+            49,
+            "dynamic: malformed: DT_PLTRELSZ is not a whole number of entries",
+        ),
+        (DT_RELAENT, 16, "dynamic: malformed: DT_RELAENT is not 24"),
+    ] {
+        let mut bytes = fixture("elf/libdata.so");
+        set_dynamic(&mut bytes, tag, value);
+        let (v, p) = values(&bytes);
+        assert!(p.gaps.iter().any(|g| g == gap), "{tag}: {:?}", p.gaps);
+        let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+        assert!(
+            unknown_with(commit, "relocations not read"),
+            "{tag}: {commit:?}"
+        );
+    }
+}
+
+/// The same gap without any known data symbol: the tables are checked where `PT_DYNAMIC` is read,
+/// not only when a value needs them.
+#[test]
+fn a_malformed_relocation_size_is_a_gap_without_known_symbols() {
+    let mut bytes = without_known_symbols(&fixture("elf/libdata.so"));
+    let (v, p) = values(&bytes);
+    assert!(v.is_empty() && p.gaps.is_empty(), "{v:?} {:?}", p.gaps);
+    set_dynamic(&mut bytes, DT_RELASZ, 241);
+    let (_, p) = values(&bytes);
+    assert_eq!(
+        p.gaps,
+        ["dynamic: malformed: DT_RELASZ is not a whole number of entries"]
+    );
+}

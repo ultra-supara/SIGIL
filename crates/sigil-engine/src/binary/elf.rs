@@ -36,6 +36,9 @@ pub(crate) struct Dynamic {
     pub jmprel_rela: Option<(u64, u64)>,
     /// `DT_REL`, `DT_RELR`, or a REL `DT_JMPREL` exists (not read in 4b-1).
     pub rel_or_relr: bool,
+    /// Why the RELA tables cannot be read as the loader reads them: a size that is not a whole
+    /// number of entries, or a `DT_RELAENT` other than the entry size. Also a gap.
+    pub rela_malformed: Option<String>,
 }
 
 /// The sections' results the other steps need.
@@ -210,8 +213,8 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             return out;
         };
         let (mut strtab, mut strsz) = (None, None);
-        let (mut rela, mut relasz, mut jmprel, mut pltrelsz, mut pltrel) =
-            (None, None, None, None, None);
+        let (mut rela, mut relasz, mut relaent, mut jmprel, mut pltrelsz, mut pltrel) =
+            (None, None, None, None, None, None);
         // The string tags, in order: (tag, offset into the string table).
         let mut strings: Vec<(elf::DynamicTag, u64)> = vec![];
         let mut terminated = false;
@@ -231,6 +234,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 elf::DT_SYMTAB => out.symtab = true,
                 elf::DT_RELA => rela = Some(val),
                 elf::DT_RELASZ => relasz = Some(val),
+                elf::DT_RELAENT => relaent = Some(val),
                 elf::DT_JMPREL => jmprel = Some(val),
                 elf::DT_PLTRELSZ => pltrelsz = Some(val),
                 elf::DT_PLTREL => pltrel = Some(val),
@@ -252,6 +256,27 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 out.rel_or_relr = true;
             }
         }
+        // The loader walks a table up to its size, so a partial last entry is applied too, and it
+        // refuses a DT_RELAENT other than its entry size: checked here, whether or not a value
+        // needs the tables later.
+        let rela_size = size_of::<H::Rela>() as u64;
+        let mut malformed = vec![];
+        if relaent.is_some_and(|n| n != rela_size) {
+            malformed.push(format!("DT_RELAENT is not {rela_size}"));
+        }
+        if out.rela.is_some_and(|(_, n)| !n.is_multiple_of(rela_size)) {
+            malformed.push("DT_RELASZ is not a whole number of entries".to_string());
+        }
+        if out
+            .jmprel_rela
+            .is_some_and(|(_, n)| !n.is_multiple_of(rela_size))
+        {
+            malformed.push("DT_PLTRELSZ is not a whole number of entries".to_string());
+        }
+        for why in &malformed {
+            self.gap(format!("dynamic: malformed: {why}"));
+        }
+        out.rela_malformed = malformed.into_iter().next();
         if strings.is_empty() {
             return out;
         }
@@ -540,6 +565,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         wanted: &BTreeSet<u64>,
     ) -> Result<BTreeMap<u64, Vec<(u32, i64)>>, String> {
         let endian = self.endian;
+        if let Some(why) = &dynamic.rela_malformed {
+            return Err(why.clone());
+        }
         let mut out: BTreeMap<u64, Vec<(u32, i64)>> = BTreeMap::new();
         for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
             let Place::File(offset) = self.loads.place(vaddr, size) else {

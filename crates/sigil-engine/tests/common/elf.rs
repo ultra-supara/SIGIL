@@ -19,6 +19,7 @@ pub const SHT_GNU_VERSYM: u32 = 0x6fff_ffff;
 pub const DT_RELA: i64 = 7;
 pub const DT_RELASZ: i64 = 8;
 pub const DT_RELAENT: i64 = 9;
+pub const DT_PLTRELSZ: i64 = 2;
 pub const R_X86_64_RELATIVE: u32 = 8;
 pub const DT_NULL: i64 = 0;
 pub const DT_NEEDED: i64 = 1;
@@ -276,6 +277,34 @@ pub fn dynamic(entries: &[(i64, u64)]) -> Vec<u8> {
     for (tag, val) in entries.iter().chain(&[(DT_NULL, 0)]) {
         out.extend_from_slice(&tag.to_le_bytes());
         out.extend_from_slice(&val.to_le_bytes());
+    }
+    out
+}
+
+/// Sets the value of the first `tag` entry of the `PT_DYNAMIC` of an ELF64 little-endian file.
+pub fn set_dynamic(bytes: &mut [u8], tag: i64, value: u64) {
+    let u64le = |b: &[u8], a: usize| u64::from_le_bytes(b[a..a + 8].try_into().unwrap());
+    let phoff = u64le(bytes, 32) as usize;
+    let phnum = u16::from_le_bytes([bytes[56], bytes[57]]) as usize;
+    let (off, size) = (0..phnum)
+        .map(|i| phoff + i * 56)
+        .find(|&p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) == PT_DYNAMIC)
+        .map(|p| (u64le(bytes, p + 8) as usize, u64le(bytes, p + 32) as usize))
+        .expect("a PT_DYNAMIC");
+    let at = (off..off + size)
+        .step_by(16)
+        .find(|&e| i64::from_le_bytes(bytes[e..e + 8].try_into().unwrap()) == tag)
+        .unwrap_or_else(|| panic!("no dynamic tag {tag}"));
+    bytes[at + 8..at + 16].copy_from_slice(&value.to_le_bytes());
+}
+
+/// `bytes` with every `LLAMA_` renamed `XLAMA_`: no known data symbol is left.
+pub fn without_known_symbols(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while let Some(at) = out[i..].windows(6).position(|w| w == b"LLAMA_") {
+        out[i + at] = b'X';
+        i += at + 6;
     }
     out
 }
