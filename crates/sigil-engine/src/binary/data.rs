@@ -1,7 +1,7 @@
 //! Known data symbols (spec §4.4): their value after loading, or `Unknown` with the reason.
 //! Never the stored word as a guess: a word some relocation rewrites at load is not a value.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use object::elf;
 use object::read::elf::{FileHeader, Sym, SymbolTable};
@@ -40,7 +40,9 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     dynamic: &Dynamic,
 ) -> Vec<DataSymbol> {
     let endian = e.endian;
-    let mut found = vec![];
+    // At most one entry per known name: a name defined twice has no single value.
+    let mut found: Vec<(&str, Kind, u64, u64)> = vec![];
+    let mut twice: BTreeSet<&str> = BTreeSet::new();
     for sym in symbols.symbols() {
         if sym.st_shndx(endian) == elf::SHN_UNDEF || sym.st_type() != elf::STT_OBJECT {
             continue;
@@ -49,18 +51,24 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             continue;
         };
         if let Some((n, kind)) = KNOWN.iter().find(|(n, _)| n.as_bytes() == name) {
+            if found.iter().any(|f| f.0 == *n) {
+                twice.insert(n);
+                continue;
+            }
             let addr: u64 = sym.st_value(endian).into();
             let size: u64 = sym.st_size(endian).into();
-            found.push((*n, *kind, addr, size));
+            found.push((n, *kind, addr, size));
         }
     }
     if found.is_empty() {
         return vec![];
     }
-    let relocs = e.relocations(dynamic);
+    let wanted: BTreeSet<u64> = found.iter().map(|f| f.2).collect();
+    let relocs = e.relocations(dynamic, &wanted);
     let mut out = vec![];
     for (name, kind, addr, size) in found {
         let value = match &relocs {
+            _ if twice.contains(name) => Err("defined more than once".to_string()),
             Err(why) => Err(format!("relocations not read: {why}")),
             Ok(map) => value(e, kind, addr, size, map, dynamic),
         };

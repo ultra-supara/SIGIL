@@ -181,10 +181,10 @@ session, read from the file's own bytes. They are observations, not identity.
   | Fact | Source | Confirmed absent (no gap) | Gap |
   |---|---|---|---|
   | Interpreter | `PT_INTERP` | no `PT_INTERP` | outside the file, or no NUL within 4 KiB |
-  | SONAME, NEEDED (in order), RPATH, RUNPATH | `PT_DYNAMIC`, its strings through `DT_STRTAB`/`DT_STRSZ` in a `PT_LOAD`'s file-backed range | no `PT_DYNAMIC` (a static executable, a relocatable object) | `PT_DYNAMIC` out of the file, strings not file-backed, an offset past `DT_STRSZ` |
+  | SONAME, NEEDED (in order), RPATH, RUNPATH | `PT_DYNAMIC`, its strings through `DT_STRTAB`/`DT_STRSZ` in a `PT_LOAD`'s file-backed range | no `PT_DYNAMIC` (a static executable, a relocatable object) | `PT_DYNAMIC` out of the file, not a whole number of entries, or without its `DT_NULL` (the table may go on past what was read); strings not file-backed, an offset past `DT_STRSZ` |
   | build-id | `PT_NOTE`, then `SHT_NOTE` | every note read, none `NT_GNU_BUILD_ID` | a malformed note |
   | `.comment`, stripped | the sections | a section header table without `.comment` | no section header table, or one out of the file (`sections: …`; stripped is then unknown) |
-  | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC` | no `PT_DYNAMIC` | dynamic symbols without a `.dynsym` section, a malformed table |
+  | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC` | no `PT_DYNAMIC` | dynamic symbols without a `.dynsym` section, a malformed table, a version index that resolves to nothing, a `.gnu.version` shorter than `.dynsym`, a known data symbol defined twice |
   | Go build info | below | the whole range searched, no magic | below |
 
 - **Known data symbols.** Four symbols from llama.cpp's `common/build-info.cpp`: `LLAMA_COMMIT`,
@@ -203,10 +203,12 @@ session, read from the file's own bytes. They are observations, not identity.
   - **Where:** the `.go.buildinfo` section, else the first writable, non-executable `PT_LOAD`.
   - **The search:** to its end, at 16-aligned virtual addresses, in 64 KiB chunks from an aligned start.
   - **What is read:** both formats (inline and pointer) in either byte order, Go's sentinel
-    stripping, and its modinfo lines (`path`, `mod`, `dep`, `=>`, `build`).
+    stripping, and its modinfo lines (`path`, `mod`, `dep`, `=>`, `build`). Where Go would read
+    a malformed sentinel or an unterminated last line as "no modules", SIGIL records a gap.
   - **What it is:** the binary's own claims about how it was built.
-- **Output limits.** A malformed file cannot multiply a few input bytes into many values. At each
-  limit, what was read is kept, and a gap says so:
+- **Output limits.** A malformed file cannot multiply a few input bytes into many values: each
+  fact is built within its limit, so nothing beyond it is ever held (the relocation table keeps
+  only the entries at the known symbols). At each limit, what was read is kept, and a gap says so:
   - 65,536 `PT_DYNAMIC` entries;
   - 1,024 NEEDED;
   - 64 RPATH/RUNPATH entries;
@@ -217,8 +219,9 @@ session, read from the file's own bytes. They are observations, not identity.
   - `binary_imports` imports;
   - a 1 KiB Go version, 1 MiB of modinfo, 4,096 deps, and 1,024 build settings.
 - **Budgets** (`--budget`, with `--install-dir` only):
-  - `binary_parse_bytes` (64 MiB per artifact) bounds the parser's input cache, bookkeeping
-    included, before anything is allocated;
+  - `binary_parse_bytes` (64 MiB per artifact) bounds the parser's input cache, before anything
+    is allocated, with 128 bytes of bookkeeping charged per cached read. A test measures the
+    heap: files declaring millions of entries stay within it plus the output limits;
   - `binary_imports` (4,096 per slice).
 - **`artifacts.container`** (scope: the root `install`), a third check of `runtime_artifacts`:
 

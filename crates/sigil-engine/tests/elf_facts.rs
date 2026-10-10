@@ -287,3 +287,108 @@ fn the_header_check_and_the_parser_agree_on_every_fixture() {
         );
     }
 }
+
+#[test]
+fn a_dynamic_table_without_dt_null_or_whole_entries_is_a_gap() {
+    // The review's case: PT_DYNAMIC cut after the first NEEDED, so the second and DT_NULL are
+    // not read. NEEDED must not look complete.
+    let mut img = image(
+        &[
+            (DT_STRTAB, 0x3000),
+            (DT_STRSZ, 17),
+            (DT_NEEDED, 1),
+            (DT_NEEDED, 9),
+        ],
+        b"\0libA.so\0libB.so\0",
+    );
+    let pt = img
+        .segs
+        .iter_mut()
+        .find(|s| s.p_type == PT_DYNAMIC)
+        .unwrap();
+    pt.filesz = 3 * 16;
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(texts(&f.needed), ["libA.so"]);
+    assert!(
+        p.gaps.contains(&"dynamic: missing DT_NULL".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    // A size that is not a whole number of entries.
+    let pt = img
+        .segs
+        .iter_mut()
+        .find(|s| s.p_type == PT_DYNAMIC)
+        .unwrap();
+    pt.filesz = 5 * 16 + 8;
+    let (_, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert!(
+        p.gaps
+            .iter()
+            .any(|g| g.starts_with("dynamic: malformed: p_filesz")),
+        "{:?}",
+        p.gaps
+    );
+    // The full table: no gap.
+    let pt = img
+        .segs
+        .iter_mut()
+        .find(|s| s.p_type == PT_DYNAMIC)
+        .unwrap();
+    pt.filesz = 5 * 16;
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(texts(&f.needed), ["libA.so", "libB.so"]);
+    assert!(
+        !p.gaps.iter().any(|g| g.starts_with("dynamic")),
+        "{:?}",
+        p.gaps
+    );
+}
+
+/// `libdata.so`'s `.gnu.version`: `(file offset, size)`.
+fn versym(bytes: &[u8]) -> (usize, usize, usize) {
+    let (_, _, header, offset, size, _) = sections64(bytes)
+        .into_iter()
+        .find(|s| s.1 == SHT_GNU_VERSYM)
+        .unwrap();
+    (header, offset as usize, size as usize)
+}
+
+#[test]
+fn a_symbol_version_that_does_not_resolve_is_a_gap() {
+    // Every versym entry set to an index past the version table: not "unversioned".
+    let mut bytes = fixture("elf/libdata.so");
+    let (_, offset, size) = versym(&bytes);
+    for e in (offset..offset + size).step_by(2).skip(1) {
+        bytes[e..e + 2].copy_from_slice(&0x7ff0u16.to_le_bytes());
+    }
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        p.gaps.iter().any(|g| g.starts_with("versions: ")),
+        "{:?}",
+        p.gaps
+    );
+    assert_eq!(
+        p.gaps
+            .iter()
+            .filter(|g| g.starts_with("versions: "))
+            .count(),
+        1,
+        "one gap, not one per symbol: {:?}",
+        p.gaps
+    );
+}
+
+#[test]
+fn a_version_table_shorter_than_the_symbols_is_a_gap() {
+    let mut bytes = fixture("elf/libdata.so");
+    let (header, _, _) = versym(&bytes);
+    bytes[header + 32..header + 40].copy_from_slice(&2u64.to_le_bytes()); // sh_size: one entry
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        p.gaps
+            .contains(&"versions: .gnu.version is shorter than .dynsym".to_string()),
+        "{:?}",
+        p.gaps
+    );
+}

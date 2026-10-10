@@ -22,8 +22,9 @@ use std::os::unix::fs::FileExt;
 
 use object::read::{ReadCache, ReadCacheOps, ReadRef};
 
-/// Bookkeeping charged per cache entry.
-pub const ENTRY_OVERHEAD: u64 = 64;
+/// Bookkeeping charged per cache entry: ReadCache's map entry, the checkpoint's own key, and the
+/// allocator's rounding of a small buffer.
+pub const ENTRY_OVERHEAD: u64 = 128;
 /// The longest string ReadCache (0.40.0) searches for its delimiter.
 pub const STRING_LIMIT: u64 = 4096;
 

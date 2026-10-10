@@ -165,3 +165,42 @@ fn a_relative_addend_outside_the_file_is_unknown() {
         p.gaps
     );
 }
+
+#[test]
+fn a_known_symbol_defined_twice_has_no_single_value() {
+    // Rename LLAMA_COMPILER to LLAMA_COMMIT in .dynsym: two definitions of one known name. Each
+    // record must stay unique (B5), and the value is Unknown, not either one.
+    let mut bytes = fixture("elf/libdata.so");
+    let secs = sections64(&bytes);
+    let (_, _, _, sym_off, sym_size, link) =
+        secs.iter().find(|s| s.1 == SHT_DYNSYM).unwrap().clone();
+    let str_off = secs[link as usize].3 as usize;
+    let name_of = |b: &[u8], e: usize| {
+        let at = str_off + u32::from_le_bytes(b[e..e + 4].try_into().unwrap()) as usize;
+        let end = b[at..].iter().position(|c| *c == 0).unwrap();
+        b[at..at + end].to_vec()
+    };
+    let entries: Vec<usize> = (sym_off as usize..(sym_off + sym_size) as usize)
+        .step_by(24)
+        .collect();
+    let commit = *entries
+        .iter()
+        .find(|e| name_of(&bytes, **e) == b"LLAMA_COMMIT")
+        .unwrap();
+    let compiler = *entries
+        .iter()
+        .find(|e| name_of(&bytes, **e) == b"LLAMA_COMPILER")
+        .unwrap();
+    let st_name = bytes[commit..commit + 4].to_vec();
+    bytes[compiler..compiler + 4].copy_from_slice(&st_name);
+    let (v, p) = values(&bytes);
+    let commits: Vec<_> = v.iter().filter(|(s, _)| s == "LLAMA_COMMIT").collect();
+    assert_eq!(commits.len(), 1, "{v:?}");
+    assert!(unknown_with(&commits[0].1, "more than once"), "{v:?}");
+    assert!(
+        p.gaps
+            .contains(&"LLAMA_COMMIT: defined more than once".to_string()),
+        "{:?}",
+        p.gaps
+    );
+}

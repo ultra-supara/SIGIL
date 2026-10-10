@@ -2,7 +2,7 @@
 //! sections. Each fact is read in full, confirmed absent, or a gap (§4.8). Everything is read
 //! through the budgeted checkpoint ([`Bounded`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 
 use object::elf;
@@ -152,8 +152,13 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 }
 
 impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
+    /// Records a gap once: a malformed table can repeat the same failure for every entry, and
+    /// the gaps must stay bounded too.
     fn gap(&mut self, gap: impl Into<String>) {
-        self.gaps.push(gap.into());
+        let gap = gap.into();
+        if !self.gaps.contains(&gap) {
+            self.gaps.push(gap);
+        }
     }
 
     /// `PT_INTERP`, up to its NUL.
@@ -191,7 +196,11 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         };
         let offset: u64 = p.p_offset(endian).into();
         let filesz: u64 = p.p_filesz(endian).into();
-        let mut count = filesz / size_of::<H::Dyn>() as u64;
+        let entry = size_of::<H::Dyn>() as u64;
+        if !filesz.is_multiple_of(entry) {
+            self.gap("dynamic: malformed: p_filesz is not a whole number of entries");
+        }
+        let mut count = filesz / entry;
         if count > MAX_DYNAMIC {
             self.gap(format!("dynamic: over {MAX_DYNAMIC} entries"));
             count = MAX_DYNAMIC;
@@ -205,11 +214,15 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             (None, None, None, None, None);
         // The string tags, in order: (tag, offset into the string table).
         let mut strings: Vec<(elf::DynamicTag, u64)> = vec![];
+        let mut terminated = false;
         for d in entries {
             let tag = d.tag(endian);
             let val = d.val(endian);
             match tag {
-                elf::DT_NULL => break,
+                elf::DT_NULL => {
+                    terminated = true;
+                    break;
+                }
                 elf::DT_STRTAB => strtab = Some(val),
                 elf::DT_STRSZ => strsz = Some(val),
                 elf::DT_NEEDED | elf::DT_SONAME | elf::DT_RPATH | elf::DT_RUNPATH => {
@@ -224,6 +237,10 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 elf::DT_REL | elf::DT_RELR => out.rel_or_relr = true,
                 _ => {}
             }
+        }
+        // Without its DT_NULL the table may go on past what was read: NEEDED could be missing.
+        if !terminated {
+            self.gap("dynamic: missing DT_NULL");
         }
         if let (Some(a), Some(n)) = (rela, relasz) {
             out.rela = Some((a, n));
@@ -390,19 +407,26 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if let Some((_, s)) = table.section_by_name(endian, b".comment") {
             match s.data(endian, data) {
                 Ok(bytes) => {
-                    let pieces: Vec<&[u8]> =
-                        bytes.split(|b| *b == 0).filter(|p| !p.is_empty()).collect();
-                    if pieces.len() > MAX_COMMENTS || pieces.iter().any(|p| p.len() > MAX_COMMENT) {
+                    // Built within the limits: nothing beyond the 16 kept entries is collected.
+                    let mut over = false;
+                    for piece in bytes.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                        if facts.comment.len() == MAX_COMMENTS {
+                            over = true;
+                            break;
+                        }
+                        if piece.len() > MAX_COMMENT {
+                            over = true;
+                            continue;
+                        }
+                        facts
+                            .comment
+                            .push(UntrustedText::from_bytes(piece.to_vec()));
+                    }
+                    if over {
                         self.gap(format!(
                             "comment: over {MAX_COMMENTS} entries of {MAX_COMMENT} bytes"
                         ));
                     }
-                    facts.comment = pieces
-                        .into_iter()
-                        .filter(|p| p.len() <= MAX_COMMENT)
-                        .take(MAX_COMMENTS)
-                        .map(|p| UntrustedText::from_bytes(p.to_vec()))
-                        .collect();
                 }
                 Err(e) => self.gap(format!("malformed: comment: {e}")),
             }
@@ -440,7 +464,18 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 None
             }
         };
-        let mut imports = vec![];
+        // object treats a symbol past the end of `.gnu.version` as unversioned: say it instead.
+        let versym_entries = table
+            .iter()
+            .find(|s| s.sh_type(endian) == elf::SHT_GNU_VERSYM)
+            .map(|s| Into::<u64>::into(s.sh_size(endian)) / 2);
+        if versym_entries.is_some_and(|n| n < symbols.len() as u64) {
+            self.gap("versions: .gnu.version is shorter than .dynsym");
+        }
+        // At most `binary_imports` imports are ever held: the smallest, in sorted order.
+        let limit = usize::try_from(budgets.imports).unwrap_or(usize::MAX);
+        let mut imports: BTreeSet<ElfImport> = BTreeSet::new();
+        let mut over = false;
         for (i, sym) in symbols.symbols().iter().enumerate().skip(1) {
             let bind = sym.st_bind();
             let global = bind == elf::STB_GLOBAL || bind == elf::STB_WEAK;
@@ -456,20 +491,27 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                         continue;
                     }
                 };
-                let version = versions.as_ref().and_then(|v| {
+                let mut version = None;
+                if let Some(v) = &versions {
                     let index = v.version_index(endian, SymbolIndex(i)).index();
                     match v.version(index) {
-                        Ok(Some(version)) => {
-                            Some(UntrustedText::from_bytes(version.name().to_vec()))
+                        Ok(Some(found)) => {
+                            version = Some(UntrustedText::from_bytes(found.name().to_vec()))
                         }
-                        _ => None,
+                        Ok(None) => {}
+                        // An index that resolves to nothing is not "unversioned".
+                        Err(e) => self.gap(format!("versions: {e}")),
                     }
-                });
-                imports.push(ElfImport {
+                }
+                imports.insert(ElfImport {
                     name: UntrustedText::from_bytes(name.to_vec()),
                     version,
                     weak: bind == elf::STB_WEAK,
                 });
+                if imports.len() > limit {
+                    imports.pop_last();
+                    over = true;
+                }
             } else {
                 let visibility = sym.st_visibility();
                 if (global || bind == elf::STB_GNU_UNIQUE)
@@ -479,29 +521,23 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 }
             }
         }
-        imports.sort();
-        imports.dedup();
-        let limit = usize::try_from(budgets.imports).unwrap_or(usize::MAX);
-        if imports.len() > limit {
-            self.gap(format!(
-                "imports: {} over binary_imports {}",
-                imports.len(),
-                budgets.imports
-            ));
-            imports.truncate(limit);
+        if over {
+            self.gap(format!("imports: over binary_imports {}", budgets.imports));
         }
-        facts.imports = imports;
+        facts.imports = imports.into_iter().collect();
         Sections {
             dynsym: Some(symbols),
             go_section,
         }
     }
 
-    /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA), by the
-    /// address they write: `(type, addend)`.
+    /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA) that write
+    /// one of the `wanted` addresses: `(type, addend)` by address. Only those are kept, so a large
+    /// table costs no more than its read.
     pub(crate) fn relocations(
         &mut self,
         dynamic: &Dynamic,
+        wanted: &BTreeSet<u64>,
     ) -> Result<BTreeMap<u64, Vec<(u32, i64)>>, String> {
         let endian = self.endian;
         let mut out: BTreeMap<u64, Vec<(u32, i64)>> = BTreeMap::new();
@@ -517,9 +553,15 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     "a relocation table outside the file or over the budget".to_string()
                 })?;
             for r in entries {
-                out.entry(r.r_offset(endian).into())
-                    .or_default()
-                    .push((r.r_type(endian, false).0, r.r_addend(endian).into()));
+                let at: u64 = r.r_offset(endian).into();
+                if !wanted.contains(&at) {
+                    continue;
+                }
+                let at_addr = out.entry(at).or_default();
+                // Two are already "more than once"; more add nothing.
+                if at_addr.len() < 2 {
+                    at_addr.push((r.r_type(endian, false).0, r.r_addend(endian).into()));
+                }
             }
         }
         Ok(out)
