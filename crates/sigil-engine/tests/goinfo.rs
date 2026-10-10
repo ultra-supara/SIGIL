@@ -330,3 +330,40 @@ fn malformed_build_info_is_a_gap_never_a_panic() {
         );
     }
 }
+
+/// An inline piece whose modinfo is exactly `modinfo` (no sentinel added).
+fn inline_raw(version: &str, modinfo: &[u8]) -> Vec<u8> {
+    let mut body = uvarint(version.len() as u64);
+    body.extend_from_slice(version.as_bytes());
+    body.extend(uvarint(modinfo.len() as u64));
+    body.extend_from_slice(modinfo);
+    inline_with(&body)
+}
+
+#[test]
+fn a_malformed_sentinel_or_an_unterminated_line_is_a_gap_not_empty_modinfo() {
+    // Go would read these as no modules; SIGIL says it could not read them.
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "no sentinel",
+            inline_raw("go1.2", b"path\tp\nmod\tm\tv1\t\n"),
+        ),
+        (
+            "unterminated",
+            inline_piece("go1.2", "path\tp\nmod\tm\tv1\t"),
+        ),
+    ];
+    for (what, bytes) in cases {
+        let p = go_of(&bytes, BinaryBudgets::default());
+        assert!(p.go.is_none(), "{what}");
+        assert!(
+            p.gaps.iter().any(|g| g.starts_with("go.buildinfo: ")),
+            "{what}: {:?}",
+            p.gaps
+        );
+    }
+    // An empty modinfo is not a gap: a Go binary without module information.
+    let p = go_of(&inline_raw("go1.2", b""), BinaryBudgets::default());
+    assert!(p.go.is_some(), "{:?}", p.gaps);
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
