@@ -120,6 +120,39 @@ fn failed_string_searches_are_charged_so_repeats_stop() {
     assert!(b.used() <= 64 << 10);
 }
 
+/// `ReadCacheOps` whose reads always fail, as on a file that shrank after its `fstat` or an I/O
+/// error: ReadCache caches nothing for a failed read.
+struct Failing;
+
+impl ReadCacheOps for Failing {
+    fn len(&mut self) -> Result<u64, ()> {
+        Ok(1 << 20)
+    }
+    fn seek(&mut self, pos: u64) -> Result<u64, ()> {
+        Ok(pos)
+    }
+    fn read(&mut self, _: &mut [u8]) -> Result<usize, ()> {
+        Err(())
+    }
+    fn read_exact(&mut self, _: &mut [u8]) -> Result<(), ()> {
+        Err(())
+    }
+}
+
+#[test]
+fn failed_reads_are_charged_so_repeats_stop() {
+    // The review of the PR-4b-1 plan: a failed read is not cached, so a repeat reads again; it
+    // must be charged again, not served as "seen".
+    let b = Bounded::new(Failing, 1 << 20, 64 << 10);
+    let mut tries = 0;
+    while (&b).read_bytes_at(0, 1000).is_err() && !b.refused() {
+        tries += 1;
+        assert!(tries < 100, "failures never exhausted the budget");
+    }
+    assert!(b.refused());
+    assert!(b.used() <= 64 << 10);
+}
+
 #[test]
 fn a_cached_string_must_end_inside_a_narrower_range() {
     let (b, _) = bounded(b"0123456789\0".to_vec(), 1 << 20);

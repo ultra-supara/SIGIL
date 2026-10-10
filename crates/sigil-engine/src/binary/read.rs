@@ -4,8 +4,9 @@
 //!
 //! `ReadCache` allocates a request's buffer before its reader sees the request, so a budget in
 //! the reader alone would not bound memory. The checkpoint sees every request first:
-//! - `read_bytes_at`: the range must be inside the file; a request not seen before is charged its
-//!   size plus [`ENTRY_OVERHEAD`], or refused without reaching the cache;
+//! - `read_bytes_at`: the range must be inside the file; a request not served before is charged
+//!   its size plus [`ENTRY_OVERHEAD`], or refused without reaching the cache. A failed read caches
+//!   nothing and stays charged, so repeated failures exhaust the budget;
 //! - `read_bytes_at_until`: ReadCache 0.40.0 searches at most [`STRING_LIMIT`] bytes in 256-byte
 //!   steps and keeps exactly the string. A new request needs `STRING_LIMIT + ENTRY_OVERHEAD`
 //!   left, and is charged the string's length plus `ENTRY_OVERHEAD`. A failed search is charged
@@ -145,11 +146,15 @@ impl<'a, R: ReadCacheOps> ReadRef<'a> for &'a Bounded<R> {
             return Err(());
         }
         let key = (0, offset, size);
-        if !self.seen.borrow().contains(&key) {
-            self.charge(size.saturating_add(ENTRY_OVERHEAD))?;
-            self.seen.borrow_mut().insert(key);
+        if self.seen.borrow().contains(&key) {
+            return (&self.cache).read_bytes_at(offset, size);
         }
-        (&self.cache).read_bytes_at(offset, size)
+        // A failed read caches nothing, so a repeat reads again: it stays charged, and only a
+        // read that succeeded is served uncharged afterwards.
+        self.charge(size.saturating_add(ENTRY_OVERHEAD))?;
+        let bytes = (&self.cache).read_bytes_at(offset, size)?;
+        self.seen.borrow_mut().insert(key);
+        Ok(bytes)
     }
 
     fn read_bytes_at_until(self, range: Range<u64>, delimiter: u8) -> Result<&'a [u8], ()> {
