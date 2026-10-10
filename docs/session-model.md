@@ -128,6 +128,21 @@ The rule then yields an open question at most.
   The rows' expected values, and whether a release lists a member at all, come from the reference
   set, which a session does not hold. The engine's verifier checks them
   (`verify_reference_matches`).
+- **Binary facts agree with the session (PR-4b-1,
+  [`docs/runtime-artifacts.md`](runtime-artifacts.md#binaries)):**
+  - B1: a record names a slice of the session, one record per slice;
+  - B2: ELF facts are about an ELF artifact;
+  - B3: the slice's `Declares { ElfNeeded }` relations are unique, and exactly its distinct NEEDED
+    names;
+  - B4: imports are sorted, unique, and within `binary_imports`;
+  - B5: a data value that is `Unknown` has its gap;
+  - B6: a Go version is not empty;
+  - B7: `artifacts.container` is `Complete` only with a complete discovery, facts for every ELF
+    slice of the install, and no gap;
+  - B8: `stripped` is unknown exactly when a `sections: ` gap says why.
+
+  Whether the gaps are right is the parser's contract: `validate` checks the stored results
+  against each other, not against the file's bytes.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -405,6 +420,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Active probes | `ActiveFeature`, `ApiProbe`, `ProbeResult`, `ProbePhase` | What `--active` asked for (`request.active`) and how each probe ended. A refused connection is an observation (`NotPresent` with basis `ConnectionRefused`); a timeout is not |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
+| Binary facts | `BinaryFacts`, `ContainerFacts`, `ElfFacts`, `ElfImport`, `DataSymbol`, `DataValue`, `GoBuildInfo`, `GoModule`, `GoSetting` | What a binary's own bytes say: interpreter, names, NEEDED in order, search paths, notes, symbol counts and imports, known embedded values, Go build info, and the gaps |
 | Reference matches | `ReferenceMatch`, `MemberResult`, `MemberKind`, `EntryKind` | One placement of the install root, or one member absent from it, compared with one release of a reference set. A placement that was not read says why (`NotReadReason`, which gained `Directory` and `NotFollowed`, a symlink of the install, in PR-4a) |
 | B: presence | `FeatureHint`, `Signal` | A feature signal exists |
 | C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice |
@@ -440,11 +456,13 @@ A field added after sessions without it were written is optional on read, so tho
 | `request.active` | PR-3b-2 | `[]` (nothing active requested) |
 | `probes` | PR-3b-2 | `[]` (no probe) |
 | `reference_matches` | PR-4a | `[]` (no installation compared) |
+| `binaries` | PR-4b-1 | `[]` (no binary parsed) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
-`reference_matches` is the exception to "always writes it": SIGIL writes it only when it has rows, so
-a session without `--install-dir` keeps its bytes, and an earlier SIGIL still reads it.
+`reference_matches` and `binaries` are the exceptions to "always writes it": SIGIL writes them only
+when they have entries, so a session without `--install-dir` keeps its bytes, and an earlier SIGIL
+still reads it.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.

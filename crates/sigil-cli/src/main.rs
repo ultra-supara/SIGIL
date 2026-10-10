@@ -546,13 +546,19 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
             "install_files_discovered" => install_budgets.files = value,
             "install_entries_listed" => install_budgets.entries = value,
             "install_bytes" => install_budgets.bytes = value,
+            "binary_parse_bytes" | "binary_imports" if !install => {
+                return Err(usage("this budget applies to --install-dir only"));
+            }
+            "binary_parse_bytes" => install_budgets.binary.parse_bytes = value,
+            "binary_imports" => install_budgets.binary.imports = value,
             _ => {
                 return Err(usage(
                     "unknown budget; known: files_discovered, entries_listed, directory_entries, \
                      walk_depth, link_hops, manifest_bytes, in observe mode processes_listed, \
                      fds_per_process, tcp_table_bytes, with --active api-probe \
                      api_connect_ms, api_io_ms, api_response_bytes, and with --install-dir \
-                     install_files_discovered, install_entries_listed, install_bytes",
+                     install_files_discovered, install_entries_listed, install_bytes, \
+                     binary_parse_bytes, binary_imports",
                 ))
             }
         }

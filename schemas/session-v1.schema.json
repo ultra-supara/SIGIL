@@ -287,6 +287,11 @@
           "type": "array",
           "items": {"$ref": "#/$defs/ReferenceMatch"}
         },
+        "binaries": {
+          "description": "Container facts per slice (PR-4b-1). Optional on read (missing means empty); written only when non-empty.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/BinaryFacts"}
+        },
         "hints": {"type": "array", "items": {"$ref": "#/$defs/FeatureHint"}},
         "code": {"type": "array", "items": {"$ref": "#/$defs/CodeFacts"}},
         "relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}},
@@ -323,6 +328,7 @@
         "components": {"type": "array", "items": {"$ref": "#/$defs/ComponentClaim"}},
         "releases": {"type": "array", "items": {"$ref": "#/$defs/ReleaseClaim"}},
         "reference_matches": {"type": "array", "items": {"$ref": "#/$defs/ReferenceMatch"}},
+        "binaries": {"type": "array", "items": {"$ref": "#/$defs/BinaryFacts"}},
         "hints": {"type": "array", "items": {"$ref": "#/$defs/FeatureHint"}},
         "code": {"type": "array", "items": {"$ref": "#/$defs/CodeFacts"}},
         "relations": {"type": "array", "items": {"$ref": "#/$defs/Relation"}},
@@ -699,6 +705,100 @@
     },
     "MemberKind": {"type": "string", "enum": ["File", "Symlink", "Directory"]},
     "EntryKind": {"type": "string", "enum": ["File", "Symlink", "Directory", "Special"]},
+    "BinaryFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slice", "container", "go", "gaps"],
+      "properties": {
+        "slice": {"$ref": "#/$defs/SliceId"},
+        "container": {"$ref": "#/$defs/ContainerFacts"},
+        "go": {"anyOf": [{"$ref": "#/$defs/GoBuildInfo"}, {"type": "null"}]},
+        "gaps": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "ContainerFacts": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["Elf"], "properties": {"Elf": {"$ref": "#/$defs/ElfFacts"}}}
+      ]
+    },
+    "ElfFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interp", "soname", "needed", "rpath", "runpath", "build_id", "comment", "stripped", "exports", "imports", "data"],
+      "properties": {
+        "interp": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "soname": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "needed": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}},
+        "rpath": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}},
+        "runpath": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}},
+        "build_id": {"anyOf": [{"type": "string", "pattern": "^([0-9a-f][0-9a-f])+$"}, {"type": "null"}]},
+        "comment": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}},
+        "stripped": {"type": ["boolean", "null"]},
+        "exports": {"type": "integer", "minimum": 0},
+        "imports": {"type": "array", "items": {"$ref": "#/$defs/ElfImport"}},
+        "data": {"type": "array", "items": {"$ref": "#/$defs/DataSymbol"}}
+      }
+    },
+    "ElfImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "weak"],
+      "properties": {
+        "name": {"$ref": "#/$defs/UntrustedText"},
+        "version": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "weak": {"type": "boolean"}
+      }
+    },
+    "DataSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "value", "at"],
+      "properties": {
+        "symbol": {"type": "string", "minLength": 1},
+        "value": {"$ref": "#/$defs/DataValue"},
+        "at": {"type": "array", "items": {"$ref": "#/$defs/Loc"}}
+      }
+    },
+    "DataValue": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["Text"], "properties": {"Text": {"$ref": "#/$defs/UntrustedText"}}},
+        {"type": "object", "additionalProperties": false, "required": ["Int"], "properties": {"Int": {"type": "integer"}}},
+        {"type": "object", "additionalProperties": false, "required": ["Unknown"], "properties": {"Unknown": {"type": "object", "additionalProperties": false, "required": ["why"], "properties": {"why": {"type": "string", "minLength": 1}}}}}
+      ]
+    },
+    "GoBuildInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "version", "path", "main", "deps", "settings"],
+      "properties": {
+        "at": {"$ref": "#/$defs/Loc"},
+        "version": {"$ref": "#/$defs/UntrustedText"},
+        "path": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "main": {"anyOf": [{"$ref": "#/$defs/GoModule"}, {"type": "null"}]},
+        "deps": {"type": "array", "items": {"$ref": "#/$defs/GoModule"}},
+        "settings": {"type": "array", "items": {"$ref": "#/$defs/GoSetting"}}
+      }
+    },
+    "GoModule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version", "sum", "replace"],
+      "properties": {
+        "path": {"$ref": "#/$defs/UntrustedText"},
+        "version": {"$ref": "#/$defs/UntrustedText"},
+        "sum": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "replace": {"anyOf": [{"$ref": "#/$defs/GoModule"}, {"type": "null"}]}
+      }
+    },
+    "GoSetting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "value"],
+      "properties": {
+        "key": {"$ref": "#/$defs/UntrustedText"},
+        "value": {"$ref": "#/$defs/UntrustedText"}
+      }
+    },
     "LinkHop": {
       "type": "object",
       "additionalProperties": false,

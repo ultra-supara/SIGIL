@@ -222,6 +222,8 @@ pub enum ValidationError {
     /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
     /// (V11).
     ReleaseCoverage { complete: bool },
+    /// A `BinaryFacts` record, or a `Declares` relation, disagrees with the session (B1–B8).
+    Binary { slice: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -349,6 +351,7 @@ impl fmt::Display for ValidationError {
                 f,
                 "releases[{product}]: the basis must list every install placement, after a complete discovery"
             ),
+            Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -675,6 +678,7 @@ impl<'a> Validator<'a> {
             }
         }
         self.reference_matches();
+        self.binaries();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -1379,6 +1383,140 @@ impl<'a> Validator<'a> {
                 self.errors
                     .push(ValidationError::ReleaseCoverage { complete }); // V11
             }
+        }
+    }
+
+    /// B1–B8 (PR-4b-1): binary facts against the session. The facts themselves are the parser's
+    /// observations: `validate` checks that the stored results agree with each other, not that
+    /// the gaps are right (that is the parser's contract).
+    fn binaries(&mut self) {
+        use crate::binary::{ContainerFacts, DataValue, ARTIFACTS_CONTAINER};
+        use crate::relation::{DeclKind, Relation};
+        let s = self.s;
+        let state = |check: &str| {
+            s.coverage
+                .iter()
+                .find(|c| c.check.as_str() == check)
+                .map(|c| &c.state)
+        };
+        let limit = s.request.budgets.get("binary_imports").copied();
+        let mut seen = BTreeSet::new();
+        for facts in &s.binaries {
+            let mut why = vec![];
+            if !seen.insert(&facts.slice) {
+                why.push("one record per slice".to_string()); // B1
+            }
+            let artifact = s
+                .artifacts
+                .iter()
+                .find(|a| a.slices.iter().any(|x| x.id == facts.slice));
+            let Some(artifact) = artifact else {
+                why.push("not a slice of the session".to_string()); // B1
+                self.binary_errors(facts.slice.as_str(), why);
+                continue;
+            };
+            let ContainerFacts::Elf(elf) = &facts.container;
+            if !matches!(artifact.format, crate::artifact::Format::Elf { .. }) {
+                why.push("ELF facts of something that is not an ELF artifact".to_string());
+                // B2
+            }
+            // B3: one Declares per distinct NEEDED name, and no other.
+            let mut declared: Vec<&crate::text::UntrustedText> = s
+                .relations
+                .iter()
+                .filter_map(|r| match r {
+                    Relation::Declares {
+                        from,
+                        needed,
+                        kind: DeclKind::ElfNeeded,
+                    } if *from == facts.slice => Some(needed),
+                    _ => None,
+                })
+                .collect();
+            let total = declared.len();
+            declared.sort();
+            declared.dedup();
+            let mut needed: Vec<&crate::text::UntrustedText> = elf.needed.iter().collect();
+            needed.sort();
+            needed.dedup();
+            if total != declared.len() || declared != needed {
+                why.push(
+                    "its Declares relations are not exactly one per distinct NEEDED name"
+                        .to_string(),
+                );
+            }
+            // B4
+            if elf.imports.windows(2).any(|w| w[0] >= w[1]) {
+                why.push("imports are not sorted and unique".to_string());
+            }
+            if limit.is_some_and(|l| elf.imports.len() as u64 > l) {
+                why.push("more imports than binary_imports".to_string());
+            }
+            // B5
+            let mut symbols = BTreeSet::new();
+            for d in &elf.data {
+                if !symbols.insert(&d.symbol) {
+                    why.push(format!("data symbol {} twice", d.symbol));
+                }
+                if let DataValue::Unknown { why: reason } = &d.value {
+                    let gap = format!("{}: {reason}", d.symbol);
+                    if !facts.gaps.contains(&gap) {
+                        why.push(format!("{} is Unknown without the gap {gap:?}", d.symbol));
+                    }
+                }
+            }
+            // B6
+            if facts
+                .go
+                .as_ref()
+                .is_some_and(|g| g.version.as_bytes().is_empty())
+            {
+                why.push("an empty Go version".to_string());
+            }
+            // B8
+            let sections_gap = facts.gaps.iter().any(|g| g.starts_with("sections: "));
+            if elf.stripped.is_none() != sections_gap {
+                why.push("stripped is None exactly when a `sections: ` gap says why".to_string());
+            }
+            self.binary_errors(facts.slice.as_str(), why);
+        }
+        // B7
+        if matches!(state(ARTIFACTS_CONTAINER), Some(CoverageState::Complete)) {
+            let discovery = matches!(state(ARTIFACTS_DISCOVERY), Some(CoverageState::Complete));
+            let install = RootId::new(INSTALL_ROOT).ok();
+            let elfs: BTreeSet<&SliceId> = s
+                .instances
+                .iter()
+                .filter(|i| Some(&i.root) == install.as_ref())
+                .filter_map(|i| match &i.content {
+                    InstanceContent::Read { artifact } => Some(artifact),
+                    _ => None,
+                })
+                .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+                .filter(|a| matches!(a.format, crate::artifact::Format::Elf { .. }))
+                .flat_map(|a| a.slices.iter().map(|x| &x.id))
+                .collect();
+            let covered = elfs
+                .iter()
+                .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
+            let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
+            if !(discovery && covered && clean) {
+                self.errors.push(ValidationError::Binary {
+                    slice: "*".to_string(),
+                    why: format!(
+                        "{ARTIFACTS_CONTAINER} is Complete, but discovery is not Complete, an install ELF slice has no facts, or a gap remains"
+                    ),
+                });
+            }
+        }
+    }
+
+    fn binary_errors(&mut self, slice: &str, why: Vec<String>) {
+        for why in why {
+            self.errors.push(ValidationError::Binary {
+                slice: slice.to_string(),
+                why,
+            });
         }
     }
 

@@ -8,6 +8,7 @@ description = "SIGIL v2 engine: anchored read-only file access (SafeFs), collect
 
 [dependencies]
 sigil-model = { path = "../sigil-model" }
+object.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

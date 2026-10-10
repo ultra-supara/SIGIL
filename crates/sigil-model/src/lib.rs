@@ -24,6 +24,7 @@
 
 pub mod access;
 pub mod artifact;
+pub mod binary;
 pub mod canonical;
 pub mod code;
 pub mod coverage;
@@ -51,6 +52,10 @@ pub use artifact::{
     Arch, Artifact, DiscoverySource, ElfType, FileInstance, Format, InstanceContent, LinkHop,
     MappingObs, NotReadReason, NsInode, ProcessExe, ProcessObs, ProcessRef, Slice, Stability,
     StatInfo,
+};
+pub use binary::{
+    BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport, GoBuildInfo, GoModule,
+    GoSetting, ARTIFACTS_CONTAINER,
 };
 pub use code::{
     ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,

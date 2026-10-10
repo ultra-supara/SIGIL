@@ -58,6 +58,15 @@ impl Session {
         }
         sort_json(&mut self.releases);
         sort_json(&mut self.reference_matches);
+        for facts in &mut self.binaries {
+            let crate::binary::ContainerFacts::Elf(elf) = &mut facts.container;
+            elf.imports.sort();
+            elf.imports.dedup();
+            elf.data.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+            facts.gaps.sort();
+            facts.gaps.dedup();
+        }
+        self.binaries.sort_by(|a, b| a.slice.cmp(&b.slice));
         sort_json(&mut self.hints);
         for facts in &mut self.code {
             sort_json(&mut facts.functions);

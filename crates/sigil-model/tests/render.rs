@@ -312,3 +312,48 @@ fn the_absent_members_of_a_candidate_are_listed() {
         "{md}"
     );
 }
+
+#[test]
+fn binaries_are_tabled_under_runtime_artifacts() {
+    let mut s = conflicting_identity();
+    let slice = s.artifacts[0].slices[0].id.clone();
+    s.binaries.push(BinaryFacts {
+        slice,
+        container: ContainerFacts::Elf(ElfFacts {
+            interp: None,
+            soname: Some(t("libggml.so.0")),
+            needed: vec![t("libggml-base.so.0"), t("libc.so.6")],
+            rpath: vec![],
+            runpath: vec![t("$ORIGIN")],
+            build_id: Some("0123456789abcdef0123".into()),
+            comment: vec![],
+            stripped: Some(true),
+            exports: 120,
+            imports: vec![],
+            data: vec![DataSymbol {
+                symbol: "LLAMA_COMMIT".into(),
+                value: DataValue::Text(t("6f3a9f3de")),
+                at: vec![],
+            }],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    let md = render_session(&s);
+    let section = md
+        .split("\n## ")
+        .find(|x| x.starts_with("Runtime artifacts"))
+        .unwrap();
+    for shown in [
+        "Binaries",
+        "libggml.so.0",
+        "libggml-base.so.0, libc.so.6",
+        "LLAMA_COMMIT=6f3a9f3de",
+        "build-id 0123456789ab",
+    ] {
+        assert!(
+            section.contains(&t(shown).markdown_inline()),
+            "{shown}\n{section}"
+        );
+    }
+}

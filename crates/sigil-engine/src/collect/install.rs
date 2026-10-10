@@ -6,6 +6,7 @@
 //! leaves that place uninspected (a gap). So nothing outside the two places is read, inside the
 //! install or outside it.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use sigil_model::{
@@ -18,7 +19,7 @@ use super::fs::{
     instance_id, recorded, Entry, EntryType, FsBudgets, ReadOutcome, ReadSpec, RelPath, RootError,
     SafeFs, WalkError,
 };
-use crate::binary::header;
+use crate::binary::{self, header, BinaryBudgets, Parsed};
 
 /// Budgets of the install scan, recorded with an `install_` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,8 @@ pub struct InstallBudgets {
     pub entries: u64,
     /// Bytes read for hashing, over the whole scan, as `install_bytes`.
     pub bytes: u64,
+    /// Each ELF artifact's parse (PR-4b-1), as `binary_parse_bytes` and `binary_imports`.
+    pub binary: BinaryBudgets,
 }
 
 impl Default for InstallBudgets {
@@ -38,6 +41,7 @@ impl Default for InstallBudgets {
             files: 4096,
             entries: 16_384,
             bytes: 64 << 30,
+            binary: BinaryBudgets::default(),
         }
     }
 }
@@ -52,6 +56,8 @@ pub struct InstallFacts {
     /// Coverage of `artifacts.discovery`, scope `Root(install)`.
     pub discovery: Coverage,
     pub bytes_read: u64,
+    /// The container facts of each ELF artifact, parsed once on the fd that hashed it (PR-4b-1).
+    pub binaries: Vec<sigil_model::BinaryFacts>,
 }
 
 const BIN: &str = "bin/ollama";
@@ -62,12 +68,13 @@ pub fn collect(dir: &Path, budgets: InstallBudgets) -> Result<InstallFacts, Stri
     collect_with(dir, budgets, &|_| {})
 }
 
-/// As [`collect`], calling `after_read` with each file's or link's path right after it was read:
-/// the tests' way to change an entry between a link's two `readlinkat`.
+/// As [`collect`], calling `during_read` with the path of each file while it is read (after
+/// hashing, before the post-read checks) and of each link between its two `readlinkat`: the
+/// tests' way to change an entry during its read.
 fn collect_with(
     dir: &Path,
     budgets: InstallBudgets,
-    after_read: &dyn Fn(&RelPath),
+    during_read: &dyn Fn(&RelPath),
 ) -> Result<InstallFacts, String> {
     let root = RootId::new(INSTALL_ROOT).map_err(|e| e.to_string())?;
     let check = CheckId::new(ARTIFACTS_DISCOVERY).map_err(|e| e.to_string())?;
@@ -91,7 +98,9 @@ fn collect_with(
         errors: vec![],
         exceeded: vec![],
         found: 0,
-        after_read,
+        during_read,
+        binary: budgets.binary,
+        parsed: BTreeMap::new(),
     };
     let state = match opened {
         Err(RootError::NotFound) => CoverageState::Unavailable {
@@ -108,10 +117,29 @@ fn collect_with(
             c.state()
         }
     };
+    let mut binaries = vec![];
+    for (id, p) in c.parsed {
+        let Some(slice) = c
+            .artifacts
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.slices.first())
+        else {
+            continue;
+        };
+        binaries.push(sigil_model::BinaryFacts {
+            slice: slice.id.clone(),
+            container: p.container,
+            go: p.go,
+            gaps: p.gaps,
+        });
+    }
+    binaries.sort_by(|a, b| a.slice.cmp(&b.slice));
     Ok(InstallFacts {
         root_path,
         instances: c.instances,
         artifacts: c.artifacts,
+        binaries,
         discovery: Coverage {
             check,
             scope: Ref::Root(root),
@@ -138,7 +166,10 @@ struct Collector<'a> {
     exceeded: Vec<BudgetUse>,
     /// How many of the two places exist.
     found: u32,
-    after_read: &'a dyn Fn(&RelPath),
+    during_read: &'a dyn Fn(&RelPath),
+    binary: BinaryBudgets,
+    /// Each ELF artifact parsed so far, by content.
+    parsed: BTreeMap<sigil_model::ArtifactId, Parsed>,
 }
 
 impl Collector<'_> {
@@ -322,7 +353,7 @@ impl Collector<'_> {
                 why: NotReadReason::NotFollowed,
             },
         )?;
-        (self.after_read)(&entry.rel);
+        (self.during_read)(&entry.rel);
         let unchanged = matches!(
             self.fs.entry_at(&self.root, &entry.rel).map(|e| e.kind),
             Ok(EntryType::Symlink { target: now }) if now == target
@@ -350,7 +381,11 @@ impl Collector<'_> {
                 },
             );
         }
-        let read = self.fs.read_entry(
+        let during = self.during_read;
+        let budgets = self.binary;
+        let parsed_before = &self.parsed;
+        let rel = entry.rel.clone();
+        let (read, parsed) = self.fs.read_entry_with(
             &self.root,
             &entry.rel,
             ReadSpec {
@@ -358,8 +393,17 @@ impl Collector<'_> {
                 limit: Some(left),
             },
             vec![DiscoverySource::Walk],
+            |input| {
+                during(&rel);
+                // ELF content, each content once.
+                if header::read(input.prefix).is_none()
+                    || parsed_before.contains_key(input.artifact)
+                {
+                    return None;
+                }
+                Some(binary::parse(input.file, input.size, budgets))
+            },
         );
-        (self.after_read)(&entry.rel);
         let Some(instance) = read.instance else {
             self.errors
                 .push(format!("{}: {:?}", entry.rel.display(), read.outcome));
@@ -381,6 +425,12 @@ impl Collector<'_> {
         if instance.stability != Stability::NoChangeDetected {
             self.errors
                 .push(format!("{}: {:?}", entry.rel.display(), instance.stability));
+        }
+        // Facts are kept only from a read that saw no change.
+        if let (Some(Some(p)), Some(a)) = (parsed, read.artifact.as_ref()) {
+            if instance.stability == Stability::NoChangeDetected {
+                self.parsed.insert(a.id.clone(), p);
+            }
         }
         if let Some(mut artifact) = read.artifact {
             self.used = self.used.saturating_add(artifact.size);
@@ -417,6 +467,7 @@ mod tests {
     use sigil_model::{CoverageState, Stability};
 
     use super::{collect_with, InstallBudgets};
+    use crate::collect::fs::RelPath;
 
     /// A link retargeted between its two `readlinkat`: its target is never read, so only the
     /// second `readlinkat` can see the change.
@@ -452,5 +503,39 @@ mod tests {
             .instances
             .iter()
             .all(|i| i.stability == Stability::NoChangeDetected));
+    }
+
+    /// A file that changes while it is parsed (the hook runs after hashing, before the post-read
+    /// check): the read is unstable, and its facts are dropped with it.
+    #[test]
+    fn a_file_changed_while_it_is_parsed_has_no_facts() {
+        use std::io::Write;
+        let d = tempfile::TempDir::new().unwrap();
+        let lib = d.path().join("lib/ollama");
+        std::fs::create_dir_all(&lib).unwrap();
+        let so = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so"),
+        )
+        .unwrap();
+        std::fs::write(lib.join("libx.so"), &so).unwrap();
+        let grow = |rel: &RelPath| {
+            if rel.display() == "lib/ollama/libx.so" {
+                let mut f = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(lib.join("libx.so"))
+                    .unwrap();
+                f.write_all(b"!").unwrap();
+            }
+        };
+        let f = collect_with(d.path(), InstallBudgets::default(), &grow).unwrap();
+        let x = f
+            .instances
+            .iter()
+            .find(|i| i.path.as_bytes().ends_with(b"/libx.so"))
+            .unwrap();
+        assert_eq!(x.stability, Stability::ChangedDuringRead);
+        assert!(f.binaries.is_empty(), "{:?}", f.binaries);
+        let f = collect_with(d.path(), InstallBudgets::default(), &|_| {}).unwrap();
+        assert_eq!(f.binaries.len(), 1);
     }
 }

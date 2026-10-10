@@ -1,6 +1,7 @@
 //! Helpers shared by the model-store tests: writing blobs and manifests into a temporary store.
 #![allow(dead_code)]
 
+pub mod elf;
 pub mod proc;
 
 use std::fs;

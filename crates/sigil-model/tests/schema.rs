@@ -68,6 +68,9 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         ReleaseBasis => "ReleaseBasis", FeatureHint => "FeatureHint", Signal => "Signal",
         ReferenceMatch => "ReferenceMatch", MemberResult => "MemberResult", MemberKind => "MemberKind",
         EntryKind => "EntryKind",
+        BinaryFacts => "BinaryFacts", ContainerFacts => "ContainerFacts", ElfFacts => "ElfFacts",
+        ElfImport => "ElfImport", DataSymbol => "DataSymbol", DataValue => "DataValue",
+        GoBuildInfo => "GoBuildInfo", GoModule => "GoModule", GoSetting => "GoSetting",
         CodeFacts => "CodeFacts", CallRef => "CallRef", FnRef => "FnRef", Function => "Function",
         BoundsSource => "BoundsSource", CallSite => "CallSite", CallKind => "CallKind", CallTarget => "CallTarget",
         ImportVia => "ImportVia", Reg => "Reg", ArgValue => "ArgValue", ValueUnknown => "ValueUnknown",
@@ -104,14 +107,15 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
     ]
 }
 
-/// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a).
-/// They are optional on read, where a missing one is an empty list. `active` and `probes` are
-/// always written; `reference_matches` only when non-empty, so sessions without an install keep
-/// their bytes.
+/// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a,
+/// PR-4b-1). They are optional on read, where a missing one is an empty list. `active` and
+/// `probes` are always written; `reference_matches` and `binaries` only when non-empty, so
+/// sessions without an install keep their bytes.
 const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("RunRequest", "active"),
     ("Session", "probes"),
     ("Session", "reference_matches"),
+    ("Session", "binaries"),
 ];
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
@@ -309,6 +313,62 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("EntryKind", EntryKind::File),
         sample("EntryKind", EntryKind::Symlink),
         sample("EntryKind", EntryKind::Directory),
+        sample(
+            "BinaryFacts",
+            BinaryFacts {
+                slice: id(&format!("sha256:{}#x86_64@0", "a".repeat(64))),
+                container: ContainerFacts::Elf(ElfFacts {
+                    interp: Some(t("/lib64/ld-linux-x86-64.so.2")),
+                    soname: None,
+                    needed: vec![t("libc.so.6")],
+                    rpath: vec![t("/opt/lib")],
+                    runpath: vec![],
+                    build_id: Some("0a1b".into()),
+                    comment: vec![t("GCC: (GNU) 11.2.1")],
+                    stripped: None,
+                    exports: 3,
+                    imports: vec![ElfImport {
+                        name: t("connect"),
+                        version: Some(t("GLIBC_2.2.5")),
+                        weak: true,
+                    }],
+                    data: vec![DataSymbol {
+                        symbol: "LLAMA_COMMIT".into(),
+                        value: DataValue::Text(t("6f3a9f3de")),
+                        at: vec![Loc::Symbol(t("LLAMA_COMMIT")), Loc::VAddr(0x2000)],
+                    }],
+                }),
+                go: Some(GoBuildInfo {
+                    at: Loc::VAddr(0x40_0000),
+                    version: t("go1.26.0"),
+                    path: Some(t("github.com/ollama/ollama")),
+                    main: None,
+                    deps: vec![GoModule {
+                        path: t("example.com/dep"),
+                        version: t("v1.0.0"),
+                        sum: Some(t("h1:abc=")),
+                        replace: Some(Box::new(GoModule {
+                            path: t("./dep"),
+                            version: t("(devel)"),
+                            sum: None,
+                            replace: None,
+                        })),
+                    }],
+                    settings: vec![GoSetting {
+                        key: t("CGO_ENABLED"),
+                        value: t("1"),
+                    }],
+                }),
+                gaps: vec!["sections: no section header table".into()],
+            },
+        ),
+        sample("DataValue", DataValue::Int(1)),
+        sample(
+            "DataValue",
+            DataValue::Unknown {
+                why: "relocated by R_X86_64_64".into(),
+            },
+        ),
         sample("Stability", Stability::ChangedDuringRead),
         sample("Stability", Stability::Vanished),
         sample(
