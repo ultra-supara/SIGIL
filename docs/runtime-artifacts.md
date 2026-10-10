@@ -181,7 +181,7 @@ session, read from the file's own bytes. They are observations, not identity.
   | Fact | Source | Confirmed absent (no gap) | Gap |
   |---|---|---|---|
   | Interpreter | `PT_INTERP` | no `PT_INTERP` | outside the file, or no NUL within 4 KiB |
-  | SONAME, NEEDED (in order), RPATH, RUNPATH | `PT_DYNAMIC`, its strings through `DT_STRTAB`/`DT_STRSZ` in a `PT_LOAD`'s file-backed range | no `PT_DYNAMIC` (a static executable, a relocatable object) | `PT_DYNAMIC` out of the file, not a whole number of entries, or without its `DT_NULL` (the table may go on past what was read); strings not file-backed, an offset past `DT_STRSZ` |
+  | SONAME, NEEDED (in order), RPATH, RUNPATH | `PT_DYNAMIC`, its strings through `DT_STRTAB`/`DT_STRSZ` in a `PT_LOAD`'s file-backed range | no `PT_DYNAMIC` (a static executable, a relocatable object) | `PT_DYNAMIC` out of the file, not a whole number of entries, or without its `DT_NULL` (the table may go on past what was read); strings not file-backed, an offset past `DT_STRSZ`; a `DT_RELASZ` or RELA `DT_PLTRELSZ` that is not a whole number of entries (the loader would apply a partial last one), or a `DT_RELAENT` other than the entry size (the loader refuses it), whether or not a data symbol needs the tables |
   | build-id | `PT_NOTE`, then `SHT_NOTE` | every note read, none `NT_GNU_BUILD_ID` | a malformed note |
   | `.comment`, stripped | the sections | a section header table without `.comment` | no section header table, or one out of the file (`sections: …`; stripped is then unknown) |
   | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC` | no `PT_DYNAMIC` | dynamic symbols without a `.dynsym` section, a malformed table, a version index that resolves to nothing, a `.gnu.version` shorter than `.dynsym`, a known data symbol defined twice |
@@ -196,6 +196,7 @@ session, read from the file's own bytes. They are observations, not identity.
   | A RELA `R_X86_64_RELATIVE` / `R_AARCH64_RELATIVE` | the string at its addend |
   | Any other relocation | `Unknown` (`relocated by R_X86_64_64`, …) |
   | No RELA relocation, and the file has `DT_REL`/`DT_RELR` | `Unknown` (not read) |
+  | A RELA table whose size or entry size is malformed (above) | `Unknown` (relocations not read) |
   | No relocation, in a non-PIE executable | the string at the stored address |
   | No relocation, in a position-independent file | `Unknown` |
 
