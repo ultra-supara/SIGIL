@@ -226,6 +226,72 @@ fn an_install_never_opens_what_its_links_lead_to() {
 }
 
 #[test]
+fn binary_inspection_reads_only_its_inputs() {
+    let case = "binary_inspection_reads_only_its_inputs";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let so = fx.target.join("libdata.so");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../sigil-engine/tests/fixtures/elf/libdata.so"),
+        &so,
+    )
+    .unwrap();
+    // Named through a symlink, which is resolved. Next to it, a file no run may open.
+    let link = fx.target.join("link.so");
+    std::os::unix::fs::symlink("libdata.so", &link).unwrap();
+    std::fs::create_dir(fx.target.join("private")).unwrap();
+    std::fs::write(fx.target.join("private/secret.txt"), b"secret").unwrap();
+    let md = fx.out.join("report.md");
+    let args = os(&[
+        &"binary",
+        &"inspect",
+        &link,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    let r = run("binary-inspect", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(std::fs::read_to_string(&md)
+        .unwrap()
+        .contains("## Binaries"));
+    assert_read_under(&r, &fx.target);
+    // Plan review P2: only the input is opened under target/; nothing under private/.
+    assert_never_opened_under(&r, &fx.target.join("private"));
+    assert_opened_only(&r, &fx.target, &[&so]);
+    // No exec, no dlopen, no mmap of the target, no socket; writes only --out (and its
+    // temporary siblings).
+    assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+}
+
+/// Every file the run opened under `root` is one of `files`; `root` itself (a directory fd) is
+/// allowed.
+fn assert_opened_only(run: &TracedRun, root: &Path, files: &[&Path]) {
+    let root = std::fs::canonicalize(root).unwrap();
+    let files: Vec<PathBuf> = files
+        .iter()
+        .map(|f| std::fs::canonicalize(f).unwrap())
+        .collect();
+    for e in &run.events {
+        if !matches!(e.name.as_str(), "openat" | "open" | "openat2") {
+            continue;
+        }
+        let Some(p) = fd_path(&e.ret) else { continue };
+        assert!(
+            !p.starts_with(&root) || p == root || files.contains(&p),
+            "case `{}` opened {} under {}: {}",
+            run.case,
+            p.display(),
+            root.display(),
+            e.raw
+        );
+    }
+}
+
+#[test]
 fn static_inspection_of_a_malformed_manifest() {
     if !require_tracer("static_inspection_of_a_malformed_manifest") {
         return;
