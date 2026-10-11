@@ -696,7 +696,10 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
             });
             for path in &paths {
                 if writes_by_open && creates && sibling(path) {
-                    created.insert(path.clone());
+                    // Only a create that succeeded makes the file this run's (review of #88).
+                    if !e.ret.starts_with('-') {
+                        created.insert(path.clone());
+                    }
                 } else if writes_by_open && !output(path) {
                     push(
                         Contract::C5ReadOnly,
@@ -1082,9 +1085,18 @@ mod tests {
                 "unlinkat(5<{out}>, \"{}\", 0) = 0",
                 hex("report.md.sigil-1-0.tmp")
             ),
+            // A create that failed (another process's file) does not make it this run's.
+            format!(
+                "openat(5<{out}>, \"{}\", O_WRONLY|O_CREAT|O_EXCL, 0600) = -1 EEXIST (File exists)",
+                hex(".report.md.sigil-1-5.tmp")
+            ),
+            format!(
+                "unlinkat(5<{out}>, \"{}\", 0) = 0",
+                hex(".report.md.sigil-1-5.tmp")
+            ),
         ];
         let lines: Vec<(u32, String)> = violations.iter().map(|l| (10, l.clone())).collect();
-        assert_eq!(found(&check(&with(&lines), &policy(&["runtime"]))).len(), 8);
+        assert_eq!(found(&check(&with(&lines), &policy(&["runtime"]))).len(), 9);
     }
 
     #[test]
