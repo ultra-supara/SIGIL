@@ -273,6 +273,7 @@ fn the_header_check_and_the_parser_agree_on_every_fixture() {
         "exe-nopie",
         "static",
         "libdata-aarch64.so",
+        "net.o",
     ] {
         let bytes = fixture(&format!("elf/{name}"));
         assert!(
@@ -391,4 +392,34 @@ fn a_version_table_shorter_than_the_symbols_is_a_gap() {
         "{:?}",
         p.gaps
     );
+}
+
+/// PR-4b-2a spec §4.4: a relocatable object has no `.dynsym`. Its imports are the undefined
+/// symbols of its link-time symbol table, left for the linker, and its exports its defined
+/// global ones. No versions, no data values.
+#[test]
+fn a_relocatable_object_s_symbols_come_from_symtab() {
+    let (f, p) = facts_of(&fixture("elf/net.o"), BinaryBudgets::default());
+    let names: Vec<String> = f
+        .imports
+        .iter()
+        .map(|i| i.name.as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(names, ["connect", "socket"]);
+    assert!(f.imports.iter().all(|i| i.version.is_none() && !i.weak));
+    assert_eq!(f.exports, 1, "sigil_connect_loopback");
+    assert_eq!(f.stripped, Some(false));
+    assert!(f.data.is_empty() && f.needed.is_empty() && f.interp.is_none());
+    assert!(!f.comment.is_empty());
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+}
+
+#[test]
+fn a_relocatable_object_without_symtab_is_a_gap() {
+    let mut img = ElfImage::new(1); // ET_REL
+    img.put(0x1000, &[0xc3]);
+    img.sec(".text", SHT_PROGBITS, 0x1000, 0, 1);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert!(f.imports.is_empty());
+    assert_eq!(p.gaps, ["symbols: no SHT_SYMTAB in a relocatable object"]);
 }

@@ -56,9 +56,12 @@ pub struct ElfFacts {
     /// Whether there is no `SHT_SYMTAB` section; `None` when the section header table could not
     /// be inspected in full (then `gaps` has a `sections: ` entry).
     pub stripped: Option<bool>,
-    /// Defined dynamic symbols: `GLOBAL`/`WEAK`/`GNU_UNIQUE`, `DEFAULT`/`PROTECTED`.
+    /// Defined dynamic symbols: `GLOBAL`/`WEAK`/`GNU_UNIQUE`, `DEFAULT`/`PROTECTED`. For a
+    /// relocatable object (`ET_REL`), the defined global symbols of its symbol table.
     pub exports: u64,
-    /// Undefined dynamic symbols, `GLOBAL` or `WEAK`. Sorted by `(name, version)`, unique.
+    /// Undefined dynamic symbols, `GLOBAL` or `WEAK`: what the loader resolves. For a relocatable
+    /// object (`ET_REL`), the undefined symbols of its symbol table: what the linker resolves,
+    /// not the final program's imports. Sorted by `(name, version)`, unique.
     pub imports: Vec<ElfImport>,
     /// The known data symbols present (plan §4.4), sorted by symbol.
     pub data: Vec<DataSymbol>,

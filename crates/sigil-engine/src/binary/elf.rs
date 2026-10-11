@@ -463,7 +463,16 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 let (offset, size) = s.file_range(endian)?;
                 Some((s.sh_addr(endian).into(), offset, size))
             });
-        let symbols = match table.symbols(endian, data, elf::SHT_DYNSYM) {
+        // A relocatable object has no `.dynsym`: its link-time symbol table holds what it leaves
+        // for the linker (PR-4b-2a spec §4.4). It has no versions, and its data is not relocated
+        // yet, so no data value is read from it.
+        let relocatable = self.header.e_type(endian) == elf::ET_REL;
+        let kind = if relocatable {
+            elf::SHT_SYMTAB
+        } else {
+            elf::SHT_DYNSYM
+        };
+        let symbols = match table.symbols(endian, data, kind) {
             Ok(s) => s,
             Err(e) => {
                 self.gap(format!("malformed: symbols: {e}"));
@@ -474,7 +483,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             }
         };
         if symbols.is_empty() {
-            if dynamic.symtab {
+            if relocatable {
+                self.gap("symbols: no SHT_SYMTAB in a relocatable object");
+            } else if dynamic.symtab {
                 self.gap("symbols: no SHT_DYNSYM");
             }
             return Sections {
@@ -482,11 +493,15 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 go_section,
             };
         }
-        let versions = match table.versions(endian, data) {
-            Ok(v) => v,
-            Err(e) => {
-                self.gap(format!("malformed: versions: {e}"));
-                None
+        let versions = if relocatable {
+            None
+        } else {
+            match table.versions(endian, data) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.gap(format!("malformed: versions: {e}"));
+                    None
+                }
             }
         };
         // object treats a symbol past the end of `.gnu.version` as unversioned: say it instead.
@@ -551,7 +566,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         facts.imports = imports.into_iter().collect();
         Sections {
-            dynsym: Some(symbols),
+            dynsym: (!relocatable).then_some(symbols),
             go_section,
         }
     }
