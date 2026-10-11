@@ -94,6 +94,70 @@ pub fn subject(r: &Ref) -> String {
     }
 }
 
+/// One input of a binary inspection, as reports show it (PR-4b-2a).
+pub struct BinaryInput<'s> {
+    pub root: &'s crate::session::ScanRoot,
+    pub instance: Option<&'s crate::artifact::FileInstance>,
+    /// `None` when the input was not read (over `binary_bytes`).
+    pub artifact: Option<&'s crate::artifact::Artifact>,
+    /// Its `binary.container` entry.
+    pub coverage: Option<&'s crate::coverage::Coverage>,
+}
+
+/// The inputs of a binary inspection, in argument order: `binary-<n>` by number, not in the
+/// canonical order, which puts `binary-10` before `binary-2` (spec §5.1).
+pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
+    use crate::artifact::InstanceContent;
+    let mut roots: Vec<(u32, &crate::session::ScanRoot)> = s
+        .request
+        .roots
+        .iter()
+        .filter_map(|r| Some((crate::binary_input::binary_root_index(&r.id)?, r)))
+        .collect();
+    roots.sort_by_key(|(n, _)| *n);
+    roots
+        .into_iter()
+        .map(|(_, root)| {
+            let instance = s.instances.iter().find(|i| i.root == root.id);
+            let artifact = instance.and_then(|i| match &i.content {
+                InstanceContent::Read { artifact } => {
+                    s.artifacts.iter().find(|a| a.id == *artifact)
+                }
+                InstanceContent::NotRead { .. } => None,
+            });
+            let coverage = instance.and_then(|i| {
+                s.coverage.iter().find(|c| {
+                    c.check.as_str() == crate::binary_input::BINARY_CONTAINER
+                        && c.scope == Ref::Instance(i.id.clone())
+                })
+            });
+            BinaryInput {
+                root,
+                instance,
+                artifact,
+                coverage,
+            }
+        })
+        .collect()
+}
+
+/// An artifact's type: `ELF Rel x86_64`, `Mach-O`, `other`, or `not read`.
+pub fn artifact_type(a: Option<&crate::artifact::Artifact>) -> String {
+    use crate::artifact::Format;
+    match a {
+        None => "not read".to_string(),
+        Some(a) => match a.format {
+            Format::Elf { kind } => {
+                let arch = a.slices.first().map_or("-", |s| s.arch.name());
+                format!("ELF {kind:?} {arch}")
+            }
+            Format::MachO => "Mach-O".to_string(),
+            Format::MachOFat => "Mach-O fat".to_string(),
+            Format::Other => "other".to_string(),
+        },
+    }
+}
+
 /// A coverage state.
 pub fn coverage_state(state: &CoverageState) -> Shown {
     match state {

@@ -29,6 +29,7 @@ pub fn render_session(s: &Session) -> String {
     open_questions(&mut out, s);
     policy_violations(&mut out, s);
     coverage(&mut out, s);
+    binary_inspection(&mut out, s);
     models(&mut out, s);
     runtime_artifacts(&mut out, s);
     md::listeners(&mut out, &s.listeners);
@@ -52,7 +53,10 @@ fn run(out: &mut String, s: &Session) {
         vec![esc("Audit scope"), esc(&joined(&r.audit))],
         vec![esc("Required checks"), esc(&joined(&r.required_checks))],
     ];
-    for root in &r.roots {
+    // Binary roots in argument order (`binary-<n>` by number); others as recorded.
+    let mut roots: Vec<&crate::session::ScanRoot> = r.roots.iter().collect();
+    roots.sort_by_key(|root| crate::binary_input::binary_root_index(&root.id));
+    for root in roots {
         rows.push(vec![
             esc("Root"),
             format!("{} {}", esc(root.id.as_str()), root.path.markdown_inline()),
@@ -165,7 +169,223 @@ fn coverage(out: &mut String, s: &Session) {
     table(out, &["Check", "Scope", "State"], rows);
 }
 
+/// What a binary inspection's report says it is not (spec §6.1).
+pub const BINARY_CAVEAT: &str = "Container facts only. For an executable or a shared object, imports are the names it asks its loader for; for a relocatable object (.o), they are the symbols left for the linker. Neither shows that the code calls them, and no code was analyzed.";
+
+/// The inputs of a binary inspection (PR-4b-2a spec §6.1): an overview in argument order, then
+/// each content's container facts once, in the order of its first input.
+fn binary_inspection(out: &mut String, s: &Session) {
+    use super::{artifact_type, binary_inputs};
+    let inputs = binary_inputs(s);
+    if inputs.is_empty() {
+        return;
+    }
+    section(out, "Binaries");
+    let path_of = |b: &super::BinaryInput<'_>| {
+        b.instance
+            .map_or_else(|| b.root.path.clone(), |i| i.path.clone())
+    };
+    let rows = inputs
+        .iter()
+        .map(|b| {
+            let sha = match (b.artifact, b.instance) {
+                (Some(a), _) => esc(a.id.as_str().trim_start_matches("sha256:")),
+                (None, Some(i)) => match &i.content {
+                    InstanceContent::NotRead { why } => esc(&format!("not read: {why:?}")),
+                    InstanceContent::Read { .. } => esc("-"),
+                },
+                (None, None) => esc("-"),
+            };
+            let size = b
+                .artifact
+                .map(|a| a.size)
+                .or(b.instance.map(|i| i.stat.size))
+                .map_or_else(|| "-".to_string(), |n| n.to_string());
+            vec![
+                path_of(b).markdown_inline(),
+                sha,
+                esc(&size),
+                esc(&artifact_type(b.artifact)),
+                b.coverage.map_or_else(
+                    || esc("no coverage entry"),
+                    |c| coverage_state(&c.state).markdown(),
+                ),
+            ]
+        })
+        .collect();
+    table(
+        out,
+        &["Path", "SHA-256", "Size", "Type", "Container facts"],
+        rows,
+    );
+    let mut shown: Vec<&crate::id::ArtifactId> = vec![];
+    for b in &inputs {
+        let Some(a) = b.artifact else { continue };
+        if shown.contains(&&a.id) {
+            continue;
+        }
+        shown.push(&a.id);
+        for slice in &a.slices {
+            if let Some(facts) = s.binaries.iter().find(|f| f.slice == slice.id) {
+                binary_facts(out, &path_of(b), a, facts);
+            }
+        }
+    }
+    out.push_str(&esc(BINARY_CAVEAT));
+    out.push_str("\n\n");
+}
+
+/// One record's facts: a table, then its imports.
+fn binary_facts(
+    out: &mut String,
+    path: &UntrustedText,
+    a: &crate::artifact::Artifact,
+    b: &crate::binary::BinaryFacts,
+) {
+    use crate::binary::DataValue;
+    let crate::binary::ContainerFacts::Elf(elf) = &b.container;
+    let opt = |t: &Option<UntrustedText>| {
+        t.as_ref()
+            .map_or_else(|| esc("-"), UntrustedText::markdown_inline)
+    };
+    let list = |v: &[UntrustedText]| {
+        if v.is_empty() {
+            esc("-")
+        } else {
+            v.iter()
+                .map(UntrustedText::markdown_inline)
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    let relocatable = matches!(
+        a.format,
+        crate::artifact::Format::Elf {
+            kind: crate::artifact::ElfType::Rel
+        }
+    );
+    let label = if relocatable {
+        "Undefined symbols (link time)"
+    } else {
+        "Imports (dynamic)"
+    };
+    out.push_str(&format!(
+        "{} {}{}\n\n",
+        esc("Facts of"),
+        path.markdown_inline(),
+        esc(":")
+    ));
+    let data = if elf.data.is_empty() {
+        esc("-")
+    } else {
+        elf.data
+            .iter()
+            .map(|d| {
+                let value = match &d.value {
+                    DataValue::Text(t) => t.markdown_inline(),
+                    DataValue::Int(n) => esc(&n.to_string()),
+                    DataValue::Unknown { .. } => esc("?"),
+                };
+                format!("{}{}{value}", esc(&d.symbol), esc("="))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut rows = vec![
+        vec![esc("Interpreter"), opt(&elf.interp)],
+        vec![esc("SONAME"), opt(&elf.soname)],
+        vec![esc("NEEDED"), list(&elf.needed)],
+        vec![esc("RPATH"), list(&elf.rpath)],
+        vec![esc("RUNPATH"), list(&elf.runpath)],
+        vec![esc("Build-id"), esc(elf.build_id.as_deref().unwrap_or("-"))],
+        vec![esc("Comment"), list(&elf.comment)],
+        vec![
+            esc("Stripped"),
+            esc(match elf.stripped {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unknown",
+            }),
+        ],
+        vec![esc("Exports"), esc(&elf.exports.to_string())],
+        vec![esc(label), esc(&elf.imports.len().to_string())],
+        vec![esc("Data symbols"), data],
+    ];
+    if let Some(go) = &b.go {
+        rows.push(vec![esc("Go version"), go.version.markdown_inline()]);
+        rows.push(vec![esc("Go path"), opt(&go.path)]);
+        rows.push(vec![
+            esc("Go main"),
+            go.main.as_ref().map_or_else(
+                || esc("-"),
+                |m| {
+                    format!(
+                        "{} {}",
+                        m.path.markdown_inline(),
+                        m.version.markdown_inline()
+                    )
+                },
+            ),
+        ]);
+        rows.push(vec![esc("Go deps"), esc(&go.deps.len().to_string())]);
+        rows.push(vec![
+            esc("Go settings"),
+            if go.settings.is_empty() {
+                esc("-")
+            } else {
+                go.settings
+                    .iter()
+                    .map(|kv| {
+                        format!(
+                            "{}{}{}",
+                            kv.key.markdown_inline(),
+                            esc("="),
+                            kv.value.markdown_inline()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        ]);
+    }
+    table(out, &["Fact", "Value"], rows);
+    if !elf.imports.is_empty() {
+        out.push_str(&format!(
+            "{} {}{}\n\n",
+            esc(&format!("{label} of")),
+            path.markdown_inline(),
+            esc(&format!(" ({}):", elf.imports.len()))
+        ));
+        let names: Vec<String> = elf
+            .imports
+            .iter()
+            .map(|i| {
+                let mut n = i.name.markdown_inline();
+                if let Some(v) = &i.version {
+                    n.push_str(&esc("@"));
+                    n.push_str(&v.markdown_inline());
+                }
+                if i.weak {
+                    n.push_str(&esc(" (weak)"));
+                }
+                n
+            })
+            .collect();
+        out.push_str(&names.join(", "));
+        out.push_str("\n\n");
+    }
+}
+
 fn models(out: &mut String, s: &Session) {
+    // A binary inspection has no model store.
+    if !s.request.roots.is_empty()
+        && s.request
+            .roots
+            .iter()
+            .all(|r| crate::binary_input::is_binary_root(&r.id))
+    {
+        return;
+    }
     section(out, "Models");
     let rows = s.models.iter().map(model_row).collect();
     table(out, &["Model", "Name", "Layers", "License"], rows);
