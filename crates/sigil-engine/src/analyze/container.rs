@@ -3,17 +3,17 @@
 use std::collections::BTreeSet;
 
 use sigil_model::{
-    CheckId, ContainerFacts, Coverage, CoverageState, DeclKind, Format, InstanceContent, Relation,
-    ARTIFACTS_CONTAINER,
+    BinaryFacts, CheckId, ContainerFacts, Coverage, CoverageState, DeclKind, Format,
+    InstanceContent, Relation, ARTIFACTS_CONTAINER,
 };
 
 use crate::analyze::release::member_of;
 use crate::collect::install::InstallFacts;
 
-pub fn analyze(facts: &InstallFacts) -> Result<(Coverage, Vec<Relation>), String> {
-    let check = CheckId::new(ARTIFACTS_CONTAINER).map_err(|e| e.to_string())?;
+/// One `Declares` per distinct NEEDED name of each record (B3).
+pub fn declares(binaries: &[BinaryFacts]) -> Vec<Relation> {
     let mut relations = vec![];
-    for b in &facts.binaries {
+    for b in binaries {
         let ContainerFacts::Elf(elf) = &b.container;
         let mut seen = BTreeSet::new();
         for needed in &elf.needed {
@@ -26,6 +26,12 @@ pub fn analyze(facts: &InstallFacts) -> Result<(Coverage, Vec<Relation>), String
             }
         }
     }
+    relations
+}
+
+pub fn analyze(facts: &InstallFacts) -> Result<(Coverage, Vec<Relation>), String> {
+    let check = CheckId::new(ARTIFACTS_CONTAINER).map_err(|e| e.to_string())?;
+    let relations = declares(&facts.binaries);
     let state = match &facts.discovery.state {
         s @ (CoverageState::Unavailable { .. }
         | CoverageState::BudgetExceeded { .. }

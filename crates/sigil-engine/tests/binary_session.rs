@@ -1,0 +1,143 @@
+//! The assembled binary inspection (PR-4b-2a spec §4.3, §4.5): it validates, evaluates its
+//! policy's binary scope, and has exactly one `binary.container` per input.
+
+use std::path::{Path, PathBuf};
+
+use sigil_engine::collect::named::NamedBudgets;
+use sigil_engine::inspect::{binary_session, BinaryRequest, InspectError};
+use sigil_engine::policy::{outcome, Policy};
+use sigil_model::*;
+use tempfile::TempDir;
+
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/elf")
+            .join(name),
+    )
+    .unwrap()
+}
+
+fn observation() -> ObservationMeta {
+    ObservationMeta {
+        started_at: Timestamp::new("2026-10-10T00:00:00Z").unwrap(),
+        finished_at: Timestamp::new("2026-10-10T00:00:01Z").unwrap(),
+        uid: 1000,
+        gid: 1000,
+        capabilities: vec![],
+        boot_id: String::new(),
+        kernel: "6.8.0".to_string(),
+        net_ns: None,
+        mnt_ns: None,
+    }
+}
+
+fn session(paths: &[PathBuf]) -> Result<Session, InspectError> {
+    let o = observation();
+    binary_session(
+        &BinaryRequest {
+            paths: paths.to_vec(),
+            budgets: NamedBudgets::default(),
+        },
+        &Policy::builtin_default().unwrap(),
+        ToolInfo {
+            name: "sigil".into(),
+            version: "0.0.0-test".into(),
+            git_rev: None,
+        },
+        o.clone(),
+        o.started_at,
+    )
+}
+
+fn state(s: &Session, inst: &str) -> CoverageState {
+    s.coverage
+        .iter()
+        .find(|c| c.scope == Ref::Instance(InstanceId::new(inst).unwrap()))
+        .unwrap()
+        .state
+        .clone()
+}
+
+#[test]
+fn an_elf_and_a_relocatable_object_are_complete() {
+    let d = TempDir::new().unwrap();
+    std::fs::write(d.path().join("libdata.so"), fixture("libdata.so")).unwrap();
+    std::fs::write(d.path().join("net.o"), fixture("net.o")).unwrap();
+    let s = session(&[d.path().join("libdata.so"), d.path().join("net.o")]).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(s.request.mode, Mode::Static);
+    assert_eq!(
+        s.request
+            .audit
+            .iter()
+            .map(|a| a.as_str())
+            .collect::<Vec<_>>(),
+        ["binary"]
+    );
+    for key in ["binary_bytes", "binary_parse_bytes", "binary_imports"] {
+        assert!(s.request.budgets.contains_key(key), "{key}");
+    }
+    assert_eq!(
+        state(&s, "inst:binary-1/libdata.so"),
+        CoverageState::Complete
+    );
+    assert_eq!(state(&s, "inst:binary-2/net.o"), CoverageState::Complete);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    assert!(s.relations.iter().any(
+        |r| matches!(r, Relation::Declares { needed, .. } if needed.as_str() == Some("libc.so.6"))
+    ));
+}
+
+#[test]
+fn an_unsupported_input_is_incomplete_and_passes() {
+    let d = TempDir::new().unwrap();
+    std::fs::write(d.path().join("NOTES.txt"), b"notes").unwrap();
+    let s = session(&[d.path().join("NOTES.txt")]).unwrap();
+    assert_eq!(
+        state(&s, "inst:binary-1/NOTES.txt"),
+        CoverageState::Unsupported {
+            what: BINARY_UNSUPPORTED.to_string()
+        }
+    );
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    assert!(matches!(
+        s.outcome.completeness,
+        Completeness::Incomplete { .. }
+    ));
+}
+
+#[test]
+fn a_dropped_coverage_entry_would_close_the_check_but_validate_refuses_it() {
+    // The review's case (P1-2): a complete input and a partial one; the partial entry removed.
+    let d = TempDir::new().unwrap();
+    std::fs::write(d.path().join("good.so"), fixture("libdata.so")).unwrap();
+    std::fs::write(d.path().join("cut.so"), &fixture("libdata.so")[..300]).unwrap();
+    let mut s = session(&[d.path().join("good.so"), d.path().join("cut.so")]).unwrap();
+    assert!(matches!(
+        state(&s, "inst:binary-2/cut.so"),
+        CoverageState::Partial { .. }
+    ));
+    s.coverage
+        .retain(|c| c.scope != Ref::Instance(InstanceId::new("inst:binary-2/cut.so").unwrap()));
+    let t = s.outcome.policy_time.clone();
+    assert_eq!(outcome(&s, t).completeness, Completeness::Complete);
+    let errors = s.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("0 binary.container entries")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_missing_input_is_an_input_error() {
+    let d = TempDir::new().unwrap();
+    let e = session(&[d.path().join("missing")]).unwrap_err();
+    assert!(
+        matches!(&e, InspectError::Input(m) if m.contains("not found")),
+        "{e}"
+    );
+}
