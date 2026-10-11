@@ -1134,6 +1134,36 @@ fn isolate_install(args: &[String], dir: &str) -> Vec<String> {
     out
 }
 
+/// `args` with every `<PATH>` of a `binary inspect` command replaced by `fixture`, so that no
+/// test reads a file outside the workspace. Flags and their values are kept.
+fn isolate_binary(args: &[String], fixture: &str) -> Vec<String> {
+    if args.first().map(String::as_str) != Some("binary") {
+        return args.to_vec();
+    }
+    const VALUED: &[&str] = &[
+        "--policy",
+        "--budget",
+        "--policy-time",
+        "--format",
+        "--out",
+        "--fail-on",
+    ];
+    let mut out = vec![];
+    let mut value_follows = false;
+    for (i, a) in args.iter().enumerate() {
+        if i < 2 || value_follows {
+            value_follows = false;
+            out.push(a.clone());
+        } else if a.starts_with("--") {
+            value_follows = VALUED.contains(&a.as_str());
+            out.push(a.clone());
+        } else {
+            out.push(fixture.to_string());
+        }
+    }
+    out
+}
+
 /// A server on 127.0.0.1 that answers every request with an Ollama version, and counts them.
 fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
@@ -1203,6 +1233,9 @@ fn run_documented(doc: &str) -> (usize, usize) {
         let args = isolate_probe(&args, &server);
         // Nor a real installation.
         let args = isolate_install(&args, install.path().to_str().unwrap());
+        // Nor a file outside the workspace.
+        let fixture = elf_fixture("libdata.so");
+        let args = isolate_binary(&args, fixture.to_str().unwrap());
         let out = sigil()
             .current_dir(cwd.path())
             .env("OLLAMA_MODELS", models.path())
@@ -1235,6 +1268,12 @@ fn every_documented_command_runs() {
         readme_active + guide_active >= 2,
         "the docs' active commands were not found"
     );
+}
+
+#[test]
+fn the_binary_inspect_guide_s_commands_run() {
+    let (n, _) = run_documented("docs/binary-inspect.md");
+    assert!(n >= 3, "only {n} documented commands were found");
 }
 
 #[test]

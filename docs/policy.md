@@ -21,7 +21,8 @@ audit          = ["model_store"]   # audited in every mode
 observe_audit  = ["exposure"]      # added in observe mode
 active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
 install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
-extra_required = []                # checks required beyond those of the scopes
+binary_audit   = ["binary"]        # a binary inspection (binary inspect) audits only these
+extra_required = []                # checks required beyond those of the scopes (inspect ollama)
 
 [open_questions]
 default = "count_as_gap"           # count_as_gap | warn | fail | ignore
@@ -58,6 +59,13 @@ written before `install_audit` existed loads unchanged, and adds nothing for an 
 the recorded request, so the two always agree. A policy that lists `runtime_artifacts` in `audit`
 gets both its checks `Skipped { Flag("--install-dir") }` on a run without `--install-dir`, and the
 result is INCOMPLETE.
+
+**A binary inspection** (`sigil binary inspect`, a session whose roots are `binary-<n>`) audits
+`binary_audit` and nothing else. Its default is `["binary"]`, whose check is `binary.container`,
+one entry per input. The other lists and `extra_required` apply to `inspect ollama` only, so an
+organization's extra checks for an installation do not make every binary inspection incomplete.
+`binary_audit` is optional too: a policy without it requires nothing of a binary inspection, and
+the result is then `COMPLETE` whatever the inputs' statuses.
 
 ## Catalogs
 
