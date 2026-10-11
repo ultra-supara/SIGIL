@@ -10,16 +10,16 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use sigil_model::{
-    Artifact, BudgetUse, CheckId, Coverage, CoverageState, DiscoverySource, FileInstance, Format,
-    InstanceContent, LinkHop, NotReadReason, Ref, RootId, Slice, SliceId, Stability,
-    Unavailability, UntrustedText, ARTIFACTS_DISCOVERY, INSTALL_ROOT,
+    Artifact, BudgetUse, CheckId, Coverage, CoverageState, DiscoverySource, FileInstance,
+    InstanceContent, LinkHop, NotReadReason, Ref, RootId, Stability, Unavailability, UntrustedText,
+    ARTIFACTS_DISCOVERY, INSTALL_ROOT,
 };
 
 use super::fs::{
-    instance_id, recorded, Entry, EntryType, FsBudgets, ReadOutcome, ReadSpec, RelPath, RootError,
-    SafeFs, WalkError,
+    instance_id, recorded, Entry, EntryType, FsBudgets, ReadOutcome, RelPath, RootError, SafeFs,
+    WalkError,
 };
-use crate::binary::{self, header, BinaryBudgets, Parsed};
+use crate::binary::{BinaryBudgets, Parsed};
 
 /// Budgets of the install scan, recorded with an `install_` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,24 +117,7 @@ fn collect_with(
             c.state()
         }
     };
-    let mut binaries = vec![];
-    for (id, p) in c.parsed {
-        let Some(slice) = c
-            .artifacts
-            .iter()
-            .find(|a| a.id == id)
-            .and_then(|a| a.slices.first())
-        else {
-            continue;
-        };
-        binaries.push(sigil_model::BinaryFacts {
-            slice: slice.id.clone(),
-            container: p.container,
-            go: p.go,
-            gaps: p.gaps,
-        });
-    }
-    binaries.sort_by(|a, b| a.slice.cmp(&b.slice));
+    let binaries = super::binread::binaries(c.parsed, &c.artifacts);
     Ok(InstallFacts {
         root_path,
         instances: c.instances,
@@ -381,28 +364,15 @@ impl Collector<'_> {
                 },
             );
         }
-        let during = self.during_read;
-        let budgets = self.binary;
-        let parsed_before = &self.parsed;
-        let rel = entry.rel.clone();
-        let (read, parsed) = self.fs.read_entry_with(
+        let read = super::binread::read(
+            self.fs,
             &self.root,
             &entry.rel,
-            ReadSpec {
-                keep: 64,
-                limit: Some(left),
-            },
+            left,
             vec![DiscoverySource::Walk],
-            |input| {
-                during(&rel);
-                // ELF content, each content once.
-                if header::read(input.prefix).is_none()
-                    || parsed_before.contains_key(input.artifact)
-                {
-                    return None;
-                }
-                Some(binary::parse(input.file, input.size, budgets))
-            },
+            self.binary,
+            &mut self.parsed,
+            self.during_read,
         );
         let Some(instance) = read.instance else {
             self.errors
@@ -426,31 +396,8 @@ impl Collector<'_> {
             self.errors
                 .push(format!("{}: {:?}", entry.rel.display(), instance.stability));
         }
-        // Facts are kept only from a read that saw no change.
-        if let (Some(Some(p)), Some(a)) = (parsed, read.artifact.as_ref()) {
-            if instance.stability == Stability::NoChangeDetected {
-                self.parsed.insert(a.id.clone(), p);
-            }
-        }
-        if let Some(mut artifact) = read.artifact {
+        if let Some(artifact) = read.artifact {
             self.used = self.used.saturating_add(artifact.size);
-            if let Some((kind, arch)) = header::read(&read.prefix) {
-                artifact.format = Format::Elf { kind };
-                let hex = artifact
-                    .id
-                    .as_str()
-                    .trim_start_matches("sha256:")
-                    .to_string();
-                if let Ok(sha256) = sigil_model::Sha256Hex::new(hex) {
-                    artifact.slices = vec![Slice {
-                        id: SliceId::from_parts(&artifact.id, arch, 0),
-                        arch,
-                        offset: 0,
-                        size: artifact.size,
-                        sha256,
-                    }];
-                }
-            }
             if !self.artifacts.iter().any(|a| a.id == artifact.id) {
                 self.artifacts.push(artifact);
             }
