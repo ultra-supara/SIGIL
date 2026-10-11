@@ -933,7 +933,8 @@ impl<'a> Validator<'a> {
             }
             for source in &instance.discovered_by {
                 match source {
-                    crate::artifact::DiscoverySource::Walk => {}
+                    crate::artifact::DiscoverySource::Walk
+                    | crate::artifact::DiscoverySource::Argument => {}
                     crate::artifact::DiscoverySource::ServiceUnit { config } => {
                         self.config(config, &at)
                     }

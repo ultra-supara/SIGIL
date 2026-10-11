@@ -178,6 +178,8 @@ pub enum Stability {
 pub enum DiscoverySource {
     /// Walking a scan root.
     Walk,
+    /// Named on the command line (`sigil binary inspect <PATH>`; PR-4b-2a).
+    Argument,
     /// Named by a service unit (e.g. `ExecStart=`).
     ServiceUnit { config: ConfigRef },
     /// The executable of an observed process.

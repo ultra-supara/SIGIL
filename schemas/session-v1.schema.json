@@ -832,7 +832,7 @@
     "Stability": {"type": "string", "enum": ["NoChangeDetected", "ChangedDuringRead", "Vanished"]},
     "DiscoverySource": {
       "oneOf": [
-        {"type": "string", "enum": ["Walk"]},
+        {"type": "string", "enum": ["Walk", "Argument"]},
         {
           "type": "object",
           "additionalProperties": false,
