@@ -55,7 +55,9 @@ pub struct Policy {
     pub binary: PathBuf,
     /// Inspected roots: files and directories that must only be read.
     pub targets: Vec<PathBuf>,
-    /// Output files the caller named; the only write-capable opens allowed (and `mkdir` of their ancestors).
+    /// Output files the caller named, and each one's temporary siblings
+    /// (`.<name>.sigil-<pid>-<k>.tmp`): the only write-capable opens and mutations allowed (and
+    /// `mkdir` of their ancestors).
     pub allowed_writes: Vec<PathBuf>,
     /// `/proc` allowlist scopes for this run: always `runtime`, plus `observe` for observe-like paths.
     pub proc_scopes: Vec<&'static str>,
@@ -462,6 +464,31 @@ fn probe_allows(e: &Event, dest: SocketAddr, probe_socket: &mut Option<String>) 
     }
 }
 
+/// The prefix of an output's name that its temporary siblings keep (`out::TEMP_NAME_PREFIX`).
+const TEMP_NAME_PREFIX: usize = 200;
+
+/// Whether `path` is a temporary sibling SIGIL writes output `out` through:
+/// `<dir of out>/.<first 200 bytes of name of out>.sigil-<pid>-<k>.tmp` (PR-4b-2a spec §3.1).
+fn is_temp_of(path: &Path, out: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let (Some(name), Some(out_name)) = (path.file_name(), out.file_name()) else {
+        return false;
+    };
+    let (name, out_name) = (name.as_bytes(), out_name.as_bytes());
+    let kept = &out_name[..out_name.len().min(TEMP_NAME_PREFIX)];
+    let digits = |p: &[u8]| !p.is_empty() && p.iter().all(u8::is_ascii_digit);
+    let Some(ids) = name
+        .strip_prefix(b".")
+        .and_then(|n| n.strip_prefix(kept))
+        .and_then(|n| n.strip_prefix(b".sigil-"))
+        .and_then(|n| n.strip_suffix(b".tmp"))
+    else {
+        return false;
+    };
+    let parts: Vec<&[u8]> = ids.split(|b| *b == b'-').collect();
+    path.parent() == out.parent() && parts.len() == 2 && parts.iter().all(|p| digits(p))
+}
+
 pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
     let binary = forms(&p.binary);
     let targets: Vec<PathBuf> = p.targets.iter().flat_map(|t| forms(t)).collect();
@@ -470,7 +497,7 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
     let is_target = |path: &Path| targets.iter().any(|t| path.starts_with(t));
     let is_binary = |path: &Path| binary.iter().any(|b| path == b);
     let is_system_lib = |path: &Path| SYSTEM_LIB_DIRS.iter().any(|d| path.starts_with(d));
-    let write_allowed = |path: &Path| allowed.iter().any(|a| path == a);
+    let write_allowed = |path: &Path| allowed.iter().any(|a| path == a || is_temp_of(path, a));
     let mkdir_allowed = |path: &Path| allowed.iter().any(|a| a.starts_with(path) && a != path);
 
     let mut out = Vec::new();
@@ -984,6 +1011,52 @@ mod tests {
         }
         // renameat2 is reported for both its source and its destination.
         assert_eq!(f.len(), 6, "{f:?}");
+    }
+
+    /// PR-4b-2a spec §3.1: an output is written through `.<name>.sigil-<pid>-<k>.tmp` and renamed
+    /// onto it. Those siblings' create, rename, and unlink are allowed; any other name is not.
+    #[test]
+    fn c5_an_output_s_temporary_siblings_are_allowed() {
+        let out = hex("/fx/out");
+        let tmp = hex(".report.md.sigil-4242-0.tmp");
+        let run = with(&[
+            (10, format!("openat(5<{out}>, \"{tmp}\", O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0666) = 6<{}>", hex("/fx/out/.report.md.sigil-4242-0.tmp"))),
+            (10, format!("renameat(5<{out}>, \"{tmp}\", 5<{out}>, \"{}\") = 0", hex("report.md"))),
+            (10, format!("unlinkat(5<{out}>, \"{tmp}\", 0) = 0")),
+        ]);
+        assert_eq!(found(&check(&run, &policy(&["runtime"]))), vec![]);
+        // Other names next to the output are still violations.
+        let run = with(&[
+            (
+                10,
+                format!(
+                    "openat(5<{out}>, \"{}\", O_WRONLY|O_CREAT|O_EXCL, 0666) = 6",
+                    hex(".report.md.sigil-x-0.tmp")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "openat(5<{out}>, \"{}\", O_WRONLY|O_CREAT|O_EXCL, 0666) = 7",
+                    hex(".other.md.sigil-1-0.tmp")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "openat(5<{out}>, \"{}\", O_WRONLY|O_CREAT|O_EXCL, 0666) = 8",
+                    hex(".report.md.sigil-1.tmp")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "unlinkat(5<{out}>, \"{}\", 0) = 0",
+                    hex("report.md.sigil-1-0.tmp")
+                ),
+            ),
+        ]);
+        assert_eq!(found(&check(&run, &policy(&["runtime"]))).len(), 4);
     }
 
     #[test]
