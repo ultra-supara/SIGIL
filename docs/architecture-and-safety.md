@@ -43,7 +43,10 @@ SIGIL is analysis-only:
 - It does not execute, load, or map what it inspects.
 - It does not spawn processes; `/proc` is read directly, never through `ss`, `lsof`, `netstat`, or `docker`.
 - It performs no network I/O in static and observe modes. The active probe makes one connection to a literal address, loopback unless `--allow-remote` is given.
-- It writes only the `--out` it is given, which must lie outside the inspected store. An existing symlink at `--out` is resolved when `--out` is checked, and the file it leads to must lie outside the store too. The document is written to a new file next to that path and renamed into place. An existing file there is therefore replaced, never written through, so a hard link cannot make SIGIL write another file, and a symlink swapped in after the check is not followed. The replaced file's mode and owner are not kept.
+- It writes only the `--out` it is given, which must lie outside the inspected store:
+  - **Checked once, then pinned.** An existing symlink at `--out` is resolved when `--out` is checked, and the file it leads to must lie outside the store too. The output's directory is opened then, without following a symlink, and kept open. It must not be, or lie under, a scan root, by `dev:ino`, and that is checked again just before the write. A directory renamed after the check therefore cannot redirect the write into the store.
+  - **Replaced, never written through.** The document goes to a new file next to the output, created readable by its owner only (`0600`), and is exchanged with the file at the output (`RENAME_EXCHANGE`). A hard link or a symlink there cannot make SIGIL write another file. The file it displaced is checked: a directory, or a protected input, is put back. The replaced file's mode and owner are not kept.
+  - **What remains:** a directory moved into a scan root between that last check and the exchange.
 - It does not delegate verdicts to an LLM.
 - It treats the model store as untrusted input: manifest digests are checked for the `sha256:<64 hex>` shape before they become paths, so a malformed digest like `sha256:foo/../../secret` cannot escape the blob store.
 - Its reads are bounded (budgets recorded in the session), and blob hashing is streaming, so multi-GB model files never have to fit in memory.
