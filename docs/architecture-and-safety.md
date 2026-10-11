@@ -46,7 +46,9 @@ SIGIL is analysis-only:
 - It writes only the `--out` it is given, which must lie outside the inspected store:
   - **Checked once, then pinned.** An existing symlink at `--out` is resolved when `--out` is checked, and the file it leads to must lie outside the store too. The output's directory is opened then, without following a symlink, and kept open. It must not be, or lie under, a scan root, by `dev:ino`, and that is checked again just before the write. A directory renamed after the check therefore cannot redirect the write into the store.
   - **Replaced, never written through.** The document goes to a new file next to the output, created readable by its owner only (`0600`), and is exchanged with the file at the output (`RENAME_EXCHANGE`). A hard link or a symlink there cannot make SIGIL write another file. The file it displaced is checked: a directory, or a protected input, is put back. The replaced file's mode and owner are not kept.
-  - **What remains:** a directory moved into a scan root between that last check and the exchange.
+  - **Each directory before it is touched.** The pinned directory is checked before anything is created in it, and each missing directory is checked once it is created, before the next one.
+  - **Without `RENAME_EXCHANGE`** (a file system that cannot exchange files), a run that protects inputs writes only a new name and refuses an existing output; other runs fall back to a plain rename.
+  - **What remains:** a directory moved into a scan root between one of those checks and the next step (a `mkdirat`, or the exchange).
 - It does not delegate verdicts to an LLM.
 - It treats the model store as untrusted input: manifest digests are checked for the `sha256:<64 hex>` shape before they become paths, so a malformed digest like `sha256:foo/../../secret` cannot escape the blob store.
 - Its reads are bounded (budgets recorded in the session), and blob hashing is streaming, so multi-GB model files never have to fit in memory.
