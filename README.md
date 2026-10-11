@@ -45,7 +45,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 - **No network I/O unless you ask for it.** SIGIL reads files and, in observe mode, allowlisted `/proc` entries. The one exception is the API probe, an explicit active feature (`--active api-probe`) that is off by default. It sends one `GET /api/version` to a literal address, loopback unless `--allow-remote` is given, and it resolves no names.
 - **No subprocess spawn.** Listener attribution reads `/proc/net/tcp{,6}` and `/proc/<pid>/fd` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
 - **No LLM in the verdict path.** Every finding comes from a deterministic analyzer, and every decision from a policy rule ([`crates/sigil-engine/src/policy`](crates/sigil-engine/src/policy)). An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
-- **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store and installation.
+- **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store and installation. An existing file at `--out` is replaced by a rename, never written through, and outputs are created readable by their owner only.
 
 These properties are **checked** by build-time API bans and by syscall tests over the exercised CLI paths ([ADR-002](docs/adr/ADR-002-execution-modes.md)). They are not enforced by a runtime sandbox.
 

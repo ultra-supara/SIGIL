@@ -16,6 +16,7 @@ sigil-engine = { path = "../sigil-engine" }
 sigil-model = { path = "../sigil-model" }
 sigil-probe = { path = "../sigil-probe" }
 sha2.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true

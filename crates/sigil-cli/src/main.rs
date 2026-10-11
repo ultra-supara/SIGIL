@@ -49,6 +49,8 @@ use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
 };
 
+mod out;
+
 #[derive(Debug, Parser)]
 #[command(name = "sigil", version)]
 #[command(about = "Local-first, read-only security inspection of local AI runtimes")]
@@ -271,13 +273,16 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         None
     };
     let given = budgets(&args.budgets, mode, probing, args.install_dir.is_some())?;
-    if let Some(out) = &args.out {
-        let mut roots = vec![(models_dir.as_path(), "models")];
-        if let Some(dir) = &args.install_dir {
-            roots.push((dir.as_path(), "install"));
+    let target = match &args.out {
+        Some(out) => {
+            let mut roots = vec![(models_dir.as_path(), "models")];
+            if let Some(dir) = &args.install_dir {
+                roots.push((dir.as_path(), "install"));
+            }
+            Some(check_out(out, &roots)?)
         }
-        check_out(out, &roots)?;
-    }
+        None => None,
+    };
     let policy = load_policy(args.policy.as_deref())?;
 
     let store = StoreRequest {
@@ -338,7 +343,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             json
         }
     };
-    emit(&document, args.out.as_deref())?;
+    emit(&document, target.as_ref(), &[])?;
     summary(&session, args.out.as_deref(), unsaved.as_ref());
 
     let failed = match args.fail_on {
@@ -573,23 +578,45 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
 }
 
 /// `--out` must not lie inside a scan root, given with its name (`models`, `install`) (C-5):
-/// SIGIL never writes under a scan root.
-fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<(), Failure> {
-    let out =
+/// SIGIL never writes under a scan root. Returns the output pinned ([`out::Target::pin`]): the
+/// document is written through its directory's fd, which must stay out of the scan roots by
+/// `dev:ino`, so neither a symlink swapped in at `--out` nor a directory renamed later
+/// redirects the write.
+fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<out::Target, Failure> {
+    use std::os::unix::fs::MetadataExt;
+    let target =
         resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
+    let mut ids = vec![];
     for (dir, name) in roots {
         let root = resolved(dir).map_err(|e| {
             Failure::Usage(format!("the {name} directory {}: {e}", shown_path(dir)))
         })?;
-        if out.starts_with(&root) {
+        if target.starts_with(&root) {
             return Err(Failure::Usage(format!(
                 "--out {} is inside the {name} directory {}; SIGIL never writes under a scan root",
-                shown_path(&out),
+                shown_path(&target),
                 shown_path(&root)
             )));
         }
+        if let Ok(m) = fs::metadata(&root) {
+            ids.push((m.dev(), m.ino()));
+        }
     }
-    Ok(())
+    pin(out, &target, ids)
+}
+
+/// Where `--out` leads ([`resolved`]), resolved and pinned once, before anything is read. An
+/// existing symlink at `--out` is resolved here, and the file it leads to is what is replaced
+/// (spec §3.1).
+fn out_target(out: &Path) -> Result<out::Target, Failure> {
+    let target =
+        resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
+    pin(out, &target, vec![])
+}
+
+fn pin(out: &Path, target: &Path, roots: Vec<(u64, u64)>) -> Result<out::Target, Failure> {
+    out::Target::pin(target, roots)
+        .map_err(|e| Failure::Usage(format!("--out {}: {}", shown_path(out), shown(&e))))
 }
 
 /// Where `path` leads once its missing directories are created: its longest existing prefix
@@ -873,16 +900,18 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
+    let target = args.out.as_deref().map(out_target).transpose()?;
     let session = load_session(&args.session)?;
     reverify(&session, &args.session)?;
     let document = match args.format {
         RenderFormat::Md => render_session(&session),
         RenderFormat::Aibom => aibom_json(&session)?.0,
     };
-    emit(&document, args.out.as_deref())
+    emit(&document, target.as_ref(), &[])
 }
 
 fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
+    let target = args.out.as_deref().map(out_target).transpose()?;
     let session = load_session(&args.session)?;
     reverify(&session, &args.session)?;
     let format = match args.format {
@@ -898,7 +927,7 @@ fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
         explain::coverage(&session, format)
     };
     text.push('\n');
-    emit(&text, args.out.as_deref())
+    emit(&text, target.as_ref(), &[])
 }
 
 fn rules() -> Result<(), Failure> {
@@ -911,7 +940,7 @@ fn rules() -> Result<(), Failure> {
             r.summary
         ));
     }
-    emit(&text, None)
+    emit(&text, None, &[])
 }
 
 /// A saved session: JSON, schema `sigil-session/1`, and valid.
@@ -959,19 +988,22 @@ fn load_session(path: &Path) -> Result<Session, Failure> {
 
 // --- output -----------------------------------------------------------------------------------
 
-/// Writes `document` to `out` (creating its directories) or to stdout.
-fn emit(document: &str, out: Option<&Path>) -> Result<(), Failure> {
+/// Writes `document` to `out`, a target pinned by [`check_out`] or [`out_target`], or to stdout.
+/// An existing file there is replaced, never written through, and a file whose `dev:ino` is in
+/// `protected` is not replaced ([`out::Target::write`]).
+fn emit(
+    document: &str,
+    out: Option<&out::Target>,
+    protected: &[(u64, u64)],
+) -> Result<(), Failure> {
     match out {
-        Some(path) => {
-            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                fs::create_dir_all(parent).map_err(|e| {
-                    Failure::Run(format!("--out {} cannot be created: {e}", shown_path(path)))
-                })?;
-            }
-            fs::write(path, document).map_err(|e| {
-                Failure::Run(format!("--out {} cannot be written: {e}", shown_path(path)))
-            })
-        }
+        Some(target) => target.write(document.as_bytes(), protected).map_err(|e| {
+            Failure::Run(format!(
+                "--out {} cannot be written: {}",
+                shown_path(target.path()),
+                shown(&e)
+            ))
+        }),
         None => {
             let mut stdout = std::io::stdout().lock();
             stdout
