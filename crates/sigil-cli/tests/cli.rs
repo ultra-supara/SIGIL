@@ -253,6 +253,55 @@ fn new_nested_directories_and_dot_dot_outside_the_store_are_allowed() {
     assert!(o.path().join("a/c/report.json").is_file());
 }
 
+/// PR-4b-2a spec §3.1 (review P1-1): an `--out` that is a hard link of a model blob is replaced,
+/// never written through, so the blob keeps its content.
+#[test]
+fn an_out_that_is_a_hard_link_of_a_blob_leaves_the_blob_intact() {
+    let d = store(true);
+    let blob = fs::read_dir(d.path().join("blobs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let before = fs::read(&blob).unwrap();
+    let o = TempDir::new().unwrap();
+    let out = o.path().join("report.json");
+    fs::hard_link(&blob, &out).unwrap();
+    let r = inspect(d.path(), &[&"--out", &out]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        fs::read(&blob).unwrap(),
+        before,
+        "the blob was written through its hard link"
+    );
+    assert!(fs::read_to_string(&out)
+        .unwrap()
+        .contains("sigil-session/1"));
+}
+
+/// PR-4b-2a spec §3.1 (plan review P2): an existing symlink at `--out` is resolved when `--out`
+/// is checked, as before: the file it leads to is replaced, and the link stays.
+#[test]
+fn an_out_that_is_a_symlink_replaces_the_file_it_leads_to() {
+    use std::os::unix::fs::symlink;
+    let d = store(true);
+    let o = TempDir::new().unwrap();
+    let actual = o.path().join("actual.json");
+    fs::write(&actual, b"old").unwrap();
+    let link = o.path().join("report.json");
+    symlink(&actual, &link).unwrap();
+    let r = inspect(d.path(), &[&"--out", &link]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(fs::read_to_string(&actual)
+        .unwrap()
+        .contains("sigil-session/1"));
+}
+
 #[test]
 fn budgets_use_the_names_the_session_records() {
     let d = store(true);
