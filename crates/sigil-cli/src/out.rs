@@ -121,27 +121,24 @@ impl Target {
     /// input of the run) is not replaced.
     pub fn write(&self, bytes: &[u8], protected: &[(u64, u64)]) -> Result<(), String> {
         let dir = self.final_dir()?;
-        if contained(&dir, &self.roots)? {
-            return Err(
-                "its directory is, or lies under, a scan root now; not written".to_string(),
-            );
-        }
         let (tmp, fd) = create_temp(&dir, &self.name)?;
+        let ours = identity(&fd)?;
         let written = std::fs::File::from(fd)
             .write_all(bytes)
             .map_err(|e| e.to_string())
             .and_then(|()| install(&dir, &tmp, &self.name, protected));
         if written.is_err() {
-            // Best effort: the error being reported is the write's.
-            let _ = unlinkat(&dir, &tmp, AtFlags::empty());
+            cleanup(&dir, &tmp, ours);
         }
         written
     }
 
-    /// The pinned directory with the missing ones created under it, each opened without
-    /// following a symlink.
+    /// The pinned directory with the missing ones created under it. A directory is checked
+    /// against the scan roots before anything is created in it, and each new one is opened
+    /// without following a symlink and checked in turn (review of #88).
     fn final_dir(&self) -> Result<OwnedFd, String> {
         let mut dir = openat(&self.dir, ".", DIR, Mode::empty()).map_err(|e| e.to_string())?;
+        self.outside(&dir)?;
         for part in &self.missing {
             match mkdirat(&dir, part, Mode::from_raw_mode(0o777)) {
                 Ok(()) | Err(Errno::EXIST) => {}
@@ -149,22 +146,49 @@ impl Target {
             }
             dir =
                 openat(&dir, part, DIR, Mode::empty()).map_err(|e| changed(Path::new(part), e))?;
+            self.outside(&dir)?;
         }
         Ok(dir)
+    }
+
+    /// `dir` is not a scan root, and does not lie under one.
+    fn outside(&self, dir: &OwnedFd) -> Result<(), String> {
+        if contained(dir, &self.roots)? {
+            return Err(
+                "its directory is, or lies under, a scan root now; not written".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// An open file's `dev:ino`.
+#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
+fn identity(fd: &OwnedFd) -> Result<(u64, u64), String> {
+    fstat(fd)
+        .map(|st| (st.st_dev as u64, st.st_ino as u64))
+        .map_err(|e| e.to_string())
+}
+
+/// Removes `tmp` only while it is still the temporary file this write created (`ours`). After a
+/// failed rollback, `tmp` names the file the exchange displaced, which is left as it is (review
+/// of #88).
+#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
+fn cleanup(dir: &OwnedFd, tmp: &OsStr, ours: (u64, u64)) {
+    if let Ok(st) = statat(dir, tmp, AtFlags::SYMLINK_NOFOLLOW) {
+        if (st.st_dev as u64, st.st_ino as u64) == ours {
+            // Best effort: the error being reported is the write's.
+            let _ = unlinkat(dir, tmp, AtFlags::empty());
+        }
     }
 }
 
 /// Whether `dir` is one of `roots` or lies under one, by `dev:ino`: `..` is walked up to `/`.
-#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
 fn contained(dir: &OwnedFd, roots: &[(u64, u64)]) -> Result<bool, String> {
     if roots.is_empty() {
         return Ok(false);
     }
-    let id = |fd: &OwnedFd| {
-        fstat(fd)
-            .map(|st| (st.st_dev as u64, st.st_ino as u64))
-            .map_err(|e| e.to_string())
-    };
+    let id = identity;
     let mut here = openat(dir, ".", DIR, Mode::empty()).map_err(|e| e.to_string())?;
     for _ in 0..MAX_DEPTH {
         let at = id(&here)?;
@@ -205,7 +229,7 @@ fn create_temp(dir: &OwnedFd, name: &OsStr) -> Result<(OsString, OwnedFd), Strin
 ///   back, and anything else is unlinked.
 /// - With nothing at `name`, `RENAME_NOREPLACE` keeps it so; a file that appears meanwhile is
 ///   exchanged on the next try.
-/// - A file system without the exchange gets a check, then a rename, with a window between them.
+/// - A file system without the exchange: [`without_exchange`].
 #[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
 fn install(
     dir: &OwnedFd,
@@ -221,14 +245,19 @@ fn install(
                 let directory = FileType::from_raw_mode(st.st_mode) == FileType::Directory;
                 let input = protected.contains(&(st.st_dev as u64, st.st_ino as u64));
                 if directory || input {
-                    // Put it back; the caller then removes the document, which is at `tmp`.
-                    renameat_with(dir, tmp, dir, name, RenameFlags::EXCHANGE)
-                        .map_err(|e| e.to_string())?;
-                    return Err(if directory {
-                        "it is a directory; not replaced".to_string()
+                    let what = if directory {
+                        "it is a directory; not replaced"
                     } else {
-                        "it is an input of this run; not replaced".to_string()
-                    });
+                        "it is an input of this run; not replaced"
+                    };
+                    // Put it back; the caller then removes the document, which is at `tmp`.
+                    if let Err(e) = renameat_with(dir, tmp, dir, name, RenameFlags::EXCHANGE) {
+                        return Err(format!(
+                            "{what}, and putting it back failed ({e}): it is named {} now",
+                            tmp.to_string_lossy()
+                        ));
+                    }
+                    return Err(what.to_string());
                 }
                 return unlinkat(dir, tmp, AtFlags::empty()).map_err(|e| e.to_string());
             }
@@ -237,8 +266,7 @@ fn install(
                 other => return other.map_err(|e| e.to_string()),
             },
             Err(Errno::INVAL | Errno::NOSYS | Errno::OPNOTSUPP) => {
-                not_protected(dir, name, protected)?;
-                return renameat(dir, tmp, dir, name).map_err(|e| e.to_string());
+                return without_exchange(dir, tmp, name, protected)
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -246,15 +274,27 @@ fn install(
     Err("the name kept changing during the write".to_string())
 }
 
-/// Refuses a file at `name` whose `dev:ino` is protected (the fallback without the exchange).
-#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
-fn not_protected(dir: &OwnedFd, name: &OsStr, protected: &[(u64, u64)]) -> Result<(), String> {
-    match statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
-        Ok(st) if protected.contains(&(st.st_dev as u64, st.st_ino as u64)) => {
-            Err("it is an input of this run; not replaced".to_string())
-        }
-        Ok(_) | Err(Errno::NOENT) => Ok(()),
-        Err(e) => Err(e.to_string()),
+/// A file system without `RENAME_EXCHANGE`. With nothing protected, a plain rename. With
+/// protected inodes, the file a rename would replace cannot be checked as it is replaced, so only
+/// a name that does not exist is written (`RENAME_NOREPLACE`), and an existing file is refused:
+/// fail-closed (review of #88).
+fn without_exchange(
+    dir: &OwnedFd,
+    tmp: &OsStr,
+    name: &OsStr,
+    protected: &[(u64, u64)],
+) -> Result<(), String> {
+    if protected.is_empty() {
+        return renameat(dir, tmp, dir, name).map_err(|e| e.to_string());
+    }
+    match renameat_with(dir, tmp, dir, name, RenameFlags::NOREPLACE) {
+        Ok(()) => Ok(()),
+        Err(Errno::EXIST) => Err(
+            "this file system cannot exchange files, so an existing output is not replaced \
+             while inputs are protected; remove it first"
+                .to_string(),
+        ),
+        Err(e) => Err(format!("this file system cannot exchange files: {e}")),
     }
 }
 
@@ -413,6 +453,69 @@ mod tests {
         fs::rename(p.join("reports"), p.join("models/reports")).unwrap();
         assert!(pinned.write(b"doc", &[]).is_err());
         assert!(names(&p.join("models/reports")).is_empty());
+    }
+
+    /// Review of #88 (P1): the pinned directory moved into a scan root before the write, with a
+    /// directory still to create. Nothing is created in the scan root.
+    #[test]
+    fn a_directory_moved_under_a_scan_root_gets_no_new_directory() {
+        let (_d, p) = dir();
+        fs::create_dir(p.join("models")).unwrap();
+        fs::create_dir(p.join("reports")).unwrap();
+        let roots = vec![inode(&p.join("models"))];
+        let pinned = Target::pin(&p.join("reports/new/out.json"), roots).unwrap();
+        fs::rename(p.join("reports"), p.join("models/reports")).unwrap();
+        assert!(pinned.write(b"doc", &[]).is_err());
+        assert!(!p.join("models/reports/new").exists());
+    }
+
+    fn open_dir(p: &Path) -> std::os::fd::OwnedFd {
+        rustix::fs::open(
+            p,
+            rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap()
+    }
+
+    /// Review of #88 (P2): without `RENAME_EXCHANGE`, protected inputs make the write fail-closed:
+    /// a new name is written, an existing file is not replaced.
+    #[test]
+    fn without_the_exchange_protected_inputs_mean_no_replacement() {
+        let (_d, p) = dir();
+        let d = open_dir(&p);
+        let stage = |name: &str| {
+            fs::write(p.join(name), b"doc").unwrap();
+            std::ffi::OsString::from(name)
+        };
+        let some = [(1u64, 1u64)];
+        // An existing output, inputs protected: refused, both files as they were.
+        fs::write(p.join("out.json"), b"old").unwrap();
+        let tmp = stage("t1");
+        assert!(super::without_exchange(&d, &tmp, "out.json".as_ref(), &some).is_err());
+        assert_eq!(fs::read(p.join("out.json")).unwrap(), b"old");
+        assert!(p.join("t1").exists());
+        // A new name, inputs protected: written.
+        let tmp = stage("t2");
+        super::without_exchange(&d, &tmp, "new.json".as_ref(), &some).unwrap();
+        assert_eq!(fs::read(p.join("new.json")).unwrap(), b"doc");
+        // Nothing protected: a plain rename replaces.
+        let tmp = stage("t3");
+        super::without_exchange(&d, &tmp, "out.json".as_ref(), &[]).unwrap();
+        assert_eq!(fs::read(p.join("out.json")).unwrap(), b"doc");
+    }
+
+    /// Review of #88 (P2): after a failed rollback, the temporary name holds the displaced file,
+    /// and the cleanup leaves it: only this write's own file is removed.
+    #[test]
+    fn the_cleanup_removes_only_this_write_s_file() {
+        let (_d, p) = dir();
+        let d = open_dir(&p);
+        fs::write(p.join("tmp"), b"displaced input").unwrap();
+        super::cleanup(&d, "tmp".as_ref(), (0, 0));
+        assert_eq!(fs::read(p.join("tmp")).unwrap(), b"displaced input");
+        super::cleanup(&d, "tmp".as_ref(), inode(&p.join("tmp")));
+        assert!(!p.join("tmp").exists());
     }
 
     #[test]
