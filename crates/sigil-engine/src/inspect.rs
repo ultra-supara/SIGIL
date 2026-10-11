@@ -179,6 +179,7 @@ fn assemble(
         mode,
         active: !active.features.is_empty(),
         install: req.install.is_some(),
+        binary: false,
     });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);

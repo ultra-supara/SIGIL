@@ -30,18 +30,21 @@ pub const SCHEMA: &str = "sigil-policy/1";
 
 const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
-/// What decides the audit scope: the mode, whether an active feature was requested, and whether
-/// an installation is inspected (an `install` root).
+/// What decides the audit scope: the mode, whether an active feature was requested, whether an
+/// installation is inspected (an `install` root), and whether this is a binary inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScopeInput {
     pub mode: Mode,
     pub active: bool,
     pub install: bool,
+    /// A binary inspection (`binary-<n>` roots): only `binary_audit` applies (PR-4b-2a).
+    pub binary: bool,
 }
 
 impl ScopeInput {
     /// What a recorded request implies: an active feature if it lists one, an installation if it
-    /// has an [`INSTALL_ROOT`](sigil_model::INSTALL_ROOT) root.
+    /// has an [`INSTALL_ROOT`](sigil_model::INSTALL_ROOT) root, a binary inspection if it has a
+    /// `binary-<n>` root.
     pub fn of(request: &sigil_model::RunRequest) -> ScopeInput {
         ScopeInput {
             mode: request.mode,
@@ -50,6 +53,10 @@ impl ScopeInput {
                 .roots
                 .iter()
                 .any(|r| r.id.as_str() == sigil_model::INSTALL_ROOT),
+            binary: request
+                .roots
+                .iter()
+                .any(|r| sigil_model::is_binary_root(&r.id)),
         }
     }
 }
@@ -68,6 +75,9 @@ pub struct Policy {
     pub active_audit: Vec<AuditScope>,
     /// Scopes added when an installation is inspected (`--install-dir`).
     pub install_audit: Vec<AuditScope>,
+    /// Scopes of a binary inspection (`sigil binary inspect`). The lists above and
+    /// `extra_required` apply to `inspect ollama` only.
+    pub binary_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.
     pub extra_required: Vec<CheckId>,
     pub open_questions: OqPolicy,
@@ -109,6 +119,31 @@ pub struct RuleOverride {
     pub reason: Option<String>,
     /// Valid through this UTC day; afterwards the rule's default applies again.
     pub expires: Option<Date>,
+}
+
+/// The scopes without repeats, in order, and the checks they require (in catalog order), then
+/// `extra`, without repeats.
+fn requirements<'a>(
+    scopes: impl Iterator<Item = &'a AuditScope>,
+    extra: &[CheckId],
+) -> (Vec<AuditScope>, Vec<CheckId>) {
+    let mut audit: Vec<AuditScope> = vec![];
+    for scope in scopes {
+        if !audit.contains(scope) {
+            audit.push(scope.clone());
+        }
+    }
+    let mut required: Vec<CheckId> = vec![];
+    let from_scopes = audit
+        .iter()
+        .filter_map(|s| catalog::scope(s.as_str()))
+        .flat_map(|s| s.checks.iter().filter_map(|c| CheckId::new(*c).ok()));
+    for check in from_scopes.chain(extra.iter().cloned()) {
+        if !required.contains(&check) {
+            required.push(check);
+        }
+    }
+    (audit, required)
 }
 
 /// Who is trusted to write where the runtime reads (used by access analysis).
@@ -227,6 +262,7 @@ impl Policy {
         let observe_audit = scopes(&raw.scope.observe_audit)?;
         let active_audit = scopes(&raw.scope.active_audit)?;
         let install_audit = scopes(&raw.scope.install_audit)?;
+        let binary_audit = scopes(&raw.scope.binary_audit)?;
         let extra_required = raw
             .scope
             .extra_required
@@ -358,6 +394,7 @@ impl Policy {
             observe_audit,
             active_audit,
             install_audit,
+            binary_audit,
             extra_required,
             open_questions,
             accept,
@@ -378,11 +415,14 @@ impl Policy {
 
     /// The audit scope requested for `input`, and the checks it requires (in catalog order, then
     /// `extra_required`, without repeats). The assembler and `evaluate` both compute it, so a
-    /// session's required checks are what its own request implies.
+    /// session's required checks are what its own request implies. A binary inspection audits
+    /// `binary_audit` only: an organization's extra checks for an Ollama installation do not
+    /// apply to it (PR-4b-2a spec §4.6).
     pub fn scope(&self, input: &ScopeInput) -> (Vec<AuditScope>, Vec<CheckId>) {
-        let mode = input.mode;
-        let mut audit: Vec<AuditScope> = vec![];
-        let observe = match mode {
+        if input.binary {
+            return requirements(self.binary_audit.iter(), &[]);
+        }
+        let observe = match input.mode {
             Mode::Observe => self.observe_audit.as_slice(),
             Mode::Static => &[],
         };
@@ -396,28 +436,14 @@ impl Policy {
         } else {
             &[]
         };
-        for scope in self
-            .audit
-            .iter()
-            .chain(observe)
-            .chain(active)
-            .chain(install)
-        {
-            if !audit.contains(scope) {
-                audit.push(scope.clone());
-            }
-        }
-        let mut required: Vec<CheckId> = vec![];
-        let from_scopes = audit
-            .iter()
-            .filter_map(|s| catalog::scope(s.as_str()))
-            .flat_map(|s| s.checks.iter().filter_map(|c| CheckId::new(*c).ok()));
-        for check in from_scopes.chain(self.extra_required.iter().cloned()) {
-            if !required.contains(&check) {
-                required.push(check);
-            }
-        }
-        (audit, required)
+        requirements(
+            self.audit
+                .iter()
+                .chain(observe)
+                .chain(active)
+                .chain(install),
+            &self.extra_required,
+        )
     }
 
     /// Whether a condition may rest on `assumption`. The session assembler records this for every
