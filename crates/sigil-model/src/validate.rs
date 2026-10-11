@@ -224,6 +224,9 @@ pub enum ValidationError {
     ReleaseCoverage { complete: bool },
     /// A `BinaryFacts` record, or a `Declares` relation, disagrees with the session (B1–B8).
     Binary { slice: String, why: String },
+    /// A binary inspection's input, its root, or its `binary.container` disagrees with the
+    /// session (B9, B10; PR-4b-2a).
+    BinaryInput { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -352,6 +355,7 @@ impl fmt::Display for ValidationError {
                 "releases[{product}]: the basis must list every install placement, after a complete discovery"
             ),
             Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
+            BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -679,6 +683,7 @@ impl<'a> Validator<'a> {
         }
         self.reference_matches();
         self.binaries();
+        self.binary_inputs();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -1518,6 +1523,137 @@ impl<'a> Validator<'a> {
                 slice: slice.to_string(),
                 why,
             });
+        }
+    }
+
+    fn input_error(&mut self, at: &str, why: impl Into<String>) {
+        self.errors.push(ValidationError::BinaryInput {
+            at: at.to_string(),
+            why: why.into(),
+        });
+    }
+
+    /// B9: one `binary.container` per input, scoped to its instance, in exactly the state the
+    /// input implies. B10: a session with a binary root is a binary inspection (PR-4b-2a).
+    fn binary_inputs(&mut self) {
+        use crate::artifact::DiscoverySource;
+        use crate::binary_input::{
+            expected_binary_container, is_binary_root, ExpectedContainer, BINARY_BYTES,
+            BINARY_CONTAINER,
+        };
+        use crate::coverage::Coverage;
+        use crate::render::coverage_state;
+        use crate::session::{Mode, ScanRoot};
+        let s = self.s;
+        // B9 (1): scoped to the instance of a binary root.
+        let mut per_instance: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_CONTAINER)
+        {
+            let Ref::Instance(at) = &c.scope else {
+                self.input_error(
+                    "coverage",
+                    "binary.container must be scoped to an input's instance",
+                );
+                continue;
+            };
+            match s.instances.iter().find(|i| i.id == *at) {
+                Some(i) if is_binary_root(&i.root) => per_instance.entry(at).or_default().push(c),
+                _ => self.input_error(
+                    at.as_str(),
+                    "binary.container on something that is not a binary input",
+                ),
+            }
+        }
+        let roots: Vec<&ScanRoot> = s
+            .request
+            .roots
+            .iter()
+            .filter(|r| is_binary_root(&r.id))
+            .collect();
+        if roots.is_empty() {
+            return;
+        }
+        // B10
+        let r = &s.request;
+        if roots.len() != r.roots.len() {
+            self.input_error("request", "a binary inspection has only binary roots");
+        }
+        if r.mode != Mode::Static {
+            self.input_error("request", "a binary inspection is static");
+        }
+        if !r.active.is_empty() {
+            self.input_error("request", "a binary inspection has no active feature");
+        }
+        if r.model_filter.is_some() {
+            self.input_error("request", "a binary inspection has no model filter");
+        }
+        for root in roots {
+            let inputs: Vec<&FileInstance> =
+                s.instances.iter().filter(|i| i.root == root.id).collect();
+            let [i] = inputs.as_slice() else {
+                self.input_error(
+                    root.id.as_str(),
+                    format!("{} instances; a binary root has exactly one", inputs.len()),
+                );
+                continue;
+            };
+            let at = i.id.as_str();
+            if i.path != root.path {
+                self.input_error(at, "the input is not at its root's path");
+            }
+            if i.discovered_by != [DiscoverySource::Argument] {
+                self.input_error(at, "an input is discovered by Argument only");
+            }
+            // B9 (2), (3)
+            let entries = per_instance
+                .get(&i.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let [c] = entries else {
+                self.input_error(
+                    at,
+                    format!(
+                        "{} binary.container entries; an input has exactly one",
+                        entries.len()
+                    ),
+                );
+                continue;
+            };
+            let shown = |state: &CoverageState| coverage_state(state).terminal();
+            match expected_binary_container(s, i) {
+                Err(why) => self.input_error(at, why),
+                Ok(ExpectedContainer::Exactly(expected)) => {
+                    if c.state != expected {
+                        self.input_error(
+                            at,
+                            format!(
+                                "binary.container is {}, but the input implies {}",
+                                shown(&c.state),
+                                shown(&expected)
+                            ),
+                        );
+                    }
+                }
+                Ok(ExpectedContainer::OverBytes { limit }) => {
+                    let ok = matches!(
+                        &c.state,
+                        CoverageState::BudgetExceeded { budget, used, limit: l }
+                            if budget == BINARY_BYTES && *l == limit && used <= l
+                    );
+                    if !ok {
+                        self.input_error(
+                            at,
+                            format!(
+                                "binary.container is {}, but the input is over binary_bytes ({limit})",
+                                shown(&c.state)
+                            ),
+                        );
+                    }
+                }
+            }
         }
     }
 

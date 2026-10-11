@@ -1331,6 +1331,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("12-conflicting-identity", conflicting_identity()),
         ("13-loader-slice-spec-example", loader_slice_spec_example()),
         ("14-store-and-runtime", store_and_runtime()),
+        ("15-binary-inspect", binary_inspect()),
     ]
 }
 
@@ -1488,5 +1489,122 @@ pub fn store_and_runtime() -> Session {
         Ref::Probe(probe),
         CoverageState::Complete,
     ));
+    s
+}
+
+// --- Binary inspection (PR-4b-2a) ---------------------------------------------------------------
+
+pub const ELF_INPUT: &str = "inst:binary-1/libggml-base.so";
+pub const TEXT_INPUT: &str = "inst:binary-2/NOTES.txt";
+
+/// Example 15: `sigil binary inspect` of two files (PR-4b-2a). The first is a shared object with
+/// complete container facts; the second is a text file SIGIL does not parse. PASS + INCOMPLETE.
+pub fn binary_inspect() -> Session {
+    let mut s = base(&[BINARY_CONTAINER]);
+    s.request.audit = ids(&["binary"]);
+    s.request.budgets = BTreeMap::from([
+        (BINARY_BYTES.to_string(), 64 << 30),
+        ("binary_imports".to_string(), 4096),
+        ("binary_parse_bytes".to_string(), 64 << 20),
+    ]);
+    let paths = [
+        "/home/user/Downloads/libggml-base.so",
+        "/home/user/Downloads/NOTES.txt",
+    ];
+    s.request.roots = vec![
+        ScanRoot {
+            id: binary_root(1).unwrap(),
+            path: t(paths[0]),
+        },
+        ScanRoot {
+            id: binary_root(2).unwrap(),
+            path: t(paths[1]),
+        },
+    ];
+    // The shared object.
+    let elf: ArtifactId = id(&format!("sha256:{}", hex(0xb1)));
+    let slice = SliceId::from_parts(&elf, Arch::X86_64, 0);
+    s.artifacts.push(Artifact {
+        id: elf.clone(),
+        size: 1_048_576,
+        format: Format::Elf { kind: ElfType::Dyn },
+        slices: vec![Slice {
+            id: slice.clone(),
+            arch: Arch::X86_64,
+            offset: 0,
+            size: 1_048_576,
+            sha256: id(&hex(0xb1)),
+        }],
+    });
+    let mut input = instance(&id(ELF_INPUT), "binary-1", paths[0], &elf, 11);
+    input.discovered_by = vec![DiscoverySource::Argument];
+    s.instances.push(input);
+    let facts = ElfFacts {
+        interp: None,
+        soname: Some(t("libggml-base.so.0")),
+        needed: vec![t("libm.so.6"), t("libc.so.6")],
+        rpath: vec![],
+        runpath: vec![t("$ORIGIN")],
+        build_id: Some("1f2e3d4c5b6a79880011223344556677deadbeef".to_string()),
+        comment: vec![t("GCC: (GNU) 11.2.1 20220127")],
+        stripped: Some(true),
+        exports: 412,
+        imports: vec![
+            ElfImport {
+                name: t("dlopen"),
+                version: Some(t("GLIBC_2.34")),
+                weak: false,
+            },
+            ElfImport {
+                name: t("getenv"),
+                version: Some(t("GLIBC_2.2.5")),
+                weak: false,
+            },
+        ],
+        data: vec![],
+    };
+    for needed in &facts.needed {
+        s.relations.push(Relation::Declares {
+            from: slice.clone(),
+            needed: needed.clone(),
+            kind: DeclKind::ElfNeeded,
+        });
+    }
+    s.binaries.push(BinaryFacts {
+        slice,
+        container: ContainerFacts::Elf(facts),
+        go: None,
+        gaps: vec![],
+    });
+    // The text file.
+    let text: ArtifactId = id(&format!("sha256:{}", hex(0xb2)));
+    s.artifacts.push(Artifact {
+        id: text.clone(),
+        size: 2048,
+        format: Format::Other,
+        slices: vec![],
+    });
+    let mut notes = instance(&id(TEXT_INPUT), "binary-2", paths[1], &text, 12);
+    notes.stat.size = 2048;
+    notes.discovered_by = vec![DiscoverySource::Argument];
+    s.instances.push(notes);
+    s.coverage.extend([
+        coverage(
+            BINARY_CONTAINER,
+            Ref::Instance(id(ELF_INPUT)),
+            CoverageState::Complete,
+        ),
+        coverage(
+            BINARY_CONTAINER,
+            Ref::Instance(id(TEXT_INPUT)),
+            CoverageState::Unsupported {
+                what: BINARY_UNSUPPORTED.to_string(),
+            },
+        ),
+    ]);
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: ids(&[BINARY_CONTAINER]),
+        gaps: vec![],
+    };
     s
 }
