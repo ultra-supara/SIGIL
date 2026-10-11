@@ -343,7 +343,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             json
         }
     };
-    emit(&document, target.as_deref(), &[])?;
+    emit(&document, target.as_ref(), &[])?;
     summary(&session, args.out.as_deref(), unsaved.as_ref());
 
     let failed = match args.fail_on {
@@ -578,10 +578,15 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
 }
 
 /// `--out` must not lie inside a scan root, given with its name (`models`, `install`) (C-5):
-/// SIGIL never writes under a scan root. Returns where `--out` leads ([`out_target`]): the
-/// document is written to that path, so a symlink swapped in at `--out` later is not followed.
-fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<PathBuf, Failure> {
-    let target = out_target(out)?;
+/// SIGIL never writes under a scan root. Returns the output pinned ([`out::Target::pin`]): the
+/// document is written through its directory's fd, which must stay out of the scan roots by
+/// `dev:ino`, so neither a symlink swapped in at `--out` nor a directory renamed later
+/// redirects the write.
+fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<out::Target, Failure> {
+    use std::os::unix::fs::MetadataExt;
+    let target =
+        resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
+    let mut ids = vec![];
     for (dir, name) in roots {
         let root = resolved(dir).map_err(|e| {
             Failure::Usage(format!("the {name} directory {}: {e}", shown_path(dir)))
@@ -593,15 +598,25 @@ fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<PathBuf, Failure> {
                 shown_path(&root)
             )));
         }
+        if let Ok(m) = fs::metadata(&root) {
+            ids.push((m.dev(), m.ino()));
+        }
     }
-    Ok(target)
+    pin(out, &target, ids)
 }
 
-/// Where `--out` leads ([`resolved`]), resolved once, before anything is read: the path the
-/// document is written to. An existing symlink at `--out` is resolved here, and the file it
-/// leads to is what is replaced (spec §3.1).
-fn out_target(out: &Path) -> Result<PathBuf, Failure> {
-    resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))
+/// Where `--out` leads ([`resolved`]), resolved and pinned once, before anything is read. An
+/// existing symlink at `--out` is resolved here, and the file it leads to is what is replaced
+/// (spec §3.1).
+fn out_target(out: &Path) -> Result<out::Target, Failure> {
+    let target =
+        resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
+    pin(out, &target, vec![])
+}
+
+fn pin(out: &Path, target: &Path, roots: Vec<(u64, u64)>) -> Result<out::Target, Failure> {
+    out::Target::pin(target, roots)
+        .map_err(|e| Failure::Usage(format!("--out {}: {}", shown_path(out), shown(&e))))
 }
 
 /// Where `path` leads once its missing directories are created: its longest existing prefix
@@ -892,7 +907,7 @@ fn render(args: &RenderArgs) -> Result<(), Failure> {
         RenderFormat::Md => render_session(&session),
         RenderFormat::Aibom => aibom_json(&session)?.0,
     };
-    emit(&document, target.as_deref(), &[])
+    emit(&document, target.as_ref(), &[])
 }
 
 fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
@@ -912,7 +927,7 @@ fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
         explain::coverage(&session, format)
     };
     text.push('\n');
-    emit(&text, target.as_deref(), &[])
+    emit(&text, target.as_ref(), &[])
 }
 
 fn rules() -> Result<(), Failure> {
@@ -973,15 +988,19 @@ fn load_session(path: &Path) -> Result<Session, Failure> {
 
 // --- output -----------------------------------------------------------------------------------
 
-/// Writes `document` to `out`, a target from [`out_target`], or to stdout. The write goes through
-/// [`out::write`]: an existing file there is replaced, never written through, and a file whose
-/// `dev:ino` is in `protected` is not replaced.
-fn emit(document: &str, out: Option<&Path>, protected: &[(u64, u64)]) -> Result<(), Failure> {
+/// Writes `document` to `out`, a target pinned by [`check_out`] or [`out_target`], or to stdout.
+/// An existing file there is replaced, never written through, and a file whose `dev:ino` is in
+/// `protected` is not replaced ([`out::Target::write`]).
+fn emit(
+    document: &str,
+    out: Option<&out::Target>,
+    protected: &[(u64, u64)],
+) -> Result<(), Failure> {
     match out {
-        Some(path) => out::write(path, document.as_bytes(), protected).map_err(|e| {
+        Some(target) => target.write(document.as_bytes(), protected).map_err(|e| {
             Failure::Run(format!(
                 "--out {} cannot be written: {}",
-                shown_path(path),
+                shown_path(target.path()),
                 shown(&e)
             ))
         }),
