@@ -1,0 +1,85 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "661247533a39533b7c533c6a4ec38d5fa7374f537396701e56cf8507cce8cc1e",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.container"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/home/user/Downloads/libggml-base.so"
+      ],
+      "slices": [
+        {
+          "id": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+          "components": []
+        }
+      ]
+    },
+    {
+      "id": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "size": 2048,
+      "format": "Other",
+      "paths": [
+        "/home/user/Downloads/NOTES.txt"
+      ],
+      "slices": []
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "binary.container",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Complete": 1,
+        "Unsupported": 1
+      }
+    }
+  ]
+}

@@ -30,3 +30,4 @@ After an intended model change, regenerate them with
 | `11-reference-verified` | A hash equal to a ground-truth-verified reference |
 | `12-conflicting-identity` | A file name and an embedded value disagree on the version; both are kept, and the per-file hash still matches |
 | `13-loader-slice-spec-example` | The plan's §5.8 loader slice, corrected to the PR-2 types |
+| `15-binary-inspect` | `sigil binary inspect` of two files: a shared object with complete container facts, and a text file that is `Unsupported`, one `binary.container` entry each: PASS + INCOMPLETE |

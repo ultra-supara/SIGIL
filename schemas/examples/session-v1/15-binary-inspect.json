@@ -1,0 +1,189 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [
+      {"id": "binary-1", "path": "/home/user/Downloads/libggml-base.so"},
+      {"id": "binary-2", "path": "/home/user/Downloads/NOTES.txt"}
+    ],
+    "audit": ["binary"],
+    "required_checks": ["binary.container"],
+    "budgets": {"binary_bytes": 68719476736, "binary_imports": 4096, "binary_parse_bytes": 67108864},
+    "observe_env": false,
+    "model_filter": null,
+    "active": []
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+        }
+      ]
+    },
+    {
+      "id": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "size": 2048,
+      "format": "Other",
+      "slices": []
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:binary-1/libggml-base.so",
+      "root": "binary-1",
+      "path": "/home/user/Downloads/libggml-base.so",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 11,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Argument"]
+    },
+    {
+      "id": "inst:binary-2/NOTES.txt",
+      "root": "binary-2",
+      "path": "/home/user/Downloads/NOTES.txt",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 12,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 2048,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Argument"]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "binaries": [
+    {
+      "slice": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+      "container": {
+        "Elf": {
+          "interp": null,
+          "soname": "libggml-base.so.0",
+          "needed": ["libm.so.6", "libc.so.6"],
+          "rpath": [],
+          "runpath": ["$ORIGIN"],
+          "build_id": "1f2e3d4c5b6a79880011223344556677deadbeef",
+          "comment": ["GCC: (GNU) 11.2.1 20220127"],
+          "stripped": true,
+          "exports": 412,
+          "imports": [
+            {"name": "dlopen", "version": "GLIBC_2.34", "weak": false},
+            {"name": "getenv", "version": "GLIBC_2.2.5", "weak": false}
+          ],
+          "data": []
+        }
+      },
+      "go": null,
+      "gaps": []
+    }
+  ],
+  "hints": [],
+  "code": [],
+  "relations": [
+    {
+      "Declares": {
+        "from": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+        "needed": "libc.so.6",
+        "kind": "ElfNeeded"
+      }
+    },
+    {
+      "Declares": {
+        "from": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+        "needed": "libm.so.6",
+        "kind": "ElfNeeded"
+      }
+    }
+  ],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "binary.container",
+      "scope": {"Instance": "inst:binary-1/libggml-base.so"},
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "binary.container",
+      "scope": {"Instance": "inst:binary-2/NOTES.txt"},
+      "state": {
+        "Unsupported": {"what": "not an ELF executable, shared object, or relocatable object"}
+      },
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {"Incomplete": {"missing_required": ["binary.container"], "gaps": []}},
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}
