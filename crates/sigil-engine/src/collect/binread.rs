@@ -15,8 +15,9 @@ use sigil_model::{
 use super::fs::{FileRead, ReadSpec, RelPath, SafeFs};
 use crate::binary::{self, header, BinaryBudgets, Parsed};
 
-/// Reads `rel` under `root` without following any symlink: hashes at most `limit` bytes, and
-/// parses an ELF content not in `parsed` yet. `during` runs while the file is open (the tests'
+/// Reads `rel` under `root` without following any symlink. The file is hashed only if it is at
+/// most `limit` bytes (a larger one is `NotRead { BudgetExceeded }`), and an ELF content not in
+/// `parsed` yet is parsed. `during` runs while the file is open (the tests'
 /// hook). The artifact of the read gets its ELF format and slice.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn read(

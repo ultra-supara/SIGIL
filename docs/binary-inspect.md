@@ -12,7 +12,7 @@ cargo run -q -p sigil-cli -- binary inspect ./libggml-base.so --fail-on-incomple
 
 ## What is recorded
 
-Each input is its own scan root, `binary-<n>` in argument order. The root's path is the file,
+Each input is its own scan root, `binary-<n>` in the order of first appearance. The root's path is the file,
 after the symlinks in the argument are resolved. A file named twice, directly or through a
 symlink, is one input. For each input, the session records:
 - **The read:** its digest and size, and its format. The format is an ELF executable, shared
@@ -22,16 +22,17 @@ symlink, is one input. For each input, the session records:
   - interpreter, SONAME, NEEDED, RPATH, RUNPATH;
   - build-id, `.comment`, stripped;
   - exports and imports;
-  - the known data symbols, and Go build info.
+  - the known data symbols (in a relocatable object, each is `Unknown` with a gap: its data is
+    not linked yet), and Go build info.
 - **One `binary.container` coverage entry:** the input's status.
 
 | The input | Status |
 |---|---|
 | An ELF, every fact read in full or confirmed absent | `Complete` |
-| An ELF with gaps | `Partial`, listing them |
+| An ELF with gaps, or without its facts | `Partial`, listing them (`not parsed` without facts) |
 | Anything else (a script, a PE, a Mach-O for now) | `Unsupported` |
 | Over the `binary_bytes` budget | `BudgetExceeded`: not read, later inputs still are |
-| Changed while it was read | `Error` |
+| Changed or removed while it was read | `Error` |
 
 Under the default policy, any status other than `Complete` makes the result `INCOMPLETE`. The same
 holds for any policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
@@ -47,7 +48,7 @@ digest, and status.
 - For an executable or a shared object, imports are the dynamic symbols its loader resolves.
 - For a relocatable object, they are the undefined symbols left for the linker. They are not the
   final program's imports.
-- Neither shows that the code calls them: no code is analyzed. Call sites are a later `--code`.
+- Neither shows that the code calls them: no code is analyzed, so no call site is recorded.
 
 ## Inputs and errors
 
@@ -60,7 +61,11 @@ a path that is:
 - a file replaced by a symlink after it was resolved.
 
 Inputs are read one at a time, so the number of inputs does not raise the number of open file
-descriptors.
+descriptors. An input's directory is opened only to reach the input by name, never listed, so a
+directory that may be entered but not listed (mode 0711) is fine. An input over `binary_bytes` is
+not read: it has no digest or format, only its `BudgetExceeded` status.
+
+Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them:
 
 | Budget | Default | |
 |---|---|---|

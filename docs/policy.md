@@ -6,7 +6,8 @@ from the analysis. The policy decides only what is done with them, and which che
 closed for the result to be complete.
 
 - **Status:** `crates/sigil-engine` loads and evaluates policies. `sigil inspect ollama --policy
-  FILE` loads one; without `--policy`, the built-in default applies.
+  FILE` and `sigil binary inspect --policy FILE` load one; without `--policy`, the built-in
+  default applies.
 - **Source:** plan §4.7. The session it applies to is described in
   [`docs/session-model.md`](session-model.md).
 
@@ -17,7 +18,7 @@ schema = "sigil-policy/1"      # required, exactly this
 name   = "default"             # required; recorded in the session with the file's SHA-256
 
 [scope]
-audit          = ["model_store"]   # audited in every mode
+audit          = ["model_store"]   # audited in every inspect ollama run
 observe_audit  = ["exposure"]      # added in observe mode
 active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
 install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
@@ -85,6 +86,7 @@ so requesting it gives an honest `INCOMPLETE`.
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
 | `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container` | PR-4a, PR-4b-1 (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
+| `binary` | `binary.container` | PR-4b-2a (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
 
 **Rules** (kind, default severity):
 

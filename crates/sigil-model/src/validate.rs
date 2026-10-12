@@ -1563,7 +1563,7 @@ impl<'a> Validator<'a> {
                 );
             }
         }
-        // B9 (1): scoped to the instance of a binary root.
+        // B9: every entry is scoped to the instance of a binary root.
         let instances: BTreeMap<&InstanceId, &FileInstance> =
             s.instances.iter().map(|i| (&i.id, i)).collect();
         let mut per_instance: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
@@ -1633,7 +1633,7 @@ impl<'a> Validator<'a> {
             if i.discovered_by != [DiscoverySource::Argument] {
                 self.input_error(at, "an input is discovered by Argument only");
             }
-            // B9 (2): exactly one entry; (3): in the state the input implies.
+            // B9: exactly one entry, in the state the input implies.
             let entries = per_instance
                 .get(&i.id)
                 .map(Vec::as_slice)

@@ -67,7 +67,7 @@ pub struct Policy {
     pub name: String,
     /// SHA-256 of the policy text, recorded in the session's knowledge.
     pub sha256: Sha256Hex,
-    /// Scopes audited in every mode.
+    /// Scopes audited in every `inspect ollama` run.
     pub audit: Vec<AuditScope>,
     /// Scopes added in observe mode.
     pub observe_audit: Vec<AuditScope>,
@@ -121,8 +121,8 @@ pub struct RuleOverride {
     pub expires: Option<Date>,
 }
 
-/// The scopes without repeats, in order, and the checks they require (in catalog order), then
-/// `extra`, without repeats.
+/// The scopes without repeats, in order, and the checks they require (scope by scope, each
+/// scope's checks in catalog order), then `extra`, without repeats.
 fn requirements<'a>(
     scopes: impl Iterator<Item = &'a AuditScope>,
     extra: &[CheckId],
