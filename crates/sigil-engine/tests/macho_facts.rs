@@ -308,6 +308,24 @@ fn a_known_required_command_shorter_than_its_structure_is_a_gap_but_not_the_end(
 }
 
 #[test]
+fn an_unknown_required_command_ends_the_walk() {
+    let commands = [
+        common::macho::command(0x8000_1234, 8, false),
+        common::macho::dylib_command(0x0c, "/usr/lib/libSystem.B.dylib", false, 8),
+    ];
+    let bytes = common::macho::thin(true, false, common::macho::X86_64, 3, &commands);
+    let parsed = parse(&bytes).unwrap();
+    assert!(macho_facts(&parsed, 0).load_dylibs.is_empty(), "{parsed:?}");
+    assert_eq!(
+        parsed.slices[0].gaps,
+        [
+            "load commands: command count does not cover sizeofcmds".to_string(),
+            "load commands: unknown required command 0x80001234".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn a_linked_universal_executable_is_read_in_full() {
     let parsed = parse(HELLO_UNIVERSAL).unwrap();
     assert_eq!(parsed.format, Format::MachOFat);

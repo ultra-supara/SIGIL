@@ -211,7 +211,8 @@ fn a_linked_universal_executable_is_complete_in_binary_inspect() {
 
 #[test]
 fn fat_tables_with_a_repeated_or_mismatched_architecture_are_partial_and_valid() {
-    // The validator's B2 accepts the engine's own gaps for both.
+    // The validator's B2 accepts the engine's own gaps for both. `mismatched`'s table entry is
+    // the architecture `twice` lists twice: another artifact's slices do not count.
     let x86 = common::macho::thin(true, false, common::macho::X86_64, 3, &[]);
     let arm = common::macho::thin(true, false, common::macho::AARCH64, 0, &[]);
     let d = TempDir::new().unwrap();
@@ -227,7 +228,7 @@ fn fat_tables_with_a_repeated_or_mismatched_architecture_are_partial_and_valid()
     let mismatched = d.path().join("mismatched");
     std::fs::write(
         &mismatched,
-        common::macho::fat32(&[(arm, common::macho::X86_64, 0)]),
+        common::macho::fat32(&[(arm, common::macho::X86_64, 3)]),
     )
     .unwrap();
     let s = session(&[twice, mismatched]).unwrap();
