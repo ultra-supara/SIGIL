@@ -257,6 +257,73 @@ fn a_known_name_of_another_type_is_unknown_never_absent() {
     assert!(unknown_with(commit, "more than once"), "{v:?}");
 }
 
+/// Spec §3.4: a relocation is matched by the bytes it writes, not by its address alone. In
+/// libdata.so (libdata.so.readelf), LLAMA_BUILD_NUMBER is the 4-byte int at 0x4018, LLAMA_COMMIT's
+/// string "6f3a9f3de" is at 0x201c, and a RELATIVE at 0x4010 (`__dso_handle`, addend 0x4010)
+/// writes 0x4010..0x4018.
+#[test]
+fn a_relocation_overlapping_a_value_or_its_string_makes_it_unknown() {
+    // Moved to 0x4014: it now writes 0x4014..0x401c, over the int.
+    let mut bytes = fixture("elf/libdata.so");
+    let entry = relative_entry(&bytes, 0x4010, 0x4010);
+    bytes[entry..entry + 8].copy_from_slice(&0x4014u64.to_le_bytes());
+    let (v, p) = values(&bytes);
+    let number = &v.iter().find(|(s, _)| s == "LLAMA_BUILD_NUMBER").unwrap().1;
+    assert!(
+        unknown_with(number, "a relocation overlaps it (R_X86_64_RELATIVE)"),
+        "{number:?}"
+    );
+    assert!(
+        p.gaps.contains(
+            &"LLAMA_BUILD_NUMBER: a relocation overlaps it (R_X86_64_RELATIVE)".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+
+    // Moved to 0x2020: it writes into LLAMA_COMMIT's string.
+    let mut bytes = fixture("elf/libdata.so");
+    let entry = relative_entry(&bytes, 0x4010, 0x4010);
+    bytes[entry..entry + 8].copy_from_slice(&0x2020u64.to_le_bytes());
+    let (v, p) = values(&bytes);
+    let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+    assert!(
+        unknown_with(
+            commit,
+            "a relocation writes into the string (R_X86_64_RELATIVE)"
+        ),
+        "{commit:?}"
+    );
+    assert!(
+        v.contains(&("LLAMA_COMPILER".into(), text("GNU 11.2.1"))),
+        "the other strings are unchanged: {v:?}"
+    );
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
+    let d = f.data.iter().find(|d| d.symbol == "LLAMA_COMMIT").unwrap();
+    assert_eq!(
+        d.at.len(),
+        1,
+        "an Unknown value has only its symbol: {:?}",
+        d.at
+    );
+    assert!(
+        p.gaps.contains(
+            &"LLAMA_COMMIT: a relocation writes into the string (R_X86_64_RELATIVE)".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+
+    // RELA RELATIVE at every pointer, plus a DT_RELR table: RELR may write the same bytes.
+    let mut bytes = fixture("elf/libdata.so");
+    retag(&mut bytes, DT_RELACOUNT, DT_RELR);
+    let (v, _) = values(&bytes);
+    assert_eq!(v.len(), 4, "{v:?}");
+    assert!(v.iter().all(|(_, x)| unknown_with(x, "REL/RELR")), "{v:?}");
+}
+
 /// The review of the PR-4b-1 plan: the loader walks a relocation table up to its size, so a size
 /// that is not a whole number of entries ends in a partial entry SIGIL would not see, and an entry
 /// size other than `Elf64_Rela`'s is refused by the loader. Each is a gap, and the values that

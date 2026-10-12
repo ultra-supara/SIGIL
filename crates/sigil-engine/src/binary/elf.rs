@@ -2,7 +2,7 @@
 //! sections. Each fact is read in full, confirmed absent, or a gap (§4.8). Everything is read
 //! through the budgeted checkpoint ([`Bounded`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::mem::size_of;
 
 use object::elf;
@@ -56,6 +56,9 @@ pub(crate) struct Dynamic {
     /// number of entries, or a `DT_RELAENT` other than the entry size. Also a gap.
     pub rela_malformed: Option<String>,
 }
+
+/// A relocation the loader applies: `(r_offset, type, addend)`.
+pub(crate) type Reloc = (u64, u32, i64);
 
 /// The sections' results the other steps need.
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
@@ -892,29 +895,30 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
     }
 
-    /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA) that write
-    /// one of the `wanted` addresses: `(type, addend)` by address. Only those are kept, so a large
-    /// table costs no more than its read.
+    /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA) whose
+    /// written bytes overlap each of `ranges` (`[start, end)`), in `ranges`' order (spec §3.4).
+    /// A relocation is taken to write a word (8 bytes, 4 for ELF32): a narrower one can only make
+    /// a value `Unknown`. At most two are kept per range: two are already "more than once". Only
+    /// those are kept, so a large table costs no more than its read.
     pub(crate) fn relocations(
-        &mut self,
+        &self,
         dynamic: &Dynamic,
-        wanted: &BTreeSet<u64>,
-    ) -> Result<BTreeMap<u64, Vec<(u32, i64)>>, String> {
+        ranges: &[(u64, u64)],
+    ) -> Result<Vec<Vec<Reloc>>, String> {
         let endian = self.endian;
         if let Some(why) = &dynamic.rela_malformed {
             return Err(why.clone());
         }
-        let mut out: BTreeMap<u64, Vec<(u32, i64)>> = BTreeMap::new();
+        let word = if self.header.is_type_64() { 8 } else { 4 };
+        let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
         for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
             for r in self.relocation_table::<H::Rela>(vaddr, size)? {
                 let at: u64 = r.r_offset(endian).into();
-                if !wanted.contains(&at) {
-                    continue;
-                }
-                let at_addr = out.entry(at).or_default();
-                // Two are already "more than once"; more add nothing.
-                if at_addr.len() < 2 {
-                    at_addr.push((r.r_type(endian, false).0, r.r_addend(endian).into()));
+                let end = at.saturating_add(word);
+                for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
+                    if at < *stop && *start < end && hits.len() < 2 {
+                        hits.push((at, r.r_type(endian, false).0, r.r_addend(endian).into()));
+                    }
                 }
             }
         }
