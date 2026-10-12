@@ -714,7 +714,8 @@ fn a_relocation_past_dynsym_is_a_gap_with_no_data_symbol() {
         }
         e
     };
-    let kinds: [(&str, bool, [(i64, u64); 3]); 4] = [
+    // (the table, whether its entries are RELA, its PT_DYNAMIC entries)
+    let kinds = [
         (
             "DT_RELA",
             true,
