@@ -108,7 +108,9 @@ fn canonical_order_sorts_records_and_imports_but_keeps_file_order() {
         gaps: vec![],
     });
     s.canonicalize();
-    let ContainerFacts::Elf(f) = &s.binaries[0].container;
+    let ContainerFacts::Elf(f) = &s.binaries[0].container else {
+        panic!()
+    };
     assert_eq!(f.imports[0].name, t("dlopen"), "imports are sorted");
     assert_eq!(f.needed, [t("z.so"), t("a.so")], "NEEDED keeps its order");
 }
@@ -162,7 +164,9 @@ fn rejected_for(s: &Session, why: &str) {
 }
 
 fn elf(s: &mut Session) -> &mut ElfFacts {
-    let ContainerFacts::Elf(f) = &mut s.binaries[0].container;
+    let ContainerFacts::Elf(f) = &mut s.binaries[0].container else {
+        panic!()
+    };
     f
 }
 

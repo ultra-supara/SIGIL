@@ -14,15 +14,30 @@ use crate::collect::install::InstallFacts;
 pub fn declares(binaries: &[BinaryFacts]) -> Vec<Relation> {
     let mut relations = vec![];
     for b in binaries {
-        let ContainerFacts::Elf(elf) = &b.container;
-        let mut seen = BTreeSet::new();
-        for needed in &elf.needed {
-            if seen.insert(needed) {
-                relations.push(Relation::Declares {
-                    from: b.slice.clone(),
-                    needed: needed.clone(),
-                    kind: DeclKind::ElfNeeded,
-                });
+        match &b.container {
+            ContainerFacts::Elf(elf) => {
+                let mut seen = BTreeSet::new();
+                for needed in &elf.needed {
+                    if seen.insert(needed) {
+                        relations.push(Relation::Declares {
+                            from: b.slice.clone(),
+                            needed: needed.clone(),
+                            kind: DeclKind::ElfNeeded,
+                        });
+                    }
+                }
+            }
+            ContainerFacts::MachO(macho) => {
+                let mut seen = BTreeSet::new();
+                for needed in &macho.load_dylibs {
+                    if seen.insert(needed) {
+                        relations.push(Relation::Declares {
+                            from: b.slice.clone(),
+                            needed: needed.clone(),
+                            kind: DeclKind::MachOLoadDylib,
+                        });
+                    }
+                }
             }
         }
     }
@@ -41,11 +56,12 @@ pub fn analyze(facts: &InstallFacts) -> Result<(Coverage, Vec<Relation>), String
             if !matches!(discovery, CoverageState::Complete) {
                 missing.push("discovery incomplete".to_string());
             }
-            for a in facts
-                .artifacts
-                .iter()
-                .filter(|a| matches!(a.format, Format::Elf { .. }))
-            {
+            for a in facts.artifacts.iter().filter(|a| {
+                matches!(
+                    a.format,
+                    Format::Elf { .. } | Format::MachO | Format::MachOFat
+                )
+            }) {
                 let path = facts
                     .instances
                     .iter()
@@ -58,13 +74,18 @@ pub fn analyze(facts: &InstallFacts) -> Result<(Coverage, Vec<Relation>), String
                     .filter_map(|i| member_of(&facts.root_path, i))
                     .min()
                     .unwrap_or_else(|| a.id.as_str().to_string());
-                match facts
-                    .binaries
-                    .iter()
-                    .find(|b| a.slices.iter().any(|s| s.id == b.slice))
-                {
-                    None => missing.push(format!("{path}: not parsed")),
-                    Some(b) => missing.extend(b.gaps.iter().map(|g| format!("{path}: {g}"))),
+                if a.slices.is_empty() {
+                    missing.push(format!("{path}: not parsed"));
+                }
+                for slice in &a.slices {
+                    match facts.binaries.iter().find(|b| b.slice == slice.id) {
+                        None => missing.push(format!("{path}: {}: not parsed", slice.arch.name())),
+                        Some(b) => missing.extend(
+                            b.gaps
+                                .iter()
+                                .map(|gap| format!("{path} [{}]: {gap}", slice.arch.name())),
+                        ),
+                    }
                 }
             }
             missing.sort();

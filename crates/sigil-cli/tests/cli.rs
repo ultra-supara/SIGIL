@@ -1686,7 +1686,12 @@ fn an_unsupported_input_is_incomplete_and_exits_0_or_4() {
         session_of(&r).outcome.completeness,
         Completeness::Incomplete { .. }
     ));
-    assert!(r.stderr.contains("unsupported: not an ELF"), "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("unsupported: not a supported ELF or Mach-O"),
+        "{}",
+        r.stderr
+    );
     assert_eq!(binary(&[&notes, &"--fail-on-incomplete"]).code, 4);
 }
 

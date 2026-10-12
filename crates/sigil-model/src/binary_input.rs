@@ -16,12 +16,12 @@ pub const BINARY_CONTAINER: &str = "binary.container";
 /// Hashing reads, over all inputs.
 pub const BINARY_BYTES: &str = "binary_bytes";
 /// `binary.container`'s `Unsupported` reason.
-pub const BINARY_UNSUPPORTED: &str = "not an ELF executable, shared object, or relocatable object";
+pub const BINARY_UNSUPPORTED: &str = "not a supported ELF or Mach-O container";
 /// `binary.container`'s `Error` for a read that saw a change.
 pub const BINARY_CHANGED: &str = "changed during the read";
 /// `binary.container`'s `Error` for a file gone after its read.
 pub const BINARY_VANISHED: &str = "vanished during the read";
-/// A `Partial` entry: an ELF slice without facts.
+/// A `Partial` entry: a recognized slice without facts.
 pub const BINARY_NOT_PARSED: &str = "not parsed";
 /// Binary roots are `binary-<n>`.
 pub const BINARY_ROOT_PREFIX: &str = "binary-";
@@ -132,7 +132,10 @@ pub fn expected_binary_container(
         .iter()
         .find(|a| a.id == *artifact)
         .ok_or("its artifact is not in the session")?;
-    if !matches!(a.format, Format::Elf { .. }) {
+    if !matches!(
+        a.format,
+        Format::Elf { .. } | Format::MachO | Format::MachOFat
+    ) {
         return Ok(ExpectedContainer::Exactly(CoverageState::Unsupported {
             what: BINARY_UNSUPPORTED.to_string(),
         }));

@@ -444,7 +444,9 @@ fn a_hostile_input_path_is_escaped() {
 fn hostile_container_facts_are_escaped() {
     let mut s = binary_inspect();
     {
-        let ContainerFacts::Elf(f) = &mut s.binaries[0].container;
+        let ContainerFacts::Elf(f) = &mut s.binaries[0].container else {
+            panic!()
+        };
         f.soname = Some(t(HOSTILE));
         f.needed = vec![t(HOSTILE)];
         f.runpath = vec![t(HOSTILE)];

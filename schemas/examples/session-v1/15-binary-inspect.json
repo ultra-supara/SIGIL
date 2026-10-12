@@ -170,9 +170,7 @@
     {
       "check": "binary.container",
       "scope": {"Instance": "inst:binary-2/NOTES.txt"},
-      "state": {
-        "Unsupported": {"what": "not an ELF executable, shared object, or relocatable object"}
-      },
+      "state": {"Unsupported": {"what": "not a supported ELF or Mach-O container"}},
       "budget": null
     }
   ],

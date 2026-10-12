@@ -1,9 +1,9 @@
 //! Container facts of a binary slice (PR-4b-1; plan §4.6.3).
 //!
-//! What a binary's own bytes say: its interpreter, names, declared dependencies, search paths,
-//! notes, symbol counts and imports, a few known embedded values, and Go build info. They are
-//! observations, not identity: `ComponentClaim`s (4c) are built from them. Each fact is read in
-//! full, confirmed absent, or listed in `gaps`.
+//! What a binary's own bytes say: its container header, names, declared dependencies, search
+//! paths, notes, symbol counts and imports, a few known embedded values, and Go build info. They
+//! are observations, not identity: `ComponentClaim`s (4c) are built from them. Each fact is read
+//! in full, confirmed absent, or listed in `gaps`.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +28,33 @@ pub struct BinaryFacts {
     pub gaps: Vec<String>,
 }
 
-/// The container format's facts. 4b-2 adds Mach-O.
+/// The container format's facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum ContainerFacts {
     Elf(ElfFacts),
+    MachO(MachOFacts),
+}
+
+/// Mach-O header and dynamic-loader facts of one slice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachOFacts {
+    pub is_64: bool,
+    pub cpu_type: i32,
+    pub cpu_subtype: i32,
+    pub fat_cpu_type: Option<i32>,
+    pub fat_cpu_subtype: Option<i32>,
+    pub fat_alignment: Option<u32>,
+    pub file_type: u32,
+    pub flags: u32,
+    pub uuid: Option<String>,
+    pub id_dylib: Option<UntrustedText>,
+    /// `LC_LOAD_*_DYLIB` names, in load-command order.
+    pub load_dylibs: Vec<UntrustedText>,
+    /// `LC_RPATH` values, in load-command order.
+    pub rpaths: Vec<UntrustedText>,
+    pub dylinker: Option<UntrustedText>,
 }
 
 /// ELF facts, from the program headers first (what the loader reads), then the sections.

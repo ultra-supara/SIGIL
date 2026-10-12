@@ -126,7 +126,7 @@ fn a_gap_makes_the_check_partial_with_the_path() {
     assert!(
         missing
             .iter()
-            .any(|m| m.starts_with("lib/ollama/libbroken.so: ")),
+            .any(|m| m.starts_with("lib/ollama/libbroken.so [x86_64]: ")),
         "{missing:?}"
     );
 }
@@ -145,7 +145,7 @@ fn a_malformed_relocation_size_makes_the_check_partial_without_data_symbols() {
     };
     assert_eq!(
         missing,
-        &["lib/ollama/libbad.so: dynamic: malformed: DT_RELASZ is not a whole number of entries"]
+        &["lib/ollama/libbad.so [x86_64]: dynamic: malformed: DT_RELASZ is not a whole number of entries"]
     );
 }
 

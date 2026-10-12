@@ -15,22 +15,25 @@ cargo run -q -p sigil-cli -- binary inspect ./libggml-base.so --fail-on-incomple
 Each input is its own scan root, `binary-<n>` in the order of first appearance. The root's path is the file,
 after the symlinks in the argument are resolved. A file named twice, directly or through a
 symlink, is one input. For each input, the session records:
-- **The read:** its digest and size, and its format. The format is an ELF executable, shared
-  object, or relocatable object (`.o`), or anything else.
-- **Its container facts,** for an ELF. These are the facts the installation scan records (see
+- **The read:** its digest and size, and its format. Supported containers are ELF executable,
+  shared object, relocatable object (`.o`), thin Mach-O, and universal (fat) Mach-O.
+- **Its container facts,** for ELF and each Mach-O slice. ELF facts match those the installation scan records (see
   [runtime artifacts](runtime-artifacts.md#binaries)):
   - interpreter, SONAME, NEEDED, RPATH, RUNPATH;
   - build-id, `.comment`, stripped;
   - exports and imports;
   - the known data symbols (in a relocatable object, each is `Unknown` with a gap: its data is
     not linked yet), and Go build info.
+  Mach-O facts include the header CPU type, subtype, file type and flags; UUID, dylib ID, loaded
+  dylibs, RPATHs, and dynamic linker. A fat file records each architecture slice's offset, size,
+  digest, table CPU type/subtype, and alignment.
 - **One `binary.container` coverage entry:** the input's status.
 
 | The input | Status |
 |---|---|
-| An ELF, every fact read in full or confirmed absent | `Complete` |
-| An ELF with gaps, or without its facts | `Partial`, listing them (`not parsed` without facts) |
-| Anything else (a script, a PE, a Mach-O for now) | `Unsupported` |
+| An ELF or Mach-O, every fact read in full or confirmed absent | `Complete` |
+| A recognized ELF or Mach-O with gaps, or without slice facts | `Partial`, listing them (`not parsed` without facts) |
+| Anything else (a script, a PE, or another unsupported format) | `Unsupported` |
 | Over the `binary_bytes` budget | `BudgetExceeded`: not read, later inputs still are |
 | Changed or removed while it was read | `Error` |
 
@@ -48,6 +51,7 @@ digest, and status.
 - For an executable or a shared object, imports are the dynamic symbols its loader resolves.
 - For a relocatable object, they are the undefined symbols left for the linker. They are not the
   final program's imports.
+- Mach-O loaded dylibs are declared dependencies, not symbol-level imports.
 - Neither shows that the code calls them: no code is analyzed, so no call site is recorded.
 
 ## Inputs and errors

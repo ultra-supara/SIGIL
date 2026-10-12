@@ -1,24 +1,23 @@
 //! Reading one file for its binary facts (PR-4b-1's read, shared by the install scan and
 //! `binary inspect`; PR-4b-2a spec §4.2). It:
 //! - hashes the file within a byte limit;
-//! - identifies an ELF by its header;
+//! - identifies ELF and Mach-O containers;
 //! - parses each content once, on the fd that hashed it;
 //! - keeps the facts only from a read that saw no change.
 
 use std::collections::BTreeMap;
 
 use sigil_model::{
-    Artifact, ArtifactId, BinaryFacts, DiscoverySource, Format, RootId, Sha256Hex, Slice, SliceId,
+    Artifact, ArtifactId, BinaryFacts, DiscoverySource, RootId, Sha256Hex, Slice, SliceId,
     Stability,
 };
 
 use super::fs::{FileRead, ReadSpec, RelPath, SafeFs};
-use crate::binary::{self, header, BinaryBudgets, Parsed};
+use crate::binary::{self, BinaryBudgets, ParsedArtifact};
 
 /// Reads `rel` under `root` without following any symlink. The file is hashed only if it is at
-/// most `limit` bytes (a larger one is `NotRead { BudgetExceeded }`), and an ELF content not in
-/// `parsed` yet is parsed. `during` runs while the file is open (the tests'
-/// hook). The artifact of the read gets its ELF format and slice.
+/// most `limit` bytes (a larger one is `NotRead { BudgetExceeded }`), and a recognized content
+/// not in `parsed` yet is parsed. `during` runs while the file is open (the tests' hook).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn read(
     fs: &SafeFs,
@@ -27,7 +26,7 @@ pub(crate) fn read(
     limit: u64,
     discovered_by: Vec<DiscoverySource>,
     budgets: BinaryBudgets,
-    parsed: &mut BTreeMap<ArtifactId, Parsed>,
+    parsed: &mut BTreeMap<ArtifactId, ParsedArtifact>,
     during: &dyn Fn(&RelPath),
 ) -> FileRead {
     let (mut read, facts) = {
@@ -42,11 +41,15 @@ pub(crate) fn read(
             discovered_by,
             |input| {
                 during(rel);
-                // ELF content, each content once.
-                if header::read(input.prefix).is_none() || before.contains_key(input.artifact) {
+                if before.contains_key(input.artifact) {
                     return None;
                 }
-                Some(binary::parse(input.file, input.size, budgets))
+                let digest = input
+                    .artifact
+                    .as_str()
+                    .strip_prefix("sha256:")
+                    .and_then(|hex| Sha256Hex::new(hex.to_string()).ok())?;
+                binary::parse_artifact(input.file, input.size, &digest, input.prefix, budgets)
             },
         )
     };
@@ -54,26 +57,24 @@ pub(crate) fn read(
         .instance
         .as_ref()
         .is_some_and(|i| i.stability == Stability::NoChangeDetected);
-    if let (Some(Some(p)), Some(a), true) = (facts, read.artifact.as_ref(), stable) {
-        parsed.insert(a.id.clone(), p);
+    let fresh = facts.flatten();
+    if let (Some(p), Some(a), true) = (fresh.as_ref(), read.artifact.as_ref(), stable) {
+        parsed.insert(a.id.clone(), p.clone());
     }
     if let Some(artifact) = read.artifact.as_mut() {
-        if let Some((kind, arch)) = header::read(&read.prefix) {
-            artifact.format = Format::Elf { kind };
-            let hex = artifact
-                .id
-                .as_str()
-                .trim_start_matches("sha256:")
-                .to_string();
-            if let Ok(sha256) = Sha256Hex::new(hex) {
-                artifact.slices = vec![Slice {
-                    id: SliceId::from_parts(&artifact.id, arch, 0),
-                    arch,
-                    offset: 0,
-                    size: artifact.size,
-                    sha256,
-                }];
-            }
+        if let Some(parsed_artifact) = parsed.get(&artifact.id).or(fresh.as_ref()) {
+            artifact.format = parsed_artifact.format;
+            artifact.slices = parsed_artifact
+                .slices
+                .iter()
+                .map(|slice| Slice {
+                    id: SliceId::from_parts(&artifact.id, slice.arch, slice.offset),
+                    arch: slice.arch,
+                    offset: slice.offset,
+                    size: slice.size,
+                    sha256: slice.sha256.clone(),
+                })
+                .collect();
         }
     }
     read
@@ -81,24 +82,29 @@ pub(crate) fn read(
 
 /// One `BinaryFacts` per parsed content, for its slice, sorted by slice.
 pub(crate) fn binaries(
-    parsed: BTreeMap<ArtifactId, Parsed>,
+    parsed: BTreeMap<ArtifactId, ParsedArtifact>,
     artifacts: &[Artifact],
 ) -> Vec<BinaryFacts> {
     let mut out = vec![];
-    for (id, p) in parsed {
-        let Some(slice) = artifacts
-            .iter()
-            .find(|a| a.id == id)
-            .and_then(|a| a.slices.first())
-        else {
+    for (id, parsed_artifact) in parsed {
+        let Some(artifact) = artifacts.iter().find(|a| a.id == id) else {
             continue;
         };
-        out.push(BinaryFacts {
-            slice: slice.id.clone(),
-            container: p.container,
-            go: p.go,
-            gaps: p.gaps,
-        });
+        for parsed_slice in parsed_artifact.slices {
+            let Some(container) = parsed_slice.container else {
+                continue;
+            };
+            let slice_id = SliceId::from_parts(&id, parsed_slice.arch, parsed_slice.offset);
+            if !artifact.slices.iter().any(|slice| slice.id == slice_id) {
+                continue;
+            }
+            out.push(BinaryFacts {
+                slice: slice_id,
+                container,
+                go: parsed_slice.go,
+                gaps: parsed_slice.gaps,
+            });
+        }
     }
     out.sort_by(|a, b| a.slice.cmp(&b.slice));
     out

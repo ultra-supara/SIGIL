@@ -28,9 +28,10 @@ separate questions:
   `PREFIX`.
 - **Its own root.** The installation is the scan root `install`, on its own SafeFs, separate from
   the model store's.
-- **The first 64 bytes** of each file give its format. An ELF file is recorded with its type and
-  architecture, and one slice. The format does not affect matching. When the same bytes are also a
-  model blob, the one artifact keeps the ELF format and slice.
+- **The first 64 bytes** identify the format. ELF records its type and architecture as one slice.
+  Thin Mach-O records its header; a fat Mach-O records each architecture, offset, size and digest.
+  The format does not affect matching. When the same bytes are also a model blob, the artifact
+  keeps its recognized format and slices.
 - **A link is stable** only if a second `readlinkat` gives the same target text. Otherwise the
   placement is `ChangedDuringRead`, as is a file whose `fstat` changed during its read, or a file
   hashed whose open fd is not the file its `lstat` saw just before.
@@ -168,15 +169,16 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
 
 ## Binaries
 
-Every ELF file of the install also gets its container facts: a `binaries` record per slice in the
-session, read from the file's own bytes. They are observations, not identity.
+Every ELF or Mach-O file of the install also gets its container facts: a `binaries` record per
+slice in the session, read from the file's own bytes. They are observations, not identity.
 
 - **How it is read.**
   - The parse runs on the fd that hashed the file, after hashing and before the post-read check.
     A file that changes while it is parsed is `ChangedDuringRead`, and its facts are dropped.
   - Each content is parsed once.
   - Everything goes through `pread`, never mapped or loaded, within `binary_parse_bytes`.
-  - An ELF needs its whole header: 52 bytes for ELF32, 64 for ELF64.
+  - ELF needs its whole header: 52 bytes for ELF32, 64 for ELF64. Mach-O records thin headers or
+    each architecture in a fat container.
 - **What is read: the program headers first** (what the dynamic loader reads), then the sections:
 
   | Fact | Source | Confirmed absent (no gap) | Gap |
@@ -187,6 +189,8 @@ session, read from the file's own bytes. They are observations, not identity.
   | `.comment`, stripped | the sections | a section header table without `.comment`, every section name read | no section header table, or one out of the file (`sections: …`; stripped is then unknown); a section whose name cannot be read (`malformed: section names: …`): it could be `.comment` or `.go.buildinfo` |
   | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC`. For a relocatable object (`ET_REL`), its `.symtab`: the undefined symbols left for the linker (not the final program's imports), with no versions; a known data symbol there is `Unknown` with its gap (its data is not linked yet) | no `PT_DYNAMIC` (never for a relocatable object: its `.symtab` is required) | dynamic symbols without a `.dynsym` section, a malformed table, a version index that resolves to nothing, a `.gnu.version` shorter than `.dynsym`, a known data symbol defined twice, a defined data object (`STT_OBJECT`) whose name cannot be read (it could be a known one); for a relocatable object (`ET_REL`), no `SHT_SYMTAB` |
   | Go build info | below | the whole range searched, no magic | below |
+  | Mach-O header, UUID, dylib ID, loaded dylibs, RPATHs, dynamic linker | Mach-O header and load commands | the command is absent | malformed header or command, an out-of-range string, or an output limit |
+  | Fat Mach-O architecture table | fat header and architecture entries | not a fat container | truncated, overlapping, misaligned, or out-of-file slices |
 
 - **Known data symbols.** Four symbols from llama.cpp's `common/build-info.cpp`: `LLAMA_COMMIT`,
   `LLAMA_COMPILER`, `LLAMA_BUILD_TARGET` (pointers), and `LLAMA_BUILD_NUMBER` (an `int`). A value
@@ -217,6 +221,7 @@ session, read from the file's own bytes. They are observations, not identity.
   - 64 RPATH/RUNPATH entries;
   - 4 KiB per string;
   - 1,024 notes per segment;
+  - 64 fat slices, 65,536 Mach-O load commands, 8 MiB of load commands, 1,024 names per field;
   - a 64-byte build-id;
   - 16 comments of 256 bytes;
   - `binary_imports` imports;
@@ -230,19 +235,17 @@ session, read from the file's own bytes. They are observations, not identity.
 
   | State | When |
   |---|---|
-  | `Complete` | Discovery is complete, and every ELF file's facts have no gap |
+  | `Complete` | Discovery is complete, and every ELF or Mach-O slice's facts have no gap |
   | `Partial { missing }` | Otherwise: `discovery incomplete`, and `<path>: <gap>` for each gap |
   | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 
   `Complete` means each fact was read in full or confirmed absent. Anything not parsed, not
   searched, or cut short is a gap.
-- **NEEDED** is also recorded as `Declares` relations, one per distinct name. The order stays in
-  the record, for the loader's lookup order.
+- **NEEDED** and Mach-O loaded dylibs are also recorded as `Declares` relations, one per distinct
+  name. The order stays in the record, for the loader's lookup order.
 
 ## Not yet
 
-- Mach-O and fat binaries, and `sigil binary inspect` (PR-4b-2). A Mach-O file's content is
-  matched by SHA-256 like any file.
 - Component identity (ggml, llama.cpp) from these facts, and the backends a library holds (PR-4c).
 - Resolving NEEDED, RPATH, and RUNPATH to files (PR-4d).
 - Releases outside the embedded set, and releases built from a source commit.

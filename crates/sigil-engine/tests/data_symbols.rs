@@ -8,7 +8,9 @@ use sigil_model::{ContainerFacts, DataValue, Loc};
 
 fn values(bytes: &[u8]) -> (Vec<(String, DataValue)>, Parsed) {
     let p = parse(&file(bytes), bytes.len() as u64, BinaryBudgets::default());
-    let ContainerFacts::Elf(f) = &p.container;
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
     (
         f.data
             .iter()
@@ -65,7 +67,9 @@ fn x86_64_values_come_from_relative_relocations() {
             ("LLAMA_COMPILER".into(), text("GNU 11.2.1")),
         ]
     );
-    let ContainerFacts::Elf(f) = &p.container;
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
     let commit = f.data.iter().find(|d| d.symbol == "LLAMA_COMMIT").unwrap();
     assert!(matches!(
         commit.at.as_slice(),

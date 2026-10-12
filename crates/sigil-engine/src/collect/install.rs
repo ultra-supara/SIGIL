@@ -19,7 +19,7 @@ use super::fs::{
     instance_id, recorded, Entry, EntryType, FsBudgets, ReadOutcome, RelPath, RootError, SafeFs,
     WalkError,
 };
-use crate::binary::{BinaryBudgets, Parsed};
+use crate::binary::{BinaryBudgets, ParsedArtifact};
 
 /// Budgets of the install scan, recorded with an `install_` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub struct InstallBudgets {
     pub entries: u64,
     /// Bytes read for hashing, over the whole scan, as `install_bytes`.
     pub bytes: u64,
-    /// Each ELF artifact's parse (PR-4b-1), as `binary_parse_bytes` and `binary_imports`.
+    /// Each ELF or Mach-O artifact's parse, as `binary_parse_bytes` and `binary_imports`.
     pub binary: BinaryBudgets,
 }
 
@@ -56,7 +56,7 @@ pub struct InstallFacts {
     /// Coverage of `artifacts.discovery`, scope `Root(install)`.
     pub discovery: Coverage,
     pub bytes_read: u64,
-    /// The container facts of each ELF artifact, parsed once on the fd that hashed it (PR-4b-1).
+    /// The container facts of each ELF or Mach-O slice, parsed once on the fd that hashed it.
     pub binaries: Vec<sigil_model::BinaryFacts>,
 }
 
@@ -151,8 +151,8 @@ struct Collector<'a> {
     found: u32,
     during_read: &'a dyn Fn(&RelPath),
     binary: BinaryBudgets,
-    /// Each ELF artifact parsed so far, by content.
-    parsed: BTreeMap<sigil_model::ArtifactId, Parsed>,
+    /// Each recognized binary artifact parsed so far, by content.
+    parsed: BTreeMap<sigil_model::ArtifactId, ParsedArtifact>,
 }
 
 impl Collector<'_> {
