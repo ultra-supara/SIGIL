@@ -1,8 +1,8 @@
 //! The files named on the command line (`sigil binary inspect <PATH>...`; PR-4b-2a spec §4.1).
 //!
 //! An argument is explicit input, so symlinks in it are resolved, as a scan root's path is. The
-//! file itself is then read without following anything, and must be the file resolved (its
-//! `dev:ino` at resolution is the hashed fd's). Each input is read through its own
+//! file itself is then opened without following anything, and must be the file at its canonical
+//! path just before (by `dev:ino`). Each input is read through its own
 //! `SafeFs`, dropped before the next, so the open file descriptors do not grow with the number
 //! of inputs. Its directory is opened with `O_PATH`: it is never listed. An input that cannot be
 //! read is a fatal error; only an input over `binary_bytes` is recorded unread.
@@ -70,9 +70,9 @@ fn fatal(path: &Path, why: &str) -> String {
     )
 }
 
-/// As [`collect`], calling `before_open` with each canonical path after it was resolved and
-/// before its directory is opened, and `during_read` while the file is open: the tests' ways to
-/// change it.
+/// As [`collect`], calling `before_open` with each canonical path after its `dev:ino` was taken
+/// and before its directory is opened, and `during_read` while the file is open: the tests' ways
+/// to change it.
 fn collect_with(
     paths: &[PathBuf],
     budgets: NamedBudgets,
@@ -82,29 +82,25 @@ fn collect_with(
     if paths.is_empty() {
         return Err("no input: name at least one file".to_string());
     }
-    let io = |p: &Path, e: std::io::Error| {
-        let why = match e.kind() {
-            std::io::ErrorKind::NotFound => "not found".to_string(),
-            std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
-            _ => e.to_string(),
-        };
-        fatal(p, &why)
-    };
-    // Each input with the `dev:ino` it resolved to: the file that must be read.
-    let mut inputs: Vec<(PathBuf, (u64, u64))> = vec![];
+    let mut inputs: Vec<PathBuf> = vec![];
     let mut seen = BTreeSet::new();
     for p in paths {
-        let canonical = std::fs::canonicalize(p).map_err(|e| io(p, e))?;
+        let canonical = std::fs::canonicalize(p).map_err(|e| {
+            let why = match e.kind() {
+                std::io::ErrorKind::NotFound => "not found".to_string(),
+                std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
+                _ => e.to_string(),
+            };
+            fatal(p, &why)
+        })?;
         if seen.insert(canonical.clone()) {
-            use std::os::unix::fs::MetadataExt;
-            let st = std::fs::symlink_metadata(&canonical).map_err(|e| io(p, e))?;
-            inputs.push((canonical, (st.dev(), st.ino())));
+            inputs.push(canonical);
         }
     }
     let mut facts = NamedFacts::default();
     let mut artifacts = BTreeSet::new();
     let mut parsed = BTreeMap::new();
-    for (k, (path, resolved)) in inputs.iter().enumerate() {
+    for (k, path) in inputs.iter().enumerate() {
         let n = u32::try_from(k + 1).map_err(|_| "too many inputs".to_string())?;
         let root = binary_root(n).ok_or_else(|| format!("binary-{n} is not a root ID"))?;
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
@@ -114,6 +110,19 @@ fn collect_with(
             .to_str()
             .ok_or_else(|| fatal(path, "the file name is not UTF-8"))?;
         let rel = RelPath::parse(name).map_err(|e| fatal(path, &e.to_string()))?;
+        // The file at the canonical path just before it is opened: the file that must be opened
+        // (review of #89). Taken here, not when every input is resolved, so that hashing the
+        // inputs before it leaves no time for its inode number to be reused.
+        let resolved = {
+            use std::os::unix::fs::MetadataExt;
+            match std::fs::symlink_metadata(path) {
+                Ok(st) => (st.dev(), st.ino()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(fatal(path, "vanished after it was resolved"));
+                }
+                Err(e) => return Err(fatal(path, &e.to_string())),
+            }
+        };
         before_open(path);
         // This input's own SafeFs: its directory fd is closed before the next input.
         let mut fs = SafeFs::new(FsBudgets::default());
@@ -145,8 +154,9 @@ fn collect_with(
         let Some(instance) = read.instance else {
             return Err(fatal(path, &outcome(&read.outcome)));
         };
-        // A regular file is recorded with its open fd's `stat`: it must be the file resolved.
-        let replaced = (instance.stat.dev, instance.stat.ino) != *resolved;
+        // A file read, or over budget, is recorded with its open fd's `stat`: it must be the file
+        // resolved.
+        let replaced = (instance.stat.dev, instance.stat.ino) != resolved;
         match &instance.content {
             InstanceContent::Read { .. }
             | InstanceContent::NotRead {
@@ -316,15 +326,21 @@ mod tests {
             let e = collect_with(&[p.join("target.so")], budgets, &replace, &|_| {}).unwrap_err();
             assert!(e.contains("replaced by another file"), "{e}");
         }
-        // The same file under another name (a hard link renamed over it) is the file resolved.
+        // The same file under a new entry (the name removed, then a hard link of it renamed
+        // there) is the file resolved. A rename between two links of one inode does nothing.
         std::fs::hard_link(p.join("target.so"), p.join("clean.so")).unwrap();
+        let relink = |path: &Path| {
+            std::fs::remove_file(path).unwrap();
+            std::fs::rename(path.with_file_name("clean.so"), path).unwrap();
+        };
         let f = collect_with(
             &[p.join("target.so")],
             NamedBudgets::default(),
-            &replace,
+            &relink,
             &|_| {},
         )
         .unwrap();
+        assert!(!p.join("clean.so").exists());
         assert_eq!(f.instances[0].stability, Stability::NoChangeDetected);
     }
 

@@ -16,7 +16,8 @@
 //!
 //! System calls SafeFs makes (the list PR-3b's safety test enforces): `openat2`, `openat`,
 //! `newfstatat`, `fstat`, `readlinkat`, `read`, `getdents64`, `fcntl`, `close`; and, once per scan
-//! root, `open` plus what `std::fs::canonicalize` needs. All are read-only (contract C-5).
+//! root, what `std::fs::canonicalize` needs, then `open` of `/` and `openat` of each component of
+//! the canonical path, never following a symlink. All are read-only (contract C-5).
 
 use std::cell::Cell;
 use std::os::fd::{AsFd, OwnedFd};
@@ -126,13 +127,21 @@ impl SafeFs {
             std::io::ErrorKind::PermissionDenied => RootError::PermissionDenied,
             _ => RootError::Failed(e.to_string()),
         })?;
-        let fd = rustix::fs::open(
-            &canonical,
-            access | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(|e| match e {
-            rustix::io::Errno::NOTDIR => RootError::NotADirectory,
+        self.add_canonical(id, canonical, access)
+    }
+
+    /// Opens the canonical `path` as root `id`: from `/`, one component at a time, without
+    /// following a symlink (review of #89). A component replaced by a symlink after
+    /// `canonicalize` is refused (`NotADirectory`), never followed; the last one is opened with
+    /// `access`.
+    fn add_canonical(
+        &mut self,
+        id: RootId,
+        canonical: PathBuf,
+        access: OFlags,
+    ) -> Result<(), RootError> {
+        let fd = open_canonical(&canonical, access).map_err(|e| match e {
+            rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP => RootError::NotADirectory,
             rustix::io::Errno::ACCESS | rustix::io::Errno::PERM => RootError::PermissionDenied,
             rustix::io::Errno::NOENT => RootError::NotFound,
             other => RootError::Failed(other.to_string()),
@@ -186,5 +195,64 @@ impl SafeFs {
 
     pub(crate) fn canonical_roots(&self) -> Vec<PathBuf> {
         self.roots.iter().map(|r| r.path.clone()).collect()
+    }
+}
+
+/// `path` (absolute, with no `.` or `..`) opened as a directory from `/`, one component at a time
+/// with `O_NOFOLLOW`: every component before the last with `O_PATH`, the last with `access`.
+fn open_canonical(path: &Path, access: OFlags) -> Result<OwnedFd, rustix::io::Errno> {
+    use std::path::Component;
+    let flags = OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        return Err(rustix::io::Errno::INVAL);
+    }
+    let mut parts = vec![];
+    for c in components {
+        let Component::Normal(part) = c else {
+            return Err(rustix::io::Errno::INVAL);
+        };
+        parts.push(part);
+    }
+    let Some((last, before)) = parts.split_last() else {
+        return rustix::fs::open("/", access | flags, Mode::empty());
+    };
+    let mut dir = rustix::fs::open("/", OFlags::PATH | flags, Mode::empty())?;
+    for part in before {
+        dir = rustix::fs::openat(&dir, *part, OFlags::PATH | flags, Mode::empty())?;
+    }
+    rustix::fs::openat(&dir, *last, access | flags, Mode::empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use rustix::fs::OFlags;
+    use sigil_model::RootId;
+
+    use super::{FsBudgets, RootError, SafeFs};
+
+    /// Review of #89: a root is opened from `/` one component at a time without following a
+    /// symlink, so a component replaced by one after `canonicalize` is refused, never followed.
+    #[test]
+    fn a_canonical_root_is_opened_without_following_a_symlink() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        std::fs::create_dir_all(p.join("a/b")).unwrap();
+        symlink("a", p.join("l")).unwrap();
+        for access in [OFlags::RDONLY, OFlags::PATH] {
+            let add = |path: std::path::PathBuf| {
+                SafeFs::new(FsBudgets::default()).add_canonical(
+                    RootId::new("r").unwrap(),
+                    path,
+                    access,
+                )
+            };
+            assert_eq!(add(p.join("a/b")), Ok(()));
+            assert_eq!(add(p.join("l/b")), Err(RootError::NotADirectory));
+            assert_eq!(add(p.join("l")), Err(RootError::NotADirectory));
+            assert_eq!(add("/".into()), Ok(()));
+        }
     }
 }
