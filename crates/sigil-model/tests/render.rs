@@ -437,3 +437,59 @@ fn a_hostile_input_path_is_escaped() {
     assert!(!md.contains("<script>"), "{md}");
     assert!(!md.contains("\n# heading"), "{md}");
 }
+
+/// Review of Part B: every value of the Binaries section that comes from the inspected file is
+/// escaped. No HTML, no heading, and every `Fact | Value` row keeps exactly three bare `|`.
+#[test]
+fn hostile_container_facts_are_escaped() {
+    let mut s = binary_inspect();
+    {
+        let ContainerFacts::Elf(f) = &mut s.binaries[0].container;
+        f.soname = Some(t(HOSTILE));
+        f.needed = vec![t(HOSTILE)];
+        f.runpath = vec![t(HOSTILE)];
+        f.comment = vec![t(HOSTILE)];
+        f.imports = vec![ElfImport {
+            name: t(HOSTILE),
+            version: Some(t(HOSTILE)),
+            weak: true,
+        }];
+        f.data = vec![DataSymbol {
+            symbol: "LLAMA_COMMIT".to_string(),
+            value: DataValue::Text(t(HOSTILE)),
+            at: vec![Loc::Symbol(t("LLAMA_COMMIT"))],
+        }];
+    }
+    s.binaries[0].go = Some(GoBuildInfo {
+        at: Loc::Section {
+            name: t(".go.buildinfo"),
+            offset: 0,
+        },
+        version: t(HOSTILE),
+        path: Some(t(HOSTILE)),
+        main: Some(GoModule {
+            path: t(HOSTILE),
+            version: t(HOSTILE),
+            sum: None,
+            replace: None,
+        }),
+        deps: vec![],
+        settings: vec![GoSetting {
+            key: t(HOSTILE),
+            value: t(HOSTILE),
+        }],
+    });
+    let md = render_session(&s);
+    assert!(!md.contains("<script>"), "{md}");
+    assert!(!md.contains("\n# heading"), "{md}");
+    let bare = |line: &str| {
+        let b = line.as_bytes();
+        (0..b.len())
+            .filter(|&i| b[i] == b'|' && (i == 0 || b[i - 1] != b'\\'))
+            .count()
+    };
+    let facts = &md[md.find("| Fact | Value |").unwrap()..];
+    for line in facts.lines().take_while(|l| l.starts_with('|')) {
+        assert_eq!(bare(line), 3, "{line}");
+    }
+}
