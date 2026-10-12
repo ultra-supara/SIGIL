@@ -55,8 +55,9 @@ pub use artifact::{
     StatInfo,
 };
 pub use binary::{
-    BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport, GoBuildInfo, GoModule,
-    GoSetting, MachOFacts, ARTIFACTS_CONTAINER,
+    macho_architecture, BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport,
+    GoBuildInfo, GoModule, GoSetting, MachOFacts, ARTIFACTS_CONTAINER, FAT_CPU_MISMATCH_GAP,
+    FAT_DUPLICATE_ARCH_GAP,
 };
 pub use binary_input::{
     binary_root, binary_root_index, expected_binary_container, is_binary_inspection,

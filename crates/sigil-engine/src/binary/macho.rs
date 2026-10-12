@@ -1,9 +1,13 @@
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 
 use object::read::{ReadCacheOps, ReadRef};
 use sha2::{Digest, Sha256};
-use sigil_model::{Arch, ContainerFacts, Format, MachOFacts, Sha256Hex, UntrustedText};
+use sigil_model::{
+    macho_architecture, Arch, ContainerFacts, Format, MachOFacts, Sha256Hex, UntrustedText,
+    FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP,
+};
 
 use super::read::{Bounded, Budgeted};
 use super::{BinaryBudgets, Parsed, ParsedArtifact, ParsedSlice};
@@ -18,7 +22,6 @@ const LC_LOAD_WEAK_DYLIB: u32 = LC_REQ_DYLD | 0x18;
 const LC_RPATH: u32 = LC_REQ_DYLD | 0x1c;
 const LC_REEXPORT_DYLIB: u32 = LC_REQ_DYLD | 0x1f;
 const LC_LOAD_UPWARD_DYLIB: u32 = LC_REQ_DYLD | 0x23;
-const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
 
 /// The other load commands dyld requires (`LC_REQ_DYLD`), with the size of each one's structure
 /// (`<mach-o/loader.h>`). Their contents are not facts, so each is skipped once its size is
@@ -673,6 +676,14 @@ fn parse_fat<R: object::read::ReadCacheOps>(
             alignment,
         });
     }
+    // Each architecture once, as lipo requires: the loader would take only one of two.
+    let mut architectures = BTreeSet::new();
+    if !slices
+        .iter()
+        .all(|slice| architectures.insert(macho_architecture(slice.cpu_type, slice.cpu_subtype)))
+    {
+        gaps.push(FAT_DUPLICATE_ARCH_GAP.to_string());
+    }
     let mut overlapping = vec![false; slices.len()];
     for left in 0..slices.len() {
         let left_end = slices[left].offset + slices[left].size;
@@ -765,13 +776,10 @@ fn fat_slice_facts<R: ReadCacheOps>(
         facts.fat_cpu_type = Some(descriptor.cpu_type);
         facts.fat_cpu_subtype = Some(descriptor.cpu_subtype);
         facts.fat_alignment = Some(descriptor.alignment);
-        if facts.cpu_type != descriptor.cpu_type
-            || (facts.cpu_subtype as u32 & !CPU_SUBTYPE_MASK)
-                != (descriptor.cpu_subtype as u32 & !CPU_SUBTYPE_MASK)
+        if macho_architecture(facts.cpu_type, facts.cpu_subtype)
+            != macho_architecture(descriptor.cpu_type, descriptor.cpu_subtype)
         {
-            parsed
-                .gaps
-                .push("fat slice: CPU type or subtype disagrees with its header".to_string());
+            parsed.gaps.push(FAT_CPU_MISMATCH_GAP.to_string());
         }
     }
     Ok(parsed)

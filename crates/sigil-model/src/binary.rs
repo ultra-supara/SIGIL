@@ -14,6 +14,23 @@ use crate::text::UntrustedText;
 /// The container analysis: what was read and what was not (scope `Root(install)`).
 pub const ARTIFACTS_CONTAINER: &str = "artifacts.container";
 
+/// The gap of a fat Mach-O slice whose own header names another architecture than its entry in
+/// the fat table (B2).
+pub const FAT_CPU_MISMATCH_GAP: &str = "fat slice: CPU type or subtype disagrees with its header";
+
+/// The gap of every slice of a fat Mach-O whose table lists one architecture twice (B2). lipo
+/// refuses to build such a file, and dyld loads only one of the two.
+pub const FAT_DUPLICATE_ARCH_GAP: &str = "fat header: an architecture is listed twice";
+
+/// The capability bits of a Mach-O CPU subtype (`CPU_SUBTYPE_MASK`).
+const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
+
+/// A Mach-O architecture as lipo compares two: the CPU type, and the subtype without its
+/// capability bits.
+pub fn macho_architecture(cpu_type: i32, cpu_subtype: i32) -> (i32, u32) {
+    (cpu_type, cpu_subtype as u32 & !CPU_SUBTYPE_MASK)
+}
+
 /// The facts of one slice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -149,6 +149,64 @@ fn truncated_duplicate_overlapping_and_out_of_range_fat_tables_are_partial() {
 }
 
 #[test]
+fn a_fat_table_that_lists_one_architecture_twice_is_partial() {
+    // Two valid x86_64 slices at different offsets that do not overlap. lipo refuses to build
+    // this, and dyld would load only one of them.
+    let first = common::macho::thin(true, false, common::macho::X86_64, 3, &[]);
+    let second = common::macho::thin(
+        true,
+        false,
+        common::macho::X86_64,
+        3,
+        &[common::macho::uuid_command(false)],
+    );
+    for second_subtype in [3, 0x8000_0003u32 as i32] {
+        let bytes = common::macho::fat32(&[
+            (first.clone(), common::macho::X86_64, 3),
+            (second.clone(), common::macho::X86_64, second_subtype),
+        ]);
+        let parsed = parse(&bytes).unwrap();
+        assert_eq!(parsed.slices.len(), 2, "{parsed:?}");
+        assert_ne!(parsed.slices[0].offset, parsed.slices[1].offset);
+        for slice in &parsed.slices {
+            assert!(
+                slice
+                    .gaps
+                    .contains(&sigil_model::FAT_DUPLICATE_ARCH_GAP.to_string()),
+                "{parsed:?}"
+            );
+        }
+    }
+
+    // x86_64 and x86_64h are two architectures (subtypes 3 and 8).
+    let bytes = common::macho::fat32(&[
+        (first.clone(), common::macho::X86_64, 3),
+        (
+            common::macho::thin(true, false, common::macho::X86_64, 8, &[]),
+            common::macho::X86_64,
+            8,
+        ),
+    ]);
+    let parsed = parse(&bytes).unwrap();
+    assert_eq!(parsed.slices.len(), 2);
+    assert!(
+        parsed.slices.iter().all(|slice| slice.gaps.is_empty()),
+        "{parsed:?}"
+    );
+}
+
+#[test]
+fn a_slice_header_that_disagrees_with_its_table_entry_is_partial() {
+    let arm = common::macho::thin(true, false, common::macho::AARCH64, 0, &[]);
+    let bytes = common::macho::fat32(&[(arm, common::macho::X86_64, 0)]);
+    let parsed = parse(&bytes).unwrap();
+    assert_eq!(
+        parsed.slices[0].gaps,
+        [sigil_model::FAT_CPU_MISMATCH_GAP.to_string()]
+    );
+}
+
+#[test]
 fn an_invalid_java_constant_pool_does_not_hide_malformed_fat_macho() {
     let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 2, 5];
     bytes.extend_from_slice(&[0; 14]);
