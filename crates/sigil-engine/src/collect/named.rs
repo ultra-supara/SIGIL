@@ -1,8 +1,8 @@
 //! The files named on the command line (`sigil binary inspect <PATH>...`; PR-4b-2a spec §4.1).
 //!
 //! An argument is explicit input, so symlinks in it are resolved, as a scan root's path is. The
-//! file itself is then opened without following anything, and must be the file at its canonical
-//! path just before (by `dev:ino`). Each input is read through its own
+//! file itself is then opened without following anything, and must be the file resolved (by
+//! `dev:ino`). Each input is read through its own
 //! `SafeFs`, dropped before the next, so the open file descriptors do not grow with the number
 //! of inputs. Its directory is opened with `O_PATH`: it is never listed. An input that cannot be
 //! read is a fatal error; only an input over `binary_bytes` is recorded unread.
@@ -70,9 +70,9 @@ fn fatal(path: &Path, why: &str) -> String {
     )
 }
 
-/// As [`collect`], calling `before_open` with each canonical path after its `dev:ino` was taken
-/// and before its directory is opened, and `during_read` while the file is open: the tests' ways
-/// to change it.
+/// As [`collect`], calling `before_open` with each canonical path after it was resolved and
+/// before its directory is opened, and `during_read` while the file is open: the tests' ways to
+/// change it.
 fn collect_with(
     paths: &[PathBuf],
     budgets: NamedBudgets,
@@ -82,7 +82,10 @@ fn collect_with(
     if paths.is_empty() {
         return Err("no input: name at least one file".to_string());
     }
-    let mut inputs: Vec<PathBuf> = vec![];
+    // Each input with the `dev:ino` it resolved to: the file that must be opened (review of #89).
+    // A file replaced later, even while the inputs before it are hashed, is not that file. A new
+    // file that reuses the number of the one it replaced is not told apart.
+    let mut inputs: Vec<(PathBuf, (u64, u64))> = vec![];
     let mut seen = BTreeSet::new();
     for p in paths {
         let canonical = std::fs::canonicalize(p).map_err(|e| {
@@ -94,13 +97,21 @@ fn collect_with(
             fatal(p, &why)
         })?;
         if seen.insert(canonical.clone()) {
-            inputs.push(canonical);
+            use std::os::unix::fs::MetadataExt;
+            let st = std::fs::symlink_metadata(&canonical).map_err(|e| {
+                let why = match e.kind() {
+                    std::io::ErrorKind::NotFound => "vanished after it was resolved".to_string(),
+                    _ => e.to_string(),
+                };
+                fatal(p, &why)
+            })?;
+            inputs.push((canonical, (st.dev(), st.ino())));
         }
     }
     let mut facts = NamedFacts::default();
     let mut artifacts = BTreeSet::new();
     let mut parsed = BTreeMap::new();
-    for (k, path) in inputs.iter().enumerate() {
+    for (k, (path, resolved)) in inputs.iter().enumerate() {
         let n = u32::try_from(k + 1).map_err(|_| "too many inputs".to_string())?;
         let root = binary_root(n).ok_or_else(|| format!("binary-{n} is not a root ID"))?;
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
@@ -110,19 +121,6 @@ fn collect_with(
             .to_str()
             .ok_or_else(|| fatal(path, "the file name is not UTF-8"))?;
         let rel = RelPath::parse(name).map_err(|e| fatal(path, &e.to_string()))?;
-        // The file at the canonical path just before it is opened: the file that must be opened
-        // (review of #89). Taken here, not when every input is resolved, so that hashing the
-        // inputs before it leaves no time for its inode number to be reused.
-        let resolved = {
-            use std::os::unix::fs::MetadataExt;
-            match std::fs::symlink_metadata(path) {
-                Ok(st) => (st.dev(), st.ino()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(fatal(path, "vanished after it was resolved"));
-                }
-                Err(e) => return Err(fatal(path, &e.to_string())),
-            }
-        };
         before_open(path);
         // This input's own SafeFs: its directory fd is closed before the next input.
         let mut fs = SafeFs::new(FsBudgets::default());
@@ -156,7 +154,7 @@ fn collect_with(
         };
         // A file read, or over budget, is recorded with its open fd's `stat`: it must be the file
         // resolved.
-        let replaced = (instance.stat.dev, instance.stat.ino) != resolved;
+        let replaced = (instance.stat.dev, instance.stat.ino) != *resolved;
         match &instance.content {
             InstanceContent::Read { .. }
             | InstanceContent::NotRead {
@@ -342,6 +340,34 @@ mod tests {
         .unwrap();
         assert!(!p.join("clean.so").exists());
         assert_eq!(f.instances[0].stability, Stability::NoChangeDetected);
+    }
+
+    /// Review of the #89 fixes: an input replaced while the inputs before it are read (here,
+    /// before the first one's directory is opened) is not the file resolved either.
+    #[test]
+    fn an_input_replaced_while_an_earlier_one_is_read_is_fatal() {
+        let (_d, p) = dir();
+        std::fs::write(p.join("first.so"), b"first").unwrap();
+        std::fs::write(p.join("second.so"), b"second").unwrap();
+        std::fs::write(p.join("clean.so"), b"clean").unwrap();
+        let replace_second = |path: &Path| {
+            if path.ends_with("first.so") {
+                std::fs::rename(
+                    path.with_file_name("clean.so"),
+                    path.with_file_name("second.so"),
+                )
+                .unwrap();
+            }
+        };
+        let e = collect_with(
+            &[p.join("first.so"), p.join("second.so")],
+            NamedBudgets::default(),
+            &replace_second,
+            &|_| {},
+        )
+        .unwrap_err();
+        assert!(e.contains("second.so"), "{e}");
+        assert!(e.contains("replaced by another file"), "{e}");
     }
 
     /// Review of Part B: a file changed, or removed, while it is read is recorded (not fatal),
