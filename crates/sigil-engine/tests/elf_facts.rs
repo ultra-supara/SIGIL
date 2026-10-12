@@ -928,4 +928,85 @@ fn a_long_valid_name_is_no_gap_and_an_unterminated_one_is() {
                 .starts_with("malformed: symbols: a data symbol's name: a name not terminated")),
         "{gaps:?}"
     );
+    // One byte longer than the longest known name (18 bytes), cut by the end of the table:
+    // malformed, never "longer than any known name" (review of rev. 2, P2-1).
+    let cut = "malformed: symbols: a data symbol's name: a name not terminated in its string table";
+    let gaps = symtab(b"\0exported\0LLAMA_BUILD_NUMBERX");
+    assert!(gaps.iter().any(|g| g == cut), "{gaps:?}");
+}
+
+/// `.dynsym` with one undefined GLOBAL FUNC per name, and no program headers (as
+/// `parse_memory.rs`). `terminated: false` drops the last name's NUL.
+fn imports_image(names: &[Vec<u8>], terminated: bool) -> Vec<u8> {
+    let mut img = ElfImage::new(3);
+    let mut strtab = vec![0u8];
+    let mut syms = vec![0u8; 24];
+    for name in names {
+        syms.extend_from_slice(&sym64(strtab.len() as u32, 0x12, 0, 0, 0));
+        strtab.extend_from_slice(name);
+        strtab.push(0);
+    }
+    if !terminated {
+        strtab.pop();
+    }
+    let sym_off = 0x1000u64;
+    let str_off = sym_off + syms.len() as u64;
+    img.put(sym_off, &syms).put(str_off, &strtab);
+    img.sec_linked(".dynsym", SHT_DYNSYM, sym_off, 0, syms.len() as u64, 2, 24)
+        .sec(".dynstr", SHT_STRTAB, str_off, 0, strtab.len() as u64);
+    img.build()
+}
+
+/// Spec §3.7: object stops looking for a name's NUL after 4096 bytes. An import name of that
+/// length or more is read in full, up to 65,536 bytes.
+#[test]
+fn long_import_names_are_read_in_full_up_to_the_limit() {
+    let names: Vec<Vec<u8>> = [255usize, 256, 1024, 4095, 4096, 4097, 5000, 16_385, 65_536]
+        .iter()
+        .enumerate()
+        .map(|(i, len)| {
+            let mut name = vec![b'a' + i as u8];
+            name.resize(*len, b'x');
+            name
+        })
+        .collect();
+    let (f, p) = facts_of(&imports_image(&names, true), BinaryBudgets::default());
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+    let got: Vec<Vec<u8>> = f
+        .imports
+        .iter()
+        .map(|i| i.name.as_bytes().to_vec())
+        .collect();
+    assert!(got == names, "every name, in full");
+
+    // Over the limit: that import is skipped, with its gap.
+    let mut over = vec![b'z'; 65_537];
+    over[0] = b'o';
+    let (f, p) = facts_of(
+        &imports_image(&[b"ok".to_vec(), over], true),
+        BinaryBudgets::default(),
+    );
+    let kept: Vec<_> = f.imports.iter().map(|i| i.name.clone()).collect();
+    assert_eq!(texts(&kept), ["ok"]);
+    assert_eq!(p.gaps, ["imports: a name over 65536 bytes"]);
+
+    // At the limit (review of rev. 2, P2-1): the last name of its table, with or without its
+    // NUL. A table that ends before the NUL is malformed, even exactly 65,537 bytes on; a name
+    // with more table after its first 65,537 bytes is over the limit.
+    let cut = "malformed: symbols: a name not terminated in its string table";
+    let long = "imports: a name over 65536 bytes";
+    for (len, terminated, gap) in [
+        (65_536, true, None),
+        (65_537, true, Some(long)),
+        (65_538, true, Some(long)),
+        (65_536, false, Some(cut)),
+        (65_537, false, Some(cut)),
+        (65_538, false, Some(long)),
+    ] {
+        let image = imports_image(&[vec![b'q'; len]], terminated);
+        let (f, p) = facts_of(&image, BinaryBudgets::default());
+        let case = format!("{len} bytes, terminated: {terminated}");
+        assert_eq!(p.gaps, gap.into_iter().collect::<Vec<_>>(), "{case}");
+        assert_eq!(f.imports.len(), usize::from(gap.is_none()), "{case}");
+    }
 }

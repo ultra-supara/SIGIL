@@ -58,7 +58,7 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         }
         // A name that cannot be read could be a known one: a gap, never a silent skip.
         let read = match strings {
-            Some(strings) => e.short_name(strings, sym.st_name(endian), longest),
+            Some(strings) => e.name(strings, sym.st_name(endian), longest),
             None => Err("no string table in the file".to_string()),
         };
         let name = match read {

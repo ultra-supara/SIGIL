@@ -26,6 +26,10 @@ pub const MAX_BUILD_ID: usize = 64;
 pub const MAX_COMMENTS: usize = 16;
 pub const MAX_COMMENT: usize = 256;
 pub const MAX_INTERP: u64 = 4_096;
+/// The longest import name kept (spec §3.7).
+pub const MAX_IMPORT_NAME: usize = 65_536;
+/// The first read of a name: enough for the names SIGIL looks for, and for most others.
+const NAME_CHUNK: u64 = 256;
 
 /// What `PT_DYNAMIC` says, for the other steps.
 #[derive(Debug, Default)]
@@ -470,7 +474,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             .and_then(|s| s.file_range(endian));
         for s in table.iter().skip(1) {
             let read = match strings {
-                Some(strings) => self.short_name(strings, s.sh_name(endian), name.len()),
+                Some(strings) => self.name(strings, s.sh_name(endian), name.len()),
                 None => Err("no section-name table in the file".to_string()),
             };
             match read {
@@ -483,12 +487,13 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     }
 
     /// The name at `offset` in the string table at `strings` (its file range), when it is at most
-    /// `max` bytes; `Ok(None)` for a longer one, which is no name SIGIL looks for. Only `max + 1`
-    /// bytes are read: object's `StringTable::get` stops looking for the NUL after 4096 bytes, so
-    /// a valid longer name (a C++ section or symbol) would read as malformed (review of #89).
-    /// `Err`: the offset is past the table, the name ends with the table unterminated, or the
-    /// bytes are outside the file or over the parse budget.
-    pub(crate) fn short_name(
+    /// `max` bytes. It reads in growing chunks (256 bytes, then ×4, never past the table or
+    /// `max + 1` bytes): object's `StringTable::get` stops looking for the NUL after 4096 bytes,
+    /// so a valid longer name (a C++ section, symbol, or import) would read as malformed (review
+    /// of #89; spec §3.7). `Ok(None)`: no NUL in the first `max + 1` bytes, with more of the
+    /// table after them. `Err`: the offset is past the table; the table ends before a NUL, even
+    /// exactly `max + 1` bytes on; or the bytes are outside the file or over the parse budget.
+    pub(crate) fn name(
         &self,
         strings: (u64, u64),
         offset: u32,
@@ -499,16 +504,28 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if offset >= size {
             return Err("a name past its string table".to_string());
         }
+        let unreadable = || "a name outside the file or over the parse budget".to_string();
+        let at = start.checked_add(offset).ok_or_else(unreadable)?;
         let want = (max as u64).saturating_add(1);
-        let len = want.min(size - offset);
-        let bytes = start
-            .checked_add(offset)
-            .and_then(|at| self.data.read_bytes_at(at, len).ok())
-            .ok_or_else(|| "a name outside the file or over the parse budget".to_string())?;
-        match bytes.iter().position(|b| *b == 0) {
-            Some(end) => Ok(Some(&bytes[..end])),
-            None if len == want => Ok(None),
-            None => Err("a name not terminated in its string table".to_string()),
+        let room = size - offset;
+        let mut len = want.min(NAME_CHUNK).min(room);
+        loop {
+            let bytes = self
+                .data
+                .read_bytes_at(at, len)
+                .map_err(|()| unreadable())?;
+            if let Some(end) = bytes.iter().position(|b| *b == 0) {
+                return Ok(Some(&bytes[..end]));
+            }
+            // The end of the table first: a name it cuts is malformed, whatever its length
+            // (review of rev. 2).
+            if len == room {
+                return Err("a name not terminated in its string table".to_string());
+            }
+            if len == want {
+                return Ok(None);
+            }
+            len = len.saturating_mul(4).min(want).min(room);
         }
     }
 
@@ -630,6 +647,11 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if !relocatable {
             self.loader_agrees(&table, &symbols, dynamic);
         }
+        // The symbols' string table, for the names object cannot read (spec §3.7).
+        let strings = table
+            .section(symbols.string_section())
+            .ok()
+            .and_then(|s| s.file_range(endian));
         // At most `binary_imports` imports are ever held: the smallest, in sorted order.
         let limit = usize::try_from(budgets.imports).unwrap_or(usize::MAX);
         let mut imports: BTreeSet<ElfImport> = BTreeSet::new();
@@ -642,13 +664,29 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     continue;
                 }
                 let name = match sym.name(endian, symbols.strings()) {
-                    Ok(n) if !n.is_empty() => n,
-                    Ok(_) => continue,
+                    Ok(n) => n,
+                    // object stops looking for the NUL after 4096 bytes: read on (spec §3.7).
                     Err(e) => {
-                        self.gap(format!("malformed: symbols: {e}"));
-                        continue;
+                        match strings.map(|s| self.name(s, sym.st_name(endian), MAX_IMPORT_NAME)) {
+                            Some(Ok(Some(n))) => n,
+                            Some(Ok(None)) => {
+                                self.gap(format!("imports: a name over {MAX_IMPORT_NAME} bytes"));
+                                continue;
+                            }
+                            Some(Err(why)) => {
+                                self.gap(format!("malformed: symbols: {why}"));
+                                continue;
+                            }
+                            None => {
+                                self.gap(format!("malformed: symbols: {e}"));
+                                continue;
+                            }
+                        }
                     }
                 };
+                if name.is_empty() {
+                    continue;
+                }
                 let mut version = None;
                 if let Some(v) = &versions {
                     let index = v.version_index(endian, SymbolIndex(i)).index();
