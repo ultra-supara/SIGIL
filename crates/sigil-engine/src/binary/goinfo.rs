@@ -1,7 +1,8 @@
 //! Go build info (spec §4.5), as Go's `debug/buildinfo` and `runtime/debug.ParseBuildInfo` read
 //! it:
-//! - the `.go.buildinfo` section, else the first writable, non-executable `PT_LOAD`, searched to
-//!   its end at 16-aligned virtual addresses, in chunks from an aligned start;
+//! - the `.go.buildinfo` section, read at its address through the `PT_LOAD`s as Go reads it
+//!   (whatever its type), else the first writable, non-executable `PT_LOAD`, searched to its end
+//!   at 16-aligned virtual addresses, in chunks from an aligned start;
 //! - the inline (Go 1.18+) or pointer format, in either byte order;
 //! - the sentinel, and the modinfo lines.
 //!
@@ -33,10 +34,19 @@ const MAX_VARINT: u64 = 10;
 /// The build info of the ELF, or `None`; a gap explains every `None` that is not an absence.
 pub(crate) fn find<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'_, R, H>,
-    section: Option<(u64, u64, u64)>,
+    section: Option<(u64, u64)>,
 ) -> Option<GoBuildInfo> {
     let (vaddr, offset, size, is_section) = match section {
-        Some((v, o, s)) => (v, o, s, true),
+        // Where the section's address is in the file, as Go's `ReadData` reads it (spec §3.6).
+        Some((v, s)) => match e.loads.place(v, s) {
+            Place::File(o) => (v, o, s, true),
+            Place::ZeroFill | Place::Unmapped => {
+                e.gaps.push(
+                    "go.buildinfo: the section is not file-backed at its address".to_string(),
+                );
+                return None;
+            }
+        },
         None => {
             let l = e.loads.0.iter().find(|l| l.writable && !l.executable)?;
             (l.vaddr, l.offset, l.filesz, false)

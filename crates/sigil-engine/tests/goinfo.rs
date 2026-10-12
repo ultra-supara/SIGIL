@@ -112,6 +112,49 @@ fn real_pieces_match_go_version_m() {
     }
 }
 
+/// Spec §3.6: Go reads `.go.buildinfo` at its address, through the program headers, whatever the
+/// section's type or file offset says.
+#[test]
+fn the_section_is_read_at_its_address_as_go_reads_it() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let section = |sh_type: u32, offset: u64, addr: u64| {
+        let mut img = ElfImage::new(2);
+        img.put(0x4000, &piece);
+        let end = img.body.len() as u64;
+        img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end).sec(
+            ".go.buildinfo",
+            sh_type,
+            offset,
+            addr,
+            piece.len() as u64,
+        );
+        go_of(&img.build(), BinaryBudgets::default())
+    };
+    // A wrong sh_offset: still read at its address.
+    let p = section(SHT_PROGBITS, 0x100, 0x4000);
+    check(
+        p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps)),
+        "amd64",
+    );
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+    // SHT_NOBITS: read as the section, not found by the segment search.
+    let p = section(SHT_NOBITS, 0x4000, 0x4000);
+    let info = p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps));
+    assert!(
+        matches!(info.at, sigil_model::Loc::Section { .. }),
+        "{:?}",
+        info.at
+    );
+    // An address no PT_LOAD maps.
+    let p = section(SHT_PROGBITS, 0x4000, 0x9_0000);
+    assert!(p.go.is_none());
+    let gaps: Vec<String> = go_gaps(&p).into_iter().cloned().collect();
+    assert_eq!(
+        gaps,
+        ["go.buildinfo: the section is not file-backed at its address"]
+    );
+}
+
 /// An ELF without sections whose first writable PT_LOAD starts at `vaddr` and holds `piece` at
 /// segment offset `at`.
 fn in_segment(piece: &[u8], vaddr: u64, at: u64) -> Vec<u8> {

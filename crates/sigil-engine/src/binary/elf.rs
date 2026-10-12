@@ -64,8 +64,8 @@ pub(crate) type Reloc = (u64, u32, i64);
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
     /// The symbols the data step reads: `.dynsym`, or a relocatable object's `.symtab`.
     pub symbols: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
-    /// `.go.buildinfo`: `(vaddr, file offset, size)`.
-    pub go_section: Option<(u64, u64, u64)>,
+    /// `.go.buildinfo`: `(sh_addr, sh_size)`, read where Go reads it (spec §3.6).
+    pub go_section: Option<(u64, u64)>,
 }
 
 /// The parse of one ELF, generic over class and byte order.
@@ -591,13 +591,11 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 Err(e) => self.gap(format!("malformed: comment: {e}")),
             }
         }
-        let go_section = self
+        // Go takes the section's address and size whatever its type, and reads it through the
+        // program headers (spec §3.6).
+        let go_section: Option<(u64, u64)> = self
             .section_named(&table, b".go.buildinfo")
-            .filter(|s| s.sh_type(endian) == elf::SHT_PROGBITS)
-            .and_then(|s| {
-                let (offset, size) = s.file_range(endian)?;
-                Some((s.sh_addr(endian).into(), offset, size))
-            });
+            .map(|s| (s.sh_addr(endian).into(), s.sh_size(endian).into()));
         // A relocatable object has no `.dynsym`: its link-time symbol table holds what it leaves
         // for the linker (PR-4b-2a spec §4.4). It has no versions, and its data is not linked
         // yet: a known data symbol in it is `Unknown`, with its gap.
