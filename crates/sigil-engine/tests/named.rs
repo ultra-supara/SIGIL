@@ -131,3 +131,53 @@ fn a_text_file_is_read_and_not_parsed() {
     assert_eq!(f.artifacts[0].format, Format::Other);
     assert!(f.binaries.is_empty());
 }
+
+// --- Review of Part B ------------------------------------------------------------------------
+
+#[test]
+fn the_bytes_hashed_before_an_input_over_the_budget_are_its_used() {
+    let (_d, p) = dir();
+    std::fs::write(p.join("small.txt"), b"tiny").unwrap();
+    std::fs::write(p.join("big.so"), fixture("libdata.so")).unwrap();
+    let budgets = NamedBudgets {
+        bytes: 100,
+        ..NamedBudgets::default()
+    };
+    let f = collect(&[p.join("small.txt"), p.join("big.so")], budgets).unwrap();
+    assert_eq!(f.over.get(&f.instances[1].id), Some(&4));
+}
+
+#[test]
+fn no_input_is_an_input_error() {
+    let e = collect(&[], NamedBudgets::default()).unwrap_err();
+    assert!(e.contains("no input"), "{e}");
+}
+
+#[test]
+fn a_file_name_that_is_not_utf8_is_fatal() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_d, p) = dir();
+    let name = std::ffi::OsStr::from_bytes(b"\xff.so");
+    std::fs::write(p.join(name), b"x").unwrap();
+    let e = collect(&[p.join(name)], NamedBudgets::default()).unwrap_err();
+    assert!(e.contains("not UTF-8"), "{e}");
+}
+
+/// Review of Part B (code review P3-1): a directory that may be entered but not listed (0711)
+/// still gives its readable files: inputs are opened relative to an `O_PATH` directory fd.
+#[test]
+fn a_file_in_a_directory_that_cannot_be_listed_is_read() {
+    if rustix::process::geteuid().is_root() {
+        eprintln!("skipped: root lists any directory");
+        return;
+    }
+    let (_d, p) = dir();
+    let inner = p.join("inner");
+    std::fs::create_dir(&inner).unwrap();
+    std::fs::write(inner.join("a.so"), fixture("libdata.so")).unwrap();
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o311)).unwrap();
+    let f = collect(&[inner.join("a.so")], NamedBudgets::default());
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let f = f.unwrap();
+    assert_eq!(f.binaries.len(), 1);
+}

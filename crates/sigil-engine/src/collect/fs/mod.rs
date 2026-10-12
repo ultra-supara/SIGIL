@@ -107,6 +107,17 @@ impl SafeFs {
     /// Opens `path` as scan root `id`. The root path itself is the caller's explicit input, so
     /// symlinks in it are resolved (by `canonicalize`); nothing below it is.
     pub fn add_root(&mut self, id: RootId, path: &Path) -> Result<(), RootError> {
+        self.add_root_with(id, path, OFlags::RDONLY)
+    }
+
+    /// As [`SafeFs::add_root`], for a root whose entries are read by name and never listed
+    /// (`binary inspect`'s inputs; PR-4b-2a): opened with `O_PATH`, so a directory that may be
+    /// entered but not listed (mode 0711) still gives its readable files. Walking it fails.
+    pub fn add_unlisted_root(&mut self, id: RootId, path: &Path) -> Result<(), RootError> {
+        self.add_root_with(id, path, OFlags::PATH)
+    }
+
+    fn add_root_with(&mut self, id: RootId, path: &Path, access: OFlags) -> Result<(), RootError> {
         if self.roots.iter().any(|r| r.id == id) {
             return Err(RootError::Duplicate);
         }
@@ -117,7 +128,7 @@ impl SafeFs {
         })?;
         let fd = rustix::fs::open(
             &canonical,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            access | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         )
         .map_err(|e| match e {

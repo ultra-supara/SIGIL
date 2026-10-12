@@ -33,11 +33,15 @@ fn observation() -> ObservationMeta {
 }
 
 fn session(paths: &[PathBuf]) -> Result<Session, InspectError> {
+    session_with(paths, NamedBudgets::default())
+}
+
+fn session_with(paths: &[PathBuf], budgets: NamedBudgets) -> Result<Session, InspectError> {
     let o = observation();
     binary_session(
         &BinaryRequest {
             paths: paths.to_vec(),
-            budgets: NamedBudgets::default(),
+            budgets,
         },
         &Policy::builtin_default().unwrap(),
         ToolInfo {
@@ -138,6 +142,73 @@ fn a_missing_input_is_an_input_error() {
     let e = session(&[d.path().join("missing")]).unwrap_err();
     assert!(
         matches!(&e, InspectError::Input(m) if m.contains("not found")),
+        "{e}"
+    );
+}
+
+/// Review of Part B: an input over `binary_bytes`, end to end. It is `BudgetExceeded` with the
+/// bytes hashed before it as `used`; a later input that fits is read; the session validates.
+#[test]
+fn an_input_over_binary_bytes_is_budget_exceeded_with_its_used() {
+    let d = TempDir::new().unwrap();
+    let so = fixture("libdata.so");
+    std::fs::write(d.path().join("libdata.so"), &so).unwrap();
+    std::fs::write(d.path().join("net.o"), fixture("net.o")).unwrap();
+    std::fs::write(d.path().join("NOTES.txt"), b"notes").unwrap();
+    let limit = so.len() as u64 + 10;
+    let s = session_with(
+        &[
+            d.path().join("libdata.so"),
+            d.path().join("net.o"),
+            d.path().join("NOTES.txt"),
+        ],
+        NamedBudgets {
+            bytes: limit,
+            ..NamedBudgets::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(
+        state(&s, "inst:binary-2/net.o"),
+        CoverageState::BudgetExceeded {
+            budget: BINARY_BYTES.to_string(),
+            used: so.len() as u64,
+            limit,
+        }
+    );
+    assert!(matches!(
+        state(&s, "inst:binary-3/NOTES.txt"),
+        CoverageState::Unsupported { .. }
+    ));
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    assert!(matches!(
+        s.outcome.completeness,
+        Completeness::Incomplete { .. }
+    ));
+}
+
+/// Two inputs with one content: one artifact and one record, two coverage entries.
+#[test]
+fn one_content_under_two_inputs_has_one_record_and_two_entries() {
+    let d = TempDir::new().unwrap();
+    std::fs::write(d.path().join("a.so"), fixture("libdata.so")).unwrap();
+    std::fs::write(d.path().join("b.so"), fixture("libdata.so")).unwrap();
+    let s = session(&[d.path().join("a.so"), d.path().join("b.so")]).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(s.artifacts.len(), 1);
+    assert_eq!(s.binaries.len(), 1);
+    assert_eq!(state(&s, "inst:binary-1/a.so"), CoverageState::Complete);
+    assert_eq!(state(&s, "inst:binary-2/b.so"), CoverageState::Complete);
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert_eq!(md.matches("Facts of").count(), 1, "{md}");
+}
+
+#[test]
+fn no_input_is_an_input_error() {
+    let e = session(&[]).unwrap_err();
+    assert!(
+        matches!(&e, InspectError::Input(m) if m.contains("no input")),
         "{e}"
     );
 }
