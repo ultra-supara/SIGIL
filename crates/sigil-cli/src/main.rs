@@ -45,10 +45,10 @@ use sigil_model::render::{
     probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
-    binary_root_index, is_binary_root, is_loopback, target, ActiveFeature, Completeness,
-    CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode, ReleaseBasis, ScanRoot, Session,
-    Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
-    INSTALL_ROOT,
+    binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
+    Completeness, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode, ReleaseBasis,
+    ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict, ARTIFACTS_DISCOVERY,
+    ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -96,15 +96,17 @@ enum InspectTarget {
 
 #[derive(Debug, Subcommand)]
 enum BinaryCommand {
-    /// Inspect one or more files (executables, shared objects, relocatable objects; anything
-    /// else is recorded as unsupported) into one session.
+    /// Inspect one or more files into one session. An ELF executable, shared object, or
+    /// relocatable object gets its container facts; any other regular file is recorded as
+    /// unsupported; a path that is not a readable regular file is an error.
     Inspect(BinaryArgs),
 }
 
 #[derive(Debug, Args)]
 struct BinaryArgs {
-    /// The files. Symlinks in a path are resolved; the file itself is read without following
-    /// anything, and never executed or loaded.
+    /// The files. Symlinks anywhere in a path, the last component included, are resolved first;
+    /// the file is then opened without following any symlink (one swapped in afterwards is an
+    /// error), and is never executed or loaded.
     #[arg(value_name = "PATH", required = true)]
     paths: Vec<PathBuf>,
     /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies.
@@ -477,11 +479,12 @@ fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
         policy_time,
     )
     .map_err(|e| match e {
-        InspectError::Input(message) => Failure::Run(shown(&message)),
+        // Already escaped for a terminal line, the path cut and the reason whole.
+        InspectError::Input(message) => Failure::Run(message),
         other => Failure::Run(shown(&other.to_string())),
     })?;
-    // Plan review P1: the inputs were resolved again by the read, so `--out` is checked against
-    // them as read, and the write refuses their inodes.
+    // The read resolved the inputs again, so `--out` is checked against them as read, and the
+    // write puts back any of their inodes it displaces.
     if let (Some(t), Some(out)) = (&target, &args.out) {
         check_out_against_inputs(t.path(), out, &session)?;
     }
@@ -513,7 +516,7 @@ fn binary_budgets(given: &[String]) -> Result<NamedBudgets, Failure> {
             .parse()
             .map_err(|_| usage("the value is not a whole number"))?;
         match key {
-            "binary_bytes" => b.bytes = value,
+            BINARY_BYTES => b.bytes = value,
             "binary_parse_bytes" => b.binary.parse_bytes = value,
             "binary_imports" => b.binary.imports = value,
             _ => {
@@ -535,7 +538,7 @@ fn check_binary_out(out: &Path, inputs: &[PathBuf]) -> Result<out::Target, Failu
     use std::os::unix::fs::MetadataExt;
     let target =
         resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
-    let existing = fs::symlink_metadata(&target).ok();
+    let existing = existing_inode(out, &target)?;
     for input in inputs {
         // An input that cannot be resolved is the inspection's own error (exit 1), later.
         let Ok(canonical) = fs::canonicalize(input) else {
@@ -548,8 +551,8 @@ fn check_binary_out(out: &Path, inputs: &[PathBuf]) -> Result<out::Target, Failu
                 shown_path(input)
             )));
         }
-        if let (Some(e), Ok(m)) = (&existing, fs::metadata(&canonical)) {
-            if (e.dev(), e.ino()) == (m.dev(), m.ino()) {
+        if let (Some(e), Ok(m)) = (existing, fs::metadata(&canonical)) {
+            if e == (m.dev(), m.ino()) {
                 return Err(Failure::Usage(format!(
                     "--out {} is a hard link of the input {}; SIGIL never writes a scan root",
                     shown_path(out),
@@ -561,16 +564,26 @@ fn check_binary_out(out: &Path, inputs: &[PathBuf]) -> Result<out::Target, Failu
     pin(out, &target, vec![])
 }
 
-/// `--out` against the files the inspection actually read (plan review P1): not one of them by
-/// recorded path, and not a hard link of one by `dev:ino`. An input that resolved elsewhere at
-/// the read than at [`check_binary_out`] (a symlink swapped meanwhile) is caught here, before
-/// anything is written.
+/// The `dev:ino` of the file at `target`, `None` when there is none. Any other error is reported:
+/// the comparison it feeds must not be skipped silently.
+fn existing_inode(out: &Path, target: &Path) -> Result<Option<(u64, u64)>, Failure> {
+    use std::os::unix::fs::MetadataExt;
+    match fs::symlink_metadata(target) {
+        Ok(m) => Ok(Some((m.dev(), m.ino()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Failure::Run(format!(
+            "--out {} cannot be checked: {e}",
+            shown_path(out)
+        ))),
+    }
+}
+
+/// `--out` against the files the inspection actually read: not one of them by recorded path, and
+/// not a hard link of one by `dev:ino`. An input that resolved elsewhere at the read than at
+/// [`check_binary_out`] (a symlink swapped meanwhile) is caught here, before anything is written.
 fn check_out_against_inputs(target: &Path, out: &Path, s: &Session) -> Result<(), Failure> {
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::MetadataExt;
-    let existing = fs::symlink_metadata(target)
-        .ok()
-        .map(|m| (m.dev(), m.ino()));
+    let existing = existing_inode(out, target)?;
     for i in s.instances.iter().filter(|i| is_binary_root(&i.root)) {
         if i.path.as_bytes() == target.as_os_str().as_bytes()
             || existing == Some((i.stat.dev, i.stat.ino))
@@ -585,7 +598,8 @@ fn check_out_against_inputs(target: &Path, out: &Path, s: &Session) -> Result<()
     Ok(())
 }
 
-/// The `dev:ino` of every input read: the write puts back any of them it displaces (spec §3.1).
+/// The `dev:ino` of every input, read or over budget: the write puts back any of them it
+/// displaces (spec §3.1).
 fn protected_inodes(s: &Session) -> Vec<(u64, u64)> {
     s.instances
         .iter()
@@ -1043,6 +1057,13 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             shown(f.id.as_str())
         ));
     }
+    if is_binary_inspection(r) && r.required_checks.is_empty() {
+        lines.push(
+            "note: the policy requires no check of a binary inspection (binary_audit = []): \
+             the result is COMPLETE whatever the inputs"
+                .to_string(),
+        );
+    }
     if r.roots.iter().any(|root| root.id.as_str() == MODELS_ROOT) {
         lines.push(
             "note: model blob hashing is unbounded by default (its I/O grows with model size)"
@@ -1362,6 +1383,14 @@ mod tests {
         // An output elsewhere passes.
         let other = p.join("other.json");
         assert!(super::check_out_against_inputs(&other, &other, &s).is_ok());
+        // Review of Part B: each half of the check alone. A hard link of the input, by inode:
+        let hard = p.join("hard.json");
+        std::fs::hard_link(&report, &hard).unwrap();
+        assert!(super::check_out_against_inputs(&hard, &hard, &s).is_err());
+        // The input's path, now a new file (another inode), by path:
+        std::fs::remove_file(&report).unwrap();
+        std::fs::write(&report, b"new").unwrap();
+        assert!(super::check_out_against_inputs(&report, &report, &s).is_err());
     }
 
     #[test]

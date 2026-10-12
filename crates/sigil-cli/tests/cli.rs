@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::render::markdown::render_session;
-use sigil_model::{Completeness, CoverageState, Mode, ProbeResult, Session, Verdict};
+use sigil_model::{
+    Completeness, CoverageState, Mode, ProbeResult, Session, UntrustedText, Verdict,
+};
 use tempfile::TempDir;
 
 const MODEL_MEDIA: &str = "application/vnd.ollama.image.model";
@@ -1643,6 +1645,11 @@ fn eleven_inputs_are_summarized_in_argument_order() {
     for (k, line) in lines.iter().enumerate() {
         assert!(line.contains(&format!("/f{}.txt ", k + 1)), "{k}: {line}");
     }
+    let roots = r.stderr.lines().find(|l| l.starts_with("roots: ")).unwrap();
+    assert!(
+        roots.find("(binary-2)").unwrap() < roots.find("(binary-10)").unwrap(),
+        "{roots}"
+    );
 }
 
 #[test]
@@ -1801,4 +1808,131 @@ fn a_saved_binary_session_is_rendered_and_explained() {
     let ex = run(&[&"explain", &saved, &"--coverage"]);
     assert_eq!(ex.code, 0, "{}", ex.stderr);
     assert!(ex.stdout.contains("binary.container"), "{}", ex.stdout);
+}
+
+// --- binary inspect: review of Part B -----------------------------------------------------------
+
+/// `--out` is refused before anything is read: a FIFO named as the input and as `--out` exits 2
+/// (refused), not 1 (the FIFO, read as an input, would be fatal). The hard-link refusal says so.
+#[test]
+fn out_on_an_input_is_refused_before_the_read() {
+    let d = TempDir::new().unwrap();
+    let fifo = d.path().join("fifo");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let r = binary(&[&fifo, &"--out", &fifo]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("is the input"), "{}", r.stderr);
+    let d = inputs();
+    let so = d.path().join("libdata.so");
+    let hard = d.path().join("hard.json");
+    fs::hard_link(&so, &hard).unwrap();
+    let r = binary(&[&so, &"--out", &hard]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("is a hard link of the input"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A partial input: its summary line, and a `missing` line naming only the entries that keep the
+/// check open.
+#[test]
+fn the_summary_names_partial_inputs_and_only_the_open_entries() {
+    let d = inputs();
+    fs::write(
+        d.path().join("cut.so"),
+        &fs::read(elf_fixture("libdata.so")).unwrap()[..300],
+    )
+    .unwrap();
+    let r = binary(&[
+        &d.path().join("libdata.so"),
+        &d.path().join("cut.so"),
+        &d.path().join("NOTES.txt"),
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = |needle: &str| {
+        r.stderr
+            .lines()
+            .find(|l| l.starts_with("binary: ") && l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {}", r.stderr))
+            .to_string()
+    };
+    assert!(line("cut.so").contains("partial ("), "{}", r.stderr);
+    let missing = r
+        .stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("missing  binary.container"))
+        .unwrap();
+    assert!(missing.contains("inst:binary-2/cut.so"), "{missing}");
+    assert!(missing.contains("inst:binary-3/NOTES.txt"), "{missing}");
+    assert!(!missing.contains("inst:binary-1/libdata.so"), "{missing}");
+}
+
+/// An input over `binary_bytes`: `not read` on its line, and in the Markdown.
+#[test]
+fn an_input_over_binary_bytes_is_shown_as_not_read() {
+    let d = inputs();
+    let size = fs::metadata(d.path().join("libdata.so")).unwrap().len();
+    let budget = format!("binary_bytes={}", size + 10);
+    let o = TempDir::new().unwrap();
+    let md = o.path().join("r.md");
+    let r = binary(&[
+        &d.path().join("libdata.so"),
+        &d.path().join("net.o"),
+        &"--budget",
+        &budget,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let net = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("binary: ") && l.contains("net.o"))
+        .unwrap();
+    assert!(net.contains("not read"), "{net}");
+    assert!(net.contains("budget exceeded"), "{net}");
+    let text = fs::read_to_string(&md).unwrap();
+    assert!(
+        text.contains(&UntrustedText::new("not read: BudgetExceeded").markdown_inline()),
+        "{text}"
+    );
+}
+
+/// A policy that requires nothing of a binary inspection is said so in the summary.
+#[test]
+fn a_policy_that_requires_nothing_is_noted() {
+    let d = inputs();
+    let o = TempDir::new().unwrap();
+    let none = write(
+        o.path(),
+        "none.toml",
+        "schema = \"sigil-policy/1\"\nname = \"none\"\n[scope]\nbinary_audit = []\n",
+    );
+    let r = binary(&[&d.path().join("NOTES.txt"), &"--policy", &none]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stderr.contains("requires no check"), "{}", r.stderr);
+    let r = binary(&[&d.path().join("NOTES.txt")]);
+    assert!(!r.stderr.contains("requires no check"), "{}", r.stderr);
+}
+
+/// A long path is cut in the message, the reason is kept.
+#[test]
+fn a_fatal_message_keeps_its_reason_after_a_long_path() {
+    let d = TempDir::new().unwrap();
+    let long = d
+        .path()
+        .join("d".repeat(200))
+        .join("e".repeat(200))
+        .join("f".repeat(200));
+    let r = binary(&[&long]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.contains("not found"), "{}", r.stderr);
 }

@@ -268,7 +268,8 @@ fn binary_inspection_reads_only_its_inputs() {
 }
 
 /// Every file the run opened under `root` is one of `files`; `root` itself (a directory fd) is
-/// allowed.
+/// allowed. It sees successful opens only (by the fd annotation of their return): give it decoys
+/// the run could open, as `private/secret.txt` is, so that an attempt would show.
 fn assert_opened_only(run: &TracedRun, root: &Path, files: &[&Path]) {
     let root = std::fs::canonicalize(root).unwrap();
     let files: Vec<PathBuf> = files
