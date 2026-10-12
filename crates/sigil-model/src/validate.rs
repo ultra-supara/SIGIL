@@ -921,7 +921,7 @@ impl<'a> Validator<'a> {
                     || slice
                         .offset
                         .checked_add(slice.size)
-                        .map_or(true, |end| end > artifact.size)
+                        .is_none_or(|end| end > artifact.size)
                 {
                     self.errors.push(ValidationError::SliceMismatch {
                         slice: slice.id.clone(),

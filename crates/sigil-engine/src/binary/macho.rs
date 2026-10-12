@@ -122,13 +122,13 @@ fn u32_at<R: object::read::ReadCacheOps>(
     })
 }
 
-fn range<'a, R: object::read::ReadCacheOps>(
-    data: &'a Bounded<R>,
+fn range<R: object::read::ReadCacheOps>(
+    data: &Bounded<R>,
     base: u64,
     size: u64,
     offset: u64,
     len: u64,
-) -> Result<&'a [u8], String> {
+) -> Result<&[u8], String> {
     let end = offset
         .checked_add(len)
         .ok_or_else(|| "range overflow".to_string())?;
@@ -166,7 +166,7 @@ fn parse_header<R: object::read::ReadCacheOps>(
     let ncmds = word(16)?;
     let sizeofcmds = word(20)?;
     let flags = word(24)?;
-    let commands_end = u64::from(header_size)
+    let commands_end = header_size
         .checked_add(u64::from(sizeofcmds))
         .ok_or_else(|| "load-command range overflow".to_string())?;
     if commands_end > size {
@@ -181,7 +181,7 @@ fn parse_header<R: object::read::ReadCacheOps>(
         flags,
         ncmds,
         sizeofcmds,
-        size: u64::from(header_size),
+        size: header_size,
     })
 }
 
@@ -566,8 +566,7 @@ fn parse_fat<R: object::read::ReadCacheOps>(
                 || 1u64
                     .checked_shl(alignment)
                     .is_some_and(|boundary| offset % boundary == 0));
-        if offset < table_size || slice_size == 0 || end.map_or(true, |end| end > size) || !aligned
-        {
+        if offset < table_size || slice_size == 0 || end.is_none_or(|end| end > size) || !aligned {
             gaps.push(format!(
                 "fat slice {index}: invalid offset, size, or alignment"
             ));
