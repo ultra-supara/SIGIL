@@ -28,6 +28,16 @@ pub const DT_SYMTAB: i64 = 6;
 pub const DT_STRSZ: i64 = 10;
 pub const DT_SONAME: i64 = 14;
 pub const DT_RELR: i64 = 36;
+pub const SHT_NOBITS: u32 = 8;
+pub const DT_HASH: i64 = 4;
+pub const DT_SYMENT: i64 = 11;
+pub const DT_REL: i64 = 17;
+pub const DT_RELSZ: i64 = 18;
+pub const DT_RELENT: i64 = 19;
+pub const DT_PLTREL: i64 = 20;
+pub const DT_JMPREL: i64 = 23;
+pub const DT_GNU_HASH: i64 = 0x6fff_fef5;
+pub const DT_RELACOUNT: i64 = 0x6fff_fff9;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Seg {
@@ -269,6 +279,16 @@ pub fn sections64(bytes: &[u8]) -> Vec<(String, u32, usize, u64, u64, u32)> {
             )
         })
         .collect()
+}
+
+/// The file offset of the first program header of `p_type` in an ELF64 little-endian file.
+pub fn phdr64(bytes: &[u8], p_type: u32) -> usize {
+    let phoff = u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
+    let phnum = u16::from_le_bytes([bytes[56], bytes[57]]) as usize;
+    (0..phnum)
+        .map(|i| phoff + i * 56)
+        .find(|&p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) == p_type)
+        .unwrap_or_else(|| panic!("no program header of type {p_type}"))
 }
 
 /// `Elf64_Dyn` entries, little-endian, ending with `DT_NULL`.
