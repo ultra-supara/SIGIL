@@ -43,7 +43,8 @@ pub(crate) struct Dynamic {
 
 /// The sections' results the other steps need.
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
-    pub dynsym: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
+    /// The symbols the data step reads: `.dynsym`, or a relocatable object's `.symtab`.
+    pub symbols: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
     /// `.go.buildinfo`: `(vaddr, file offset, size)`.
     pub go_section: Option<(u64, u64, u64)>,
 }
@@ -143,7 +144,7 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let dynamic = e.dynamic(&mut facts);
     facts.build_id = e.build_id();
     let sections = e.sections(&mut facts, &dynamic, budgets);
-    if let Some(symbols) = &sections.dynsym {
+    if let Some(symbols) = &sections.symbols {
         facts.data = data::read(&mut e, symbols, &dynamic);
     }
     let go = goinfo::find(&mut e, sections.go_section);
@@ -398,7 +399,8 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         None
     }
 
-    /// The section facts: `.comment`, stripped, the dynamic symbols, and `.go.buildinfo`.
+    /// The section facts: `.comment`, stripped, the symbols (`.dynsym`, or a relocatable object's
+    /// `.symtab`), and `.go.buildinfo`.
     fn sections(
         &mut self,
         facts: &mut ElfFacts,
@@ -408,7 +410,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let endian = self.endian;
         let data = self.data;
         let none = Sections {
-            dynsym: None,
+            symbols: None,
             go_section: None,
         };
         let table = match self.header.sections(endian, data) {
@@ -464,8 +466,8 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 Some((s.sh_addr(endian).into(), offset, size))
             });
         // A relocatable object has no `.dynsym`: its link-time symbol table holds what it leaves
-        // for the linker (PR-4b-2a spec §4.4). It has no versions, and its data is not relocated
-        // yet, so no data value is read from it.
+        // for the linker (PR-4b-2a spec §4.4). It has no versions, and its data is not linked
+        // yet: a known data symbol in it is `Unknown`, with its gap.
         let relocatable = self.header.e_type(endian) == elf::ET_REL;
         let kind = if relocatable {
             elf::SHT_SYMTAB
@@ -477,7 +479,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Err(e) => {
                 self.gap(format!("malformed: symbols: {e}"));
                 return Sections {
-                    dynsym: None,
+                    symbols: None,
                     go_section,
                 };
             }
@@ -489,7 +491,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 self.gap("symbols: no SHT_DYNSYM");
             }
             return Sections {
-                dynsym: None,
+                symbols: None,
                 go_section,
             };
         }
@@ -566,7 +568,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         facts.imports = imports.into_iter().collect();
         Sections {
-            dynsym: (!relocatable).then_some(symbols),
+            symbols: Some(symbols),
             go_section,
         }
     }

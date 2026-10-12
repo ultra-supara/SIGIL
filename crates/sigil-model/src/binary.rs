@@ -57,17 +57,19 @@ pub struct ElfFacts {
     /// be inspected in full (then `gaps` has a `sections: ` entry).
     pub stripped: Option<bool>,
     /// Defined dynamic symbols: `GLOBAL`/`WEAK`/`GNU_UNIQUE`, `DEFAULT`/`PROTECTED`. For a
-    /// relocatable object (`ET_REL`), the defined global symbols of its symbol table.
+    /// relocatable object (`ET_REL`), the same, counted in its `.symtab`.
     pub exports: u64,
     /// Undefined dynamic symbols, `GLOBAL` or `WEAK`: what the loader resolves. For a relocatable
     /// object (`ET_REL`), the undefined symbols of its symbol table: what the linker resolves,
     /// not the final program's imports. Sorted by `(name, version)`, unique.
     pub imports: Vec<ElfImport>,
-    /// The known data symbols present (plan §4.4), sorted by symbol.
+    /// The known data symbols present (plan §4.4), sorted by symbol. In a relocatable object
+    /// (`ET_REL`) each is `Unknown`, with its gap: its data is not linked yet.
     pub data: Vec<DataSymbol>,
 }
 
-/// An undefined dynamic symbol.
+/// An undefined symbol: a dynamic import, or for a relocatable object (`ET_REL`) an undefined
+/// symbol of its `.symtab`, left for the linker.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElfImport {

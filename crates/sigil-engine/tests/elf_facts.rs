@@ -423,3 +423,45 @@ fn a_relocatable_object_without_symtab_is_a_gap() {
     assert!(f.imports.is_empty());
     assert_eq!(p.gaps, ["symbols: no SHT_SYMTAB in a relocatable object"]);
 }
+
+/// Review of Part B: a relocatable object's symbol table, built by hand. Locals and hidden
+/// globals are not exports; a weak undefined symbol is a weak import; a known data symbol is
+/// listed as `Unknown` with its gap (its data is not linked yet), never left out as absent.
+#[test]
+fn a_relocatable_object_s_symtab_follows_the_dynsym_rules_and_keeps_known_symbols() {
+    let mut img = ElfImage::new(1); // ET_REL
+    let names = b"\0local_fn\0hidden_fn\0weak_ref\0LLAMA_COMMIT\0exported\0";
+    let at = |s: &[u8]| names.windows(s.len()).position(|w| w == s).unwrap() as u32;
+    let mut syms = vec![0u8; 24];
+    syms.extend_from_slice(&sym64(at(b"local_fn"), 0x02, 1, 0, 1)); // LOCAL FUNC
+    let mut hidden = sym64(at(b"hidden_fn"), 0x12, 1, 0, 1); // GLOBAL FUNC
+    hidden[5] = 2; // STV_HIDDEN
+    syms.extend_from_slice(&hidden);
+    syms.extend_from_slice(&sym64(at(b"weak_ref"), 0x20, 0, 0, 0)); // WEAK NOTYPE, undefined
+    syms.extend_from_slice(&sym64(at(b"LLAMA_COMMIT"), 0x11, 1, 0, 8)); // GLOBAL OBJECT
+    syms.extend_from_slice(&sym64(at(b"exported"), 0x12, 1, 0, 1)); // GLOBAL FUNC
+    let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+    img.put(sym_off, &syms).put(str_off, names);
+    // Section 1 is .symtab, linked to section 2, .strtab.
+    img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+        .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(
+        f.exports, 2,
+        "exported and LLAMA_COMMIT; not the local or the hidden one"
+    );
+    assert_eq!(f.imports.len(), 1);
+    assert_eq!(f.imports[0].name.as_str(), Some("weak_ref"));
+    assert!(f.imports[0].weak);
+    assert_eq!(f.data.len(), 1, "{:?}", f.data);
+    assert_eq!(f.data[0].symbol, "LLAMA_COMMIT");
+    assert!(
+        matches!(&f.data[0].value, sigil_model::DataValue::Unknown { why } if why.contains("relocatable")),
+        "{:?}",
+        f.data[0].value
+    );
+    assert_eq!(
+        p.gaps,
+        ["LLAMA_COMMIT: not linked yet (a relocatable object)"]
+    );
+}

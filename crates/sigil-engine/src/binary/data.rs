@@ -63,12 +63,19 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     if found.is_empty() {
         return vec![];
     }
+    // A relocatable object's data is not linked yet: no value can be read (PR-4b-2a).
+    let relocatable = e.header.e_type(endian) == elf::ET_REL;
     let wanted: BTreeSet<u64> = found.iter().map(|f| f.2).collect();
-    let relocs = e.relocations(dynamic, &wanted);
+    let relocs = if relocatable {
+        Ok(BTreeMap::new())
+    } else {
+        e.relocations(dynamic, &wanted)
+    };
     let mut out = vec![];
     for (name, kind, addr, size) in found {
         let value = match &relocs {
             _ if twice.contains(name) => Err("defined more than once".to_string()),
+            _ if relocatable => Err("not linked yet (a relocatable object)".to_string()),
             Err(why) => Err(format!("relocations not read: {why}")),
             Ok(map) => value(e, kind, addr, size, map, dynamic),
         };

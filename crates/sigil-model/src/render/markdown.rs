@@ -561,7 +561,16 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 esc(&format!("{kind} {arch}")),
                 esc(&soname),
                 esc(&needed),
-                esc(&format!("{} / {}", elf.exports, elf.imports.len())),
+                // A relocatable object's "imports" are its undefined link-time symbols.
+                esc(&if kind == "Rel" {
+                    format!(
+                        "{} / {} (undefined, link time)",
+                        elf.exports,
+                        elf.imports.len()
+                    )
+                } else {
+                    format!("{} / {}", elf.exports, elf.imports.len())
+                }),
                 esc(&notes.join("; ")),
             ]
         })
