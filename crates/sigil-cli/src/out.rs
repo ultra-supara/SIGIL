@@ -14,8 +14,9 @@
 //!   checked, and a protected one (an input of the run) or a directory is put back.
 //!
 //! A directory renamed after `--out` was checked therefore cannot redirect the write: the fd is
-//! the directory that was checked. What remains is a directory moved into a scan root between
-//! the last check and the exchange.
+//! the directory that was checked. What remains:
+//! - a directory moved into a scan root between the last check and the exchange;
+//! - a run killed after the exchange and before a put-back (see [`install`]).
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -66,7 +67,8 @@ pub struct Target {
 
 impl Target {
     /// Pins `target`: an absolute path whose existing part has no symlink, as `check_out`
-    /// resolved it. Refuses a directory that is, or lies under, one of `roots` (`dev:ino`).
+    /// resolved it. Refuses a directory that is, or lies under, one of `roots` (`dev:ino`), and a
+    /// directory at `target` itself: it would only be exchanged and put back (review of #89).
     /// Nothing is created yet.
     pub fn pin(target: &Path, roots: Vec<(u64, u64)>) -> Result<Target, String> {
         let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
@@ -102,6 +104,13 @@ impl Target {
                 "{} is, or lies under, a scan root",
                 parent.display()
             ));
+        }
+        if missing.is_empty() {
+            if let Ok(st) = statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+                if FileType::from_raw_mode(st.st_mode) == FileType::Directory {
+                    return Err(format!("{} is a directory", target.display()));
+                }
+            }
         }
         Ok(Target {
             dir,
@@ -230,6 +239,10 @@ fn create_temp(dir: &OwnedFd, name: &OsStr) -> Result<(OsString, OwnedFd), Strin
 /// - With nothing at `name`, `RENAME_NOREPLACE` keeps it so; a file that appears meanwhile is
 ///   exchanged on the next try.
 /// - A file system without the exchange: [`without_exchange`].
+///
+/// The put-back is a second system call: a run killed after the exchange and before it leaves
+/// the displaced file at `tmp`, whole, and the document at `name` (review of #89;
+/// docs/architecture-and-safety.md). A displaced file that cannot be checked is put back.
 #[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
 fn install(
     dir: &OwnedFd,
@@ -241,15 +254,19 @@ fn install(
         match renameat_with(dir, tmp, dir, name, RenameFlags::EXCHANGE) {
             Ok(()) => {
                 // `tmp` now names the file that was at `name`.
-                let st = statat(dir, tmp, AtFlags::SYMLINK_NOFOLLOW).map_err(|e| e.to_string())?;
-                let directory = FileType::from_raw_mode(st.st_mode) == FileType::Directory;
-                let input = protected.contains(&(st.st_dev as u64, st.st_ino as u64));
-                if directory || input {
-                    let what = if directory {
-                        "it is a directory; not replaced"
-                    } else {
-                        "it is an input of this run; not replaced"
-                    };
+                let refused = match statat(dir, tmp, AtFlags::SYMLINK_NOFOLLOW) {
+                    Err(e) => Some(format!(
+                        "the file it displaced could not be checked ({e}); not replaced"
+                    )),
+                    Ok(st) if FileType::from_raw_mode(st.st_mode) == FileType::Directory => {
+                        Some("it is a directory; not replaced".to_string())
+                    }
+                    Ok(st) if protected.contains(&(st.st_dev as u64, st.st_ino as u64)) => {
+                        Some("it is an input of this run; not replaced".to_string())
+                    }
+                    Ok(_) => None,
+                };
+                if let Some(what) = refused {
                     // Put it back; the caller then removes the document, which is at `tmp`.
                     if let Err(e) = renameat_with(dir, tmp, dir, name, RenameFlags::EXCHANGE) {
                         return Err(format!(
@@ -257,9 +274,15 @@ fn install(
                             tmp.to_string_lossy()
                         ));
                     }
-                    return Err(what.to_string());
+                    return Err(what);
                 }
-                return unlinkat(dir, tmp, AtFlags::empty()).map_err(|e| e.to_string());
+                return unlinkat(dir, tmp, AtFlags::empty()).map_err(|e| {
+                    format!(
+                        "written, but the file it replaced could not be removed ({e}): it is \
+                         named {} now",
+                        tmp.to_string_lossy()
+                    )
+                });
             }
             Err(Errno::NOENT) => match renameat_with(dir, tmp, dir, name, RenameFlags::NOREPLACE) {
                 Err(Errno::EXIST) => continue,
@@ -574,11 +597,26 @@ mod tests {
         );
     }
 
+    /// A directory put at `--out` after it was pinned: exchanged, then put back.
     #[test]
     fn a_directory_at_out_is_put_back_and_the_temporary_file_removed() {
         let (_d, p) = dir();
+        let target = Target::pin(&p.join("out.json"), vec![]).unwrap();
         fs::create_dir_all(p.join("out.json/x")).unwrap();
-        assert!(write(&p.join("out.json"), b"doc", &[]).is_err());
+        let e = target.write(b"doc", &[]).unwrap_err();
+        assert!(e.contains("it is a directory; not replaced"), "{e}");
+        assert_eq!(names(&p), ["out.json"]);
+        assert_eq!(names(&p.join("out.json")), ["x"]);
+    }
+
+    /// Review of #89: a directory at `--out` when it is pinned is refused then: nothing is
+    /// exchanged, so no crash can leave it at a temporary name.
+    #[test]
+    fn a_directory_at_out_is_refused_when_pinned() {
+        let (_d, p) = dir();
+        fs::create_dir_all(p.join("out.json/x")).unwrap();
+        let e = write(&p.join("out.json"), b"doc", &[]).unwrap_err();
+        assert!(e.ends_with("out.json is a directory"), "{e}");
         assert_eq!(names(&p), ["out.json"]);
         assert_eq!(names(&p.join("out.json")), ["x"]);
     }

@@ -38,14 +38,20 @@ fn assert_valid(s: &Session) {
 
 /// A policy from `body` that requires exactly the checks `s` was collected for. The list is set
 /// directly rather than through TOML because example 06 names a check the catalog does not have
-/// yet.
+/// yet. A binary inspection's checks come from `binary_audit` alone (PR-4b-2a), so its audit is
+/// given there.
 fn policy_for(s: &Session, body: &str) -> Policy {
     let mut p = policy(body);
     p.audit.clear();
     p.observe_audit.clear();
     p.active_audit.clear();
     p.install_audit.clear();
-    p.extra_required = s.request.required_checks.clone();
+    p.binary_audit.clear();
+    if ScopeInput::of(&s.request).binary {
+        p.binary_audit = s.request.audit.clone();
+    } else {
+        p.extra_required = s.request.required_checks.clone();
+    }
     p
 }
 
@@ -106,7 +112,7 @@ fn re_evaluating_every_golden_example_reproduces_it() {
         assert_eq!(s, expected, "{}", path.display());
         seen += 1;
     }
-    assert_eq!(seen, 14);
+    assert_eq!(seen, 15);
 }
 
 #[test]

@@ -93,12 +93,20 @@ impl Snapshot {
     }
 }
 
-/// Whether a file changed while it was read: `before` and `after` are `fstat`s of the open file,
-/// `now` the `dev:ino` the path resolves to afterwards (`None` when it no longer exists).
-pub(crate) fn stability(before: &Snapshot, after: &Snapshot, now: Option<(u64, u64)>) -> Stability {
+/// Whether a file changed while it was read: `seen` is the `dev:ino` of the path's `lstat` before
+/// the open, `before` and `after` are `fstat`s of the open file, `now` the `dev:ino` the path
+/// resolves to afterwards (`None` when it no longer exists). Another file opened than the one
+/// seen is a change: the path was replaced between the two.
+pub(crate) fn stability(
+    seen: (u64, u64),
+    before: &Snapshot,
+    after: &Snapshot,
+    now: Option<(u64, u64)>,
+) -> Stability {
+    let opened = (before.dev, before.ino);
     match now {
         None => Stability::Vanished,
-        Some(id) if before != after || id != (before.dev, before.ino) => {
+        Some(id) if seen != opened || before != after || id != opened => {
             Stability::ChangedDuringRead
         }
         Some(_) => Stability::NoChangeDetected,
@@ -183,7 +191,11 @@ impl SafeFs {
                     .as_ref()
                     .map_or_else(|| self.roots[at].fd.as_fd(), |fd| fd.as_fd());
                 match self.open_at(parent, &name, OFlags::RDONLY | OFlags::NONBLOCK) {
-                    Ok(fd) => self.read_open(index, rel, place, fd, spec, false, None),
+                    Ok(fd) => {
+                        let seen = Snapshot::of(&lstat);
+                        let seen = (seen.dev, seen.ino);
+                        self.read_open(index, rel, place, fd, spec, false, seen, None)
+                    }
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
                     }
@@ -298,7 +310,11 @@ impl SafeFs {
                     .as_ref()
                     .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
                 match self.open_at(parent, &name, OFlags::RDONLY | OFlags::NONBLOCK) {
-                    Ok(fd) => self.read_open(index, rel, place, fd, spec, true, hook),
+                    Ok(fd) => {
+                        let seen = Snapshot::of(&lstat);
+                        let seen = (seen.dev, seen.ino);
+                        self.read_open(index, rel, place, fd, spec, true, seen, hook)
+                    }
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
                     }
@@ -322,7 +338,8 @@ impl SafeFs {
     }
 
     /// Streams the open file: limit, hash, prefix, the hook, then stability. `strict`: the path is
-    /// checked again afterwards without following symlinks.
+    /// checked again afterwards without following symlinks. `seen`: the `dev:ino` of the `lstat`
+    /// that preceded the open.
     #[allow(clippy::too_many_arguments)]
     fn read_open(
         &self,
@@ -332,6 +349,7 @@ impl SafeFs {
         fd: OwnedFd,
         spec: ReadSpec,
         strict: bool,
+        seen: (u64, u64),
         hook: Hook<'_>,
     ) -> FileRead {
         let st = match rustix::fs::fstat(&fd) {
@@ -421,7 +439,7 @@ impl SafeFs {
             InstanceContent::Read {
                 artifact: artifact_id,
             },
-            stability(&before, &after, now),
+            stability(seen, &before, &after, now),
         );
         FileRead {
             instance: Some(instance),
@@ -539,6 +557,8 @@ mod tests {
     #[test]
     fn stability_compares_both_fstats_and_the_path_afterwards() {
         let before = snap(7, 10, 100);
+        let stability =
+            |before: &Snapshot, after: &Snapshot, now| stability((1, 7), before, after, now);
         assert_eq!(
             stability(&before, &before, Some((1, 7))),
             Stability::NoChangeDetected
@@ -562,5 +582,23 @@ mod tests {
             Stability::ChangedDuringRead
         );
         assert_eq!(stability(&before, &before, None), Stability::Vanished);
+    }
+
+    /// Review of #89 (P1): the file opened is not the one the `lstat` before the open saw.
+    #[test]
+    fn another_file_opened_than_the_one_seen_is_a_change() {
+        let before = snap(7, 10, 100);
+        assert_eq!(
+            stability((1, 8), &before, &before, Some((1, 7))),
+            Stability::ChangedDuringRead
+        );
+        assert_eq!(
+            stability((2, 7), &before, &before, Some((1, 7))),
+            Stability::ChangedDuringRead
+        );
+        assert_eq!(
+            stability((1, 7), &before, &before, Some((1, 7))),
+            Stability::NoChangeDetected
+        );
     }
 }

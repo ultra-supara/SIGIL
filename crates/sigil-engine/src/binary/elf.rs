@@ -6,8 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 
 use object::elf;
-use object::read::elf::{Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, Sym, SymbolTable};
-use object::read::{ReadCacheOps, ReadRef, SymbolIndex};
+use object::read::elf::{
+    Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
+};
+use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endianness, FileKind};
 use sigil_model::{ContainerFacts, ElfFacts, ElfImport, UntrustedText};
 
@@ -43,7 +45,8 @@ pub(crate) struct Dynamic {
 
 /// The sections' results the other steps need.
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
-    pub dynsym: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
+    /// The symbols the data step reads: `.dynsym`, or a relocatable object's `.symtab`.
+    pub symbols: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
     /// `.go.buildinfo`: `(vaddr, file offset, size)`.
     pub go_section: Option<(u64, u64, u64)>,
 }
@@ -143,7 +146,7 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let dynamic = e.dynamic(&mut facts);
     facts.build_id = e.build_id();
     let sections = e.sections(&mut facts, &dynamic, budgets);
-    if let Some(symbols) = &sections.dynsym {
+    if let Some(symbols) = &sections.symbols {
         facts.data = data::read(&mut e, symbols, &dynamic);
     }
     let go = goinfo::find(&mut e, sections.go_section);
@@ -398,7 +401,68 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         None
     }
 
-    /// The section facts: `.comment`, stripped, the dynamic symbols, and `.go.buildinfo`.
+    /// The first section named `name`, after the null section. A section whose name cannot be
+    /// read could be it: a gap, never "absent" (review of #89). The gap does not start with
+    /// `sections: `, which B8 keeps for a table that cannot be read.
+    fn section_named(
+        &mut self,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        name: &[u8],
+    ) -> Option<&'d H::SectionHeader> {
+        let endian = self.endian;
+        // The string table `sections()` names them from (`e_shstrndx`).
+        let strings = self
+            .header
+            .shstrndx(endian, self.data)
+            .ok()
+            .and_then(|i| table.section(SectionIndex(i as usize)).ok())
+            .and_then(|s| s.file_range(endian));
+        for s in table.iter().skip(1) {
+            let read = match strings {
+                Some(strings) => self.short_name(strings, s.sh_name(endian), name.len()),
+                None => Err("no section-name table in the file".to_string()),
+            };
+            match read {
+                Ok(Some(n)) if n == name => return Some(s),
+                Ok(_) => {}
+                Err(e) => self.gap(format!("malformed: section names: {e}")),
+            }
+        }
+        None
+    }
+
+    /// The name at `offset` in the string table at `strings` (its file range), when it is at most
+    /// `max` bytes; `Ok(None)` for a longer one, which is no name SIGIL looks for. Only `max + 1`
+    /// bytes are read: object's `StringTable::get` stops looking for the NUL after 4096 bytes, so
+    /// a valid longer name (a C++ section or symbol) would read as malformed (review of #89).
+    /// `Err`: the offset is past the table, the name ends with the table unterminated, or the
+    /// bytes are outside the file or over the parse budget.
+    pub(crate) fn short_name(
+        &self,
+        strings: (u64, u64),
+        offset: u32,
+        max: usize,
+    ) -> Result<Option<&'d [u8]>, String> {
+        let (start, size) = strings;
+        let offset = u64::from(offset);
+        if offset >= size {
+            return Err("a name past its string table".to_string());
+        }
+        let want = (max as u64).saturating_add(1);
+        let len = want.min(size - offset);
+        let bytes = start
+            .checked_add(offset)
+            .and_then(|at| self.data.read_bytes_at(at, len).ok())
+            .ok_or_else(|| "a name outside the file or over the parse budget".to_string())?;
+        match bytes.iter().position(|b| *b == 0) {
+            Some(end) => Ok(Some(&bytes[..end])),
+            None if len == want => Ok(None),
+            None => Err("a name not terminated in its string table".to_string()),
+        }
+    }
+
+    /// The section facts: `.comment`, stripped, the symbols (`.dynsym`, or a relocatable object's
+    /// `.symtab`), and `.go.buildinfo`.
     fn sections(
         &mut self,
         facts: &mut ElfFacts,
@@ -408,7 +472,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let endian = self.endian;
         let data = self.data;
         let none = Sections {
-            dynsym: None,
+            symbols: None,
             go_section: None,
         };
         let table = match self.header.sections(endian, data) {
@@ -429,7 +493,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             }
         };
         facts.stripped = Some(!table.iter().any(|s| s.sh_type(endian) == elf::SHT_SYMTAB));
-        if let Some((_, s)) = table.section_by_name(endian, b".comment") {
+        if let Some(s) = self.section_named(&table, b".comment") {
             match s.data(endian, data) {
                 Ok(bytes) => {
                     // Built within the limits: nothing beyond the 16 kept entries is collected.
@@ -456,37 +520,52 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 Err(e) => self.gap(format!("malformed: comment: {e}")),
             }
         }
-        let go_section = table
-            .section_by_name(endian, b".go.buildinfo")
-            .filter(|(_, s)| s.sh_type(endian) == elf::SHT_PROGBITS)
-            .and_then(|(_, s)| {
+        let go_section = self
+            .section_named(&table, b".go.buildinfo")
+            .filter(|s| s.sh_type(endian) == elf::SHT_PROGBITS)
+            .and_then(|s| {
                 let (offset, size) = s.file_range(endian)?;
                 Some((s.sh_addr(endian).into(), offset, size))
             });
-        let symbols = match table.symbols(endian, data, elf::SHT_DYNSYM) {
+        // A relocatable object has no `.dynsym`: its link-time symbol table holds what it leaves
+        // for the linker (PR-4b-2a spec §4.4). It has no versions, and its data is not linked
+        // yet: a known data symbol in it is `Unknown`, with its gap.
+        let relocatable = self.header.e_type(endian) == elf::ET_REL;
+        let kind = if relocatable {
+            elf::SHT_SYMTAB
+        } else {
+            elf::SHT_DYNSYM
+        };
+        let symbols = match table.symbols(endian, data, kind) {
             Ok(s) => s,
             Err(e) => {
                 self.gap(format!("malformed: symbols: {e}"));
                 return Sections {
-                    dynsym: None,
+                    symbols: None,
                     go_section,
                 };
             }
         };
         if symbols.is_empty() {
-            if dynamic.symtab {
+            if relocatable {
+                self.gap("symbols: no SHT_SYMTAB in a relocatable object");
+            } else if dynamic.symtab {
                 self.gap("symbols: no SHT_DYNSYM");
             }
             return Sections {
-                dynsym: None,
+                symbols: None,
                 go_section,
             };
         }
-        let versions = match table.versions(endian, data) {
-            Ok(v) => v,
-            Err(e) => {
-                self.gap(format!("malformed: versions: {e}"));
-                None
+        let versions = if relocatable {
+            None
+        } else {
+            match table.versions(endian, data) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.gap(format!("malformed: versions: {e}"));
+                    None
+                }
             }
         };
         // object treats a symbol past the end of `.gnu.version` as unversioned: say it instead.
@@ -551,7 +630,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         facts.imports = imports.into_iter().collect();
         Sections {
-            dynsym: Some(symbols),
+            symbols: Some(symbols),
             go_section,
         }
     }

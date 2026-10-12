@@ -54,7 +54,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 14);
+    assert_eq!(all.len(), 15);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -355,5 +355,141 @@ fn binaries_are_tabled_under_runtime_artifacts() {
             section.contains(&t(shown).markdown_inline()),
             "{shown}\n{section}"
         );
+    }
+}
+
+fn md_esc(text: &str) -> String {
+    UntrustedText::new(text).markdown_inline()
+}
+
+#[test]
+fn a_binary_inspection_has_the_binaries_section_and_no_models_section() {
+    let md = render_session(&binary_inspect());
+    assert!(md.contains("## Binaries\n"), "{md}");
+    assert!(!md.contains("## Models"), "{md}");
+    assert!(md.contains(&md_esc("Imports (dynamic) of")), "{md}");
+    assert!(md.contains("dlopen"), "{md}");
+    assert!(md.contains(&md_esc(BINARY_UNSUPPORTED)), "{md}");
+    assert!(md.contains(&md_esc("Container facts only.")), "{md}");
+    // Other sessions keep their Models section.
+    assert!(render_session(&store_and_runtime()).contains("## Models"));
+}
+
+#[test]
+fn a_relocatable_object_shows_link_time_symbols() {
+    let mut s = binary_inspect();
+    s.artifacts[0].format = Format::Elf { kind: ElfType::Rel };
+    let md = render_session(&s);
+    assert!(
+        md.contains(&md_esc("Undefined symbols (link time) of")),
+        "{md}"
+    );
+    assert!(!md.contains(&md_esc("Imports (dynamic) of")), "{md}");
+}
+
+#[test]
+fn eleven_inputs_are_shown_in_argument_order() {
+    let mut s = binary_inspect();
+    for n in 3..=11u32 {
+        let root = binary_root(n).unwrap();
+        let path = format!("/in/f{n}");
+        let inst: InstanceId = id(&format!("inst:binary-{n}/f{n}"));
+        let text = s.artifacts[1].id.clone();
+        let mut i = instance(&inst, root.as_str(), &path, &text, 100 + u64::from(n));
+        i.stat.size = 2048;
+        i.discovered_by = vec![DiscoverySource::Argument];
+        s.instances.push(i);
+        s.request.roots.push(ScanRoot {
+            id: root,
+            path: t(&path),
+        });
+        s.coverage.push(coverage(
+            BINARY_CONTAINER,
+            Ref::Instance(inst),
+            CoverageState::Unsupported {
+                what: BINARY_UNSUPPORTED.to_string(),
+            },
+        ));
+    }
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let (f3, f10) = (md_esc("/in/f3"), md_esc("/in/f10"));
+    // The Run table, then the Binaries overview.
+    assert!(md.find(&f3).unwrap() < md.find(&f10).unwrap(), "{md}");
+    let binaries = &md[md.find("## Binaries").unwrap()..];
+    assert!(
+        binaries.find(&f3).unwrap() < binaries.find(&f10).unwrap(),
+        "{binaries}"
+    );
+    let inputs = sigil_model::render::binary_inputs(&s);
+    let order: Vec<&str> = inputs.iter().map(|b| b.root.id.as_str()).collect();
+    assert_eq!(order[1], "binary-2");
+    assert_eq!(order[10], "binary-11");
+}
+
+#[test]
+fn a_hostile_input_path_is_escaped() {
+    let mut s = binary_inspect();
+    s.request.roots[0].path = t(HOSTILE);
+    s.instances[0].path = t(HOSTILE);
+    let md = render_session(&s);
+    assert!(!md.contains("<script>"), "{md}");
+    assert!(!md.contains("\n# heading"), "{md}");
+}
+
+/// Review of Part B: every value of the Binaries section that comes from the inspected file is
+/// escaped. No HTML, no heading, and every `Fact | Value` row keeps exactly three bare `|`.
+#[test]
+fn hostile_container_facts_are_escaped() {
+    let mut s = binary_inspect();
+    {
+        let ContainerFacts::Elf(f) = &mut s.binaries[0].container;
+        f.soname = Some(t(HOSTILE));
+        f.needed = vec![t(HOSTILE)];
+        f.runpath = vec![t(HOSTILE)];
+        f.comment = vec![t(HOSTILE)];
+        f.imports = vec![ElfImport {
+            name: t(HOSTILE),
+            version: Some(t(HOSTILE)),
+            weak: true,
+        }];
+        f.data = vec![DataSymbol {
+            symbol: "LLAMA_COMMIT".to_string(),
+            value: DataValue::Text(t(HOSTILE)),
+            at: vec![Loc::Symbol(t("LLAMA_COMMIT"))],
+        }];
+    }
+    s.binaries[0].go = Some(GoBuildInfo {
+        at: Loc::Section {
+            name: t(".go.buildinfo"),
+            offset: 0,
+        },
+        version: t(HOSTILE),
+        path: Some(t(HOSTILE)),
+        main: Some(GoModule {
+            path: t(HOSTILE),
+            version: t(HOSTILE),
+            sum: None,
+            replace: None,
+        }),
+        deps: vec![],
+        settings: vec![GoSetting {
+            key: t(HOSTILE),
+            value: t(HOSTILE),
+        }],
+    });
+    let md = render_session(&s);
+    assert!(!md.contains("<script>"), "{md}");
+    assert!(!md.contains("\n# heading"), "{md}");
+    let bare = |line: &str| {
+        let b = line.as_bytes();
+        (0..b.len())
+            .filter(|&i| b[i] == b'|' && (i == 0 || b[i - 1] != b'\\'))
+            .count()
+    };
+    let facts = &md[md.find("| Fact | Value |").unwrap()..];
+    for line in facts.lines().take_while(|l| l.starts_with('|')) {
+        assert_eq!(bare(line), 3, "{line}");
     }
 }

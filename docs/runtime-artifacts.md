@@ -32,7 +32,8 @@ separate questions:
   architecture, and one slice. The format does not affect matching. When the same bytes are also a
   model blob, the one artifact keeps the ELF format and slice.
 - **A link is stable** only if a second `readlinkat` gives the same target text. Otherwise the
-  placement is `ChangedDuringRead`, as is a file whose `fstat` changed during its read.
+  placement is `ChangedDuringRead`, as is a file whose `fstat` changed during its read, or a file
+  hashed whose open fd is not the file its `lstat` saw just before.
 - **The budgets** (`--budget`, with `--install-dir` only) are recorded in `request.budgets` with an
   `install_` prefix:
 
@@ -183,8 +184,8 @@ session, read from the file's own bytes. They are observations, not identity.
   | Interpreter | `PT_INTERP` | no `PT_INTERP` | outside the file, or no NUL within 4 KiB |
   | SONAME, NEEDED (in order), RPATH, RUNPATH | `PT_DYNAMIC`, its strings through `DT_STRTAB`/`DT_STRSZ` in a `PT_LOAD`'s file-backed range | no `PT_DYNAMIC` (a static executable, a relocatable object) | `PT_DYNAMIC` out of the file, not a whole number of entries, or without its `DT_NULL` (the table may go on past what was read); strings not file-backed, an offset past `DT_STRSZ`; a `DT_RELASZ` or RELA `DT_PLTRELSZ` that is not a whole number of entries (the loader would apply a partial last one), or a `DT_RELAENT` other than the entry size (the loader refuses it), whether or not a data symbol needs the tables |
   | build-id | `PT_NOTE`, then `SHT_NOTE` | every note read, none `NT_GNU_BUILD_ID` | a malformed note |
-  | `.comment`, stripped | the sections | a section header table without `.comment` | no section header table, or one out of the file (`sections: …`; stripped is then unknown) |
-  | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC` | no `PT_DYNAMIC` | dynamic symbols without a `.dynsym` section, a malformed table, a version index that resolves to nothing, a `.gnu.version` shorter than `.dynsym`, a known data symbol defined twice |
+  | `.comment`, stripped | the sections | a section header table without `.comment`, every section name read | no section header table, or one out of the file (`sections: …`; stripped is then unknown); a section whose name cannot be read (`malformed: section names: …`): it could be `.comment` or `.go.buildinfo` |
+  | Export count, imports with versions, data symbols | `.dynsym` with its version tables; the relocations the loader applies, from `PT_DYNAMIC`. For a relocatable object (`ET_REL`), its `.symtab`: the undefined symbols left for the linker (not the final program's imports), with no versions; a known data symbol there is `Unknown` with its gap (its data is not linked yet) | no `PT_DYNAMIC` (never for a relocatable object: its `.symtab` is required) | dynamic symbols without a `.dynsym` section, a malformed table, a version index that resolves to nothing, a `.gnu.version` shorter than `.dynsym`, a known data symbol defined twice, a defined data object (`STT_OBJECT`) whose name cannot be read (it could be a known one); for a relocatable object (`ET_REL`), no `SHT_SYMTAB` |
   | Go build info | below | the whole range searched, no magic | below |
 
 - **Known data symbols.** Four symbols from llama.cpp's `common/build-info.cpp`: `LLAMA_COMMIT`,
@@ -197,6 +198,7 @@ session, read from the file's own bytes. They are observations, not identity.
   | Any other relocation | `Unknown` (`relocated by R_X86_64_64`, …) |
   | No RELA relocation, and the file has `DT_REL`/`DT_RELR` | `Unknown` (not read) |
   | A RELA table whose size or entry size is malformed (above) | `Unknown` (relocations not read) |
+  | In a relocatable object (`.o`): its data is not linked yet | `Unknown` (not linked yet) |
   | No relocation, in a non-PIE executable | the string at the stored address |
   | No relocation, in a position-independent file | `Unknown` |
 

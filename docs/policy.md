@@ -6,7 +6,8 @@ from the analysis. The policy decides only what is done with them, and which che
 closed for the result to be complete.
 
 - **Status:** `crates/sigil-engine` loads and evaluates policies. `sigil inspect ollama --policy
-  FILE` loads one; without `--policy`, the built-in default applies.
+  FILE` and `sigil binary inspect --policy FILE` load one; without `--policy`, the built-in
+  default applies.
 - **Source:** plan §4.7. The session it applies to is described in
   [`docs/session-model.md`](session-model.md).
 
@@ -17,11 +18,12 @@ schema = "sigil-policy/1"      # required, exactly this
 name   = "default"             # required; recorded in the session with the file's SHA-256
 
 [scope]
-audit          = ["model_store"]   # audited in every mode
+audit          = ["model_store"]   # audited in every inspect ollama run
 observe_audit  = ["exposure"]      # added in observe mode
 active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
 install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
-extra_required = []                # checks required beyond those of the scopes
+binary_audit   = ["binary"]        # a binary inspection (binary inspect) audits only these
+extra_required = []                # checks required beyond those of the scopes (inspect ollama)
 
 [open_questions]
 default = "count_as_gap"           # count_as_gap | warn | fail | ignore
@@ -59,6 +61,16 @@ the recorded request, so the two always agree. A policy that lists `runtime_arti
 gets both its checks `Skipped { Flag("--install-dir") }` on a run without `--install-dir`, and the
 result is INCOMPLETE.
 
+**A binary inspection** (`sigil binary inspect`, a session whose roots are `binary-<n>`) audits
+`binary_audit` and nothing else: `["binary"]`, whose check is `binary.container`, one entry per
+input. The other lists and `extra_required` apply to `inspect ollama` only, so an organization's
+extra checks for an installation do not make every binary inspection incomplete.
+
+`binary_audit` is optional, but unlike the other lists, a policy file that omits it gets
+`["binary"]`: a policy written before it existed still requires every input to be inspected in
+full. Only an explicit `binary_audit = []` requires nothing, and the result is then `COMPLETE`
+whatever the inputs' statuses (the summary says so).
+
 ## Catalogs
 
 A policy may only name what exists.
@@ -74,6 +86,7 @@ so requesting it gives an honest `INCOMPLETE`.
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
 | `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container` | PR-4a, PR-4b-1 (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
+| `binary` | `binary.container` | PR-4b-2a (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
 
 **Rules** (kind, default severity):
 

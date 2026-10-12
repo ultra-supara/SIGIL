@@ -224,6 +224,9 @@ pub enum ValidationError {
     ReleaseCoverage { complete: bool },
     /// A `BinaryFacts` record, or a `Declares` relation, disagrees with the session (B1–B8).
     Binary { slice: String, why: String },
+    /// A binary inspection's input, its root, or its `binary.container` disagrees with the
+    /// session (B9, B10; PR-4b-2a).
+    BinaryInput { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -352,6 +355,7 @@ impl fmt::Display for ValidationError {
                 "releases[{product}]: the basis must list every install placement, after a complete discovery"
             ),
             Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
+            BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -679,6 +683,7 @@ impl<'a> Validator<'a> {
         }
         self.reference_matches();
         self.binaries();
+        self.binary_inputs();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -934,6 +939,15 @@ impl<'a> Validator<'a> {
             for source in &instance.discovered_by {
                 match source {
                     crate::artifact::DiscoverySource::Walk => {}
+                    crate::artifact::DiscoverySource::Argument => {
+                        if !crate::binary_input::is_binary_root(&instance.root) {
+                            self.errors.push(ValidationError::BinaryInput {
+                                at: instance.id.to_string(),
+                                why: "discovered by Argument outside a binary inspection's roots"
+                                    .to_string(),
+                            });
+                        }
+                    }
                     crate::artifact::DiscoverySource::ServiceUnit { config } => {
                         self.config(config, &at)
                     }
@@ -1517,6 +1531,142 @@ impl<'a> Validator<'a> {
                 slice: slice.to_string(),
                 why,
             });
+        }
+    }
+
+    fn input_error(&mut self, at: &str, why: impl Into<String>) {
+        self.errors.push(ValidationError::BinaryInput {
+            at: at.to_string(),
+            why: why.into(),
+        });
+    }
+
+    /// B9: each input has exactly one `binary.container` entry, scoped to its instance, in the
+    /// state the input implies (`ExpectedContainer::admits`: exactly, but for `BudgetExceeded`,
+    /// whose `used` is at most the limit). B10: a session with a binary root is a binary
+    /// inspection. Also: the `binary-` root prefix is reserved for `binary-<n>` (PR-4b-2a).
+    fn binary_inputs(&mut self) {
+        use crate::artifact::DiscoverySource;
+        use crate::binary_input::{
+            expected_binary_container, is_binary_inspection, is_binary_root, ExpectedContainer,
+            BINARY_CONTAINER, BINARY_ROOT_PREFIX,
+        };
+        use crate::coverage::Coverage;
+        use crate::render::{coverage_state, subject};
+        use crate::session::Mode;
+        let s = self.s;
+        for root in &s.request.roots {
+            if root.id.as_str().starts_with(BINARY_ROOT_PREFIX) && !is_binary_root(&root.id) {
+                self.input_error(
+                    root.id.as_str(),
+                    "the root ID prefix `binary-` is reserved for binary-<n>",
+                );
+            }
+        }
+        // B9: every entry is scoped to the instance of a binary root.
+        let instances: BTreeMap<&InstanceId, &FileInstance> =
+            s.instances.iter().map(|i| (&i.id, i)).collect();
+        let mut per_instance: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_CONTAINER)
+        {
+            let Ref::Instance(at) = &c.scope else {
+                self.input_error(
+                    &format!("coverage[{BINARY_CONTAINER} on {}]", subject(&c.scope)),
+                    "binary.container must be scoped to an input's instance",
+                );
+                continue;
+            };
+            match instances.get(at) {
+                Some(i) if is_binary_root(&i.root) => per_instance.entry(at).or_default().push(c),
+                _ => self.input_error(
+                    at.as_str(),
+                    "binary.container on something that is not a binary input",
+                ),
+            }
+        }
+        if !is_binary_inspection(&s.request) {
+            return;
+        }
+        // B10
+        let r = &s.request;
+        if !r.roots.iter().all(|root| is_binary_root(&root.id)) {
+            self.input_error("request", "a binary inspection has only binary roots");
+        }
+        if r.mode != Mode::Static {
+            self.input_error("request", "a binary inspection is static");
+        }
+        if !r.active.is_empty() {
+            self.input_error("request", "a binary inspection has no active feature");
+        }
+        if r.model_filter.is_some() {
+            self.input_error("request", "a binary inspection has no model filter");
+        }
+        if r.observe_env {
+            self.input_error(
+                "request",
+                "a binary inspection reads no process environment",
+            );
+        }
+        if !s.models.is_empty() {
+            self.input_error("models", "a binary inspection has no model");
+        }
+        let mut by_root: BTreeMap<&RootId, Vec<&FileInstance>> = BTreeMap::new();
+        for i in &s.instances {
+            by_root.entry(&i.root).or_default().push(i);
+        }
+        for root in r.roots.iter().filter(|root| is_binary_root(&root.id)) {
+            let inputs = by_root.get(&root.id).map(Vec::as_slice).unwrap_or_default();
+            let [i] = inputs else {
+                self.input_error(
+                    root.id.as_str(),
+                    format!("{} instances; a binary root has exactly one", inputs.len()),
+                );
+                continue;
+            };
+            let at = i.id.as_str();
+            if i.path != root.path {
+                self.input_error(at, "the input is not at its root's path");
+            }
+            if i.discovered_by != [DiscoverySource::Argument] {
+                self.input_error(at, "an input is discovered by Argument only");
+            }
+            // B9: exactly one entry, in the state the input implies.
+            let entries = per_instance
+                .get(&i.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let [c] = entries else {
+                self.input_error(
+                    at,
+                    format!(
+                        "{} binary.container entries; an input has exactly one",
+                        entries.len()
+                    ),
+                );
+                continue;
+            };
+            let shown = |state: &CoverageState| coverage_state(state).terminal();
+            match expected_binary_container(s, i) {
+                Err(why) => self.input_error(at, why),
+                Ok(expected) if !expected.admits(&c.state) => {
+                    let why = match &expected {
+                        ExpectedContainer::Exactly(state) => format!(
+                            "binary.container is {}, but the input implies {}",
+                            shown(&c.state),
+                            shown(state)
+                        ),
+                        ExpectedContainer::OverBytes { limit } => format!(
+                            "binary.container is {}, but the input is over binary_bytes ({limit})",
+                            shown(&c.state)
+                        ),
+                    };
+                    self.input_error(at, why);
+                }
+                Ok(_) => {}
+            }
         }
     }
 

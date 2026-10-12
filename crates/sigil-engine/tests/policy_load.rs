@@ -16,6 +16,7 @@ fn the_default_policy_requires_only_implemented_scopes() {
         mode: Mode::Static,
         active: false,
         install: false,
+        binary: false,
     });
     assert_eq!(ids(&audit), ["model_store"]);
     assert_eq!(
@@ -30,6 +31,7 @@ fn the_default_policy_requires_only_implemented_scopes() {
         mode: Mode::Observe,
         active: false,
         install: false,
+        binary: false,
     });
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert_eq!(
@@ -90,6 +92,7 @@ fn the_plan_example_loads() {
         mode: Mode::Static,
         active: false,
         install: false,
+        binary: false,
     });
     assert_eq!(
         ids(&required),
@@ -142,6 +145,7 @@ extra_groups = ["gid:27"]
         mode: Mode::Static,
         active: false,
         install: false,
+        binary: false,
     });
     assert_eq!(required.last().unwrap().as_str(), "exposure.binds");
     assert_eq!(policy.open_questions.treatment, OqTreatment::Warn);
@@ -318,6 +322,7 @@ fn an_active_feature_adds_the_active_scopes() {
         mode: Mode::Static,
         active: true,
         install: false,
+        binary: false,
     });
     assert_eq!(ids(&audit), ["model_store", "runtime_api"]);
     assert_eq!(required.last().unwrap().as_str(), "runtime_api.version");
@@ -325,6 +330,7 @@ fn an_active_feature_adds_the_active_scopes() {
         mode: Mode::Observe,
         active: true,
         install: false,
+        binary: false,
     });
     assert_eq!(ids(&audit), ["model_store", "exposure", "runtime_api"]);
     // Without an active feature, the active scopes are not requested.
@@ -332,6 +338,7 @@ fn an_active_feature_adds_the_active_scopes() {
         mode: Mode::Observe,
         active: false,
         install: false,
+        binary: false,
     });
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert!(!ids(&required).contains(&"runtime_api.version".to_string()));
@@ -343,7 +350,8 @@ fn an_active_feature_adds_the_active_scopes() {
             .scope(&ScopeInput {
                 mode: Mode::Static,
                 active: true,
-                install: false
+                install: false,
+                binary: false
             })
             .0),
         ["model_store"]
@@ -362,6 +370,7 @@ fn the_install_adds_runtime_artifacts_and_its_three_checks() {
         mode: Mode::Static,
         active: false,
         install: false,
+        binary: false,
     };
     let (audit, required) = policy.scope(&base);
     let (audit_i, required_i) = policy.scope(&ScopeInput {
@@ -390,4 +399,58 @@ fn a_policy_without_install_audit_still_loads() {
     let text = "schema = \"sigil-policy/1\"\nname = \"old\"\n[scope]\naudit = [\"model_store\"]\n";
     let policy = Policy::load(text).unwrap();
     assert!(policy.install_audit.is_empty());
+}
+
+/// PR-4b-2a spec §4.6: a binary inspection audits `binary_audit` only, without `extra_required`.
+#[test]
+fn a_binary_inspection_audits_binary_audit_only() {
+    let binary = ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+        binary: true,
+    };
+    let policy = Policy::builtin_default().unwrap();
+    assert_eq!(ids(&policy.binary_audit), ["binary"]);
+    let (audit, required) = policy.scope(&binary);
+    assert_eq!(ids(&audit), ["binary"]);
+    assert_eq!(ids(&required), ["binary.container"]);
+    // An organization's extra checks are for `inspect ollama`.
+    let text = "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\naudit = [\"model_store\"]\n\
+                binary_audit = [\"binary\"]\nextra_required = [\"loader.identify\"]\n";
+    let (_, required) = Policy::load(text).unwrap().scope(&binary);
+    assert_eq!(ids(&required), ["binary.container"]);
+    // Review of Part B: a policy without binary_audit (any written before it existed) requires
+    // the binary scope, so binary inspections fail closed; only an explicit [] requires nothing.
+    let old = Policy::load("schema = \"sigil-policy/1\"\nname = \"old\"\n").unwrap();
+    assert_eq!(ids(&old.binary_audit), ["binary"]);
+    assert_eq!(ids(&old.scope(&binary).1), ["binary.container"]);
+    let none =
+        Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\nbinary_audit = []\n")
+            .unwrap();
+    assert_eq!(none.scope(&binary), (vec![], vec![]));
+    assert!(matches!(
+        Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\nbinary_audit = [\"nope\"]\n"),
+        Err(PolicyError::UnknownScope(s)) if s == "nope"
+    ));
+}
+
+#[test]
+fn scope_input_of_finds_binary_roots() {
+    let mut request = sigil_model::RunRequest {
+        mode: Mode::Static,
+        roots: vec![sigil_model::ScanRoot {
+            id: sigil_model::binary_root(1).unwrap(),
+            path: sigil_model::UntrustedText::new("/x"),
+        }],
+        audit: vec![],
+        required_checks: vec![],
+        budgets: Default::default(),
+        observe_env: false,
+        model_filter: None,
+        active: vec![],
+    };
+    assert!(ScopeInput::of(&request).binary);
+    request.roots[0].id = sigil_model::RootId::new("models").unwrap();
+    assert!(!ScopeInput::of(&request).binary);
 }

@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::render::markdown::render_session;
-use sigil_model::{Completeness, CoverageState, Mode, ProbeResult, Session, Verdict};
+use sigil_model::{
+    Completeness, CoverageState, Mode, ProbeResult, Session, UntrustedText, Verdict,
+};
 use tempfile::TempDir;
 
 const MODEL_MEDIA: &str = "application/vnd.ollama.image.model";
@@ -1134,6 +1136,36 @@ fn isolate_install(args: &[String], dir: &str) -> Vec<String> {
     out
 }
 
+/// `args` with every `<PATH>` of a `binary inspect` command replaced by `fixture`, so that no
+/// test reads a file outside the workspace. Flags and their values are kept.
+fn isolate_binary(args: &[String], fixture: &str) -> Vec<String> {
+    if args.first().map(String::as_str) != Some("binary") {
+        return args.to_vec();
+    }
+    const VALUED: &[&str] = &[
+        "--policy",
+        "--budget",
+        "--policy-time",
+        "--format",
+        "--out",
+        "--fail-on",
+    ];
+    let mut out = vec![];
+    let mut value_follows = false;
+    for (i, a) in args.iter().enumerate() {
+        if i < 2 || value_follows {
+            value_follows = false;
+            out.push(a.clone());
+        } else if a.starts_with("--") {
+            value_follows = VALUED.contains(&a.as_str());
+            out.push(a.clone());
+        } else {
+            out.push(fixture.to_string());
+        }
+    }
+    out
+}
+
 /// A server on 127.0.0.1 that answers every request with an Ollama version, and counts them.
 fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::io::{Read, Write};
@@ -1203,6 +1235,9 @@ fn run_documented(doc: &str) -> (usize, usize) {
         let args = isolate_probe(&args, &server);
         // Nor a real installation.
         let args = isolate_install(&args, install.path().to_str().unwrap());
+        // Nor a file outside the workspace.
+        let fixture = elf_fixture("libdata.so");
+        let args = isolate_binary(&args, fixture.to_str().unwrap());
         let out = sigil()
             .current_dir(cwd.path())
             .env("OLLAMA_MODELS", models.path())
@@ -1235,6 +1270,12 @@ fn every_documented_command_runs() {
         readme_active + guide_active >= 2,
         "the docs' active commands were not found"
     );
+}
+
+#[test]
+fn the_binary_inspect_guide_s_commands_run() {
+    let (n, _) = run_documented("docs/binary-inspect.md");
+    assert!(n >= 3, "only {n} documented commands were found");
 }
 
 #[test]
@@ -1516,4 +1557,382 @@ fn binary_budgets_apply_with_install_dir_only() {
     let r = inspect(models.path(), &[&"--budget", &"binary_imports=2"]);
     assert_eq!(r.code, 2, "{}", r.stderr);
     assert!(r.stderr.contains("--install-dir"), "{}", r.stderr);
+}
+
+// --- binary inspect (PR-4b-2a) ------------------------------------------------------------------
+
+fn elf_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/elf")
+        .join(name)
+}
+
+/// The inputs in a temporary directory: `libdata.so`, `net.o`, and `NOTES.txt`.
+fn inputs() -> TempDir {
+    let d = TempDir::new().unwrap();
+    fs::copy(elf_fixture("libdata.so"), d.path().join("libdata.so")).unwrap();
+    fs::copy(elf_fixture("net.o"), d.path().join("net.o")).unwrap();
+    fs::write(d.path().join("NOTES.txt"), b"notes").unwrap();
+    d
+}
+
+fn binary(extra: &[&dyn AsRef<std::ffi::OsStr>]) -> Run {
+    let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = vec![&"binary", &"inspect"];
+    args.extend_from_slice(extra);
+    run(&args)
+}
+
+fn sha_of(path: &Path) -> String {
+    sha256_hex(&fs::read(path).unwrap())
+}
+
+#[test]
+fn binary_inspect_writes_a_valid_session_and_a_line_per_input() {
+    let d = inputs();
+    let (so, o) = (d.path().join("libdata.so"), d.path().join("net.o"));
+    let r = binary(&[&so, &o]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert!(r.stderr.contains("audit=binary"), "{}", r.stderr);
+    let lines: Vec<&str> = r
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("binary: "))
+        .collect();
+    assert_eq!(lines.len(), 2, "{}", r.stderr);
+    assert!(
+        lines[0].contains("libdata.so")
+            && lines[0].contains("ELF Dyn x86_64")
+            && lines[0].ends_with("complete"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("net.o") && lines[1].contains("ELF Rel x86_64"),
+        "{}",
+        lines[1]
+    );
+    assert!(!r.stderr.contains("model blob hashing"), "{}", r.stderr);
+    // Deterministic but for the observation.
+    let mut again = session_of(&binary(&[&so, &o]));
+    again.observation = s.observation.clone();
+    assert_eq!(again, s);
+}
+
+#[test]
+fn eleven_inputs_are_summarized_in_argument_order() {
+    let d = TempDir::new().unwrap();
+    let paths: Vec<PathBuf> = (1..=11)
+        .map(|n| {
+            let p = d.path().join(format!("f{n}.txt"));
+            fs::write(&p, format!("{n}")).unwrap();
+            p
+        })
+        .collect();
+    let args: Vec<&dyn AsRef<std::ffi::OsStr>> = paths
+        .iter()
+        .map(|p| p as &dyn AsRef<std::ffi::OsStr>)
+        .collect();
+    let r = binary(&args);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let lines: Vec<&str> = r
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("binary: "))
+        .collect();
+    assert_eq!(lines.len(), 11, "{}", r.stderr);
+    for (k, line) in lines.iter().enumerate() {
+        assert!(line.contains(&format!("/f{}.txt ", k + 1)), "{k}: {line}");
+    }
+    let roots = r.stderr.lines().find(|l| l.starts_with("roots: ")).unwrap();
+    assert!(
+        roots.find("(binary-2)").unwrap() < roots.find("(binary-10)").unwrap(),
+        "{roots}"
+    );
+}
+
+#[test]
+fn two_hundred_inputs_fit_in_32_file_descriptors() {
+    // Review P2-3: one SafeFs per input, dropped after its read.
+    let d = TempDir::new().unwrap();
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg("ulimit -n 32 && exec \"$0\" \"$@\"")
+        .arg(assert_cmd::cargo::cargo_bin("sigil"))
+        .args(["binary", "inspect"]);
+    for n in 0..200 {
+        let p = d.path().join(format!("f{n}"));
+        fs::write(&p, format!("{n}")).unwrap();
+        cmd.arg(p);
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let s: Session = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(s.coverage.len(), 200);
+}
+
+#[test]
+fn an_unsupported_input_is_incomplete_and_exits_0_or_4() {
+    let d = inputs();
+    let notes = d.path().join("NOTES.txt");
+    let r = binary(&[&notes]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(matches!(
+        session_of(&r).outcome.completeness,
+        Completeness::Incomplete { .. }
+    ));
+    assert!(r.stderr.contains("unsupported: not an ELF"), "{}", r.stderr);
+    assert_eq!(binary(&[&notes, &"--fail-on-incomplete"]).code, 4);
+}
+
+#[test]
+fn binary_inspect_takes_a_policy() {
+    let d = inputs();
+    let notes = d.path().join("NOTES.txt");
+    let o = TempDir::new().unwrap();
+    let none = write(
+        o.path(),
+        "none.toml",
+        "schema = \"sigil-policy/1\"\nname = \"none\"\n[scope]\nbinary_audit = []\n",
+    );
+    let r = binary(&[&notes, &"--policy", &none]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(session_of(&r).outcome.completeness, Completeness::Complete);
+    let bad = write(o.path(), "bad.toml", "schema = \"nope\"\n");
+    assert_eq!(binary(&[&notes, &"--policy", &bad]).code, 1);
+}
+
+#[test]
+fn inputs_that_cannot_be_inspected_exit_1_and_write_nothing() {
+    let d = inputs();
+    let o = TempDir::new().unwrap();
+    let out = o.path().join("report.json");
+    for input in [d.path().join("missing"), d.path().to_path_buf()] {
+        let r = binary(&[&input, &"--out", &out]);
+        assert_eq!(r.code, 1, "{}: {}", input.display(), r.stderr);
+        assert!(!out.exists());
+    }
+}
+
+#[test]
+fn out_on_an_input_or_a_hard_link_of_one_is_refused_and_the_input_kept() {
+    use std::os::unix::fs::symlink;
+    let d = inputs();
+    let so = d.path().join("libdata.so");
+    let before = sha_of(&so);
+    let link = d.path().join("link.so");
+    symlink(&so, &link).unwrap();
+    let hard = d.path().join("hard.json");
+    fs::hard_link(&so, &hard).unwrap();
+    for out in [&so, &link, &hard] {
+        let r = binary(&[&so, &"--out", out]);
+        assert_eq!(r.code, 2, "{}: {}", out.display(), r.stderr);
+        assert_eq!(sha_of(&so), before, "{}", out.display());
+    }
+    // Next to the input is fine.
+    let next = d.path().join("report.md");
+    let r = binary(&[&so, &"--format", &"md", &"--out", &next]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(fs::read_to_string(&next).unwrap().contains("## Binaries"));
+    assert_eq!(sha_of(&so), before);
+}
+
+#[test]
+fn binary_budgets_are_recorded_and_others_refused() {
+    let d = inputs();
+    let so = d.path().join("libdata.so");
+    let r = binary(&[
+        &so,
+        &"--budget",
+        &"binary_bytes=1000000",
+        &"--budget",
+        &"binary_parse_bytes=1048576",
+        &"--budget",
+        &"binary_imports=10",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let b = session_of(&r).request.budgets;
+    assert_eq!(b["binary_bytes"], 1_000_000);
+    assert_eq!(b["binary_parse_bytes"], 1_048_576);
+    assert_eq!(b["binary_imports"], 10);
+    for bad in ["install_bytes=1", "files_discovered=1", "nope=1"] {
+        assert_eq!(binary(&[&so, &"--budget", &bad]).code, 2, "{bad}");
+    }
+    let models = store(true);
+    assert_eq!(
+        inspect(models.path(), &[&"--budget", &"binary_bytes=1"]).code,
+        2
+    );
+}
+
+#[test]
+fn binary_inspect_help_lists_its_flags() {
+    let r = binary(&[&"--help"]);
+    assert_eq!(r.code, 0);
+    for flag in [
+        "--policy",
+        "--budget",
+        "--policy-time",
+        "--format",
+        "--out",
+        "--fail-on",
+        "--fail-on-incomplete",
+        "<PATH>...",
+    ] {
+        assert!(r.stdout.contains(flag), "{flag}: {}", r.stdout);
+    }
+}
+
+#[test]
+fn a_saved_binary_session_is_rendered_and_explained() {
+    let d = inputs();
+    let o = TempDir::new().unwrap();
+    let saved = o.path().join("s.json");
+    let r = binary(&[
+        &d.path().join("libdata.so"),
+        &d.path().join("NOTES.txt"),
+        &"--out",
+        &saved,
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let md = run(&[&"session", &"render", &saved]);
+    assert_eq!(md.code, 0, "{}", md.stderr);
+    assert!(md.stdout.contains("## Binaries"));
+    let bom = run(&[&"session", &"render", &saved, &"--format", &"aibom"]);
+    assert_eq!(bom.code, 0, "{}", bom.stderr);
+    let ex = run(&[&"explain", &saved, &"--coverage"]);
+    assert_eq!(ex.code, 0, "{}", ex.stderr);
+    assert!(ex.stdout.contains("binary.container"), "{}", ex.stdout);
+}
+
+// --- binary inspect: review of Part B -----------------------------------------------------------
+
+/// `--out` is refused before anything is read: a FIFO named as the input and as `--out` exits 2
+/// (refused), not 1 (the FIFO, read as an input, would be fatal). The hard-link refusal says so.
+#[test]
+fn out_on_an_input_is_refused_before_the_read() {
+    let d = TempDir::new().unwrap();
+    let fifo = d.path().join("fifo");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let r = binary(&[&fifo, &"--out", &fifo]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("is the input"), "{}", r.stderr);
+    let d = inputs();
+    let so = d.path().join("libdata.so");
+    let hard = d.path().join("hard.json");
+    fs::hard_link(&so, &hard).unwrap();
+    let r = binary(&[&so, &"--out", &hard]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("is a hard link of the input"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A partial input: its summary line, and a `missing` line naming only the entries that keep the
+/// check open.
+#[test]
+fn the_summary_names_partial_inputs_and_only_the_open_entries() {
+    let d = inputs();
+    fs::write(
+        d.path().join("cut.so"),
+        &fs::read(elf_fixture("libdata.so")).unwrap()[..300],
+    )
+    .unwrap();
+    let r = binary(&[
+        &d.path().join("libdata.so"),
+        &d.path().join("cut.so"),
+        &d.path().join("NOTES.txt"),
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = |needle: &str| {
+        r.stderr
+            .lines()
+            .find(|l| l.starts_with("binary: ") && l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {}", r.stderr))
+            .to_string()
+    };
+    assert!(line("cut.so").contains("partial ("), "{}", r.stderr);
+    let missing = r
+        .stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("missing  binary.container"))
+        .unwrap();
+    assert!(missing.contains("inst:binary-2/cut.so"), "{missing}");
+    assert!(missing.contains("inst:binary-3/NOTES.txt"), "{missing}");
+    assert!(!missing.contains("inst:binary-1/libdata.so"), "{missing}");
+}
+
+/// An input over `binary_bytes`: `not read` on its line, and in the Markdown.
+#[test]
+fn an_input_over_binary_bytes_is_shown_as_not_read() {
+    let d = inputs();
+    let size = fs::metadata(d.path().join("libdata.so")).unwrap().len();
+    let budget = format!("binary_bytes={}", size + 10);
+    let o = TempDir::new().unwrap();
+    let md = o.path().join("r.md");
+    let r = binary(&[
+        &d.path().join("libdata.so"),
+        &d.path().join("net.o"),
+        &"--budget",
+        &budget,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let net = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("binary: ") && l.contains("net.o"))
+        .unwrap();
+    assert!(net.contains("not read"), "{net}");
+    assert!(net.contains("budget exceeded"), "{net}");
+    let text = fs::read_to_string(&md).unwrap();
+    assert!(
+        text.contains(&UntrustedText::new("not read: BudgetExceeded").markdown_inline()),
+        "{text}"
+    );
+}
+
+/// A policy that requires nothing of a binary inspection is said so in the summary.
+#[test]
+fn a_policy_that_requires_nothing_is_noted() {
+    let d = inputs();
+    let o = TempDir::new().unwrap();
+    let none = write(
+        o.path(),
+        "none.toml",
+        "schema = \"sigil-policy/1\"\nname = \"none\"\n[scope]\nbinary_audit = []\n",
+    );
+    let r = binary(&[&d.path().join("NOTES.txt"), &"--policy", &none]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stderr.contains("requires no check"), "{}", r.stderr);
+    let r = binary(&[&d.path().join("NOTES.txt")]);
+    assert!(!r.stderr.contains("requires no check"), "{}", r.stderr);
+}
+
+/// A long path is cut in the message, the reason is kept.
+#[test]
+fn a_fatal_message_keeps_its_reason_after_a_long_path() {
+    let d = TempDir::new().unwrap();
+    let long = d
+        .path()
+        .join("d".repeat(200))
+        .join("e".repeat(200))
+        .join("f".repeat(200));
+    let r = binary(&[&long]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.contains("not found"), "{}", r.stderr);
 }

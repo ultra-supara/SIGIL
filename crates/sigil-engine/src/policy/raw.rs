@@ -35,6 +35,11 @@ pub(super) struct RawScope {
     /// Added in PR-4a: optional, so older policy files load unchanged.
     #[serde(default)]
     pub install_audit: Vec<String>,
+    /// Added in PR-4b-2a. Optional, so older policy files load, but unlike the other lists a
+    /// missing one is `None`: it then means the built-in `["binary"]`, so a binary inspection
+    /// under an older policy still requires its check. Only an explicit `[]` requires nothing.
+    #[serde(default)]
+    pub binary_audit: Option<Vec<String>>,
     #[serde(default)]
     pub extra_required: Vec<String>,
 }

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use object::elf;
-use object::read::elf::{FileHeader, Sym, SymbolTable};
+use object::read::elf::{FileHeader, SectionHeader, Sym, SymbolTable};
 use object::read::{ReadCacheOps, ReadRef};
 use object::Endianness;
 use sigil_model::{DataSymbol, DataValue, Loc, UntrustedText};
@@ -43,12 +43,32 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     // At most one entry per known name: a name defined twice has no single value.
     let mut found: Vec<(&str, Kind, u64, u64)> = vec![];
     let mut twice: BTreeSet<&str> = BTreeSet::new();
+    let mut unnamed = None;
+    // The symbols' string table, read for names no longer than the longest known one.
+    let strings = e
+        .header
+        .sections(endian, e.data)
+        .ok()
+        .and_then(|t| t.section(symbols.string_section()).ok())
+        .and_then(|s| s.file_range(endian));
+    let longest = KNOWN.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for sym in symbols.symbols() {
         if sym.st_shndx(endian) == elf::SHN_UNDEF || sym.st_type() != elf::STT_OBJECT {
             continue;
         }
-        let Ok(name) = sym.name(endian, symbols.strings()) else {
-            continue;
+        // A name that cannot be read could be a known one: a gap, never a silent skip.
+        let read = match strings {
+            Some(strings) => e.short_name(strings, sym.st_name(endian), longest),
+            None => Err("no string table in the file".to_string()),
+        };
+        let name = match read {
+            Ok(Some(name)) => name,
+            // Longer than every known name.
+            Ok(None) => continue,
+            Err(why) => {
+                unnamed.get_or_insert(why);
+                continue;
+            }
         };
         if let Some((n, kind)) = KNOWN.iter().find(|(n, _)| n.as_bytes() == name) {
             if found.iter().any(|f| f.0 == *n) {
@@ -60,15 +80,26 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             found.push((n, *kind, addr, size));
         }
     }
+    if let Some(why) = unnamed {
+        e.gaps
+            .push(format!("malformed: symbols: a data symbol's name: {why}"));
+    }
     if found.is_empty() {
         return vec![];
     }
+    // A relocatable object's data is not linked yet: no value can be read (PR-4b-2a).
+    let relocatable = e.header.e_type(endian) == elf::ET_REL;
     let wanted: BTreeSet<u64> = found.iter().map(|f| f.2).collect();
-    let relocs = e.relocations(dynamic, &wanted);
+    let relocs = if relocatable {
+        Ok(BTreeMap::new())
+    } else {
+        e.relocations(dynamic, &wanted)
+    };
     let mut out = vec![];
     for (name, kind, addr, size) in found {
         let value = match &relocs {
             _ if twice.contains(name) => Err("defined more than once".to_string()),
+            _ if relocatable => Err("not linked yet (a relocatable object)".to_string()),
             Err(why) => Err(format!("relocations not read: {why}")),
             Ok(map) => value(e, kind, addr, size, map, dynamic),
         };

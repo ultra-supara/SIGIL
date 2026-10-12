@@ -123,6 +123,10 @@ pub const SCOPES: &[ScopeInfo] = &[
             "loader.search_paths",
         ],
     },
+    ScopeInfo {
+        id: "binary",
+        checks: &["binary.container"],
+    },
 ];
 
 /// An assumption a finding condition may rest on, if the policy accepts it.

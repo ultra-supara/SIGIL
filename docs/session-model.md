@@ -143,6 +143,20 @@ The rule then yields an open question at most.
 
   Whether the gaps are right is the parser's contract: `validate` checks the stored results
   against each other, not against the file's bytes.
+- **A binary inspection's inputs agree with their coverage (PR-4b-2a,
+  [`docs/binary-inspect.md`](binary-inspect.md)):**
+  - B9: every `binary.container` entry is scoped to the instance of a binary root, and each input
+    has exactly one. Its state is the one the input implies (`expected_binary_container`):
+    `Complete`; `Partial` with the record's gaps (`not parsed` without a record); `Unsupported` for
+    anything but an ELF; `Error` for a read that saw a change or a removal; or `BudgetExceeded`
+    over `binary_bytes`. The state must match exactly, except that a `BudgetExceeded` needs only
+    its budget and limit exact, with `used` at most the limit. Any other state, `NotPresent` and
+    `OutOfScope` among them, is invalid. A missing entry is invalid too: `outcome()` closes a
+    check when every entry present closes, so a dropped entry would otherwise close it;
+  - B10: a session with a binary root is a binary inspection: only binary roots, static, no
+    active feature, no model filter, no process environment read, no model, and one instance per
+    root, at the root's path, discovered by `Argument`. `Argument` appears on no other instance,
+    and the root ID prefix `binary-` is reserved for `binary-<n>`.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -447,6 +461,21 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
   - a model's layers (manifest order).
 - Timestamps are kept. `ObservationMeta` is recorded but is not part of analysis, and `Outcome.policy_time` is an input that re-analysis reuses.
 
+## Binary inspections (PR-4b-2a)
+
+`sigil binary inspect` writes a session whose scan roots are its inputs:
+- **Roots.** Each input is a root `binary-<n>`, numbered from 1 in the order of first appearance (a
+  file named twice is one input). The root's path
+  is the file, after the symlinks in the argument are resolved. The canonical order sorts roots
+  as text (`binary-10` before `binary-2`), so reports sort binary roots by their number.
+- **Instances.** Each root has one instance: ID `inst:binary-<n>/<file name>`, at the root's path,
+  discovered by `Argument` (named on the command line).
+- **Coverage.** Each input has one `binary.container` entry, scope `Instance`: its status
+  (B9 above). Under the default policy, the request's audit is `binary`, and its one required
+  check is `binary.container`.
+- **Facts.** An ELF input's facts are a `BinaryFacts` record and its `Declares` relations, as for
+  an installation.
+
 ## Fields added to `sigil-session/1`
 
 A field added after sessions without it were written is optional on read, so those sessions still load. A missing one reads as empty. SIGIL always writes it, so a session it writes has every field.
@@ -466,7 +495,7 @@ still reads it.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, and one from before PR-4a a session with `reference_matches`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, and one from before PR-4b-2a a binary inspection (`discovered_by: Argument`).
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet

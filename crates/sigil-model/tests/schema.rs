@@ -371,6 +371,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         ),
         sample("Stability", Stability::ChangedDuringRead),
         sample("Stability", Stability::Vanished),
+        sample("DiscoverySource", DiscoverySource::Argument),
         sample(
             "DiscoverySource",
             DiscoverySource::ServiceUnit {

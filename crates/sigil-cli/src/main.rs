@@ -8,6 +8,8 @@
 //! - `session render` renders a saved session, as Markdown or as its AI-BOM v2.
 //! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
 //! - `rules` lists the detection rules.
+//! - `binary inspect` inspects files directly: each one's digest, format, and container facts, in
+//!   one session (PR-4b-2a).
 //!
 //! Exit codes: 0 normal, 1 execution error, 2 usage error, 3 `--fail-on` reached by the verdict,
 //! 4 `--fail-on-incomplete` with an incomplete result (when 3 does not apply).
@@ -24,10 +26,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
+use sigil_engine::collect::named::NamedBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, Format as ExplainFormat};
 use sigil_engine::inspect::{
-    observe_session, store_session, ActiveInput, InstallRequest, ObserveRequest, StoreRequest,
+    binary_session, observe_session, store_session, ActiveInput, BinaryRequest, InspectError,
+    InstallRequest, ObserveRequest, StoreRequest, MODELS_ROOT,
 };
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
@@ -37,13 +41,14 @@ use sigil_engine::reference;
 use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
-    action, completeness, coverage_state, mode as mode_name, probe_result, severity, subject,
-    verdict, PROBE_SCOPE_NOTE,
+    action, artifact_type, binary_inputs, completeness, coverage_state, mode as mode_name,
+    probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
-    is_loopback, target, ActiveFeature, Completeness, CoverageState, KnowledgeKind, MemberKind,
-    MemberResult, Mode, ReleaseBasis, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText,
-    Verdict, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
+    binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
+    Completeness, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode, ReleaseBasis,
+    ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict, ARTIFACTS_DISCOVERY,
+    ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -66,6 +71,11 @@ enum Command {
         #[command(subcommand)]
         target: InspectTarget,
     },
+    /// Inspect files directly: digest, format, and container facts. Nothing is executed.
+    Binary {
+        #[command(subcommand)]
+        command: BinaryCommand,
+    },
     /// Work with a saved session.
     Session {
         #[command(subcommand)]
@@ -82,6 +92,54 @@ enum Command {
 enum InspectTarget {
     /// Ollama: its model store, and in observe mode the runtime's listening sockets.
     Ollama(OllamaArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum BinaryCommand {
+    /// Inspect one or more files into one session. An ELF executable, shared object, or
+    /// relocatable object gets its container facts; any other regular file is recorded as
+    /// unsupported; a path that is not a readable regular file is an error.
+    Inspect(BinaryArgs),
+}
+
+#[derive(Debug, Args)]
+struct BinaryArgs {
+    /// The files. Symlinks anywhere in a path, the last component included, are resolved first;
+    /// the file is then opened without following any symlink (one swapped in afterwards is an
+    /// error), and is never executed or loaded.
+    #[arg(value_name = "PATH", required = true)]
+    paths: Vec<PathBuf>,
+    /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies.
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
+    /// A read budget: binary_bytes, binary_parse_bytes, or binary_imports (e.g.
+    /// binary_bytes=1073741824).
+    #[arg(long = "budget", value_name = "KEY=VALUE")]
+    budgets: Vec<String>,
+    /// The instant that policy expiry is judged at: now, or RFC 3339 UTC.
+    #[arg(long, value_name = "now|RFC3339", default_value = "now")]
+    policy_time: String,
+    /// The document written.
+    #[arg(long, value_enum, default_value = "session")]
+    format: BinaryFormat,
+    /// Write the document here instead of stdout (not an input; an existing file is replaced).
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+    /// Exit with 3 when the verdict reaches this level.
+    #[arg(long, value_enum)]
+    fail_on: Option<FailOn>,
+    /// Exit with 4 when the result is incomplete (and 3 does not apply), e.g. an unsupported
+    /// input.
+    #[arg(long)]
+    fail_on_incomplete: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BinaryFormat {
+    /// The session (canonical JSON).
+    Session,
+    /// The session as Markdown.
+    Md,
 }
 
 #[derive(Debug, Args)]
@@ -233,6 +291,9 @@ fn main() -> ExitCode {
         Command::Inspect {
             target: InspectTarget::Ollama(args),
         } => inspect_ollama(&args),
+        Command::Binary {
+            command: BinaryCommand::Inspect(args),
+        } => inspect_binary(&args),
         Command::Session {
             command: SessionCommand::Render(args),
         } => render(&args).map(|()| 0),
@@ -260,11 +321,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         ModeArg::Static => Mode::Static,
         ModeArg::Observe => Mode::Observe,
     };
-    let policy_time = match args.policy_time.as_str() {
-        "now" => started_at.clone(),
-        given => Timestamp::new(given)
-            .map_err(|e| Failure::Usage(format!("--policy-time: {}", shown(&e.to_string()))))?,
-    };
+    let policy_time = policy_time(&args.policy_time, &started_at)?;
     let models_dir = args.models_dir.clone().unwrap_or_else(default_models_dir);
     let probing = args.active.contains(&ActiveArg::ApiProbe);
     let probe_target = if probing {
@@ -295,11 +352,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             budgets: given.install,
         }),
     };
-    let tool = ToolInfo {
-        name: "sigil".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        git_rev: None,
-    };
+    let tool = tool_info();
     let proc_root = Path::new("/proc");
     let observation = host::meta(mode, proc_root, started_at);
     let active = match probe_target {
@@ -327,14 +380,54 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             policy_time,
         ),
     };
-    let mut session = assembled.map_err(|e| Failure::Run(shown(&e.to_string())))?;
+    let session = assembled.map_err(|e| Failure::Run(shown(&e.to_string())))?;
+    conclude(
+        session,
+        args.format,
+        target.as_ref(),
+        args.out.as_deref(),
+        &[],
+        args.fail_on,
+        args.fail_on_incomplete,
+    )
+}
+
+/// `--policy-time`: `now` (the start of the run) or an RFC 3339 UTC instant.
+fn policy_time(given: &str, started_at: &Timestamp) -> Result<Timestamp, Failure> {
+    match given {
+        "now" => Ok(started_at.clone()),
+        given => Timestamp::new(given)
+            .map_err(|e| Failure::Usage(format!("--policy-time: {}", shown(&e.to_string())))),
+    }
+}
+
+fn tool_info() -> ToolInfo {
+    ToolInfo {
+        name: "sigil".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_rev: None,
+    }
+}
+
+/// The end of an inspection: the finish time, the document (`aibom` gives the session's hash for
+/// the summary), the summary, and the exit code (3 for `--fail-on`, else 4 for
+/// `--fail-on-incomplete`). `protected`: inodes the write must not replace (the inputs).
+#[allow(clippy::too_many_arguments)]
+fn conclude(
+    mut session: Session,
+    format: DocFormat,
+    target: Option<&out::Target>,
+    out: Option<&Path>,
+    protected: &[(u64, u64)],
+    fail_on: Option<FailOn>,
+    fail_on_incomplete: bool,
+) -> Result<u8, Failure> {
     let finished = now()?;
     if finished > session.observation.started_at {
         session.observation.finished_at = finished;
     }
-
     let mut unsaved = None;
-    let document = match args.format {
+    let document = match format {
         DocFormat::Session => canonical_json(&session)?,
         DocFormat::Md => render_session(&session),
         DocFormat::Aibom => {
@@ -343,10 +436,9 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             json
         }
     };
-    emit(&document, target.as_ref(), &[])?;
-    summary(&session, args.out.as_deref(), unsaved.as_ref());
-
-    let failed = match args.fail_on {
+    emit(&document, target, protected)?;
+    summary(&session, out, unsaved.as_ref());
+    let failed = match fail_on {
         Some(FailOn::Warn) => session.outcome.verdict >= Verdict::Warn,
         Some(FailOn::Fail) => session.outcome.verdict == Verdict::Fail,
         None => false,
@@ -357,11 +449,163 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     );
     Ok(if failed {
         3
-    } else if args.fail_on_incomplete && incomplete {
+    } else if fail_on_incomplete && incomplete {
         4
     } else {
         0
     })
+}
+
+// --- binary inspect ---------------------------------------------------------------------------
+
+fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
+    let started_at = now()?;
+    let policy_time = policy_time(&args.policy_time, &started_at)?;
+    let budgets = binary_budgets(&args.budgets)?;
+    let target = match &args.out {
+        Some(out) => Some(check_binary_out(out, &args.paths)?),
+        None => None,
+    };
+    let policy = load_policy(args.policy.as_deref())?;
+    let observation = host::meta(Mode::Static, Path::new("/proc"), started_at);
+    let session = binary_session(
+        &BinaryRequest {
+            paths: args.paths.clone(),
+            budgets,
+        },
+        &policy,
+        tool_info(),
+        observation,
+        policy_time,
+    )
+    .map_err(|e| match e {
+        // Already escaped for a terminal line, the path cut and the reason whole.
+        InspectError::Input(message) => Failure::Run(message),
+        other => Failure::Run(shown(&other.to_string())),
+    })?;
+    // The read resolved the inputs again, so `--out` is checked against them as read, and the
+    // write puts back any of their inodes it displaces.
+    if let (Some(t), Some(out)) = (&target, &args.out) {
+        check_out_against_inputs(t.path(), out, &session)?;
+    }
+    let protected = protected_inodes(&session);
+    let format = match args.format {
+        BinaryFormat::Session => DocFormat::Session,
+        BinaryFormat::Md => DocFormat::Md,
+    };
+    conclude(
+        session,
+        format,
+        target.as_ref(),
+        args.out.as_deref(),
+        &protected,
+        args.fail_on,
+        args.fail_on_incomplete,
+    )
+}
+
+/// The budgets of `binary inspect`, by the names the session records.
+fn binary_budgets(given: &[String]) -> Result<NamedBudgets, Failure> {
+    let mut b = NamedBudgets::default();
+    for entry in given {
+        let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
+        let Some((key, value)) = entry.split_once('=') else {
+            return Err(usage("expected KEY=VALUE"));
+        };
+        let value: u64 = value
+            .parse()
+            .map_err(|_| usage("the value is not a whole number"))?;
+        match key {
+            BINARY_BYTES => b.bytes = value,
+            "binary_parse_bytes" => b.binary.parse_bytes = value,
+            "binary_imports" => b.binary.imports = value,
+            _ => {
+                return Err(usage(
+                    "unknown budget; known for binary inspect: binary_bytes, \
+                     binary_parse_bytes, binary_imports",
+                ))
+            }
+        }
+    }
+    Ok(b)
+}
+
+/// `--out` of `binary inspect` (spec §3, D4). It must not be an input: each input is a scan root
+/// that is a file, compared after resolution. It must not be a hard link of one either, compared
+/// by `dev:ino`. The write itself never opens an existing file (`out::Target`), but refusing says
+/// what went wrong. The output is pinned with no directory roots: the inputs are files.
+fn check_binary_out(out: &Path, inputs: &[PathBuf]) -> Result<out::Target, Failure> {
+    use std::os::unix::fs::MetadataExt;
+    let target =
+        resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
+    let existing = existing_inode(out, &target)?;
+    for input in inputs {
+        // An input that cannot be resolved is the inspection's own error (exit 1), later.
+        let Ok(canonical) = fs::canonicalize(input) else {
+            continue;
+        };
+        if target == canonical {
+            return Err(Failure::Usage(format!(
+                "--out {} is the input {}; SIGIL never writes a scan root",
+                shown_path(out),
+                shown_path(input)
+            )));
+        }
+        if let (Some(e), Ok(m)) = (existing, fs::metadata(&canonical)) {
+            if e == (m.dev(), m.ino()) {
+                return Err(Failure::Usage(format!(
+                    "--out {} is a hard link of the input {}; SIGIL never writes a scan root",
+                    shown_path(out),
+                    shown_path(input)
+                )));
+            }
+        }
+    }
+    pin(out, &target, vec![])
+}
+
+/// The `dev:ino` of the file at `target`, `None` when there is none. Any other error is reported:
+/// the comparison it feeds must not be skipped silently.
+fn existing_inode(out: &Path, target: &Path) -> Result<Option<(u64, u64)>, Failure> {
+    use std::os::unix::fs::MetadataExt;
+    match fs::symlink_metadata(target) {
+        Ok(m) => Ok(Some((m.dev(), m.ino()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Failure::Run(format!(
+            "--out {} cannot be checked: {e}",
+            shown_path(out)
+        ))),
+    }
+}
+
+/// `--out` against the files the inspection actually read: not one of them by recorded path, and
+/// not a hard link of one by `dev:ino`. An input that resolved elsewhere at the read than at
+/// [`check_binary_out`] (a symlink swapped meanwhile) is caught here, before anything is written.
+fn check_out_against_inputs(target: &Path, out: &Path, s: &Session) -> Result<(), Failure> {
+    use std::os::unix::ffi::OsStrExt;
+    let existing = existing_inode(out, target)?;
+    for i in s.instances.iter().filter(|i| is_binary_root(&i.root)) {
+        if i.path.as_bytes() == target.as_os_str().as_bytes()
+            || existing == Some((i.stat.dev, i.stat.ino))
+        {
+            return Err(Failure::Usage(format!(
+                "--out {} is the input {}, as it was read; SIGIL never writes a scan root",
+                shown_path(out),
+                i.path.terminal_line()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The `dev:ino` of every input, read or over budget: the write puts back any of them it
+/// displaces (spec §3.1).
+fn protected_inodes(s: &Session) -> Vec<(u64, u64)> {
+    s.instances
+        .iter()
+        .filter(|i| is_binary_root(&i.root))
+        .map(|i| (i.stat.dev, i.stat.ino))
+        .collect()
 }
 
 /// `$OLLAMA_MODELS`, else `$HOME/.ollama/models`, as Ollama itself.
@@ -713,12 +957,39 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
         header.push_str(&format!("  active={}", active.join(",")));
     }
     let mut lines = vec![header];
-    let roots: Vec<String> = r
-        .roots
+    // Binary roots in argument order (`binary-<n>` by number).
+    let mut ordered: Vec<&ScanRoot> = r.roots.iter().collect();
+    ordered.sort_by_key(|root| binary_root_index(&root.id));
+    let roots: Vec<String> = ordered
         .iter()
         .map(|root| format!("{} ({})", root.path.terminal_line(), root.id))
         .collect();
     lines.push(format!("roots: {}", roots.join(", ")));
+    for b in binary_inputs(s) {
+        let path = b.instance.map_or(&b.root.path, |i| &i.path);
+        let sha = b.artifact.map_or_else(
+            || "not read".to_string(),
+            |a| {
+                let hex = a.id.as_str().trim_start_matches("sha256:");
+                format!("sha256:{}…", &hex[..hex.len().min(12)])
+            },
+        );
+        let state = match b.coverage.map(|c| &c.state) {
+            Some(CoverageState::Partial { missing }) if missing.len() == 1 => {
+                "partial (1 gap)".to_string()
+            }
+            Some(CoverageState::Partial { missing }) => {
+                format!("partial ({} gaps)", missing.len())
+            }
+            Some(state) => coverage_state(state).terminal(),
+            None => "no coverage entry".to_string(),
+        };
+        lines.push(format!(
+            "binary: {}  {}  {sha}  {state}",
+            path.terminal_line(),
+            artifact_type(b.artifact)
+        ));
+    }
     lines.extend(release_line(s));
     for p in &s.probes {
         lines.push(format!(
@@ -756,7 +1027,9 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
                 let states: Vec<String> = s
                     .coverage
                     .iter()
-                    .filter(|c| c.check == *check)
+                    // Only the entries that keep the check open: a binary inspection has one
+                    // per input.
+                    .filter(|c| c.check == *check && !c.state.can_close())
                     .map(|c| {
                         format!(
                             "{}: {}",
@@ -784,10 +1057,19 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             shown(f.id.as_str())
         ));
     }
-    lines.push(
-        "note: model blob hashing is unbounded by default (its I/O grows with model size)"
-            .to_string(),
-    );
+    if is_binary_inspection(r) && r.required_checks.is_empty() {
+        lines.push(
+            "note: the policy requires no check of a binary inspection (binary_audit = []): \
+             the result is COMPLETE whatever the inputs"
+                .to_string(),
+        );
+    }
+    if r.roots.iter().any(|root| root.id.as_str() == MODELS_ROOT) {
+        lines.push(
+            "note: model blob hashing is unbounded by default (its I/O grows with model size)"
+                .to_string(),
+        );
+    }
     if let Some(sha256) = unsaved {
         lines.push(format!(
             "session sha256: {sha256} (not saved: write it with --format session to keep the evidence)"
@@ -1060,6 +1342,56 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::{civil_from_days, parse_api_addr};
+
+    /// Plan review P1: an input that resolves to `--out` at the read, after `check_binary_out`
+    /// passed (a symlink swapped in between), is caught against the inputs as read, and the
+    /// write puts its inode back.
+    #[test]
+    fn out_is_checked_against_the_inputs_as_read() {
+        use std::os::unix::fs::{symlink, MetadataExt};
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let report = p.join("report.json");
+        std::fs::write(&report, b"report").unwrap();
+        // The state after the swap: the input argument leads to --out.
+        symlink(&report, p.join("input.so")).unwrap();
+        let at = sigil_model::Timestamp::new("2026-10-12T00:00:00Z").unwrap();
+        let s = sigil_engine::inspect::binary_session(
+            &sigil_engine::inspect::BinaryRequest {
+                paths: vec![p.join("input.so")],
+                budgets: Default::default(),
+            },
+            &sigil_engine::policy::Policy::builtin_default().unwrap(),
+            super::tool_info(),
+            sigil_engine::observe::host::meta(
+                sigil_model::Mode::Static,
+                std::path::Path::new("/proc"),
+                at.clone(),
+            ),
+            at,
+        )
+        .unwrap();
+        assert!(matches!(
+            super::check_out_against_inputs(&report, &report, &s),
+            Err(super::Failure::Usage(_))
+        ));
+        let m = std::fs::metadata(&report).unwrap();
+        assert_eq!(super::protected_inodes(&s), [(m.dev(), m.ino())]);
+        let target = super::out::Target::pin(&report, vec![]).unwrap();
+        assert!(target.write(b"doc", &super::protected_inodes(&s)).is_err());
+        assert_eq!(std::fs::read(&report).unwrap(), b"report");
+        // An output elsewhere passes.
+        let other = p.join("other.json");
+        assert!(super::check_out_against_inputs(&other, &other, &s).is_ok());
+        // Review of Part B: each half of the check alone. A hard link of the input, by inode:
+        let hard = p.join("hard.json");
+        std::fs::hard_link(&report, &hard).unwrap();
+        assert!(super::check_out_against_inputs(&hard, &hard, &s).is_err());
+        // The input's path, now a new file (another inode), by path:
+        std::fs::remove_file(&report).unwrap();
+        std::fs::write(&report, b"new").unwrap();
+        assert!(super::check_out_against_inputs(&report, &report, &s).is_err());
+    }
 
     #[test]
     fn api_addresses_are_literal() {

@@ -12,6 +12,9 @@ observe_audit = ["exposure"]
 active_audit = ["runtime_api"]
 # When an installation is inspected (`--install-dir`): its files against the official manifests.
 install_audit = ["runtime_artifacts"]
+# A binary inspection (`sigil binary inspect`) audits only these; the lists above and
+# extra_required are for `inspect ollama`.
+binary_audit = ["binary"]
 extra_required = []
 
 [open_questions]

@@ -8,12 +8,13 @@ use sigil_model::{
     ActiveFeature, ApiProbe, Artifact, CheckId, Completeness, Coverage, CoverageState, Format,
     KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion,
     Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict,
-    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
+    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
 };
 
-use crate::analyze::{container, exposure, model_store, release, runtime_api};
+use crate::analyze::{binary, container, exposure, model_store, release, runtime_api};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
+use crate::collect::named::{self, NamedBudgets};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
 use crate::observe;
 use crate::observe::proc::{ProcBudgets, ProcFacts};
@@ -58,6 +59,8 @@ pub enum InspectError {
     Invalid(Vec<String>),
     /// The session's reference rows are not what the embedded set gives (a bug).
     Reference(Vec<String>),
+    /// An input of `binary inspect` that cannot be inspected (exit 1; plan §4.9).
+    Input(String),
 }
 
 impl fmt::Display for InspectError {
@@ -73,6 +76,7 @@ impl fmt::Display for InspectError {
                 "the session's reference matches disagree with the embedded set: {}",
                 errors.join("; ")
             ),
+            InspectError::Input(e) => write!(f, "{e}"),
         }
     }
 }
@@ -179,6 +183,7 @@ fn assemble(
         mode,
         active: !active.features.is_empty(),
         install: req.install.is_some(),
+        binary: false,
     });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
@@ -308,6 +313,96 @@ fn assemble(
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
         reference::verify_reference_matches(&session, set).map_err(InspectError::Reference)?;
     }
+    Ok(session)
+}
+
+/// What a binary inspection is asked to do (`sigil binary inspect`; PR-4b-2a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryRequest {
+    /// The files, as given: each is resolved, and a file named twice is one input.
+    pub paths: Vec<PathBuf>,
+    pub budgets: NamedBudgets,
+}
+
+/// Inspects the files of `req` and evaluates `policy`'s binary scope on the result (spec §4.5).
+/// An input that cannot be inspected is [`InspectError::Input`]. The session is in canonical
+/// order and passes `Session::validate`.
+pub fn binary_session(
+    req: &BinaryRequest,
+    policy: &Policy,
+    tool: ToolInfo,
+    observation: ObservationMeta,
+    policy_time: Timestamp,
+) -> Result<Session, InspectError> {
+    let facts = named::collect(&req.paths, req.budgets).map_err(InspectError::Input)?;
+    let (audit, required_checks) = policy.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+        binary: true,
+    });
+    let relations = container::declares(&facts.binaries);
+    let budgets = BTreeMap::from([
+        (BINARY_BYTES.to_string(), req.budgets.bytes),
+        (
+            "binary_parse_bytes".to_string(),
+            req.budgets.binary.parse_bytes,
+        ),
+        ("binary_imports".to_string(), req.budgets.binary.imports),
+    ]);
+    let mut session = Session {
+        schema: SchemaVersion::SessionV1,
+        tool,
+        knowledge: vec![],
+        request: RunRequest {
+            mode: Mode::Static,
+            roots: facts.roots,
+            audit,
+            required_checks,
+            budgets,
+            observe_env: false,
+            model_filter: None,
+            active: vec![],
+        },
+        observation,
+        artifacts: facts.artifacts,
+        instances: facts.instances,
+        models: vec![],
+        processes: vec![],
+        listeners: vec![],
+        probes: vec![],
+        values: vec![],
+        components: vec![],
+        releases: vec![],
+        reference_matches: vec![],
+        binaries: facts.binaries,
+        hints: vec![],
+        code: vec![],
+        relations,
+        rule_support: vec![],
+        bindings: vec![],
+        loads: vec![],
+        access: vec![],
+        assumptions: vec![],
+        coverage: vec![],
+        findings: vec![],
+        open_questions: vec![],
+        policy_violations: vec![],
+        // Computed by `evaluate`.
+        outcome: Outcome {
+            verdict: Verdict::Pass,
+            completeness: Completeness::Complete,
+            confirmed_failures: 0,
+            confirmed_warnings: 0,
+            policy_time: policy_time.clone(),
+        },
+    };
+    session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
+    evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
+    session.canonicalize();
+    session.validate().map_err(|errors| {
+        InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
+    })?;
     Ok(session)
 }
 

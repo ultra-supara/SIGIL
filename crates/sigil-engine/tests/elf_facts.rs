@@ -273,6 +273,7 @@ fn the_header_check_and_the_parser_agree_on_every_fixture() {
         "exe-nopie",
         "static",
         "libdata-aarch64.so",
+        "net.o",
     ] {
         let bytes = fixture(&format!("elf/{name}"));
         assert!(
@@ -390,5 +391,170 @@ fn a_version_table_shorter_than_the_symbols_is_a_gap() {
             .contains(&"versions: .gnu.version is shorter than .dynsym".to_string()),
         "{:?}",
         p.gaps
+    );
+}
+
+/// PR-4b-2a spec §4.4: a relocatable object has no `.dynsym`. Its imports are the undefined
+/// symbols of its link-time symbol table, left for the linker, and its exports its defined
+/// global ones. No versions, no data values.
+#[test]
+fn a_relocatable_object_s_symbols_come_from_symtab() {
+    let (f, p) = facts_of(&fixture("elf/net.o"), BinaryBudgets::default());
+    let names: Vec<String> = f
+        .imports
+        .iter()
+        .map(|i| i.name.as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(names, ["connect", "socket"]);
+    assert!(f.imports.iter().all(|i| i.version.is_none() && !i.weak));
+    assert_eq!(f.exports, 1, "sigil_connect_loopback");
+    assert_eq!(f.stripped, Some(false));
+    assert!(f.data.is_empty() && f.needed.is_empty() && f.interp.is_none());
+    assert!(!f.comment.is_empty());
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+}
+
+#[test]
+fn a_relocatable_object_without_symtab_is_a_gap() {
+    let mut img = ElfImage::new(1); // ET_REL
+    img.put(0x1000, &[0xc3]);
+    img.sec(".text", SHT_PROGBITS, 0x1000, 0, 1);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert!(f.imports.is_empty());
+    assert_eq!(p.gaps, ["symbols: no SHT_SYMTAB in a relocatable object"]);
+}
+
+/// Review of Part B: a relocatable object's symbol table, built by hand. Locals and hidden
+/// globals are not exports; a weak undefined symbol is a weak import; a known data symbol is
+/// listed as `Unknown` with its gap (its data is not linked yet), never left out as absent.
+#[test]
+fn a_relocatable_object_s_symtab_follows_the_dynsym_rules_and_keeps_known_symbols() {
+    let mut img = ElfImage::new(1); // ET_REL
+    let names = b"\0local_fn\0hidden_fn\0weak_ref\0LLAMA_COMMIT\0exported\0";
+    let at = |s: &[u8]| names.windows(s.len()).position(|w| w == s).unwrap() as u32;
+    let mut syms = vec![0u8; 24];
+    syms.extend_from_slice(&sym64(at(b"local_fn"), 0x02, 1, 0, 1)); // LOCAL FUNC
+    let mut hidden = sym64(at(b"hidden_fn"), 0x12, 1, 0, 1); // GLOBAL FUNC
+    hidden[5] = 2; // STV_HIDDEN
+    syms.extend_from_slice(&hidden);
+    syms.extend_from_slice(&sym64(at(b"weak_ref"), 0x20, 0, 0, 0)); // WEAK NOTYPE, undefined
+    syms.extend_from_slice(&sym64(at(b"LLAMA_COMMIT"), 0x11, 1, 0, 8)); // GLOBAL OBJECT
+    syms.extend_from_slice(&sym64(at(b"exported"), 0x12, 1, 0, 1)); // GLOBAL FUNC
+    let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+    img.put(sym_off, &syms).put(str_off, names);
+    // Section 1 is .symtab, linked to section 2, .strtab.
+    img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+        .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(
+        f.exports, 2,
+        "exported and LLAMA_COMMIT; not the local or the hidden one"
+    );
+    assert_eq!(f.imports.len(), 1);
+    assert_eq!(f.imports[0].name.as_str(), Some("weak_ref"));
+    assert!(f.imports[0].weak);
+    assert_eq!(f.data.len(), 1, "{:?}", f.data);
+    assert_eq!(f.data[0].symbol, "LLAMA_COMMIT");
+    assert!(
+        matches!(&f.data[0].value, sigil_model::DataValue::Unknown { why } if why.contains("relocatable")),
+        "{:?}",
+        f.data[0].value
+    );
+    assert_eq!(
+        p.gaps,
+        ["LLAMA_COMMIT: not linked yet (a relocatable object)"]
+    );
+}
+
+/// Review of #89 (P2): a defined data symbol whose name cannot be read (its `st_name` past the
+/// string table) is a gap, never skipped silently: it could be a known data symbol.
+#[test]
+fn a_data_symbol_whose_name_cannot_be_read_is_a_gap() {
+    let mut img = ElfImage::new(1); // ET_REL
+    let names = b"\0exported\0";
+    let mut syms = vec![0u8; 24];
+    syms.extend_from_slice(&sym64(1, 0x12, 1, 0, 1)); // GLOBAL FUNC "exported"
+    syms.extend_from_slice(&sym64(0xffff, 0x11, 1, 0, 8)); // GLOBAL OBJECT, name out of range
+    let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+    img.put(sym_off, &syms).put(str_off, names);
+    img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+        .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert!(f.data.is_empty());
+    assert!(
+        p.gaps
+            .iter()
+            .any(|g| g.starts_with("malformed: symbols: a data symbol's name")),
+        "{:?}",
+        p.gaps
+    );
+}
+
+/// Review of #89 (the same class as P2): a section whose name cannot be read could be `.comment`
+/// or `.go.buildinfo`. It is a gap, never "absent".
+#[test]
+fn a_section_whose_name_cannot_be_read_is_a_gap() {
+    let mut img = ElfImage::new(3);
+    img.put(0x1000, b"GCC: test\0")
+        .sec(".comment", SHT_PROGBITS, 0x1000, 0, 10);
+    let readable = img.build();
+    let (f, p) = facts_of(&readable, BinaryBudgets::default());
+    assert_eq!(texts(&f.comment), ["GCC: test"]);
+    assert!(
+        p.gaps.iter().all(|g| !g.contains("section names")),
+        "{:?}",
+        p.gaps
+    );
+    // `.comment` is section 1: its `sh_name` set past `.shstrtab`.
+    let mut bytes = readable;
+    let shoff = u64::from_le_bytes(bytes[40..48].try_into().unwrap()) as usize;
+    bytes[shoff + 64..shoff + 68].copy_from_slice(&0xffff_u32.to_le_bytes());
+    let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(f.comment.is_empty());
+    assert_eq!(f.stripped, Some(true));
+    assert!(
+        p.gaps
+            .iter()
+            .any(|g| g.starts_with("malformed: section names: ")),
+        "{:?}",
+        p.gaps
+    );
+}
+
+/// Review of the #89 fixes: a valid name of 4096 bytes or more (a C++ section or symbol) is no
+/// gap. object's string lookup stops at 4096 bytes; SIGIL reads only what a wanted name needs.
+#[test]
+fn a_long_valid_name_is_no_gap_and_an_unterminated_one_is() {
+    let long = "x".repeat(5000);
+    let mut img = ElfImage::new(3);
+    img.put(0x1000, b"GCC: test\0")
+        .sec(&format!(".text.{long}"), SHT_PROGBITS, 0x1000, 0, 0)
+        .sec(".comment", SHT_PROGBITS, 0x1000, 0, 10);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(texts(&f.comment), ["GCC: test"]);
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+
+    let symtab = |names: &[u8]| {
+        let mut img = ElfImage::new(1); // ET_REL
+        let mut syms = vec![0u8; 24];
+        syms.extend_from_slice(&sym64(1, 0x12, 1, 0, 1)); // GLOBAL FUNC "exported"
+        syms.extend_from_slice(&sym64(10, 0x11, 1, 0, 8)); // GLOBAL OBJECT, the name at 10
+        let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+        img.put(sym_off, &syms).put(str_off, names);
+        img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+            .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+        facts_of(&img.build(), BinaryBudgets::default()).1.gaps
+    };
+    let mut names = b"\0exported\0".to_vec();
+    names.extend_from_slice(long.as_bytes());
+    names.push(0);
+    assert!(symtab(&names).is_empty(), "{:?}", symtab(&names));
+    // "LLAMA" at the end of the table with no NUL: it could be a known name, cut.
+    let gaps = symtab(b"\0exported\0LLAMA");
+    assert!(
+        gaps.iter()
+            .any(|g| g
+                .starts_with("malformed: symbols: a data symbol's name: a name not terminated")),
+        "{gaps:?}"
     );
 }

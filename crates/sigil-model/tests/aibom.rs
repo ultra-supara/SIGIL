@@ -59,7 +59,7 @@ fn every_session_example_projects_to_its_committed_aibom() {
         fs::create_dir_all(&dir).unwrap();
     }
     let examples = session_examples();
-    assert_eq!(examples.len(), 14);
+    assert_eq!(examples.len(), 15);
     for (name, s) in &examples {
         let bom = project(s, sha(s));
         let text = json(&bom);

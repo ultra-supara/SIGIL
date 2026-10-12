@@ -94,6 +94,78 @@ pub fn subject(r: &Ref) -> String {
     }
 }
 
+/// One input of a binary inspection, as reports show it (PR-4b-2a).
+pub struct BinaryInput<'s> {
+    pub root: &'s crate::session::ScanRoot,
+    pub instance: Option<&'s crate::artifact::FileInstance>,
+    /// `None` when the input was not read (over `binary_bytes`).
+    pub artifact: Option<&'s crate::artifact::Artifact>,
+    /// Its `binary.container` entry.
+    pub coverage: Option<&'s crate::coverage::Coverage>,
+}
+
+/// The inputs of a binary inspection, in argument order: `binary-<n>` by number, not in the
+/// canonical order, which puts `binary-10` before `binary-2` (spec §5.1).
+pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
+    use std::collections::BTreeMap;
+
+    use crate::artifact::InstanceContent;
+    use crate::binary_input::{binary_root_index, BINARY_CONTAINER};
+    let mut roots: Vec<(u32, &crate::session::ScanRoot)> = s
+        .request
+        .roots
+        .iter()
+        .filter_map(|r| Some((binary_root_index(&r.id)?, r)))
+        .collect();
+    roots.sort_by_key(|(n, _)| *n);
+    // Indexed once: a binary inspection may have many inputs.
+    let mut instances = BTreeMap::new();
+    for i in &s.instances {
+        instances.entry(&i.root).or_insert(i);
+    }
+    let artifacts: BTreeMap<_, _> = s.artifacts.iter().map(|a| (&a.id, a)).collect();
+    let mut coverage = BTreeMap::new();
+    for c in &s.coverage {
+        if let (true, Ref::Instance(at)) = (c.check.as_str() == BINARY_CONTAINER, &c.scope) {
+            coverage.entry(at).or_insert(c);
+        }
+    }
+    roots
+        .into_iter()
+        .map(|(_, root)| {
+            let instance = instances.get(&root.id).copied();
+            let artifact = instance.and_then(|i| match &i.content {
+                InstanceContent::Read { artifact } => artifacts.get(artifact).copied(),
+                InstanceContent::NotRead { .. } => None,
+            });
+            let coverage = instance.and_then(|i| coverage.get(&i.id).copied());
+            BinaryInput {
+                root,
+                instance,
+                artifact,
+                coverage,
+            }
+        })
+        .collect()
+}
+
+/// An artifact's type: `ELF Rel x86_64`, `Mach-O`, `other`, or `not read`.
+pub fn artifact_type(a: Option<&crate::artifact::Artifact>) -> String {
+    use crate::artifact::Format;
+    match a {
+        None => "not read".to_string(),
+        Some(a) => match a.format {
+            Format::Elf { kind } => {
+                let arch = a.slices.first().map_or("-", |s| s.arch.name());
+                format!("ELF {kind:?} {arch}")
+            }
+            Format::MachO => "Mach-O".to_string(),
+            Format::MachOFat => "Mach-O fat".to_string(),
+            Format::Other => "other".to_string(),
+        },
+    }
+}
+
 /// A coverage state.
 pub fn coverage_state(state: &CoverageState) -> Shown {
     match state {

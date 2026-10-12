@@ -13,6 +13,8 @@ cc $C -no-pie -rdynamic -o exe-nopie exe.c -Wl,--disable-new-dtags -Wl,-rpath,/o
 cc $C -nostdlib -static -o static static.c
 clang --target=aarch64-linux-gnu -fuse-ld=lld -nostdlib -shared -fPIC $C \
    -o libdata-aarch64.so data-only.c -Wl,-soname,libdata-aarch64.so
+cc $C -fno-stack-protector -c -o net.o net.c
 for f in libdata.so libdata-relr.so libsym64.so exe-nopie static libdata-aarch64.so; do
   LC_ALL=C readelf -hlndrW --dyn-syms -p .comment "$f" > "$f.readelf" 2>&1 || true
 done
+LC_ALL=C readelf -hSsW -p .comment net.o > net.o.readelf 2>&1 || true

@@ -87,9 +87,14 @@ cargo run -p sigil-cli -- session render out/session.json
 
 # The detection rules
 cargo run -p sigil-cli -- rules
+
+# Files directly (no model store or installation): digest, format, container facts
+cargo run -p sigil-cli -- binary inspect ./libggml-base.so --format md --out out/binary.md
 ```
 
-Every option, the exit codes, and a CI recipe are in the [Ollama guide](docs/ollama-inspection.md). Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached (`--fail-on`), `4` incomplete (`--fail-on-incomplete`).
+`binary inspect` reads files directly and writes one session for all of them; its options, budgets, and statuses are in [docs/binary-inspect.md](docs/binary-inspect.md).
+
+Every option of `inspect ollama`, the exit codes, and a CI recipe are in the [Ollama guide](docs/ollama-inspection.md). Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached (`--fail-on`), `4` incomplete (`--fail-on-incomplete`).
 
 Details: [Ollama guide](docs/ollama-inspection.md) · [model store](docs/model-store.md) · [runtime artifacts](docs/runtime-artifacts.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
 
