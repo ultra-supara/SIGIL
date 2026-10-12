@@ -420,10 +420,15 @@ fn a_binary_inspection_audits_binary_audit_only() {
                 binary_audit = [\"binary\"]\nextra_required = [\"loader.identify\"]\n";
     let (_, required) = Policy::load(text).unwrap().scope(&binary);
     assert_eq!(ids(&required), ["binary.container"]);
-    // Without binary_audit, nothing is required; an unknown scope is fatal.
+    // Review of Part B: a policy without binary_audit (any written before it existed) requires
+    // the binary scope, so binary inspections fail closed; only an explicit [] requires nothing.
     let old = Policy::load("schema = \"sigil-policy/1\"\nname = \"old\"\n").unwrap();
-    assert!(old.binary_audit.is_empty());
-    assert_eq!(old.scope(&binary), (vec![], vec![]));
+    assert_eq!(ids(&old.binary_audit), ["binary"]);
+    assert_eq!(ids(&old.scope(&binary).1), ["binary.container"]);
+    let none =
+        Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\nbinary_audit = []\n")
+            .unwrap();
+    assert_eq!(none.scope(&binary), (vec![], vec![]));
     assert!(matches!(
         Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\nbinary_audit = [\"nope\"]\n"),
         Err(PolicyError::UnknownScope(s)) if s == "nope"

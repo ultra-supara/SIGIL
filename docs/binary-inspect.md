@@ -33,9 +33,9 @@ symlink, is one input. For each input, the session records:
 | Over the `binary_bytes` budget | `BudgetExceeded`: not read, later inputs still are |
 | Changed while it was read | `Error` |
 
-Under the default policy (`binary_audit = ["binary"]`), any status other than `Complete` makes
-the result `INCOMPLETE`. A policy whose `binary_audit` is empty requires nothing, and the result
-is then `COMPLETE` whatever the statuses.
+Under the default policy, any status other than `Complete` makes the result `INCOMPLETE`. The same
+holds for any policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
+`binary_audit = []` requires nothing, and the result is then `COMPLETE` whatever the statuses.
 
 No rule judges binaries yet, so the verdict is `PASS`. Use `--fail-on-incomplete` (exit 4) to
 fail on an unsupported or partial input.
@@ -84,5 +84,5 @@ descriptors.
 
 ## Policy
 
-The policy's `binary_audit` is what a binary inspection requires. Its default is `["binary"]`,
-whose check is `binary.container`. See [policy](policy.md).
+The policy's `binary_audit` is what a binary inspection requires: `["binary"]`, whose check is
+`binary.container`, when the policy sets it that way or leaves it out. See [policy](policy.md).

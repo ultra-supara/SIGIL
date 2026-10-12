@@ -28,6 +28,9 @@ pub use evaluate::{evaluate, outcome, EvaluateError, PolicyWarning};
 /// The schema line every policy starts with.
 pub const SCHEMA: &str = "sigil-policy/1";
 
+/// The audit scope of a binary inspection, and what a policy without `binary_audit` requires.
+pub const BINARY_SCOPE: &str = "binary";
+
 const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
 /// What decides the audit scope: the mode, whether an active feature was requested, whether an
@@ -72,8 +75,8 @@ pub struct Policy {
     pub active_audit: Vec<AuditScope>,
     /// Scopes added when an installation is inspected (`--install-dir`).
     pub install_audit: Vec<AuditScope>,
-    /// Scopes of a binary inspection (`sigil binary inspect`). The lists above and
-    /// `extra_required` apply to `inspect ollama` only.
+    /// Scopes of a binary inspection (`sigil binary inspect`); `["binary"]` when the policy file
+    /// omits the list. The lists above and `extra_required` apply to `inspect ollama` only.
     pub binary_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.
     pub extra_required: Vec<CheckId>,
@@ -259,7 +262,11 @@ impl Policy {
         let observe_audit = scopes(&raw.scope.observe_audit)?;
         let active_audit = scopes(&raw.scope.active_audit)?;
         let install_audit = scopes(&raw.scope.install_audit)?;
-        let binary_audit = scopes(&raw.scope.binary_audit)?;
+        // Omitted: the built-in scope, so a binary inspection fails closed (review of Part B).
+        let binary_audit = match &raw.scope.binary_audit {
+            Some(list) => scopes(list)?,
+            None => scopes(&[BINARY_SCOPE.to_string()])?,
+        };
         let extra_required = raw
             .scope
             .extra_required

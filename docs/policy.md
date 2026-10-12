@@ -61,11 +61,14 @@ gets both its checks `Skipped { Flag("--install-dir") }` on a run without `--ins
 result is INCOMPLETE.
 
 **A binary inspection** (`sigil binary inspect`, a session whose roots are `binary-<n>`) audits
-`binary_audit` and nothing else. Its default is `["binary"]`, whose check is `binary.container`,
-one entry per input. The other lists and `extra_required` apply to `inspect ollama` only, so an
-organization's extra checks for an installation do not make every binary inspection incomplete.
-`binary_audit` is optional too: a policy without it requires nothing of a binary inspection, and
-the result is then `COMPLETE` whatever the inputs' statuses.
+`binary_audit` and nothing else: `["binary"]`, whose check is `binary.container`, one entry per
+input. The other lists and `extra_required` apply to `inspect ollama` only, so an organization's
+extra checks for an installation do not make every binary inspection incomplete.
+
+`binary_audit` is optional, but unlike the other lists, a policy file that omits it gets
+`["binary"]`: a policy written before it existed still requires every input to be inspected in
+full. Only an explicit `binary_audit = []` requires nothing, and the result is then `COMPLETE`
+whatever the inputs' statuses (the summary says so).
 
 ## Catalogs
 
