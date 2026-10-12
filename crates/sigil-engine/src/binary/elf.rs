@@ -30,13 +30,23 @@ pub const MAX_INTERP: u64 = 4_096;
 /// What `PT_DYNAMIC` says, for the other steps.
 #[derive(Debug, Default)]
 pub(crate) struct Dynamic {
-    /// `DT_SYMTAB` is present: the file has dynamic symbols.
-    pub symtab: bool,
+    /// `DT_SYMTAB`: where the loader reads the dynamic symbols.
+    pub symtab: Option<u64>,
+    /// `DT_HASH` and `DT_GNU_HASH`: the hash tables a lookup goes through.
+    pub hash: Option<u64>,
+    pub gnu_hash: Option<u64>,
+    /// `DT_VERSYM`: where the loader reads the symbols' versions.
+    pub versym: Option<u64>,
     /// `DT_RELA`/`DT_RELASZ`: `(vaddr, size)`.
     pub rela: Option<(u64, u64)>,
     /// `DT_JMPREL`/`DT_PLTRELSZ` when `DT_PLTREL` is `DT_RELA`: `(vaddr, size)`.
     pub jmprel_rela: Option<(u64, u64)>,
-    /// `DT_REL`, `DT_RELR`, or a REL `DT_JMPREL` exists (not read in 4b-1).
+    /// `DT_REL`/`DT_RELSZ`, and `DT_JMPREL`/`DT_PLTRELSZ` when `DT_PLTREL` is not `DT_RELA`:
+    /// `(vaddr, size)`. Read only for their symbol indices (spec §3.2).
+    pub rel: Option<(u64, u64)>,
+    pub jmprel_rel: Option<(u64, u64)>,
+    /// `DT_REL`, `DT_RELR`, or a REL `DT_JMPREL` exists: SIGIL does not apply them, so no
+    /// data value is read (spec §3.4).
     pub rel_or_relr: bool,
     /// Why the RELA tables cannot be read as the loader reads them: a size that is not a whole
     /// number of entries, or a `DT_RELAENT` other than the entry size. Also a gap.
@@ -222,9 +232,10 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             self.gap("dynamic: outside the file");
             return out;
         };
-        let (mut strtab, mut strsz) = (None, None);
+        let (mut strtab, mut strsz, mut syment) = (None, None, None);
         let (mut rela, mut relasz, mut relaent, mut jmprel, mut pltrelsz, mut pltrel) =
             (None, None, None, None, None, None);
+        let (mut rel, mut relsz, mut relent) = (None, None, None);
         // The string tags, in order: (tag, offset into the string table).
         let mut strings: Vec<(elf::DynamicTag, u64)> = vec![];
         let mut terminated = false;
@@ -241,14 +252,24 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 elf::DT_NEEDED | elf::DT_SONAME | elf::DT_RPATH | elf::DT_RUNPATH => {
                     strings.push((tag, val))
                 }
-                elf::DT_SYMTAB => out.symtab = true,
+                elf::DT_SYMTAB => out.symtab = Some(val),
+                elf::DT_SYMENT => syment = Some(val),
+                elf::DT_HASH => out.hash = Some(val),
+                elf::DT_GNU_HASH => out.gnu_hash = Some(val),
+                elf::DT_VERSYM => out.versym = Some(val),
                 elf::DT_RELA => rela = Some(val),
                 elf::DT_RELASZ => relasz = Some(val),
                 elf::DT_RELAENT => relaent = Some(val),
+                elf::DT_REL => {
+                    rel = Some(val);
+                    out.rel_or_relr = true;
+                }
+                elf::DT_RELSZ => relsz = Some(val),
+                elf::DT_RELENT => relent = Some(val),
                 elf::DT_JMPREL => jmprel = Some(val),
                 elf::DT_PLTRELSZ => pltrelsz = Some(val),
                 elf::DT_PLTREL => pltrel = Some(val),
-                elf::DT_REL | elf::DT_RELR => out.rel_or_relr = true,
+                elf::DT_RELR => out.rel_or_relr = true,
                 _ => {}
             }
         }
@@ -259,16 +280,25 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if let (Some(a), Some(n)) = (rela, relasz) {
             out.rela = Some((a, n));
         }
+        if let (Some(a), Some(n)) = (rel, relsz) {
+            out.rel = Some((a, n));
+        }
         if let (Some(a), Some(n)) = (jmprel, pltrelsz) {
             if pltrel == Some(elf::DT_RELA.0 as u64) {
                 out.jmprel_rela = Some((a, n));
             } else {
                 out.rel_or_relr = true;
+                out.jmprel_rel = Some((a, n));
             }
         }
+        // glibc refuses a DT_SYMENT other than its symbol size (spec §3.2).
+        let sym_size = size_of::<H::Sym>() as u64;
+        if syment.is_some_and(|n| n != sym_size) {
+            self.gap(format!("dynamic: malformed: DT_SYMENT is not {sym_size}"));
+        }
         // The loader walks a table up to its size, so a partial last entry is applied too, and it
-        // refuses a DT_RELAENT other than its entry size: checked here, whether or not a value
-        // needs the tables later.
+        // refuses an entry size other than its own: checked here, whether or not a value needs
+        // the tables later.
         let rela_size = size_of::<H::Rela>() as u64;
         let mut malformed = vec![];
         if relaent.is_some_and(|n| n != rela_size) {
@@ -287,6 +317,20 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             self.gap(format!("dynamic: malformed: {why}"));
         }
         out.rela_malformed = malformed.into_iter().next();
+        // REL tables are read only for their symbol indices (spec §3.2): the same checks.
+        let rel_size = size_of::<H::Rel>() as u64;
+        if relent.is_some_and(|n| n != rel_size) {
+            self.gap(format!("dynamic: malformed: DT_RELENT is not {rel_size}"));
+        }
+        if out.rel.is_some_and(|(_, n)| !n.is_multiple_of(rel_size)) {
+            self.gap("dynamic: malformed: DT_RELSZ is not a whole number of entries");
+        }
+        if out
+            .jmprel_rel
+            .is_some_and(|(_, n)| !n.is_multiple_of(rel_size))
+        {
+            self.gap("dynamic: malformed: DT_PLTRELSZ is not a whole number of entries");
+        }
         if strings.is_empty() {
             return out;
         }
@@ -485,7 +529,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let table = match self.header.sections(endian, data) {
             Ok(t) if t.is_empty() => {
                 self.gap("sections: no section header table");
-                if dynamic.symtab {
+                if dynamic.symtab.is_some() {
                     self.gap("symbols: no section header table");
                 }
                 return none;
@@ -493,7 +537,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Ok(t) => t,
             Err(e) => {
                 self.gap(format!("sections: malformed: {e}"));
-                if dynamic.symtab {
+                if dynamic.symtab.is_some() {
                     self.gap("symbols: no readable section header table");
                 }
                 return none;
@@ -556,7 +600,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if symbols.is_empty() {
             if relocatable {
                 self.gap("symbols: no SHT_SYMTAB in a relocatable object");
-            } else if dynamic.symtab {
+            } else if dynamic.symtab.is_some() {
                 self.gap("symbols: no SHT_DYNSYM");
             }
             return Sections {
@@ -582,6 +626,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             .map(|s| Into::<u64>::into(s.sh_size(endian)) / 2);
         if versym_entries.is_some_and(|n| n < symbols.len() as u64) {
             self.gap("versions: .gnu.version is shorter than .dynsym");
+        }
+        if !relocatable {
+            self.loader_agrees(&table, dynamic);
         }
         // At most `binary_imports` imports are ever held: the smallest, in sorted order.
         let limit = usize::try_from(budgets.imports).unwrap_or(usize::MAX);
@@ -639,6 +686,25 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         Sections {
             symbols: Some(symbols),
             go_section,
+        }
+    }
+
+    /// What the loader uses agrees with the sections SIGIL reads (spec §3.1, §3.2): each
+    /// disagreement is a gap. Not for a relocatable object, which no loader reads.
+    fn loader_agrees(&mut self, table: &SectionTable<'d, H, &'d Bounded<R>>, dynamic: &Dynamic) {
+        let endian = self.endian;
+        // ld.so checks versions through DT_VERSYM, whatever the sections say.
+        if let Some(versym) = dynamic.versym {
+            match table
+                .iter()
+                .find(|s| s.sh_type(endian) == elf::SHT_GNU_VERSYM)
+            {
+                None => self.gap("versions: DT_VERSYM without a .gnu.version section"),
+                Some(s) if Into::<u64>::into(s.sh_addr(endian)) != versym => {
+                    self.gap("versions: .gnu.version is not at DT_VERSYM")
+                }
+                Some(_) => {}
+            }
         }
     }
 

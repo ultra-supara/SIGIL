@@ -451,6 +451,119 @@ fn a_version_table_shorter_than_the_symbols_is_a_gap() {
     );
 }
 
+/// An ET_DYN image: `.dynsym` (null, then the defined GLOBAL FUNCs "one" and "two") at 0x1000
+/// (`DT_SYMTAB`), its strings at 0x1100, `PT_DYNAMIC` at 0x2000 with `entries` added, and each
+/// `(offset, bytes)` of `extra`. One PT_LOAD maps the file at vaddr == offset.
+fn dynsym_image(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> Vec<u8> {
+    let names = b"\0one\0two\0";
+    let mut syms = vec![0u8; 24];
+    syms.extend_from_slice(&sym64(1, 0x12, 5, 0x3000, 1));
+    syms.extend_from_slice(&sym64(5, 0x12, 5, 0x3001, 1));
+    let mut all = vec![
+        (DT_SYMTAB, 0x1000),
+        (DT_STRTAB, 0x1100),
+        (DT_STRSZ, names.len() as u64),
+    ];
+    all.extend_from_slice(entries);
+    let table = dynamic(&all);
+    let mut img = ElfImage::new(3);
+    img.put(0x1000, &syms)
+        .put(0x1100, names)
+        .put(0x2000, &table);
+    for (at, bytes) in extra {
+        img.put(*at, bytes);
+    }
+    img.put(0x3fff, &[0]);
+    let end = img.body.len() as u64;
+    let len = table.len() as u64;
+    img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end).seg(
+        PT_DYNAMIC,
+        PF_R | PF_W,
+        0x2000,
+        0x2000,
+        len,
+        len,
+    );
+    // Section 1 is .dynsym, linked to section 2, .dynstr.
+    img.sec_linked(
+        ".dynsym",
+        SHT_DYNSYM,
+        0x1000,
+        0x1000,
+        syms.len() as u64,
+        2,
+        24,
+    )
+    .sec(".dynstr", SHT_STRTAB, 0x1100, 0x1100, names.len() as u64);
+    img.build()
+}
+
+/// Spec §3.1: ld.so checks versions through `DT_VERSYM`. A `.gnu.version` section that is
+/// missing, or not where `DT_VERSYM` is, leaves a gap, never "unversioned" in silence.
+#[test]
+fn dt_versym_without_its_section_is_a_gap() {
+    let mut bytes = fixture("elf/libdata.so");
+    let (header, _, _) = versym(&bytes);
+    bytes[header + 4..header + 8].copy_from_slice(&SHT_PROGBITS.to_le_bytes());
+    let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        f.imports.iter().all(|i| i.version.is_none()),
+        "{:?}",
+        f.imports
+    );
+    assert_eq!(
+        p.gaps,
+        ["versions: DT_VERSYM without a .gnu.version section"]
+    );
+
+    let mut bytes = fixture("elf/libdata.so");
+    let (header, _, _) = versym(&bytes);
+    let addr = u64::from_le_bytes(bytes[header + 16..header + 24].try_into().unwrap());
+    bytes[header + 16..header + 24].copy_from_slice(&(addr + 2).to_le_bytes());
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert_eq!(p.gaps, ["versions: .gnu.version is not at DT_VERSYM"]);
+}
+
+/// Spec §3.2: glibc refuses a `DT_SYMENT` other than its symbol size.
+#[test]
+fn a_dt_syment_other_than_the_symbol_size_is_a_gap() {
+    let mut bytes = fixture("elf/libdata.so");
+    set_dynamic(&mut bytes, DT_SYMENT, 16);
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert_eq!(p.gaps, ["dynamic: malformed: DT_SYMENT is not 24"]);
+}
+
+/// Spec §3.2: REL tables are read for their symbol indices, so their sizes are checked as
+/// RELA's are.
+#[test]
+fn rel_table_sizes_are_checked_as_rela_s_are() {
+    assert!(
+        facts_of(&dynsym_image(&[], &[]), BinaryBudgets::default())
+            .1
+            .gaps
+            .is_empty(),
+        "the image itself has no gap"
+    );
+    for (entries, gap) in [
+        (
+            vec![(DT_REL, 0x2800), (DT_RELSZ, 16), (DT_RELENT, 8)],
+            "dynamic: malformed: DT_RELENT is not 16",
+        ),
+        (
+            vec![(DT_REL, 0x2800), (DT_RELSZ, 20)],
+            "dynamic: malformed: DT_RELSZ is not a whole number of entries",
+        ),
+        (
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 20), (DT_PLTREL, 17)],
+            "dynamic: malformed: DT_PLTRELSZ is not a whole number of entries",
+        ),
+    ] {
+        let bytes = dynsym_image(&entries, &[(0x2800, &[0u8; 32][..])]);
+        let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+        assert!(p.gaps.contains(&gap.to_string()), "{gap}: {:?}", p.gaps);
+    }
+}
+
 /// PR-4b-2a spec §4.4: a relocatable object has no `.dynsym`. Its imports are the undefined
 /// symbols of its link-time symbol table, left for the linker, and its exports its defined
 /// global ones. No versions, no data values.
