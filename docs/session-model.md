@@ -131,7 +131,9 @@ The rule then yields an open question at most.
 - **Binary facts agree with the session (PR-4b-1 and PR-4b-2b,
   [`docs/runtime-artifacts.md`](runtime-artifacts.md#binaries)):**
   - B1: a record names a slice of the session, one record per slice;
-  - B2: ELF and Mach-O facts are about an artifact of the matching format;
+  - B2: ELF and Mach-O facts are about an artifact of the matching format. A fat Mach-O slice's
+    own header names its table entry's architecture, and no other slice of the table names it,
+    unless the slice has the parser's gap for it;
   - B3: the slice's dependency `Declares` relations are unique, and exactly its distinct ELF
     NEEDED or Mach-O loaded-dylib names;
   - B4: imports are sorted, unique, and within `binary_imports`;
