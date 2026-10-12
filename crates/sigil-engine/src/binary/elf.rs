@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 
 use object::elf;
-use object::read::elf::{Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, Sym, SymbolTable};
+use object::read::elf::{
+    Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
+};
 use object::read::{ReadCacheOps, ReadRef, SymbolIndex};
 use object::{Endianness, FileKind};
 use sigil_model::{ContainerFacts, ElfFacts, ElfImport, UntrustedText};
@@ -399,6 +401,25 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         None
     }
 
+    /// The first section named `name`, after the null section. A section whose name cannot be
+    /// read could be it: a gap, never "absent" (review of #89). The gap does not start with
+    /// `sections: `, which B8 keeps for a table that cannot be read.
+    fn section_named(
+        &mut self,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        name: &[u8],
+    ) -> Option<&'d H::SectionHeader> {
+        let endian = self.endian;
+        for s in table.iter().skip(1) {
+            match table.section_name(endian, s) {
+                Ok(n) if n == name => return Some(s),
+                Ok(_) => {}
+                Err(e) => self.gap(format!("malformed: section names: {e}")),
+            }
+        }
+        None
+    }
+
     /// The section facts: `.comment`, stripped, the symbols (`.dynsym`, or a relocatable object's
     /// `.symtab`), and `.go.buildinfo`.
     fn sections(
@@ -431,7 +452,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             }
         };
         facts.stripped = Some(!table.iter().any(|s| s.sh_type(endian) == elf::SHT_SYMTAB));
-        if let Some((_, s)) = table.section_by_name(endian, b".comment") {
+        if let Some(s) = self.section_named(&table, b".comment") {
             match s.data(endian, data) {
                 Ok(bytes) => {
                     // Built within the limits: nothing beyond the 16 kept entries is collected.
@@ -458,10 +479,10 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 Err(e) => self.gap(format!("malformed: comment: {e}")),
             }
         }
-        let go_section = table
-            .section_by_name(endian, b".go.buildinfo")
-            .filter(|(_, s)| s.sh_type(endian) == elf::SHT_PROGBITS)
-            .and_then(|(_, s)| {
+        let go_section = self
+            .section_named(&table, b".go.buildinfo")
+            .filter(|s| s.sh_type(endian) == elf::SHT_PROGBITS)
+            .and_then(|s| {
                 let (offset, size) = s.file_range(endian)?;
                 Some((s.sh_addr(endian).into(), offset, size))
             });

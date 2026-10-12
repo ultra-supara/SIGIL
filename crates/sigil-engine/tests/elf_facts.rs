@@ -489,3 +489,34 @@ fn a_data_symbol_whose_name_cannot_be_read_is_a_gap() {
         p.gaps
     );
 }
+
+/// Review of #89 (the same class as P2): a section whose name cannot be read could be `.comment`
+/// or `.go.buildinfo`. It is a gap, never "absent".
+#[test]
+fn a_section_whose_name_cannot_be_read_is_a_gap() {
+    let mut img = ElfImage::new(3);
+    img.put(0x1000, b"GCC: test\0")
+        .sec(".comment", SHT_PROGBITS, 0x1000, 0, 10);
+    let readable = img.build();
+    let (f, p) = facts_of(&readable, BinaryBudgets::default());
+    assert_eq!(texts(&f.comment), ["GCC: test"]);
+    assert!(
+        p.gaps.iter().all(|g| !g.contains("section names")),
+        "{:?}",
+        p.gaps
+    );
+    // `.comment` is section 1: its `sh_name` set past `.shstrtab`.
+    let mut bytes = readable;
+    let shoff = u64::from_le_bytes(bytes[40..48].try_into().unwrap()) as usize;
+    bytes[shoff + 64..shoff + 68].copy_from_slice(&0xffff_u32.to_le_bytes());
+    let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(f.comment.is_empty());
+    assert_eq!(f.stripped, Some(true));
+    assert!(
+        p.gaps
+            .iter()
+            .any(|g| g.starts_with("malformed: section names: ")),
+        "{:?}",
+        p.gaps
+    );
+}
