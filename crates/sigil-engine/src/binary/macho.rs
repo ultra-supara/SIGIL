@@ -20,6 +20,17 @@ const LC_REEXPORT_DYLIB: u32 = LC_REQ_DYLD | 0x1f;
 const LC_LOAD_UPWARD_DYLIB: u32 = LC_REQ_DYLD | 0x23;
 const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
 
+/// The other load commands dyld requires (`LC_REQ_DYLD`), with the size of each one's structure
+/// (`<mach-o/loader.h>`). Their contents are not facts, so each is skipped once its size is
+/// checked. Any other required command is unknown: the walk stops there.
+const SKIPPED_REQUIRED: [(u32, &str, usize); 5] = [
+    (LC_REQ_DYLD | 0x22, "LC_DYLD_INFO_ONLY", 48),
+    (LC_REQ_DYLD | 0x28, "LC_MAIN", 24),
+    (LC_REQ_DYLD | 0x33, "LC_DYLD_EXPORTS_TRIE", 16),
+    (LC_REQ_DYLD | 0x34, "LC_DYLD_CHAINED_FIXUPS", 16),
+    (LC_REQ_DYLD | 0x35, "LC_FILESET_ENTRY", 32),
+];
+
 #[derive(Clone, Copy)]
 enum ByteOrder {
     Little,
@@ -481,8 +492,17 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                 }
             }
             _ if cmd & LC_REQ_DYLD != 0 => {
-                gaps.push(format!("load commands: unknown required command {cmd:#x}"));
-                stop_after_command = true;
+                match SKIPPED_REQUIRED.iter().find(|(id, ..)| *id == cmd) {
+                    Some((_, name, min_size)) => {
+                        if cmdsize < *min_size {
+                            gaps.push(format!("{name}: command is too short"));
+                        }
+                    }
+                    None => {
+                        gaps.push(format!("load commands: unknown required command {cmd:#x}"));
+                        stop_after_command = true;
+                    }
+                }
             }
             _ => {}
         }

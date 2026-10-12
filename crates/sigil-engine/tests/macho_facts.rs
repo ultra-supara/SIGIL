@@ -200,6 +200,112 @@ fn malformed_command_sizes_string_offsets_and_required_commands_leave_gaps() {
         .any(|gap| gap.contains("unknown required command")));
 }
 
+/// A universal executable that ld64.lld linked (`fixtures/macho/build.sh`); the expected values
+/// are in `hello-universal.otool`.
+const HELLO_UNIVERSAL: &[u8] = include_bytes!("fixtures/macho/hello-universal");
+
+#[test]
+fn known_required_commands_are_skipped_and_later_commands_are_read() {
+    // LC_DYLD_INFO_ONLY, LC_MAIN, LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, and
+    // LC_FILESET_ENTRY, each at its structure's size, before the commands SIGIL reads.
+    for (is_64, big_endian) in [(true, false), (true, true), (false, false), (false, true)] {
+        let alignment = if is_64 { 8 } else { 4 };
+        let commands = [
+            common::macho::command(0x8000_0022, 48, big_endian),
+            common::macho::command(0x8000_0028, 24, big_endian),
+            common::macho::command(0x8000_0034, 16, big_endian),
+            common::macho::command(0x8000_0033, 16, big_endian),
+            common::macho::command(0x8000_0035, 32, big_endian),
+            common::macho::dylib_command(0x0c, "/usr/lib/libSystem.B.dylib", big_endian, alignment),
+            common::macho::rpath_command(0x8000_001c, "@loader_path/../lib", big_endian, alignment),
+        ];
+        let bytes = common::macho::thin(is_64, big_endian, common::macho::X86_64, 3, &commands);
+        let parsed = parse(&bytes).unwrap();
+        assert!(parsed.slices[0].gaps.is_empty(), "{parsed:?}");
+        let facts = macho_facts(&parsed, 0);
+        assert_eq!(
+            facts.load_dylibs[0].as_str(),
+            Some("/usr/lib/libSystem.B.dylib")
+        );
+        assert_eq!(facts.rpaths[0].as_str(), Some("@loader_path/../lib"));
+    }
+}
+
+#[test]
+fn a_known_required_command_shorter_than_its_structure_is_a_gap_but_not_the_end() {
+    let commands = [
+        common::macho::command(0x8000_0028, 16, false),
+        common::macho::dylib_command(0x0c, "/usr/lib/libSystem.B.dylib", false, 8),
+    ];
+    let bytes = common::macho::thin(true, false, common::macho::X86_64, 3, &commands);
+    let parsed = parse(&bytes).unwrap();
+    assert_eq!(
+        parsed.slices[0].gaps,
+        ["LC_MAIN: command is too short".to_string()]
+    );
+    assert_eq!(
+        macho_facts(&parsed, 0).load_dylibs[0].as_str(),
+        Some("/usr/lib/libSystem.B.dylib")
+    );
+}
+
+#[test]
+fn a_linked_universal_executable_is_read_in_full() {
+    let parsed = parse(HELLO_UNIVERSAL).unwrap();
+    assert_eq!(parsed.format, Format::MachOFat);
+    assert_eq!(parsed.slices.len(), 2);
+    let expected = [
+        (
+            4096,
+            12_560,
+            common::macho::X86_64,
+            "@loader_path/../lib",
+            "4c4c442d55553144a149c2a40805f99b",
+        ),
+        (
+            32_768,
+            33_472,
+            common::macho::AARCH64,
+            "@executable_path/../Frameworks",
+            "4c4c44e455553144a1c6aa2fc11dc892",
+        ),
+    ];
+    for (index, (offset, size, cpu_type, rpath, uuid)) in expected.into_iter().enumerate() {
+        let slice = &parsed.slices[index];
+        assert_eq!((slice.offset, slice.size), (offset, size));
+        assert!(slice.gaps.is_empty(), "{parsed:?}");
+        let facts = macho_facts(&parsed, index);
+        assert_eq!(
+            (facts.cpu_type, facts.fat_cpu_type),
+            (cpu_type, Some(cpu_type))
+        );
+        assert_eq!(facts.file_type, 2, "MH_EXECUTE");
+        let names = |names: &[sigil_model::UntrustedText]| -> Vec<String> {
+            names
+                .iter()
+                .map(|name| name.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(names(&facts.load_dylibs), ["/usr/lib/libSystem.B.dylib"]);
+        assert_eq!(names(&facts.rpaths), [rpath]);
+        assert_eq!(
+            facts.dylinker.as_ref().and_then(|name| name.as_str()),
+            Some("/usr/lib/dyld")
+        );
+        assert_eq!(facts.uuid.as_deref(), Some(uuid));
+
+        // The slice alone is the thin executable `lipo -thin` would extract.
+        let thin = &HELLO_UNIVERSAL[offset as usize..(offset + size) as usize];
+        let alone = parse(thin).unwrap();
+        assert_eq!(alone.format, Format::MachO);
+        assert!(alone.slices[0].gaps.is_empty(), "{alone:?}");
+        let thin_facts = macho_facts(&alone, 0);
+        assert_eq!(thin_facts.load_dylibs, facts.load_dylibs);
+        assert_eq!(thin_facts.rpaths, facts.rpaths);
+        assert_eq!(thin_facts.uuid, facts.uuid);
+    }
+}
+
 fn observation() -> ObservationMeta {
     ObservationMeta {
         started_at: Timestamp::new("2026-10-10T00:00:00Z").unwrap(),

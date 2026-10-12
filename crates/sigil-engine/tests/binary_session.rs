@@ -176,6 +176,40 @@ fn a_malformed_fat_macho_remains_partial_in_binary_inspect() {
 }
 
 #[test]
+fn a_linked_universal_executable_is_complete_in_binary_inspect() {
+    // fixtures/macho/build.sh: LC_DYLD_INFO_ONLY (x86_64), LC_DYLD_CHAINED_FIXUPS and
+    // LC_DYLD_EXPORTS_TRIE (arm64), and LC_MAIN in both slices, before LC_LOAD_DYLIB.
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("hello");
+    std::fs::write(&path, include_bytes!("fixtures/macho/hello-universal")).unwrap();
+    let s = session(&[path]).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(state(&s, "inst:binary-1/hello"), CoverageState::Complete);
+    assert_eq!(s.binaries.len(), 2);
+    assert!(
+        s.binaries.iter().all(|f| f.gaps.is_empty()),
+        "{:?}",
+        s.binaries
+    );
+    let declared: Vec<_> = s
+        .relations
+        .iter()
+        .filter_map(|r| match r {
+            Relation::Declares {
+                needed,
+                kind: DeclKind::MachOLoadDylib,
+                ..
+            } => needed.as_str(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        declared,
+        ["/usr/lib/libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"]
+    );
+}
+
+#[test]
 fn a_dropped_coverage_entry_would_close_the_check_but_validate_refuses_it() {
     // The review's case (P1-2): a complete input and a partial one; the partial entry removed.
     let d = TempDir::new().unwrap();
