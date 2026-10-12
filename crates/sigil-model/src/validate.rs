@@ -1410,7 +1410,10 @@ impl<'a> Validator<'a> {
     /// observations: `validate` checks that the stored results agree with each other, not that
     /// the gaps are right (that is the parser's contract).
     fn binaries(&mut self) {
-        use crate::binary::{ContainerFacts, DataValue, ARTIFACTS_CONTAINER};
+        use crate::binary::{
+            macho_architecture, ContainerFacts, DataValue, ARTIFACTS_CONTAINER,
+            FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP,
+        };
         use crate::relation::{DeclKind, Relation};
         let s = self.s;
         let state = |check: &str| {
@@ -1541,6 +1544,37 @@ impl<'a> Validator<'a> {
                         why.push(
                             "Mach-O CPU type disagrees with the slice architecture".to_string(),
                         );
+                    }
+                    // A fat slice's own header names its table entry's architecture, and no other
+                    // slice of the table names it, or the slice has the parser's gap.
+                    if let Some((fat_type, fat_subtype)) =
+                        macho.fat_cpu_type.zip(macho.fat_cpu_subtype)
+                    {
+                        let table = macho_architecture(fat_type, fat_subtype);
+                        if macho_architecture(macho.cpu_type, macho.cpu_subtype) != table
+                            && !facts.gaps.iter().any(|g| g == FAT_CPU_MISMATCH_GAP)
+                        {
+                            why.push(format!(
+                                "its header disagrees with its fat table entry without the gap {FAT_CPU_MISMATCH_GAP:?}"
+                            ));
+                        }
+                        let twice = s.binaries.iter().any(|other| {
+                            other.slice != facts.slice
+                                && artifact.slices.iter().any(|x| x.id == other.slice)
+                                && matches!(
+                                    &other.container,
+                                    ContainerFacts::MachO(o)
+                                        if o.fat_cpu_type
+                                            .zip(o.fat_cpu_subtype)
+                                            .map(|(t, st)| macho_architecture(t, st))
+                                            == Some(table)
+                                )
+                        });
+                        if twice && !facts.gaps.iter().any(|g| g == FAT_DUPLICATE_ARCH_GAP) {
+                            why.push(format!(
+                                "its architecture listed twice in the fat table without the gap {FAT_DUPLICATE_ARCH_GAP:?}"
+                            ));
+                        }
                     }
                     if facts.go.is_some() {
                         why.push("Mach-O facts cannot contain Go build info".to_string());

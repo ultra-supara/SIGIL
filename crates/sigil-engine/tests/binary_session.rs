@@ -210,6 +210,40 @@ fn a_linked_universal_executable_is_complete_in_binary_inspect() {
 }
 
 #[test]
+fn fat_tables_with_a_repeated_or_mismatched_architecture_are_partial_and_valid() {
+    // The validator's B2 accepts the engine's own gaps for both.
+    let x86 = common::macho::thin(true, false, common::macho::X86_64, 3, &[]);
+    let arm = common::macho::thin(true, false, common::macho::AARCH64, 0, &[]);
+    let d = TempDir::new().unwrap();
+    let twice = d.path().join("twice");
+    std::fs::write(
+        &twice,
+        common::macho::fat32(&[
+            (x86.clone(), common::macho::X86_64, 3),
+            (x86, common::macho::X86_64, 3),
+        ]),
+    )
+    .unwrap();
+    let mismatched = d.path().join("mismatched");
+    std::fs::write(
+        &mismatched,
+        common::macho::fat32(&[(arm, common::macho::X86_64, 0)]),
+    )
+    .unwrap();
+    let s = session(&[twice, mismatched]).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    for (inst, gap) in [
+        ("inst:binary-1/twice", FAT_DUPLICATE_ARCH_GAP),
+        ("inst:binary-2/mismatched", FAT_CPU_MISMATCH_GAP),
+    ] {
+        let CoverageState::Partial { missing } = state(&s, inst) else {
+            panic!("{inst}: {:?}", state(&s, inst));
+        };
+        assert!(missing.iter().any(|m| m == gap), "{inst}: {missing:?}");
+    }
+}
+
+#[test]
 fn a_dropped_coverage_entry_would_close_the_check_but_validate_refuses_it() {
     // The review's case (P1-2): a complete input and a partial one; the partial entry removed.
     let d = TempDir::new().unwrap();
