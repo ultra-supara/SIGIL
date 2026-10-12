@@ -916,7 +916,13 @@ impl<'a> Validator<'a> {
         let s = self.s;
         for artifact in &s.artifacts {
             for slice in &artifact.slices {
-                if SliceId::from_parts(&artifact.id, slice.arch, slice.offset) != slice.id {
+                if SliceId::from_parts(&artifact.id, slice.arch, slice.offset) != slice.id
+                    || slice.size == 0
+                    || slice
+                        .offset
+                        .checked_add(slice.size)
+                        .is_none_or(|end| end > artifact.size)
+                {
                     self.errors.push(ValidationError::SliceMismatch {
                         slice: slice.id.clone(),
                     });
@@ -1404,7 +1410,10 @@ impl<'a> Validator<'a> {
     /// observations: `validate` checks that the stored results agree with each other, not that
     /// the gaps are right (that is the parser's contract).
     fn binaries(&mut self) {
-        use crate::binary::{ContainerFacts, DataValue, ARTIFACTS_CONTAINER};
+        use crate::binary::{
+            macho_architecture, ContainerFacts, DataValue, ARTIFACTS_CONTAINER,
+            FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP,
+        };
         use crate::relation::{DeclKind, Relation};
         let s = self.s;
         let state = |check: &str| {
@@ -1429,53 +1438,180 @@ impl<'a> Validator<'a> {
                 self.binary_errors(facts.slice.as_str(), why);
                 continue;
             };
-            let ContainerFacts::Elf(elf) = &facts.container;
-            if !matches!(artifact.format, crate::artifact::Format::Elf { .. }) {
-                why.push("ELF facts of something that is not an ELF artifact".to_string());
-                // B2
-            }
-            // B3: one Declares per distinct NEEDED name, and no other.
-            let mut declared: Vec<&crate::text::UntrustedText> = s
-                .relations
-                .iter()
-                .filter_map(|r| match r {
-                    Relation::Declares {
-                        from,
-                        needed,
-                        kind: DeclKind::ElfNeeded,
-                    } if *from == facts.slice => Some(needed),
-                    _ => None,
-                })
-                .collect();
-            let total = declared.len();
-            declared.sort();
-            declared.dedup();
-            let mut needed: Vec<&crate::text::UntrustedText> = elf.needed.iter().collect();
-            needed.sort();
-            needed.dedup();
-            if total != declared.len() || declared != needed {
-                why.push(
-                    "its Declares relations are not exactly one per distinct NEEDED name"
-                        .to_string(),
-                );
-            }
-            // B4
-            if elf.imports.windows(2).any(|w| w[0] >= w[1]) {
-                why.push("imports are not sorted and unique".to_string());
-            }
-            if limit.is_some_and(|l| elf.imports.len() as u64 > l) {
-                why.push("more imports than binary_imports".to_string());
-            }
-            // B5
-            let mut symbols = BTreeSet::new();
-            for d in &elf.data {
-                if !symbols.insert(&d.symbol) {
-                    why.push(format!("data symbol {} twice", d.symbol));
+            match &facts.container {
+                ContainerFacts::Elf(elf) => {
+                    if !matches!(artifact.format, crate::artifact::Format::Elf { .. }) {
+                        why.push("ELF facts of something that is not an ELF artifact".to_string());
+                    }
+                    let mut declared: Vec<&crate::text::UntrustedText> = s
+                        .relations
+                        .iter()
+                        .filter_map(|r| match r {
+                            Relation::Declares {
+                                from,
+                                needed,
+                                kind: DeclKind::ElfNeeded,
+                            } if *from == facts.slice => Some(needed),
+                            _ => None,
+                        })
+                        .collect();
+                    let total = declared.len();
+                    declared.sort();
+                    declared.dedup();
+                    let mut needed: Vec<&crate::text::UntrustedText> = elf.needed.iter().collect();
+                    needed.sort();
+                    needed.dedup();
+                    if total != declared.len() || declared != needed {
+                        why.push(
+                            "its Declares relations are not exactly one per distinct dependency name"
+                                .to_string(),
+                        );
+                    }
+                    if s.relations.iter().any(|relation| {
+                        matches!(
+                            relation,
+                            Relation::Declares { from, kind, .. }
+                                if *from == facts.slice && *kind != DeclKind::ElfNeeded
+                        )
+                    }) {
+                        why.push("a dependency relation has the wrong ELF kind".to_string());
+                    }
+                    if elf.imports.windows(2).any(|w| w[0] >= w[1]) {
+                        why.push("imports are not sorted and unique".to_string());
+                    }
+                    if limit.is_some_and(|l| elf.imports.len() as u64 > l) {
+                        why.push("more imports than binary_imports".to_string());
+                    }
+                    let mut symbols = BTreeSet::new();
+                    for d in &elf.data {
+                        if !symbols.insert(&d.symbol) {
+                            why.push(format!("data symbol {} twice", d.symbol));
+                        }
+                        if let DataValue::Unknown { why: reason } = &d.value {
+                            let gap = format!("{}: {reason}", d.symbol);
+                            if !facts.gaps.contains(&gap) {
+                                why.push(format!(
+                                    "{} is Unknown without the gap {gap:?}",
+                                    d.symbol
+                                ));
+                            }
+                        }
+                    }
+                    let sections_gap = facts.gaps.iter().any(|g| g.starts_with("sections: "));
+                    if elf.stripped.is_none() != sections_gap {
+                        why.push(
+                            "stripped is None exactly when a `sections: ` gap says why".to_string(),
+                        );
+                    }
                 }
-                if let DataValue::Unknown { why: reason } = &d.value {
-                    let gap = format!("{}: {reason}", d.symbol);
-                    if !facts.gaps.contains(&gap) {
-                        why.push(format!("{} is Unknown without the gap {gap:?}", d.symbol));
+                ContainerFacts::MachO(macho) => {
+                    if !matches!(
+                        artifact.format,
+                        crate::artifact::Format::MachO | crate::artifact::Format::MachOFat
+                    ) {
+                        why.push(
+                            "Mach-O facts of something that is not a Mach-O artifact".to_string(),
+                        );
+                    }
+                    let fat = artifact.format == crate::artifact::Format::MachOFat;
+                    let any_fat = macho.fat_cpu_type.is_some()
+                        || macho.fat_cpu_subtype.is_some()
+                        || macho.fat_alignment.is_some();
+                    let all_fat = macho.fat_cpu_type.is_some()
+                        && macho.fat_cpu_subtype.is_some()
+                        && macho.fat_alignment.is_some();
+                    if (fat && !all_fat) || (!fat && any_fat) {
+                        why.push(
+                            "fat Mach-O table facts disagree with the artifact format".to_string(),
+                        );
+                    }
+                    let cpu_type = (if fat {
+                        macho.fat_cpu_type.unwrap_or(macho.cpu_type)
+                    } else {
+                        macho.cpu_type
+                    }) as u32;
+                    let expected_arch = match cpu_type {
+                        0x0100_0007 => crate::artifact::Arch::X86_64,
+                        0x0100_000c => crate::artifact::Arch::Aarch64,
+                        _ => crate::artifact::Arch::Other,
+                    };
+                    if artifact
+                        .slices
+                        .iter()
+                        .find(|slice| slice.id == facts.slice)
+                        .is_some_and(|slice| slice.arch != expected_arch)
+                    {
+                        why.push(
+                            "Mach-O CPU type disagrees with the slice architecture".to_string(),
+                        );
+                    }
+                    // A fat slice's own header names its table entry's architecture, and no other
+                    // slice of the table names it, or the slice has the parser's gap.
+                    if let Some((fat_type, fat_subtype)) =
+                        macho.fat_cpu_type.zip(macho.fat_cpu_subtype)
+                    {
+                        let table = macho_architecture(fat_type, fat_subtype);
+                        if macho_architecture(macho.cpu_type, macho.cpu_subtype) != table
+                            && !facts.gaps.iter().any(|g| g == FAT_CPU_MISMATCH_GAP)
+                        {
+                            why.push(format!(
+                                "its header disagrees with its fat table entry without the gap {FAT_CPU_MISMATCH_GAP:?}"
+                            ));
+                        }
+                        let twice = s.binaries.iter().any(|other| {
+                            other.slice != facts.slice
+                                && artifact.slices.iter().any(|x| x.id == other.slice)
+                                && matches!(
+                                    &other.container,
+                                    ContainerFacts::MachO(o)
+                                        if o.fat_cpu_type
+                                            .zip(o.fat_cpu_subtype)
+                                            .map(|(t, st)| macho_architecture(t, st))
+                                            == Some(table)
+                                )
+                        });
+                        if twice && !facts.gaps.iter().any(|g| g == FAT_DUPLICATE_ARCH_GAP) {
+                            why.push(format!(
+                                "its architecture listed twice in the fat table without the gap {FAT_DUPLICATE_ARCH_GAP:?}"
+                            ));
+                        }
+                    }
+                    if facts.go.is_some() {
+                        why.push("Mach-O facts cannot contain Go build info".to_string());
+                    }
+                    let mut declared: Vec<&crate::text::UntrustedText> = s
+                        .relations
+                        .iter()
+                        .filter_map(|r| match r {
+                            Relation::Declares {
+                                from,
+                                needed,
+                                kind: DeclKind::MachOLoadDylib,
+                            } if *from == facts.slice => Some(needed),
+                            _ => None,
+                        })
+                        .collect();
+                    let total = declared.len();
+                    declared.sort();
+                    declared.dedup();
+                    let mut needed: Vec<&crate::text::UntrustedText> =
+                        macho.load_dylibs.iter().collect();
+                    needed.sort();
+                    needed.dedup();
+                    if total != declared.len() || declared != needed {
+                        why.push(
+                            "its Declares relations are not exactly one per distinct dependency name"
+                                .to_string(),
+                        );
+                    }
+                    if s.relations.iter().any(|relation| {
+                        matches!(
+                            relation,
+                            Relation::Declares { from, kind, .. }
+                                if *from == facts.slice && *kind != DeclKind::MachOLoadDylib
+                        )
+                    }) {
+                        why.push("a dependency relation has the wrong Mach-O kind".to_string());
                     }
                 }
             }
@@ -1487,18 +1623,13 @@ impl<'a> Validator<'a> {
             {
                 why.push("an empty Go version".to_string());
             }
-            // B8
-            let sections_gap = facts.gaps.iter().any(|g| g.starts_with("sections: "));
-            if elf.stripped.is_none() != sections_gap {
-                why.push("stripped is None exactly when a `sections: ` gap says why".to_string());
-            }
             self.binary_errors(facts.slice.as_str(), why);
         }
         // B7
         if matches!(state(ARTIFACTS_CONTAINER), Some(CoverageState::Complete)) {
             let discovery = matches!(state(ARTIFACTS_DISCOVERY), Some(CoverageState::Complete));
             let install = RootId::new(INSTALL_ROOT).ok();
-            let elfs: BTreeSet<&SliceId> = s
+            let install_binaries: Vec<_> = s
                 .instances
                 .iter()
                 .filter(|i| Some(&i.root) == install.as_ref())
@@ -1507,18 +1638,32 @@ impl<'a> Validator<'a> {
                     _ => None,
                 })
                 .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
-                .filter(|a| matches!(a.format, crate::artifact::Format::Elf { .. }))
-                .flat_map(|a| a.slices.iter().map(|x| &x.id))
+                .filter(|a| {
+                    matches!(
+                        a.format,
+                        crate::artifact::Format::Elf { .. }
+                            | crate::artifact::Format::MachO
+                            | crate::artifact::Format::MachOFat
+                    )
+                })
                 .collect();
-            let covered = elfs
+            let has_slices = install_binaries
                 .iter()
-                .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
+                .all(|artifact| !artifact.slices.is_empty());
+            let slices: BTreeSet<&SliceId> = install_binaries
+                .iter()
+                .flat_map(|artifact| artifact.slices.iter().map(|slice| &slice.id))
+                .collect();
+            let covered = has_slices
+                && slices
+                    .iter()
+                    .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
             let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
             if !(discovery && covered && clean) {
                 self.errors.push(ValidationError::Binary {
                     slice: "*".to_string(),
                     why: format!(
-                        "{ARTIFACTS_CONTAINER} is Complete, but discovery is not Complete, an install ELF slice has no facts, or a gap remains"
+                        "{ARTIFACTS_CONTAINER} is Complete, but discovery is not Complete, an install binary has no slices or a slice has no facts, or a gap remains"
                     ),
                 });
             }

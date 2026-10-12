@@ -1,9 +1,9 @@
 //! Container facts of a binary slice (PR-4b-1; plan §4.6.3).
 //!
-//! What a binary's own bytes say: its interpreter, names, declared dependencies, search paths,
-//! notes, symbol counts and imports, a few known embedded values, and Go build info. They are
-//! observations, not identity: `ComponentClaim`s (4c) are built from them. Each fact is read in
-//! full, confirmed absent, or listed in `gaps`.
+//! What a binary's own bytes say: its container header, names, declared dependencies, search
+//! paths, notes, symbol counts and imports, a few known embedded values, and Go build info. They
+//! are observations, not identity: `ComponentClaim`s (4c) are built from them. Each fact is read
+//! in full, confirmed absent, or listed in `gaps`.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,23 @@ use crate::text::UntrustedText;
 
 /// The container analysis: what was read and what was not (scope `Root(install)`).
 pub const ARTIFACTS_CONTAINER: &str = "artifacts.container";
+
+/// The gap of a fat Mach-O slice whose own header names another architecture than its entry in
+/// the fat table (B2).
+pub const FAT_CPU_MISMATCH_GAP: &str = "fat slice: CPU type or subtype disagrees with its header";
+
+/// The gap of every slice of a fat Mach-O whose table lists one architecture twice (B2). lipo
+/// refuses to build such a file, and dyld loads only one of the two.
+pub const FAT_DUPLICATE_ARCH_GAP: &str = "fat header: an architecture is listed twice";
+
+/// The capability bits of a Mach-O CPU subtype (`CPU_SUBTYPE_MASK`).
+const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
+
+/// A Mach-O architecture as lipo compares two: the CPU type, and the subtype without its
+/// capability bits.
+pub fn macho_architecture(cpu_type: i32, cpu_subtype: i32) -> (i32, u32) {
+    (cpu_type, cpu_subtype as u32 & !CPU_SUBTYPE_MASK)
+}
 
 /// The facts of one slice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,11 +45,33 @@ pub struct BinaryFacts {
     pub gaps: Vec<String>,
 }
 
-/// The container format's facts. 4b-2 adds Mach-O.
+/// The container format's facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum ContainerFacts {
     Elf(ElfFacts),
+    MachO(MachOFacts),
+}
+
+/// Mach-O header and dynamic-loader facts of one slice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachOFacts {
+    pub is_64: bool,
+    pub cpu_type: i32,
+    pub cpu_subtype: i32,
+    pub fat_cpu_type: Option<i32>,
+    pub fat_cpu_subtype: Option<i32>,
+    pub fat_alignment: Option<u32>,
+    pub file_type: u32,
+    pub flags: u32,
+    pub uuid: Option<String>,
+    pub id_dylib: Option<UntrustedText>,
+    /// `LC_LOAD_*_DYLIB` names, in load-command order.
+    pub load_dylibs: Vec<UntrustedText>,
+    /// `LC_RPATH` values, in load-command order.
+    pub rpaths: Vec<UntrustedText>,
+    pub dylinker: Option<UntrustedText>,
 }
 
 /// ELF facts, from the program headers first (what the loader reads), then the sections.

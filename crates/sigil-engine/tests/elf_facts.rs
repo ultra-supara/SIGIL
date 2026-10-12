@@ -9,7 +9,9 @@ use sigil_model::{ContainerFacts, ElfFacts, UntrustedText};
 
 fn facts_of(bytes: &[u8], budgets: BinaryBudgets) -> (ElfFacts, Parsed) {
     let parsed = parse(&file(bytes), bytes.len() as u64, budgets);
-    let ContainerFacts::Elf(f) = parsed.container.clone();
+    let ContainerFacts::Elf(f) = parsed.container.clone() else {
+        panic!()
+    };
     (f, parsed)
 }
 

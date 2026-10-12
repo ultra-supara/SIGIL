@@ -128,17 +128,19 @@ The rule then yields an open question at most.
   The rows' expected values, and whether a release lists a member at all, come from the reference
   set, which a session does not hold. The engine's verifier checks them
   (`verify_reference_matches`).
-- **Binary facts agree with the session (PR-4b-1,
+- **Binary facts agree with the session (PR-4b-1 and PR-4b-2b,
   [`docs/runtime-artifacts.md`](runtime-artifacts.md#binaries)):**
   - B1: a record names a slice of the session, one record per slice;
-  - B2: ELF facts are about an ELF artifact;
-  - B3: the slice's `Declares { ElfNeeded }` relations are unique, and exactly its distinct NEEDED
-    names;
+  - B2: ELF and Mach-O facts are about an artifact of the matching format. A fat Mach-O slice's
+    own header names its table entry's architecture, and no other slice of the table names it,
+    unless the slice has the parser's gap for it;
+  - B3: the slice's dependency `Declares` relations are unique, and exactly its distinct ELF
+    NEEDED or Mach-O loaded-dylib names;
   - B4: imports are sorted, unique, and within `binary_imports`;
   - B5: a data value that is `Unknown` has its gap;
   - B6: a Go version is not empty;
   - B7: `artifacts.container` is `Complete` only with a complete discovery, facts for every ELF
-    slice of the install, and no gap;
+    or Mach-O slice of the install, and no gap;
   - B8: `stripped` is unknown exactly when a `sections: ` gap says why.
 
   Whether the gaps are right is the parser's contract: `validate` checks the stored results
@@ -148,7 +150,7 @@ The rule then yields an open question at most.
   - B9: every `binary.container` entry is scoped to the instance of a binary root, and each input
     has exactly one. Its state is the one the input implies (`expected_binary_container`):
     `Complete`; `Partial` with the record's gaps (`not parsed` without a record); `Unsupported` for
-    anything but an ELF; `Error` for a read that saw a change or a removal; or `BudgetExceeded`
+    anything but ELF or Mach-O; `Error` for a read that saw a change or a removal; or `BudgetExceeded`
     over `binary_bytes`. The state must match exactly, except that a `BudgetExceeded` needs only
     its budget and limit exact, with `used` at most the limit. Any other state, `NotPresent` and
     `OutOfScope` among them, is invalid. A missing entry is invalid too: `outcome()` closes a
@@ -461,7 +463,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
   - a model's layers (manifest order).
 - Timestamps are kept. `ObservationMeta` is recorded but is not part of analysis, and `Outcome.policy_time` is an input that re-analysis reuses.
 
-## Binary inspections (PR-4b-2a)
+## Binary inspections (PR-4b-2a and PR-4b-2b)
 
 `sigil binary inspect` writes a session whose scan roots are its inputs:
 - **Roots.** Each input is a root `binary-<n>`, numbered from 1 in the order of first appearance (a
@@ -473,8 +475,8 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 - **Coverage.** Each input has one `binary.container` entry, scope `Instance`: its status
   (B9 above). Under the default policy, the request's audit is `binary`, and its one required
   check is `binary.container`.
-- **Facts.** An ELF input's facts are a `BinaryFacts` record and its `Declares` relations, as for
-  an installation.
+- **Facts.** An ELF or Mach-O input's facts are `BinaryFacts` records and their `Declares`
+  relations, as for an installation. A fat Mach-O has one record per valid architecture slice.
 
 ## Fields added to `sigil-session/1`
 

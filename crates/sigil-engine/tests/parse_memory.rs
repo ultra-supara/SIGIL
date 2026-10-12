@@ -178,7 +178,9 @@ fn many_relocations() -> (Vec<u8>, u64) {
 #[test]
 fn the_parse_stays_within_its_budget_whatever_the_file_declares() {
     let (p, peak) = measured(many_comments());
-    let ContainerFacts::Elf(f) = &p.container;
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
     assert_eq!(f.comment.len(), 16);
     assert!(
         p.gaps.iter().any(|g| g.starts_with("comment: over")),
@@ -188,7 +190,9 @@ fn the_parse_stays_within_its_budget_whatever_the_file_declares() {
     bounded("30M comments", peak);
 
     let (p, peak) = measured(many_imports());
-    let ContainerFacts::Elf(f) = &p.container;
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
     assert_eq!(f.imports.len(), 4096);
     assert!(
         p.gaps.iter().any(|g| g.starts_with("imports: over")),
@@ -200,7 +204,9 @@ fn the_parse_stays_within_its_budget_whatever_the_file_declares() {
     let (bytes, rela_len) = many_relocations();
     assert!(rela_len < BUDGET, "the table fits the budget");
     let (p, peak) = measured(bytes);
-    let ContainerFacts::Elf(f) = &p.container;
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
     assert_eq!(
         f.data.first().map(|d| d.value.clone()),
         Some(DataValue::Text(sigil_model::UntrustedText::new(

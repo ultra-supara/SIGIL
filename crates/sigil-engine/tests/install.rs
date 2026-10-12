@@ -404,9 +404,11 @@ fn elf_placements_get_their_facts_once_per_content() {
     let parsed: Vec<_> = f
         .binaries
         .iter()
-        .filter(|b| {
-            let sigil_model::ContainerFacts::Elf(e) = &b.container;
-            e.soname.as_ref().and_then(|s| s.as_str()) == Some("libdata.so.1")
+        .filter(|b| match &b.container {
+            sigil_model::ContainerFacts::Elf(e) => {
+                e.soname.as_ref().and_then(|s| s.as_str()) == Some("libdata.so.1")
+            }
+            sigil_model::ContainerFacts::MachO(_) => false,
         })
         .collect();
     assert_eq!(parsed.len(), 1, "one record for one content");

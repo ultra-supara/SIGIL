@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 pub mod elf;
+pub mod macho;
 pub mod proc;
 
 use std::fs;

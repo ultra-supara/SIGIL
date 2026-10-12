@@ -1,6 +1,8 @@
 //! The assembled binary inspection (PR-4b-2a spec §4.3, §4.5): it validates, evaluates its
 //! policy's binary scope, and has exactly one `binary.container` per input.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use sigil_engine::collect::named::NamedBudgets;
@@ -110,6 +112,136 @@ fn an_unsupported_input_is_incomplete_and_passes() {
         s.outcome.completeness,
         Completeness::Incomplete { .. }
     ));
+}
+
+#[test]
+fn compiled_java_class_versions_are_unsupported_not_fat_macho() {
+    let d = TempDir::new().unwrap();
+    let versions = [
+        (
+            "java8.class",
+            include_str!("fixtures/macho/java8.class.hex"),
+        ),
+        (
+            "java17.class",
+            include_str!("fixtures/macho/java17.class.hex"),
+        ),
+        (
+            "java21.class",
+            include_str!("fixtures/macho/java21.class.hex"),
+        ),
+    ];
+    let paths: Vec<PathBuf> = versions
+        .iter()
+        .map(|(name, bytes)| {
+            let path = d.path().join(name);
+            std::fs::write(&path, common::macho::decode_hex(bytes)).unwrap();
+            path
+        })
+        .collect();
+    let s = session(&paths).unwrap();
+    for name in ["java8.class", "java17.class", "java21.class"] {
+        assert_eq!(
+            state(
+                &s,
+                &format!(
+                    "inst:binary-{}/{}",
+                    paths
+                        .iter()
+                        .position(|p| p.file_name().unwrap() == name)
+                        .unwrap()
+                        + 1,
+                    name
+                )
+            ),
+            CoverageState::Unsupported {
+                what: BINARY_UNSUPPORTED.to_string()
+            }
+        );
+    }
+}
+
+#[test]
+fn a_malformed_fat_macho_remains_partial_in_binary_inspect() {
+    let d = TempDir::new().unwrap();
+    let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 1];
+    bytes.extend_from_slice(&[0; 8]);
+    let path = d.path().join("truncated-fat");
+    std::fs::write(&path, bytes).unwrap();
+    let s = session(&[path]).unwrap();
+    assert!(matches!(
+        state(&s, "inst:binary-1/truncated-fat"),
+        CoverageState::Partial { .. }
+    ));
+}
+
+#[test]
+fn a_linked_universal_executable_is_complete_in_binary_inspect() {
+    // fixtures/macho/build.sh: LC_DYLD_INFO_ONLY (x86_64), LC_DYLD_CHAINED_FIXUPS and
+    // LC_DYLD_EXPORTS_TRIE (arm64), and LC_MAIN in both slices, before LC_LOAD_DYLIB.
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("hello");
+    std::fs::write(&path, include_bytes!("fixtures/macho/hello-universal")).unwrap();
+    let s = session(&[path]).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(state(&s, "inst:binary-1/hello"), CoverageState::Complete);
+    assert_eq!(s.binaries.len(), 2);
+    assert!(
+        s.binaries.iter().all(|f| f.gaps.is_empty()),
+        "{:?}",
+        s.binaries
+    );
+    let declared: Vec<_> = s
+        .relations
+        .iter()
+        .filter_map(|r| match r {
+            Relation::Declares {
+                needed,
+                kind: DeclKind::MachOLoadDylib,
+                ..
+            } => needed.as_str(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        declared,
+        ["/usr/lib/libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"]
+    );
+}
+
+#[test]
+fn fat_tables_with_a_repeated_or_mismatched_architecture_are_partial_and_valid() {
+    // The validator's B2 accepts the engine's own gaps for both. `mismatched`'s table entry is
+    // the architecture `twice` lists twice: another artifact's slices do not count.
+    let x86 = common::macho::thin(true, false, common::macho::X86_64, 3, &[]);
+    let arm = common::macho::thin(true, false, common::macho::AARCH64, 0, &[]);
+    let d = TempDir::new().unwrap();
+    let twice = d.path().join("twice");
+    std::fs::write(
+        &twice,
+        common::macho::fat32(&[
+            (x86.clone(), common::macho::X86_64, 3),
+            (x86, common::macho::X86_64, 3),
+        ]),
+    )
+    .unwrap();
+    let mismatched = d.path().join("mismatched");
+    std::fs::write(
+        &mismatched,
+        common::macho::fat32(&[(arm, common::macho::X86_64, 3)]),
+    )
+    .unwrap();
+    let s = session(&[twice, mismatched]).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    for (inst, gap) in [
+        ("inst:binary-1/twice", FAT_DUPLICATE_ARCH_GAP),
+        ("inst:binary-2/mismatched", FAT_CPU_MISMATCH_GAP),
+    ] {
+        let CoverageState::Partial { missing } = state(&s, inst) else {
+            panic!("{inst}: {:?}", state(&s, inst));
+        };
+        assert!(missing.iter().any(|m| m == gap), "{inst}: {missing:?}");
+    }
 }
 
 #[test]

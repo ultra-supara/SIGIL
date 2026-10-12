@@ -86,7 +86,7 @@ so requesting it gives an honest `INCOMPLETE`.
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
 | `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container` | PR-4a, PR-4b-1 (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
-| `binary` | `binary.container` | PR-4b-2a (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
+| `binary` | `binary.container` | PR-4b-2a and PR-4b-2b (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
 
 **Rules** (kind, default severity):
 

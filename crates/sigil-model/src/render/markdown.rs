@@ -243,7 +243,71 @@ fn binary_facts(
     b: &crate::binary::BinaryFacts,
 ) {
     use crate::binary::DataValue;
-    let crate::binary::ContainerFacts::Elf(elf) = &b.container;
+    if let crate::binary::ContainerFacts::MachO(macho) = &b.container {
+        let opt = |value: &Option<UntrustedText>| {
+            value
+                .as_ref()
+                .map_or_else(|| esc("-"), UntrustedText::markdown_inline)
+        };
+        let list = |values: &[UntrustedText]| {
+            if values.is_empty() {
+                esc("-")
+            } else {
+                values
+                    .iter()
+                    .map(UntrustedText::markdown_inline)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        out.push_str(&format!(
+            "{} {}{}\n\n",
+            esc("Facts of"),
+            path.markdown_inline(),
+            esc(":")
+        ));
+        let mut rows = vec![
+            vec![
+                esc("Container"),
+                esc(if macho.is_64 {
+                    "Mach-O 64-bit"
+                } else {
+                    "Mach-O 32-bit"
+                }),
+            ],
+            vec![esc("CPU type"), esc(&macho.cpu_type.to_string())],
+            vec![esc("CPU subtype"), esc(&macho.cpu_subtype.to_string())],
+            vec![esc("File type"), esc(&macho.file_type.to_string())],
+            vec![esc("Flags"), esc(&format!("0x{:08x}", macho.flags))],
+            vec![esc("UUID"), esc(macho.uuid.as_deref().unwrap_or("-"))],
+            vec![esc("Dylib ID"), opt(&macho.id_dylib)],
+            vec![esc("Loaded dylibs"), list(&macho.load_dylibs)],
+            vec![esc("RPATH"), list(&macho.rpaths)],
+            vec![esc("Dynamic linker"), opt(&macho.dylinker)],
+        ];
+        if let Some(slice) = a.slices.iter().find(|slice| slice.id == b.slice) {
+            rows.extend([
+                vec![esc("Architecture"), esc(slice.arch.name())],
+                vec![esc("Slice offset"), esc(&slice.offset.to_string())],
+                vec![esc("Slice size"), esc(&slice.size.to_string())],
+                vec![esc("Slice SHA-256"), esc(slice.sha256.as_str())],
+            ]);
+        }
+        if let Some(cpu_type) = macho.fat_cpu_type {
+            rows.push(vec![esc("Fat CPU type"), esc(&cpu_type.to_string())]);
+        }
+        if let Some(cpu_subtype) = macho.fat_cpu_subtype {
+            rows.push(vec![esc("Fat CPU subtype"), esc(&cpu_subtype.to_string())]);
+        }
+        if let Some(alignment) = macho.fat_alignment {
+            rows.push(vec![esc("Fat alignment"), esc(&alignment.to_string())]);
+        }
+        table(out, &["Fact", "Value"], rows);
+        return;
+    }
+    let crate::binary::ContainerFacts::Elf(elf) = &b.container else {
+        return;
+    };
     let opt = |t: &Option<UntrustedText>| {
         t.as_ref()
             .map_or_else(|| esc("-"), UntrustedText::markdown_inline)
@@ -517,55 +581,99 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 .unwrap_or("-");
             let kind = match artifact.map(|a| &a.format) {
                 Some(crate::artifact::Format::Elf { kind }) => format!("{kind:?}"),
+                Some(crate::artifact::Format::MachO) => "Mach-O".to_string(),
+                Some(crate::artifact::Format::MachOFat) => "Mach-O fat".to_string(),
                 _ => "-".to_string(),
             };
-            let crate::binary::ContainerFacts::Elf(elf) = &b.container;
             let text =
                 |t: &UntrustedText| t.as_str().map_or_else(|| t.terminal_line(), str::to_string);
-            let soname = elf.soname.as_ref().map_or_else(|| "-".to_string(), text);
-            let needed = if elf.needed.is_empty() {
-                "-".to_string()
-            } else {
-                elf.needed.iter().map(text).collect::<Vec<_>>().join(", ")
+            let (soname, needed, symbol_counts, notes) = match &b.container {
+                crate::binary::ContainerFacts::Elf(elf) => {
+                    let soname = elf.soname.as_ref().map_or_else(|| "-".to_string(), text);
+                    let needed = if elf.needed.is_empty() {
+                        "-".to_string()
+                    } else {
+                        elf.needed.iter().map(text).collect::<Vec<_>>().join(", ")
+                    };
+                    let mut notes = vec![];
+                    if let Some(id) = &elf.build_id {
+                        notes.push(format!(
+                            "build-id {}",
+                            id.chars().take(12).collect::<String>()
+                        ));
+                    }
+                    for d in &elf.data {
+                        let value = match &d.value {
+                            crate::binary::DataValue::Text(t) => text(t),
+                            crate::binary::DataValue::Int(n) => n.to_string(),
+                            crate::binary::DataValue::Unknown { .. } => "?".to_string(),
+                        };
+                        notes.push(format!("{}={value}", d.symbol));
+                    }
+                    if let Some(go) = &b.go {
+                        let path = go.path.as_ref().map(text).unwrap_or_default();
+                        notes.push(
+                            format!("go {} {path}", text(&go.version))
+                                .trim_end()
+                                .to_string(),
+                        );
+                    }
+                    let counts = if kind == "Rel" {
+                        format!(
+                            "{} / {} (undefined, link time)",
+                            elf.exports,
+                            elf.imports.len()
+                        )
+                    } else {
+                        format!("{} / {}", elf.exports, elf.imports.len())
+                    };
+                    (soname, needed, counts, notes)
+                }
+                crate::binary::ContainerFacts::MachO(macho) => {
+                    let soname = macho
+                        .id_dylib
+                        .as_ref()
+                        .map_or_else(|| "-".to_string(), text);
+                    let needed = if macho.load_dylibs.is_empty() {
+                        "-".to_string()
+                    } else {
+                        macho
+                            .load_dylibs
+                            .iter()
+                            .map(text)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    let mut notes = vec![format!("{}-bit", if macho.is_64 { 64 } else { 32 })];
+                    if let Some(uuid) = &macho.uuid {
+                        notes.push(format!("UUID {}", &uuid[..12.min(uuid.len())]));
+                    }
+                    if !macho.rpaths.is_empty() {
+                        notes.push(format!(
+                            "RPATH {}",
+                            macho.rpaths.iter().map(text).collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                    if let Some(dylinker) = &macho.dylinker {
+                        notes.push(format!("dylinker {}", text(dylinker)));
+                    }
+                    if let Some(slice) =
+                        artifact.and_then(|a| a.slices.iter().find(|x| x.id == b.slice))
+                    {
+                        notes.push(format!("slice {}+{}", slice.offset, slice.size));
+                    }
+                    if let Some(alignment) = macho.fat_alignment {
+                        notes.push(format!("fat align {alignment}"));
+                    }
+                    (soname, needed, "-".to_string(), notes)
+                }
             };
-            let mut notes = vec![];
-            if let Some(id) = &elf.build_id {
-                notes.push(format!(
-                    "build-id {}",
-                    id.chars().take(12).collect::<String>()
-                ));
-            }
-            for d in &elf.data {
-                let value = match &d.value {
-                    crate::binary::DataValue::Text(t) => text(t),
-                    crate::binary::DataValue::Int(n) => n.to_string(),
-                    crate::binary::DataValue::Unknown { .. } => "?".to_string(),
-                };
-                notes.push(format!("{}={value}", d.symbol));
-            }
-            if let Some(go) = &b.go {
-                let path = go.path.as_ref().map(text).unwrap_or_default();
-                notes.push(
-                    format!("go {} {path}", text(&go.version))
-                        .trim_end()
-                        .to_string(),
-                );
-            }
             vec![
                 path.markdown_inline(),
                 esc(&format!("{kind} {arch}")),
                 esc(&soname),
                 esc(&needed),
-                // A relocatable object's "imports" are its undefined link-time symbols.
-                esc(&if kind == "Rel" {
-                    format!(
-                        "{} / {} (undefined, link time)",
-                        elf.exports,
-                        elf.imports.len()
-                    )
-                } else {
-                    format!("{} / {}", elf.exports, elf.imports.len())
-                }),
+                esc(&symbol_counts),
                 esc(&notes.join("; ")),
             ]
         })
@@ -575,8 +683,8 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
         &[
             "Path",
             "Type",
-            "SONAME",
-            "NEEDED",
+            "Dylib ID / SONAME",
+            "Loaded dylibs / NEEDED",
             "Exports / imports",
             "Notes",
         ],

@@ -108,7 +108,9 @@ fn canonical_order_sorts_records_and_imports_but_keeps_file_order() {
         gaps: vec![],
     });
     s.canonicalize();
-    let ContainerFacts::Elf(f) = &s.binaries[0].container;
+    let ContainerFacts::Elf(f) = &s.binaries[0].container else {
+        panic!()
+    };
     assert_eq!(f.imports[0].name, t("dlopen"), "imports are sorted");
     assert_eq!(f.needed, [t("z.so"), t("a.so")], "NEEDED keeps its order");
 }
@@ -162,7 +164,9 @@ fn rejected_for(s: &Session, why: &str) {
 }
 
 fn elf(s: &mut Session) -> &mut ElfFacts {
-    let ContainerFacts::Elf(f) = &mut s.binaries[0].container;
+    let ContainerFacts::Elf(f) = &mut s.binaries[0].container else {
+        panic!()
+    };
     f
 }
 
@@ -269,6 +273,18 @@ fn b7_complete_needs_facts_for_every_install_elf_and_no_gap() {
 }
 
 #[test]
+fn b7_complete_rejects_a_recognized_install_artifact_without_slices() {
+    let mut s = base();
+    s.artifacts[0].format = sigil_model::Format::MachOFat;
+    s.artifacts[0].slices.clear();
+    s.binaries.clear();
+    s.relations
+        .retain(|relation| !matches!(relation, Relation::Declares { .. }));
+    s.canonicalize();
+    rejected_for(&s, "has no slices");
+}
+
+#[test]
 fn b8_stripped_is_unknown_exactly_with_a_sections_gap() {
     let mut s = base();
     elf(&mut s).stripped = None;
@@ -287,4 +303,109 @@ fn b8_stripped_is_unknown_exactly_with_a_sections_gap() {
     let mut s2 = s.clone();
     elf(&mut s2).stripped = Some(true);
     rejected_for(&s2, "stripped");
+}
+
+// --- B2: fat Mach-O facts ---------------------------------------------------------------------
+
+const X86_64: i32 = 0x0100_0007;
+const AARCH64: i32 = 0x0100_000c;
+
+fn macho_facts(cpu_type: i32, cpu_subtype: i32, fat: (i32, i32)) -> ContainerFacts {
+    ContainerFacts::MachO(sigil_model::MachOFacts {
+        is_64: true,
+        cpu_type,
+        cpu_subtype,
+        fat_cpu_type: Some(fat.0),
+        fat_cpu_subtype: Some(fat.1),
+        fat_alignment: Some(12),
+        file_type: 2,
+        flags: 0,
+        uuid: None,
+        id_dylib: None,
+        load_dylibs: vec![],
+        rpaths: vec![],
+        dylinker: None,
+    })
+}
+
+/// `base()` with its artifact a fat Mach-O whose one x86_64 slice has consistent facts.
+fn fat_base() -> Session {
+    let mut s = base();
+    s.artifacts[0].format = sigil_model::Format::MachOFat;
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { .. }));
+    s.binaries[0].container = macho_facts(X86_64, 3, (X86_64, 3));
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()), "the fat base must be valid");
+    s
+}
+
+/// Not rejected for `why`, whatever else is wrong.
+fn not_rejected_for(s: &Session, why: &str) {
+    if let Err(errors) = s.validate() {
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::Binary { why: w, .. } if w.contains(why))),
+            "{why}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn b2_a_fat_slice_header_that_disagrees_with_its_table_entry_has_its_gap() {
+    // The table says x86_64 (so does the slice's arch); the slice's own header says arm64.
+    let mut s = fat_base();
+    s.binaries[0].container = macho_facts(AARCH64, 3, (X86_64, 3));
+    rejected_for(&s, "disagrees with its fat table entry");
+    // The subtype, compared without its capability bits.
+    let mut s = fat_base();
+    s.binaries[0].container = macho_facts(X86_64, 8, (X86_64, 3));
+    rejected_for(&s, "disagrees with its fat table entry");
+    let mut s = fat_base();
+    s.binaries[0].container = macho_facts(X86_64, 3, (X86_64, 0x8000_0003u32 as i32));
+    assert_eq!(s.validate(), Ok(()));
+    // With the parser's gap the facts are consistent, but the container is not Complete (B7).
+    let mut s = fat_base();
+    s.binaries[0].container = macho_facts(AARCH64, 0, (X86_64, 3));
+    s.binaries[0]
+        .gaps
+        .push(sigil_model::FAT_CPU_MISMATCH_GAP.to_string());
+    not_rejected_for(&s, "disagrees with its fat table entry");
+    rejected_for(&s, "Complete");
+}
+
+#[test]
+fn b2_fat_slices_of_one_architecture_have_its_gap() {
+    let mut s = fat_base();
+    let artifact = s.artifacts[0].id.clone();
+    s.artifacts[0].slices[0].size = 0x8_0000;
+    let mut second = s.artifacts[0].slices[0].clone();
+    second.offset = 0x8_0000;
+    second.id = SliceId::from_parts(&artifact, second.arch, second.offset);
+    s.artifacts[0].slices.push(second.clone());
+    // The same CPU type, and a subtype that differs only in its capability bits.
+    s.binaries.push(BinaryFacts {
+        slice: second.id,
+        container: macho_facts(X86_64, 3, (X86_64, 0x8000_0003u32 as i32)),
+        go: None,
+        gaps: vec![],
+    });
+    s.canonicalize();
+    rejected_for(&s, "architecture listed twice");
+    let mut gapped = s.clone();
+    for facts in &mut gapped.binaries {
+        facts
+            .gaps
+            .push(sigil_model::FAT_DUPLICATE_ARCH_GAP.to_string());
+    }
+    not_rejected_for(&gapped, "architecture listed twice");
+    rejected_for(&gapped, "Complete");
+    // x86_64h is another architecture.
+    let ContainerFacts::MachO(f) = &mut s.binaries[1].container else {
+        panic!()
+    };
+    f.cpu_subtype = 8;
+    f.fat_cpu_subtype = Some(8);
+    assert_eq!(s.validate(), Ok(()));
 }
