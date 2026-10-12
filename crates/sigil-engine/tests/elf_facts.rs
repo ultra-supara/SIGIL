@@ -146,6 +146,61 @@ fn image(entries: &[(i64, u64)], strtab: &[u8]) -> ElfImage {
     img
 }
 
+/// The gaps about `PT_DYNAMIC` (an image without sections also has a `sections: ` gap).
+fn dynamic_gaps(p: &Parsed) -> Vec<String> {
+    p.gaps
+        .iter()
+        .filter(|g| g.starts_with("dynamic"))
+        .cloned()
+        .collect()
+}
+
+/// Spec §3.5: glibc and musl keep the last `PT_DYNAMIC` and read it at its `p_vaddr`.
+#[test]
+fn the_last_pt_dynamic_is_read_where_its_address_is() {
+    let strings = b"\0libA.so\0libB.so\0";
+    let entries = [(DT_STRTAB, 0x3000), (DT_STRSZ, 17), (DT_NEEDED, 1)];
+    // Two tables: libA.so's at 0x2000 (first), libB.so's at 0x2800 (last).
+    let mut img = image(&entries, strings);
+    let second = dynamic(&[(DT_STRTAB, 0x3000), (DT_STRSZ, 17), (DT_NEEDED, 9)]);
+    let len = second.len() as u64;
+    img.put(0x2800, &second)
+        .seg(PT_DYNAMIC, PF_R | PF_W, 0x2800, 0x2800, len, len);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(texts(&f.needed), ["libB.so"]);
+    assert_eq!(dynamic_gaps(&p), ["dynamic: more than one PT_DYNAMIC"]);
+
+    // p_offset elsewhere: still read at p_vaddr, with no gap.
+    let mut img = image(&entries, strings);
+    img.segs
+        .iter_mut()
+        .find(|s| s.p_type == PT_DYNAMIC)
+        .unwrap()
+        .offset = 0x100;
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(texts(&f.needed), ["libA.so"]);
+    assert!(dynamic_gaps(&p).is_empty(), "{:?}", p.gaps);
+
+    // p_vaddr in no PT_LOAD: not where the loader could read it.
+    let mut img = image(&entries, strings);
+    img.segs
+        .iter_mut()
+        .find(|s| s.p_type == PT_DYNAMIC)
+        .unwrap()
+        .vaddr = 0x9_0000;
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert!(f.needed.is_empty());
+    assert_eq!(dynamic_gaps(&p), ["dynamic: not file-backed at p_vaddr"]);
+
+    // A real shared object with its PT_DYNAMIC p_offset zeroed: the same facts, no gap.
+    let mut bytes = fixture("elf/libdata.so");
+    let h = phdr64(&bytes, PT_DYNAMIC);
+    bytes[h + 8..h + 16].fill(0);
+    let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert_eq!(texts(&f.needed), LIBDATA_NEEDED);
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+}
+
 #[test]
 fn only_pt_note_gives_the_build_id() {
     let mut img = ElfImage::new(3);

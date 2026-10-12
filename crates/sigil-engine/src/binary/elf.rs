@@ -189,18 +189,21 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
     }
 
-    /// `PT_DYNAMIC`: SONAME, NEEDED, RPATH, RUNPATH, and what the other steps need.
+    /// `PT_DYNAMIC`: SONAME, NEEDED, RPATH, RUNPATH, and what the other steps need. The last
+    /// `PT_DYNAMIC`, read where its `p_vaddr` is in the file: glibc and musl keep the last one
+    /// (their program-header loop overwrites it) and read it in memory (spec §3.5).
     fn dynamic(&mut self, facts: &mut ElfFacts) -> Dynamic {
         let endian = self.endian;
         let mut out = Dynamic::default();
-        let Some(p) = self
-            .phdrs
-            .iter()
-            .find(|p| p.p_type(endian) == elf::PT_DYNAMIC)
-        else {
+        let phdrs = self.phdrs;
+        let mut dynamics = phdrs.iter().filter(|p| p.p_type(endian) == elf::PT_DYNAMIC);
+        let Some(p) = dynamics.next_back() else {
             return out;
         };
-        let offset: u64 = p.p_offset(endian).into();
+        if dynamics.next().is_some() {
+            self.gap("dynamic: more than one PT_DYNAMIC");
+        }
+        let vaddr: u64 = p.p_vaddr(endian).into();
         let filesz: u64 = p.p_filesz(endian).into();
         let entry = size_of::<H::Dyn>() as u64;
         if !filesz.is_multiple_of(entry) {
@@ -211,6 +214,10 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             self.gap(format!("dynamic: over {MAX_DYNAMIC} entries"));
             count = MAX_DYNAMIC;
         }
+        let Place::File(offset) = self.loads.place(vaddr, count * entry) else {
+            self.gap("dynamic: not file-backed at p_vaddr");
+            return out;
+        };
         let Ok(entries) = self.data.read_slice_at::<H::Dyn>(offset, count as usize) else {
             self.gap("dynamic: outside the file");
             return out;
