@@ -230,6 +230,9 @@ fn create_temp(dir: &OwnedFd, name: &OsStr) -> Result<(OsString, OwnedFd), Strin
 /// - With nothing at `name`, `RENAME_NOREPLACE` keeps it so; a file that appears meanwhile is
 ///   exchanged on the next try.
 /// - A file system without the exchange: [`without_exchange`].
+///
+/// The put-back is a second system call: a run killed before it leaves the displaced file at
+/// `tmp`, whole, and the document at `name` (review of #89; docs/architecture-and-safety.md).
 #[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
 fn install(
     dir: &OwnedFd,

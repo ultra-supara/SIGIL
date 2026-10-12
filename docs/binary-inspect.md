@@ -58,7 +58,8 @@ a path that is:
 - a directory, a FIFO, or a device;
 - a file SIGIL may `lstat` but not open;
 - a file with a non-UTF-8 name;
-- a file replaced by a symlink after it was resolved.
+- a file replaced after it was resolved: by a symlink, or by another file (the file read must
+  be the one resolved, by `dev:ino`).
 
 Inputs are read one at a time, so the number of inputs does not raise the number of open file
 descriptors. An input's directory is opened only to reach the input by name, never listed, so a
@@ -84,6 +85,10 @@ Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them
   its owner only, and exchanges it with the existing file. An existing file there is replaced,
   never written through, and its mode and owner are not kept. An input displaced by the
   exchange is put back, and the run fails.
+- **A crash before the put-back.** The exchange and the put-back are two system calls. A run
+  killed between them leaves the input next to `--out`, at `.<name>.sigil-<pid>-<k>.tmp`, with
+  its contents intact: rename it back. An input is at `--out` then only if another process moved
+  it there after `--out` was checked.
 - **File systems without the exchange.** On a file system that cannot exchange files
   (`RENAME_EXCHANGE`), `--out` must name a file that does not exist yet.
 
