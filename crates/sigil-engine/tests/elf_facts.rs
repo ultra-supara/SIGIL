@@ -520,3 +520,41 @@ fn a_section_whose_name_cannot_be_read_is_a_gap() {
         p.gaps
     );
 }
+
+/// Review of the #89 fixes: a valid name of 4096 bytes or more (a C++ section or symbol) is no
+/// gap. object's string lookup stops at 4096 bytes; SIGIL reads only what a wanted name needs.
+#[test]
+fn a_long_valid_name_is_no_gap_and_an_unterminated_one_is() {
+    let long = "x".repeat(5000);
+    let mut img = ElfImage::new(3);
+    img.put(0x1000, b"GCC: test\0")
+        .sec(&format!(".text.{long}"), SHT_PROGBITS, 0x1000, 0, 0)
+        .sec(".comment", SHT_PROGBITS, 0x1000, 0, 10);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(texts(&f.comment), ["GCC: test"]);
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+
+    let symtab = |names: &[u8]| {
+        let mut img = ElfImage::new(1); // ET_REL
+        let mut syms = vec![0u8; 24];
+        syms.extend_from_slice(&sym64(1, 0x12, 1, 0, 1)); // GLOBAL FUNC "exported"
+        syms.extend_from_slice(&sym64(10, 0x11, 1, 0, 8)); // GLOBAL OBJECT, the name at 10
+        let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+        img.put(sym_off, &syms).put(str_off, names);
+        img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+            .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+        facts_of(&img.build(), BinaryBudgets::default()).1.gaps
+    };
+    let mut names = b"\0exported\0".to_vec();
+    names.extend_from_slice(long.as_bytes());
+    names.push(0);
+    assert!(symtab(&names).is_empty(), "{:?}", symtab(&names));
+    // "LLAMA" at the end of the table with no NUL: it could be a known name, cut.
+    let gaps = symtab(b"\0exported\0LLAMA");
+    assert!(
+        gaps.iter()
+            .any(|g| g
+                .starts_with("malformed: symbols: a data symbol's name: a name not terminated")),
+        "{gaps:?}"
+    );
+}

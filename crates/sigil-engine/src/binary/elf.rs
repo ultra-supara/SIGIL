@@ -9,7 +9,7 @@ use object::elf;
 use object::read::elf::{
     Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
 };
-use object::read::{ReadCacheOps, ReadRef, SymbolIndex};
+use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endianness, FileKind};
 use sigil_model::{ContainerFacts, ElfFacts, ElfImport, UntrustedText};
 
@@ -410,14 +410,55 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         name: &[u8],
     ) -> Option<&'d H::SectionHeader> {
         let endian = self.endian;
+        // The string table `sections()` names them from (`e_shstrndx`).
+        let strings = self
+            .header
+            .shstrndx(endian, self.data)
+            .ok()
+            .and_then(|i| table.section(SectionIndex(i as usize)).ok())
+            .and_then(|s| s.file_range(endian));
         for s in table.iter().skip(1) {
-            match table.section_name(endian, s) {
-                Ok(n) if n == name => return Some(s),
+            let read = match strings {
+                Some(strings) => self.short_name(strings, s.sh_name(endian), name.len()),
+                None => Err("no section-name table in the file".to_string()),
+            };
+            match read {
+                Ok(Some(n)) if n == name => return Some(s),
                 Ok(_) => {}
                 Err(e) => self.gap(format!("malformed: section names: {e}")),
             }
         }
         None
+    }
+
+    /// The name at `offset` in the string table at `strings` (its file range), when it is at most
+    /// `max` bytes; `Ok(None)` for a longer one, which is no name SIGIL looks for. Only `max + 1`
+    /// bytes are read: object's `StringTable::get` stops looking for the NUL after 4096 bytes, so
+    /// a valid longer name (a C++ section or symbol) would read as malformed (review of #89).
+    /// `Err`: the offset is past the table, the name ends with the table unterminated, or the
+    /// bytes are outside the file or over the parse budget.
+    pub(crate) fn short_name(
+        &self,
+        strings: (u64, u64),
+        offset: u32,
+        max: usize,
+    ) -> Result<Option<&'d [u8]>, String> {
+        let (start, size) = strings;
+        let offset = u64::from(offset);
+        if offset >= size {
+            return Err("a name past its string table".to_string());
+        }
+        let want = (max as u64).saturating_add(1);
+        let len = want.min(size - offset);
+        let bytes = start
+            .checked_add(offset)
+            .and_then(|at| self.data.read_bytes_at(at, len).ok())
+            .ok_or_else(|| "a name outside the file or over the parse budget".to_string())?;
+        match bytes.iter().position(|b| *b == 0) {
+            Some(end) => Ok(Some(&bytes[..end])),
+            None if len == want => Ok(None),
+            None => Err("a name not terminated in its string table".to_string()),
+        }
     }
 
     /// The section facts: `.comment`, stripped, the symbols (`.dynsym`, or a relocatable object's

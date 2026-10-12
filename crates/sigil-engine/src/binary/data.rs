@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use object::elf;
-use object::read::elf::{FileHeader, Sym, SymbolTable};
+use object::read::elf::{FileHeader, SectionHeader, Sym, SymbolTable};
 use object::read::{ReadCacheOps, ReadRef};
 use object::Endianness;
 use sigil_model::{DataSymbol, DataValue, Loc, UntrustedText};
@@ -44,15 +44,29 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let mut found: Vec<(&str, Kind, u64, u64)> = vec![];
     let mut twice: BTreeSet<&str> = BTreeSet::new();
     let mut unnamed = None;
+    // The symbols' string table, read for names no longer than the longest known one.
+    let strings = e
+        .header
+        .sections(endian, e.data)
+        .ok()
+        .and_then(|t| t.section(symbols.string_section()).ok())
+        .and_then(|s| s.file_range(endian));
+    let longest = KNOWN.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for sym in symbols.symbols() {
         if sym.st_shndx(endian) == elf::SHN_UNDEF || sym.st_type() != elf::STT_OBJECT {
             continue;
         }
         // A name that cannot be read could be a known one: a gap, never a silent skip.
-        let name = match sym.name(endian, symbols.strings()) {
-            Ok(name) => name,
-            Err(e) => {
-                unnamed.get_or_insert(e);
+        let read = match strings {
+            Some(strings) => e.short_name(strings, sym.st_name(endian), longest),
+            None => Err("no string table in the file".to_string()),
+        };
+        let name = match read {
+            Ok(Some(name)) => name,
+            // Longer than every known name.
+            Ok(None) => continue,
+            Err(why) => {
+                unnamed.get_or_insert(why);
                 continue;
             }
         };
