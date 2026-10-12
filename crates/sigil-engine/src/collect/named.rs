@@ -1,7 +1,8 @@
 //! The files named on the command line (`sigil binary inspect <PATH>...`; PR-4b-2a spec §4.1).
 //!
 //! An argument is explicit input, so symlinks in it are resolved, as a scan root's path is. The
-//! file itself is then read without following anything. Each input is read through its own
+//! file itself is then read without following anything, and must be the file resolved (its
+//! `dev:ino` at resolution is the hashed fd's). Each input is read through its own
 //! `SafeFs`, dropped before the next, so the open file descriptors do not grow with the number
 //! of inputs. Its directory is opened with `O_PATH`: it is never listed. An input that cannot be
 //! read is a fatal error; only an input over `binary_bytes` is recorded unread.
@@ -81,25 +82,29 @@ fn collect_with(
     if paths.is_empty() {
         return Err("no input: name at least one file".to_string());
     }
-    let mut inputs: Vec<PathBuf> = vec![];
+    let io = |p: &Path, e: std::io::Error| {
+        let why = match e.kind() {
+            std::io::ErrorKind::NotFound => "not found".to_string(),
+            std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
+            _ => e.to_string(),
+        };
+        fatal(p, &why)
+    };
+    // Each input with the `dev:ino` it resolved to: the file that must be read.
+    let mut inputs: Vec<(PathBuf, (u64, u64))> = vec![];
     let mut seen = BTreeSet::new();
     for p in paths {
-        let canonical = std::fs::canonicalize(p).map_err(|e| {
-            let why = match e.kind() {
-                std::io::ErrorKind::NotFound => "not found".to_string(),
-                std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
-                _ => e.to_string(),
-            };
-            fatal(p, &why)
-        })?;
+        let canonical = std::fs::canonicalize(p).map_err(|e| io(p, e))?;
         if seen.insert(canonical.clone()) {
-            inputs.push(canonical);
+            use std::os::unix::fs::MetadataExt;
+            let st = std::fs::symlink_metadata(&canonical).map_err(|e| io(p, e))?;
+            inputs.push((canonical, (st.dev(), st.ino())));
         }
     }
     let mut facts = NamedFacts::default();
     let mut artifacts = BTreeSet::new();
     let mut parsed = BTreeMap::new();
-    for (k, path) in inputs.iter().enumerate() {
+    for (k, (path, resolved)) in inputs.iter().enumerate() {
         let n = u32::try_from(k + 1).map_err(|_| "too many inputs".to_string())?;
         let root = binary_root(n).ok_or_else(|| format!("binary-{n} is not a root ID"))?;
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
@@ -140,7 +145,18 @@ fn collect_with(
         let Some(instance) = read.instance else {
             return Err(fatal(path, &outcome(&read.outcome)));
         };
+        // A regular file is recorded with its open fd's `stat`: it must be the file resolved.
+        let replaced = (instance.stat.dev, instance.stat.ino) != *resolved;
         match &instance.content {
+            InstanceContent::Read { .. }
+            | InstanceContent::NotRead {
+                why: NotReadReason::BudgetExceeded,
+            } if replaced => {
+                return Err(fatal(
+                    path,
+                    "replaced by another file after it was resolved",
+                ));
+            }
             InstanceContent::Read { .. } => {}
             InstanceContent::NotRead {
                 why: NotReadReason::BudgetExceeded,
@@ -279,6 +295,37 @@ mod tests {
         let e =
             collect_with(&[p.join("a/x.so")], NamedBudgets::default(), &swap, &|_| {}).unwrap_err();
         assert!(e.contains("changed after it was resolved"), "{e}");
+    }
+
+    /// Review of #89 (P1): the resolved file replaced by another regular file (a rename over it)
+    /// before it is opened. The file read is not the one resolved: an input error.
+    #[test]
+    fn a_file_replaced_by_another_after_resolution_is_fatal() {
+        let (_d, p) = dir();
+        let replace = |path: &Path| {
+            std::fs::rename(path.with_file_name("clean.so"), path).unwrap();
+        };
+        for bytes in [64 << 30, 1] {
+            std::fs::write(p.join("target.so"), b"target").unwrap();
+            std::fs::write(p.join("clean.so"), b"clean").unwrap();
+            let budgets = NamedBudgets {
+                bytes,
+                ..NamedBudgets::default()
+            };
+            // Read, or over budget (recorded unread): either way the fd is not the file resolved.
+            let e = collect_with(&[p.join("target.so")], budgets, &replace, &|_| {}).unwrap_err();
+            assert!(e.contains("replaced by another file"), "{e}");
+        }
+        // The same file under another name (a hard link renamed over it) is the file resolved.
+        std::fs::hard_link(p.join("target.so"), p.join("clean.so")).unwrap();
+        let f = collect_with(
+            &[p.join("target.so")],
+            NamedBudgets::default(),
+            &replace,
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(f.instances[0].stability, Stability::NoChangeDetected);
     }
 
     /// Review of Part B: a file changed, or removed, while it is read is recorded (not fatal),
