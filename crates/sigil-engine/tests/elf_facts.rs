@@ -564,6 +564,207 @@ fn rel_table_sizes_are_checked_as_rela_s_are() {
     }
 }
 
+/// The `.dynsym` section header's file offset.
+fn dynsym_header(bytes: &[u8]) -> usize {
+    sections64(bytes)
+        .into_iter()
+        .find(|s| s.1 == SHT_DYNSYM)
+        .unwrap()
+        .2
+}
+
+/// Spec §3.2: `.dynsym` must be the table the loader reads, and as long as what it reaches.
+#[test]
+fn dynsym_must_be_where_and_as_long_as_the_loader_reads_it() {
+    // libdata.so: 13 symbols, all reached by DT_GNU_HASH. One entry short:
+    let mut bytes = fixture("elf/libdata.so");
+    let h = dynsym_header(&bytes);
+    bytes[h + 32..h + 40].copy_from_slice(&(12u64 * 24).to_le_bytes());
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        p.gaps
+            .contains(&"symbols: .dynsym has 12 entries, DT_GNU_HASH 13".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    // Not at DT_SYMTAB.
+    let mut bytes = fixture("elf/libdata.so");
+    let h = dynsym_header(&bytes);
+    bytes[h + 16..h + 24].copy_from_slice(&0x280u64.to_le_bytes());
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert_eq!(p.gaps, ["symbols: .dynsym is not at DT_SYMTAB"]);
+    // A JUMP_SLOT naming symbol 99: an import the section does not hold.
+    let mut bytes = fixture("elf/libdata.so");
+    let plt = sections64(&bytes)
+        .into_iter()
+        .find(|s| s.0 == ".rela.plt")
+        .unwrap()
+        .3 as usize;
+    bytes[plt + 8..plt + 16].copy_from_slice(&((99u64 << 32) | 7).to_le_bytes());
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert_eq!(
+        p.gaps,
+        ["symbols: a relocation names symbol 99 past .dynsym's 13 entries"]
+    );
+    // DT_GNU_HASH where nothing is mapped.
+    let mut bytes = fixture("elf/libdata.so");
+    set_dynamic(&mut bytes, DT_GNU_HASH, 0x9_0000);
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert_eq!(p.gaps, ["symbols: DT_GNU_HASH cannot be read"]);
+}
+
+/// A `DT_GNU_HASH` table (ELF64): `buckets.len()` buckets, `symoffset`, one bloom word, then
+/// the buckets and the chain values (bit 0 ends a chain).
+fn gnu_hash(symoffset: u32, buckets: &[u32], chains: &[u32]) -> Vec<u8> {
+    let mut out = vec![];
+    for w in [buckets.len() as u32, symoffset, 1, 6] {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    out.extend_from_slice(&u64::MAX.to_le_bytes());
+    for w in buckets.iter().chain(chains) {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    out
+}
+
+#[test]
+fn dt_gnu_hash_must_reach_every_symbol_of_dynsym() {
+    let gaps = |table: Vec<u8>| {
+        let bytes = dynsym_image(&[(DT_GNU_HASH, 0x2800)], &[(0x2800, table.as_slice())]);
+        facts_of(&bytes, BinaryBudgets::default()).1.gaps
+    };
+    // "one" and "two" (symbols 1 and 2) in one chain: 3 symbols.
+    assert!(gaps(gnu_hash(1, &[1], &[0x10, 0x21])).is_empty());
+    assert_eq!(
+        gaps(gnu_hash(1, &[1], &[0x11])),
+        ["symbols: .dynsym has 3 entries, DT_GNU_HASH 2"]
+    );
+    // symoffset 0 is counted like any other (object's count skips it; glibc does not).
+    assert!(gaps(gnu_hash(0, &[1], &[0, 0x10, 0x21])).is_empty());
+    assert_eq!(
+        gaps(gnu_hash(0, &[1], &[0, 0x11])),
+        ["symbols: .dynsym has 3 entries, DT_GNU_HASH 2"]
+    );
+    // Empty (every bucket 0): no count, but the unhashed symbols below symoffset must be in the
+    // table (review of rev. 2, P2-3).
+    for symoffset in [1, 3] {
+        assert!(
+            gaps(gnu_hash(symoffset, &[0], &[])).is_empty(),
+            "empty, symoffset {symoffset}"
+        );
+    }
+    for symoffset in [4, 500] {
+        assert_eq!(
+            gaps(gnu_hash(symoffset, &[0, 0], &[])),
+            [format!(
+                "symbols: .dynsym has 3 entries, DT_GNU_HASH's symoffset {symoffset}"
+            )],
+        );
+    }
+    // Every non-empty bucket, not only the highest, must be at least symoffset.
+    assert_eq!(
+        gaps(gnu_hash(2, &[2, 1], &[0x21])),
+        ["symbols: DT_GNU_HASH cannot be read"],
+        "a bucket below symoffset beside a valid one"
+    );
+    assert_eq!(
+        gaps(gnu_hash(5, &[2], &[0x11])),
+        ["symbols: DT_GNU_HASH cannot be read"],
+        "the highest bucket below symoffset"
+    );
+    assert_eq!(
+        gaps(gnu_hash(1, &[1], &[0x10, 0x20])),
+        ["symbols: DT_GNU_HASH cannot be read"],
+        "a chain that never ends before the end of its PT_LOAD"
+    );
+}
+
+#[test]
+fn dt_hash_must_count_the_symbols_of_dynsym() {
+    let table = |nchain: u32| [1u32.to_le_bytes(), nchain.to_le_bytes()].concat();
+    let gaps = |entries: &[(i64, u64)], extra: &[(u64, &[u8])]| {
+        facts_of(&dynsym_image(entries, extra), BinaryBudgets::default())
+            .1
+            .gaps
+    };
+    let three = table(3);
+    let two = table(2);
+    assert!(gaps(&[(DT_HASH, 0x2800)], &[(0x2800, three.as_slice())]).is_empty());
+    assert_eq!(
+        gaps(&[(DT_HASH, 0x2800)], &[(0x2800, two.as_slice())]),
+        ["symbols: .dynsym has 3 entries, DT_HASH 2"]
+    );
+    assert_eq!(
+        gaps(&[(DT_HASH, 0x9_0000)], &[]),
+        ["symbols: DT_HASH cannot be read"]
+    );
+}
+
+/// Review of rev. 2 (P2-2): every relocation table is read for its symbol indices whether or not
+/// a known data symbol is there. `dynsym_image` defines none, so `data::read` reads no table.
+#[test]
+fn a_relocation_past_dynsym_is_a_gap_with_no_data_symbol() {
+    // One relocation at 0x2800 naming symbol `sym` (type 1, R_X86_64_64); a RELA entry has its
+    // addend after it.
+    let entry = |sym: u64, rela: bool| {
+        let mut e = 0x3000u64.to_le_bytes().to_vec();
+        e.extend_from_slice(&((sym << 32) | 1).to_le_bytes());
+        if rela {
+            e.extend_from_slice(&0u64.to_le_bytes());
+        }
+        e
+    };
+    let kinds: [(&str, bool, [(i64, u64); 3]); 4] = [
+        (
+            "DT_RELA",
+            true,
+            [(DT_RELA, 0x2800), (DT_RELASZ, 24), (DT_RELAENT, 24)],
+        ),
+        (
+            "DT_REL",
+            false,
+            [(DT_REL, 0x2800), (DT_RELSZ, 16), (DT_RELENT, 16)],
+        ),
+        (
+            "DT_JMPREL (RELA)",
+            true,
+            [
+                (DT_JMPREL, 0x2800),
+                (DT_PLTRELSZ, 24),
+                (DT_PLTREL, DT_RELA as u64),
+            ],
+        ),
+        (
+            "DT_JMPREL (REL)",
+            false,
+            [
+                (DT_JMPREL, 0x2800),
+                (DT_PLTRELSZ, 16),
+                (DT_PLTREL, DT_REL as u64),
+            ],
+        ),
+    ];
+    for (kind, rela, entries) in kinds {
+        for (sym, gap) in [
+            (2, None),
+            (
+                5,
+                Some("symbols: a relocation names symbol 5 past .dynsym's 3 entries"),
+            ),
+        ] {
+            let table = entry(sym, rela);
+            let bytes = dynsym_image(&entries, &[(0x2800, table.as_slice())]);
+            let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+            assert!(f.data.is_empty(), "{kind}: no known data symbol");
+            assert_eq!(
+                p.gaps,
+                gap.into_iter().collect::<Vec<_>>(),
+                "{kind}, symbol {sym}"
+            );
+        }
+    }
+}
+
 /// PR-4b-2a spec §4.4: a relocatable object has no `.dynsym`. Its imports are the undefined
 /// symbols of its link-time symbol table, left for the linker, and its exports its defined
 /// global ones. No versions, no data values.

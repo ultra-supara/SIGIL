@@ -7,10 +7,10 @@ use std::mem::size_of;
 
 use object::elf;
 use object::read::elf::{
-    Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
+    Dyn, FileHeader, ProgramHeader, Rel, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
 };
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
-use object::{Endianness, FileKind};
+use object::{Endian, Endianness, FileKind, Pod};
 use sigil_model::{ContainerFacts, ElfFacts, ElfImport, UntrustedText};
 
 use super::read::Bounded;
@@ -628,7 +628,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             self.gap("versions: .gnu.version is shorter than .dynsym");
         }
         if !relocatable {
-            self.loader_agrees(&table, dynamic);
+            self.loader_agrees(&table, &symbols, dynamic);
         }
         // At most `binary_imports` imports are ever held: the smallest, in sorted order.
         let limit = usize::try_from(budgets.imports).unwrap_or(usize::MAX);
@@ -691,8 +691,56 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
 
     /// What the loader uses agrees with the sections SIGIL reads (spec §3.1, §3.2): each
     /// disagreement is a gap. Not for a relocatable object, which no loader reads.
-    fn loader_agrees(&mut self, table: &SectionTable<'d, H, &'d Bounded<R>>, dynamic: &Dynamic) {
+    fn loader_agrees(
+        &mut self,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
+        dynamic: &Dynamic,
+    ) {
         let endian = self.endian;
+        let count = symbols.len() as u64;
+        // Where the loader reads the symbols.
+        if let Some(symtab) = dynamic.symtab {
+            let at = table
+                .section(symbols.section())
+                .ok()
+                .map(|s| Into::<u64>::into(s.sh_addr(endian)));
+            if at != Some(symtab) {
+                self.gap("symbols: .dynsym is not at DT_SYMTAB");
+            }
+        }
+        // How many symbols a lookup reaches.
+        if let Some(hash) = dynamic.hash {
+            match self.sysv_hash_count(hash) {
+                Ok(n) if n != count => {
+                    self.gap(format!("symbols: .dynsym has {count} entries, DT_HASH {n}"))
+                }
+                Ok(_) => {}
+                Err(()) => self.gap("symbols: DT_HASH cannot be read"),
+            }
+        }
+        if let Some(gnu_hash) = dynamic.gnu_hash {
+            match self.gnu_hash_count(gnu_hash) {
+                // The unhashed symbols are in the table too, whether or not one is hashed.
+                Ok((symoffset, _)) if symoffset > count => self.gap(format!(
+                    "symbols: .dynsym has {count} entries, DT_GNU_HASH's symoffset {symoffset}"
+                )),
+                Ok((_, Some(n))) if n != count => self.gap(format!(
+                    "symbols: .dynsym has {count} entries, DT_GNU_HASH {n}"
+                )),
+                // Empty (no count, symoffset within the table), or in agreement.
+                Ok(_) => {}
+                Err(()) => self.gap("symbols: DT_GNU_HASH cannot be read"),
+            }
+        }
+        // Which symbols a relocation binds: the imports.
+        match self.largest_symbol_index(dynamic) {
+            Ok(Some(i)) if u64::from(i) >= count => self.gap(format!(
+                "symbols: a relocation names symbol {i} past .dynsym's {count} entries"
+            )),
+            Ok(_) => {}
+            Err(why) => self.gap(format!("symbols: relocations not read: {why}")),
+        }
         // ld.so checks versions through DT_VERSYM, whatever the sections say.
         if let Some(versym) = dynamic.versym {
             match table
@@ -704,6 +752,104 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     self.gap("versions: .gnu.version is not at DT_VERSYM")
                 }
                 Some(_) => {}
+            }
+        }
+    }
+
+    /// The whole entries of a relocation table at `vaddr`, `size` bytes, where the loader reads
+    /// it. A partial last entry is the `dynamic: malformed:` gap of `dynamic()`.
+    fn relocation_table<T: Pod>(&self, vaddr: u64, size: u64) -> Result<&'d [T], String> {
+        let Place::File(offset) = self.loads.place(vaddr, size) else {
+            return Err("a relocation table is not file-backed".to_string());
+        };
+        let count = size / size_of::<T>() as u64;
+        self.data
+            .read_slice_at::<T>(offset, count as usize)
+            .map_err(|()| "a relocation table outside the file or over the budget".to_string())
+    }
+
+    /// The largest symbol index the loader's relocation tables name (`DT_RELA`, `DT_REL`, and
+    /// `DT_JMPREL` of either kind); `None` without a table.
+    fn largest_symbol_index(&self, dynamic: &Dynamic) -> Result<Option<u32>, String> {
+        let endian = self.endian;
+        let mut largest = None;
+        for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
+            for r in self.relocation_table::<H::Rela>(vaddr, size)? {
+                largest = largest.max(Some(r.r_sym(endian, false)));
+            }
+        }
+        for (vaddr, size) in [dynamic.rel, dynamic.jmprel_rel].into_iter().flatten() {
+            for r in self.relocation_table::<H::Rel>(vaddr, size)? {
+                largest = largest.max(Some(r.r_sym(endian)));
+            }
+        }
+        Ok(largest)
+    }
+
+    /// `len` bytes at virtual address `vaddr`, from a PT_LOAD's file-backed range only.
+    fn mapped(&self, vaddr: u64, len: u64) -> Result<&'d [u8], ()> {
+        match self.loads.place(vaddr, len) {
+            Place::File(offset) => self.data.read_bytes_at(offset, len),
+            Place::ZeroFill | Place::Unmapped => Err(()),
+        }
+    }
+
+    /// The 32-bit word at the start of `bytes`, in the file's byte order.
+    fn u32_of(&self, bytes: &[u8]) -> Result<u32, ()> {
+        let word: [u8; 4] = bytes.get(..4).ok_or(())?.try_into().map_err(|_| ())?;
+        Ok(self.endian.read_u32(word))
+    }
+
+    /// `DT_HASH`'s `nchain`: the number of symbols it covers.
+    fn sysv_hash_count(&self, vaddr: u64) -> Result<u64, ()> {
+        let header = self.mapped(vaddr, 8)?;
+        Ok(u64::from(self.u32_of(&header[4..])?))
+    }
+
+    /// What `DT_GNU_HASH` says about the symbols, read through the checkpoint (spec §3.2): its
+    /// `symoffset` (the symbols below it are in the table, unhashed), and the number a lookup
+    /// reaches, one past the end of the chain of its highest bucket, as object's
+    /// `GnuHashTable::symbol_table_length` counts it. No count when every bucket is empty: no
+    /// symbol is hashed. `Err`: the table cannot be read where the loader reads it, a non-empty
+    /// bucket is below `symoffset` (the loader would read before the chains), or the chain runs
+    /// out of its `PT_LOAD`'s file-backed range.
+    fn gnu_hash_count(&self, vaddr: u64) -> Result<(u64, Option<u64>), ()> {
+        let header = self.mapped(vaddr, 16)?;
+        let buckets = u64::from(self.u32_of(&header[0..])?);
+        let symoffset = u64::from(self.u32_of(&header[4..])?);
+        let bloom_words = u64::from(self.u32_of(&header[8..])?);
+        let word_size = if self.header.is_type_64() { 8 } else { 4 };
+        let buckets_at = bloom_words
+            .checked_mul(word_size)
+            .and_then(|bloom| vaddr.checked_add(16)?.checked_add(bloom))
+            .ok_or(())?;
+        let buckets_len = buckets.checked_mul(4).ok_or(())?;
+        let mut highest = 0;
+        for bucket in self.mapped(buckets_at, buckets_len)?.chunks_exact(4) {
+            let bucket = u64::from(self.u32_of(bucket)?);
+            // 0 is an empty bucket; any other is the first hashed symbol of its chain.
+            if bucket != 0 && bucket < symoffset {
+                return Err(());
+            }
+            highest = highest.max(bucket);
+        }
+        if highest == 0 {
+            return Ok((symoffset, None));
+        }
+        let chains_at = buckets_at.checked_add(buckets_len).ok_or(())?;
+        // The chain ends at the first value with bit 0 set; a chain that runs out of its
+        // PT_LOAD's file-backed range is a read that fails.
+        let mut index = highest;
+        loop {
+            let at = index
+                .checked_sub(symoffset)
+                .and_then(|n| n.checked_mul(4))
+                .and_then(|n| chains_at.checked_add(n))
+                .ok_or(())?;
+            let value = self.u32_of(self.mapped(at, 4)?)?;
+            index = index.checked_add(1).ok_or(())?;
+            if value & 1 != 0 {
+                return Ok((symoffset, Some(index)));
             }
         }
     }
@@ -722,17 +868,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         let mut out: BTreeMap<u64, Vec<(u32, i64)>> = BTreeMap::new();
         for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
-            let Place::File(offset) = self.loads.place(vaddr, size) else {
-                return Err("a relocation table is not file-backed".to_string());
-            };
-            let count = size / size_of::<H::Rela>() as u64;
-            let entries = self
-                .data
-                .read_slice_at::<H::Rela>(offset, count as usize)
-                .map_err(|()| {
-                    "a relocation table outside the file or over the budget".to_string()
-                })?;
-            for r in entries {
+            for r in self.relocation_table::<H::Rela>(vaddr, size)? {
                 let at: u64 = r.r_offset(endian).into();
                 if !wanted.contains(&at) {
                     continue;
