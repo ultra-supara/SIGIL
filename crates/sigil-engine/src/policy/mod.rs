@@ -53,10 +53,7 @@ impl ScopeInput {
                 .roots
                 .iter()
                 .any(|r| r.id.as_str() == sigil_model::INSTALL_ROOT),
-            binary: request
-                .roots
-                .iter()
-                .any(|r| sigil_model::is_binary_root(&r.id)),
+            binary: sigil_model::is_binary_inspection(request),
         }
     }
 }

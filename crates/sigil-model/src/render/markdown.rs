@@ -377,13 +377,8 @@ fn binary_facts(
 }
 
 fn models(out: &mut String, s: &Session) {
-    // A binary inspection has no model store.
-    if !s.request.roots.is_empty()
-        && s.request
-            .roots
-            .iter()
-            .all(|r| crate::binary_input::is_binary_root(&r.id))
-    {
+    // A binary inspection has no model store (B10).
+    if crate::binary_input::is_binary_inspection(&s.request) {
         return;
     }
     section(out, "Models");

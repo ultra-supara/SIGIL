@@ -8,7 +8,7 @@
 use crate::artifact::{FileInstance, Format, InstanceContent, NotReadReason, Stability};
 use crate::coverage::CoverageState;
 use crate::id::RootId;
-use crate::session::Session;
+use crate::session::{RunRequest, Session};
 use crate::text::UntrustedText;
 
 /// The check of a binary inspection: one entry per input, scope `Instance`.
@@ -48,6 +48,13 @@ pub fn is_binary_root(id: &RootId) -> bool {
     binary_root_index(id).is_some()
 }
 
+/// Whether `request` is a binary inspection's: it has a binary root. The one test of a binary
+/// session, for the policy scope, the validator, and the renderers alike; B10 makes every root of
+/// such a session a binary root.
+pub fn is_binary_inspection(request: &RunRequest) -> bool {
+    request.roots.iter().any(|r| is_binary_root(&r.id))
+}
+
 /// The `binary.container` state an input implies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedContainer {
@@ -55,6 +62,33 @@ pub enum ExpectedContainer {
     Exactly(CoverageState),
     /// `BudgetExceeded` over `binary_bytes` with this limit; its `used` is the engine's count.
     OverBytes { limit: u64 },
+}
+
+impl ExpectedContainer {
+    /// The state to record: `used` is the bytes hashed before the input, for `OverBytes`.
+    pub fn into_state(self, used: u64) -> CoverageState {
+        match self {
+            ExpectedContainer::Exactly(state) => state,
+            ExpectedContainer::OverBytes { limit } => CoverageState::BudgetExceeded {
+                budget: BINARY_BYTES.to_string(),
+                used,
+                limit,
+            },
+        }
+    }
+
+    /// Whether `state` is the one implied: exactly, or for `OverBytes` a `BudgetExceeded` over
+    /// `binary_bytes` with this limit and `used` at most the limit (B9).
+    pub fn admits(&self, state: &CoverageState) -> bool {
+        match self {
+            ExpectedContainer::Exactly(expected) => state == expected,
+            ExpectedContainer::OverBytes { limit } => matches!(
+                state,
+                CoverageState::BudgetExceeded { budget, used, limit: l }
+                    if budget == BINARY_BYTES && l == limit && used <= l
+            ),
+        }
+    }
 }
 
 /// What `i`'s read implies for `binary.container` (spec §4.3). `Err` for an input that cannot be

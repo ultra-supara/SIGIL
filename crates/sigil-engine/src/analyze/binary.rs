@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use sigil_model::{
-    expected_binary_container, is_binary_root, CheckId, Coverage, CoverageState, ExpectedContainer,
-    InstanceId, Ref, Session, BINARY_BYTES, BINARY_CONTAINER,
+    expected_binary_container, is_binary_root, CheckId, Coverage, ExpectedContainer, InstanceId,
+    Ref, Session, BINARY_CONTAINER,
 };
 
 /// The coverage of every input of `s`. `over`: the bytes hashed before each input that was over
@@ -16,14 +16,15 @@ pub fn analyze(s: &Session, over: &BTreeMap<InstanceId, u64>) -> Result<Vec<Cove
         .iter()
         .filter(|i| is_binary_root(&i.root))
         .map(|i| {
-            let state = match expected_binary_container(s, i)? {
-                ExpectedContainer::Exactly(state) => state,
-                ExpectedContainer::OverBytes { limit } => CoverageState::BudgetExceeded {
-                    budget: BINARY_BYTES.to_string(),
-                    used: over.get(&i.id).copied().unwrap_or(0),
-                    limit,
-                },
+            let expected = expected_binary_container(s, i)?;
+            let used = match expected {
+                ExpectedContainer::OverBytes { .. } => over
+                    .get(&i.id)
+                    .copied()
+                    .ok_or_else(|| format!("{}: over binary_bytes without a count", i.id))?,
+                ExpectedContainer::Exactly(_) => 0,
             };
+            let state = expected.into_state(used);
             Ok(Coverage {
                 check: check.clone(),
                 scope: Ref::Instance(i.id.clone()),

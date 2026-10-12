@@ -250,3 +250,121 @@ fn b10_a_session_with_a_binary_root_is_a_binary_inspection() {
     s.instances[0].discovered_by = vec![DiscoverySource::Walk];
     rejected_for(&s, "discovered by Argument only");
 }
+
+// --- Review of Part B ------------------------------------------------------------------------
+
+#[test]
+fn argument_is_only_for_a_binary_inspection_s_inputs() {
+    let mut s = store_and_runtime();
+    s.instances[0].discovered_by = vec![DiscoverySource::Argument];
+    rejected_for(&s, "discovered by Argument outside a binary inspection");
+}
+
+#[test]
+fn b9_a_coverage_on_a_real_instance_of_another_root_is_refused() {
+    let mut s = store_and_runtime();
+    let other = s.instances[0].id.clone();
+    s.coverage.push(coverage(
+        BINARY_CONTAINER,
+        Ref::Instance(other),
+        CoverageState::Complete,
+    ));
+    rejected_for(&s, "not a binary input");
+}
+
+#[test]
+fn b10_a_binary_inspection_has_no_model_and_reads_no_environment() {
+    let mut s = valid();
+    s.models = store_and_runtime().models;
+    rejected_for(&s, "has no model");
+    let mut s = valid();
+    s.request.observe_env = true;
+    rejected_for(&s, "reads no process environment");
+}
+
+#[test]
+fn b10_the_binary_root_prefix_is_reserved() {
+    for name in ["binary-01", "binary-0", "binary-x"] {
+        let mut s = valid();
+        s.request.roots.push(ScanRoot {
+            id: id(name),
+            path: t("/x"),
+        });
+        rejected_for(&s, "is reserved for binary-<n>");
+    }
+}
+
+#[test]
+fn b9_an_elf_without_facts_is_not_parsed() {
+    let without_facts = |state: CoverageState| {
+        let mut s = valid();
+        s.binaries.clear();
+        s.relations.clear();
+        *state_of(&mut s, ELF_INPUT) = state;
+        s
+    };
+    rejected_for(
+        &without_facts(CoverageState::Complete),
+        "but the input implies",
+    );
+    let s = without_facts(CoverageState::Partial {
+        missing: vec![BINARY_NOT_PARSED.to_string()],
+    });
+    assert_eq!(s.validate(), Ok(()));
+}
+
+#[test]
+fn b9_a_read_that_saw_a_change_or_a_removal_is_an_error() {
+    let read = |stability: Stability, message: &str| {
+        let mut s = valid();
+        s.binaries.clear();
+        s.relations.clear();
+        s.instances
+            .iter_mut()
+            .find(|i| i.id.as_str() == ELF_INPUT)
+            .unwrap()
+            .stability = stability;
+        *state_of(&mut s, ELF_INPUT) = CoverageState::Error {
+            message: t(message),
+        };
+        s
+    };
+    assert_eq!(
+        read(Stability::ChangedDuringRead, BINARY_CHANGED).validate(),
+        Ok(())
+    );
+    assert_eq!(
+        read(Stability::Vanished, BINARY_VANISHED).validate(),
+        Ok(())
+    );
+    rejected_for(
+        &read(Stability::Vanished, BINARY_CHANGED),
+        "but the input implies",
+    );
+}
+
+#[test]
+fn b9_used_may_equal_the_limit() {
+    let mut s = valid();
+    s.artifacts.retain(|a| a.format != Format::Other);
+    s.instances
+        .iter_mut()
+        .find(|i| i.id.as_str() == TEXT_INPUT)
+        .unwrap()
+        .content = InstanceContent::NotRead {
+        why: NotReadReason::BudgetExceeded,
+    };
+    let limit = 64u64 << 30;
+    *state_of(&mut s, TEXT_INPUT) = CoverageState::BudgetExceeded {
+        budget: BINARY_BYTES.to_string(),
+        used: limit,
+        limit,
+    };
+    assert_eq!(s.validate(), Ok(()));
+}
+
+#[test]
+fn is_binary_inspection_is_the_one_test_of_a_binary_session() {
+    assert!(is_binary_inspection(&binary_inspect().request));
+    assert!(!is_binary_inspection(&store_and_runtime().request));
+}

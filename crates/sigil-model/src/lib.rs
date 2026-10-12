@@ -59,9 +59,9 @@ pub use binary::{
     GoSetting, ARTIFACTS_CONTAINER,
 };
 pub use binary_input::{
-    binary_root, binary_root_index, expected_binary_container, is_binary_root, ExpectedContainer,
-    BINARY_BYTES, BINARY_CHANGED, BINARY_CONTAINER, BINARY_NOT_PARSED, BINARY_ROOT_PREFIX,
-    BINARY_UNSUPPORTED, BINARY_VANISHED,
+    binary_root, binary_root_index, expected_binary_container, is_binary_inspection,
+    is_binary_root, ExpectedContainer, BINARY_BYTES, BINARY_CHANGED, BINARY_CONTAINER,
+    BINARY_NOT_PARSED, BINARY_ROOT_PREFIX, BINARY_UNSUPPORTED, BINARY_VANISHED,
 };
 pub use code::{
     ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,
