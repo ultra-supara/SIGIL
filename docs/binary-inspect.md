@@ -58,8 +58,11 @@ a path that is:
 - a directory, a FIFO, or a device;
 - a file SIGIL may `lstat` but not open;
 - a file with a non-UTF-8 name;
-- a file replaced between its resolution and its opening: by a symlink, or by another file. The
-  file opened, read or over budget, must be the one at its path just before, by `dev:ino`;
+- a file replaced after it was resolved and before it is opened, also while the inputs before
+  it are read: by a symlink, or by another file. The file opened, read or over budget, must be
+  the one resolved, by `dev:ino`. A new file that reuses the inode number of the one it replaced
+  is not told apart; on a file system whose inode numbers are not stable (some FUSE file
+  systems), an unchanged file can be refused;
 - a file whose directory was replaced after it was resolved. The directory is opened from `/`
   without following a symlink.
 
