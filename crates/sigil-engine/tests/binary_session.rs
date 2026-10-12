@@ -1,6 +1,8 @@
 //! The assembled binary inspection (PR-4b-2a spec §4.3, §4.5): it validates, evaluates its
 //! policy's binary scope, and has exactly one `binary.container` per input.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use sigil_engine::collect::named::NamedBudgets;
@@ -109,6 +111,67 @@ fn an_unsupported_input_is_incomplete_and_passes() {
     assert!(matches!(
         s.outcome.completeness,
         Completeness::Incomplete { .. }
+    ));
+}
+
+#[test]
+fn compiled_java_class_versions_are_unsupported_not_fat_macho() {
+    let d = TempDir::new().unwrap();
+    let versions = [
+        (
+            "java8.class",
+            include_str!("fixtures/macho/java8.class.hex"),
+        ),
+        (
+            "java17.class",
+            include_str!("fixtures/macho/java17.class.hex"),
+        ),
+        (
+            "java21.class",
+            include_str!("fixtures/macho/java21.class.hex"),
+        ),
+    ];
+    let paths: Vec<PathBuf> = versions
+        .iter()
+        .map(|(name, bytes)| {
+            let path = d.path().join(name);
+            std::fs::write(&path, common::macho::decode_hex(bytes)).unwrap();
+            path
+        })
+        .collect();
+    let s = session(&paths).unwrap();
+    for name in ["java8.class", "java17.class", "java21.class"] {
+        assert_eq!(
+            state(
+                &s,
+                &format!(
+                    "inst:binary-{}/{}",
+                    paths
+                        .iter()
+                        .position(|p| p.file_name().unwrap() == name)
+                        .unwrap()
+                        + 1,
+                    name
+                )
+            ),
+            CoverageState::Unsupported {
+                what: BINARY_UNSUPPORTED.to_string()
+            }
+        );
+    }
+}
+
+#[test]
+fn a_malformed_fat_macho_remains_partial_in_binary_inspect() {
+    let d = TempDir::new().unwrap();
+    let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 1];
+    bytes.extend_from_slice(&[0; 8]);
+    let path = d.path().join("truncated-fat");
+    std::fs::write(&path, bytes).unwrap();
+    let s = session(&[path]).unwrap();
+    assert!(matches!(
+        state(&s, "inst:binary-1/truncated-fat"),
+        CoverageState::Partial { .. }
     ));
 }
 

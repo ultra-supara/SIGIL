@@ -41,6 +41,11 @@ Under the default policy, any status other than `Complete` makes the result `INC
 holds for any policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
 `binary_audit = []` requires nothing, and the result is then `COMPLETE` whatever the statuses.
 
+The fat Mach-O magic also begins a Java class file. SIGIL treats a structurally valid fat
+architecture table as Mach-O; when that table is invalid but the file has a valid Java class
+header and constant pool, it is treated as an unsupported format. This resolves the shared-magic
+ambiguity in favor of a valid fat table.
+
 No rule judges binaries yet, so the verdict is `PASS`. Use `--fail-on-incomplete` (exit 4) to
 fail on an unsupported or partial input.
 

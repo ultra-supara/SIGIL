@@ -1595,7 +1595,7 @@ impl<'a> Validator<'a> {
         if matches!(state(ARTIFACTS_CONTAINER), Some(CoverageState::Complete)) {
             let discovery = matches!(state(ARTIFACTS_DISCOVERY), Some(CoverageState::Complete));
             let install = RootId::new(INSTALL_ROOT).ok();
-            let elfs: BTreeSet<&SliceId> = s
+            let install_binaries: Vec<_> = s
                 .instances
                 .iter()
                 .filter(|i| Some(&i.root) == install.as_ref())
@@ -1612,17 +1612,24 @@ impl<'a> Validator<'a> {
                             | crate::artifact::Format::MachOFat
                     )
                 })
-                .flat_map(|a| a.slices.iter().map(|x| &x.id))
                 .collect();
-            let covered = elfs
+            let has_slices = install_binaries
                 .iter()
-                .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
+                .all(|artifact| !artifact.slices.is_empty());
+            let slices: BTreeSet<&SliceId> = install_binaries
+                .iter()
+                .flat_map(|artifact| artifact.slices.iter().map(|slice| &slice.id))
+                .collect();
+            let covered = has_slices
+                && slices
+                    .iter()
+                    .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
             let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
             if !(discovery && covered && clean) {
                 self.errors.push(ValidationError::Binary {
                     slice: "*".to_string(),
                     why: format!(
-                        "{ARTIFACTS_CONTAINER} is Complete, but discovery is not Complete, an install binary slice has no facts, or a gap remains"
+                        "{ARTIFACTS_CONTAINER} is Complete, but discovery is not Complete, an install binary has no slices or a slice has no facts, or a gap remains"
                     ),
                 });
             }

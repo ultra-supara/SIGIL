@@ -273,6 +273,18 @@ fn b7_complete_needs_facts_for_every_install_elf_and_no_gap() {
 }
 
 #[test]
+fn b7_complete_rejects_a_recognized_install_artifact_without_slices() {
+    let mut s = base();
+    s.artifacts[0].format = sigil_model::Format::MachOFat;
+    s.artifacts[0].slices.clear();
+    s.binaries.clear();
+    s.relations
+        .retain(|relation| !matches!(relation, Relation::Declares { .. }));
+    s.canonicalize();
+    rejected_for(&s, "has no slices");
+}
+
+#[test]
 fn b8_stripped_is_unknown_exactly_with_a_sections_gap() {
     let mut s = base();
     elf(&mut s).stripped = None;

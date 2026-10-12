@@ -14,6 +14,11 @@ const MAX_LOAD_COMMAND_BYTES: u64 = 8 << 20;
 const MAX_NAMES: usize = 1_024;
 const MAX_NAME_BYTES: usize = 4_096;
 const LC_REQ_DYLD: u32 = 0x8000_0000;
+const LC_LOAD_WEAK_DYLIB: u32 = LC_REQ_DYLD | 0x18;
+const LC_RPATH: u32 = LC_REQ_DYLD | 0x1c;
+const LC_REEXPORT_DYLIB: u32 = LC_REQ_DYLD | 0x1f;
+const LC_LOAD_UPWARD_DYLIB: u32 = LC_REQ_DYLD | 0x23;
+const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
 
 #[derive(Clone, Copy)]
 enum ByteOrder {
@@ -105,6 +110,63 @@ fn recognized(prefix: &[u8]) -> Option<Format> {
     } else {
         None
     }
+}
+
+fn java_class<R: ReadCacheOps>(data: &Bounded<R>, size: u64) -> bool {
+    let Ok(header) = range(data, 0, size, 0, 10) else {
+        return false;
+    };
+    if header[..4] != [0xca, 0xfe, 0xba, 0xbe] {
+        return false;
+    }
+    let minor = u16::from_be_bytes([header[4], header[5]]);
+    let major = u16::from_be_bytes([header[6], header[7]]);
+    if major < 45 || (major >= 56 && minor != 0 && minor != u16::MAX) {
+        return false;
+    }
+    let constant_pool_count = usize::from(u16::from_be_bytes([header[8], header[9]]));
+    if constant_pool_count == 0 {
+        return false;
+    }
+
+    let mut offset = 10u64;
+    let mut index = 1usize;
+    while index < constant_pool_count {
+        let Ok(tag_bytes) = range(data, 0, size, offset, 1) else {
+            return false;
+        };
+        let tag = tag_bytes[0];
+        let payload_size = match tag {
+            1 => {
+                let Ok(length_bytes) = range(data, 0, size, offset + 1, 2) else {
+                    return false;
+                };
+                let length = u64::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+                if range(data, 0, size, offset + 3, length).is_err() {
+                    return false;
+                }
+                3 + length
+            }
+            3 | 4 => 5,
+            5 | 6 => {
+                if index + 1 >= constant_pool_count {
+                    return false;
+                }
+                index += 1;
+                9
+            }
+            7 | 8 | 16 | 19 | 20 => 3,
+            9 | 10 | 11 | 12 | 17 | 18 => 5,
+            15 => 4,
+            _ => return false,
+        };
+        if range(data, 0, size, offset, payload_size).is_err() {
+            return false;
+        }
+        offset += payload_size;
+        index += 1;
+    }
+    range(data, 0, size, offset, 6).is_ok()
 }
 
 fn u32_at<R: object::read::ReadCacheOps>(
@@ -338,14 +400,18 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                 commands[offset + 7],
             ]),
         } as usize;
-        if cmdsize < 8 || cmdsize > commands.len().saturating_sub(offset) {
+        let alignment = if header.is_64 { 8 } else { 4 };
+        if cmdsize < 8
+            || !cmdsize.is_multiple_of(alignment)
+            || cmdsize > commands.len().saturating_sub(offset)
+        {
             gaps.push("load commands: invalid command size".to_string());
             break;
         }
         let bytes = &commands[offset..offset + cmdsize];
-        let plain_cmd = cmd & !LC_REQ_DYLD;
-        match plain_cmd {
-            0x0c | 0x18 | 0x1f | 0x20 | 0x23 => {
+        let mut stop_after_command = false;
+        match cmd {
+            0x0c | LC_LOAD_WEAK_DYLIB | LC_REEXPORT_DYLIB | 0x20 | LC_LOAD_UPWARD_DYLIB => {
                 if cmdsize < 24 {
                     gaps.push("load dylib: command is too short".to_string());
                 } else {
@@ -384,7 +450,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                     }
                 }
             }
-            0x1c => {
+            LC_RPATH => {
                 if cmdsize < 12 {
                     gaps.push("rpath: command is too short".to_string());
                 } else {
@@ -414,9 +480,16 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                     facts.uuid = Some(uuid);
                 }
             }
+            _ if cmd & LC_REQ_DYLD != 0 => {
+                gaps.push(format!("load commands: unknown required command {cmd:#x}"));
+                stop_after_command = true;
+            }
             _ => {}
         }
         offset = offset.saturating_add(cmdsize);
+        if stop_after_command {
+            break;
+        }
     }
     if offset != commands.len() {
         gaps.push("load commands: command count does not cover sizeofcmds".to_string());
@@ -672,7 +745,10 @@ fn fat_slice_facts<R: ReadCacheOps>(
         facts.fat_cpu_type = Some(descriptor.cpu_type);
         facts.fat_cpu_subtype = Some(descriptor.cpu_subtype);
         facts.fat_alignment = Some(descriptor.alignment);
-        if facts.cpu_type != descriptor.cpu_type || facts.cpu_subtype != descriptor.cpu_subtype {
+        if facts.cpu_type != descriptor.cpu_type
+            || (facts.cpu_subtype as u32 & !CPU_SUBTYPE_MASK)
+                != (descriptor.cpu_subtype as u32 & !CPU_SUBTYPE_MASK)
+        {
             parsed
                 .gaps
                 .push("fat slice: CPU type or subtype disagrees with its header".to_string());
@@ -704,6 +780,12 @@ pub(super) fn parse_artifact(
     let format = recognized(&magic)?;
     let data = Bounded::new(Budgeted::new(file, size), size, budgets.parse_bytes);
     let mut slices = vec![];
+    let fat_parsed = fat_magic(&magic).map(|fat| parse_fat(&data, size, fat));
+    if let Some((descriptors, gaps)) = &fat_parsed {
+        if (!gaps.is_empty() || descriptors.is_empty()) && java_class(&data, size) {
+            return None;
+        }
+    }
     match format {
         Format::MachO => {
             if let Ok((slice_arch, parsed)) = parse_thin(&data, 0, size) {
@@ -718,8 +800,7 @@ pub(super) fn parse_artifact(
             }
         }
         Format::MachOFat => {
-            let fat = fat_magic(&magic)?;
-            let (descriptors, mut gaps) = parse_fat(&data, size, fat);
+            let (descriptors, mut gaps) = fat_parsed?;
             for descriptor in descriptors {
                 let expected_arch = arch(descriptor.cpu_type);
                 let digest = match hash_range(file, descriptor.offset, descriptor.size) {
