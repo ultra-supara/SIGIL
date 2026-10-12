@@ -9,8 +9,10 @@ pub fn decode_hex(input: &str) -> Vec<u8> {
         .filter(|byte| !byte.is_ascii_whitespace())
         .collect();
     assert!(digits.len().is_multiple_of(2));
-    digits
-        .chunks_exact(2)
+    let (pairs, remainder) = digits.as_chunks::<2>();
+    assert!(remainder.is_empty());
+    pairs
+        .iter()
         .map(|pair| {
             let high = (pair[0] as char).to_digit(16).unwrap();
             let low = (pair[1] as char).to_digit(16).unwrap();
