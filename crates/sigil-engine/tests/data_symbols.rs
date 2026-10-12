@@ -209,6 +209,54 @@ fn a_known_symbol_defined_twice_has_no_single_value() {
     );
 }
 
+/// The `.dynsym` entry (its file offset) of the symbol named `name`, in an ELF64 little-endian
+/// file.
+fn dynsym_entry(bytes: &[u8], name: &[u8]) -> usize {
+    let secs = sections64(bytes);
+    let (_, _, _, sym_off, sym_size, link) =
+        secs.iter().find(|s| s.1 == SHT_DYNSYM).unwrap().clone();
+    let str_off = secs[link as usize].3 as usize;
+    (sym_off as usize..(sym_off + sym_size) as usize)
+        .step_by(24)
+        .find(|e| {
+            let at = str_off + u32::from_le_bytes(bytes[*e..*e + 4].try_into().unwrap()) as usize;
+            bytes[at..].starts_with(name) && bytes[at + name.len()] == 0
+        })
+        .unwrap()
+}
+
+/// Spec §3.3: a known name is looked for in every defined symbol, whatever its type.
+#[test]
+fn a_known_name_of_another_type_is_unknown_never_absent() {
+    // LLAMA_COMMIT typed STT_FUNC.
+    let mut bytes = fixture("elf/libdata.so");
+    let e = dynsym_entry(&bytes, b"LLAMA_COMMIT");
+    bytes[e + 4] = (bytes[e + 4] & 0xf0) | 2;
+    let (v, p) = values(&bytes);
+    let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+    assert!(
+        unknown_with(commit, "not a data object (STT_FUNC)"),
+        "{commit:?}"
+    );
+    assert!(
+        p.gaps
+            .contains(&"LLAMA_COMMIT: not a data object (STT_FUNC)".to_string()),
+        "{:?}",
+        p.gaps
+    );
+
+    // A second definition of LLAMA_COMMIT typed STT_NOTYPE (LLAMA_COMPILER renamed).
+    let mut bytes = fixture("elf/libdata.so");
+    let commit = dynsym_entry(&bytes, b"LLAMA_COMMIT");
+    let compiler = dynsym_entry(&bytes, b"LLAMA_COMPILER");
+    let st_name = bytes[commit..commit + 4].to_vec();
+    bytes[compiler..compiler + 4].copy_from_slice(&st_name);
+    bytes[compiler + 4] &= 0xf0;
+    let (v, _) = values(&bytes);
+    let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+    assert!(unknown_with(commit, "more than once"), "{v:?}");
+}
+
 /// The review of the PR-4b-1 plan: the loader walks a relocation table up to its size, so a size
 /// that is not a whole number of entries ends in a partial entry SIGIL would not see, and an entry
 /// size other than `Elf64_Rela`'s is refused by the loader. Each is a gap, and the values that

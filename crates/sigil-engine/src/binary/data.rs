@@ -41,7 +41,7 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 ) -> Vec<DataSymbol> {
     let endian = e.endian;
     // At most one entry per known name: a name defined twice has no single value.
-    let mut found: Vec<(&str, Kind, u64, u64)> = vec![];
+    let mut found: Vec<(&str, Kind, u64, u64, elf::SymbolType)> = vec![];
     let mut twice: BTreeSet<&str> = BTreeSet::new();
     let mut unnamed = None;
     // The symbols' string table, read for names no longer than the longest known one.
@@ -53,7 +53,9 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         .and_then(|s| s.file_range(endian));
     let longest = KNOWN.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for sym in symbols.symbols() {
-        if sym.st_shndx(endian) == elf::SHN_UNDEF || sym.st_type() != elf::STT_OBJECT {
+        // Every defined symbol, whatever its type: a known name defined twice has no single
+        // value, even if one definition is a function (spec §3.3).
+        if sym.st_shndx(endian) == elf::SHN_UNDEF {
             continue;
         }
         // A name that cannot be read could be a known one: a gap, never a silent skip.
@@ -77,12 +79,13 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             }
             let addr: u64 = sym.st_value(endian).into();
             let size: u64 = sym.st_size(endian).into();
-            found.push((n, *kind, addr, size));
+            found.push((n, *kind, addr, size, sym.st_type()));
         }
     }
     if let Some(why) = unnamed {
-        e.gaps
-            .push(format!("malformed: symbols: a data symbol's name: {why}"));
+        e.gaps.push(format!(
+            "malformed: symbols: a defined symbol's name: {why}"
+        ));
     }
     if found.is_empty() {
         return vec![];
@@ -96,9 +99,12 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         e.relocations(dynamic, &wanted)
     };
     let mut out = vec![];
-    for (name, kind, addr, size) in found {
+    for (name, kind, addr, size, st_type) in found {
         let value = match &relocs {
             _ if twice.contains(name) => Err("defined more than once".to_string()),
+            _ if st_type != elf::STT_OBJECT => {
+                Err(format!("not a data object ({})", symbol_type(st_type)))
+            }
             _ if relocatable => Err("not linked yet (a relocatable object)".to_string()),
             Err(why) => Err(format!("relocations not read: {why}")),
             Ok(map) => value(e, kind, addr, size, map, dynamic),
@@ -145,6 +151,22 @@ fn type_name(machine: elf::Machine, t: u32) -> String {
         (elf::EM_AARCH64, 1026) => "R_AARCH64_JUMP_SLOT",
         (elf::EM_AARCH64, 1027) => "R_AARCH64_RELATIVE",
         _ => return format!("type {t}"),
+    };
+    name.to_string()
+}
+
+/// A symbol type's name, for the reason.
+fn symbol_type(t: elf::SymbolType) -> String {
+    let name = match t {
+        elf::STT_NOTYPE => "STT_NOTYPE",
+        elf::STT_OBJECT => "STT_OBJECT",
+        elf::STT_FUNC => "STT_FUNC",
+        elf::STT_SECTION => "STT_SECTION",
+        elf::STT_FILE => "STT_FILE",
+        elf::STT_COMMON => "STT_COMMON",
+        elf::STT_TLS => "STT_TLS",
+        elf::STT_GNU_IFUNC => "STT_GNU_IFUNC",
+        _ => return format!("type {}", t.0),
     };
     name.to_string()
 }

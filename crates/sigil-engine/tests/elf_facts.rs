@@ -855,9 +855,28 @@ fn a_data_symbol_whose_name_cannot_be_read_is_a_gap() {
     assert!(
         p.gaps
             .iter()
-            .any(|g| g.starts_with("malformed: symbols: a data symbol's name")),
+            .any(|g| g.starts_with("malformed: symbols: a defined symbol's name")),
         "{:?}",
         p.gaps
+    );
+}
+
+/// Spec §3.3: a function whose name cannot be read could be a second definition of a known name.
+#[test]
+fn a_defined_symbol_whose_name_cannot_be_read_is_a_gap_whatever_its_type() {
+    let mut img = ElfImage::new(1); // ET_REL
+    let names = b"\0exported\0";
+    let mut syms = vec![0u8; 24];
+    syms.extend_from_slice(&sym64(1, 0x12, 1, 0, 1)); // GLOBAL FUNC "exported"
+    syms.extend_from_slice(&sym64(0xffff, 0x12, 1, 0, 1)); // GLOBAL FUNC, name out of range
+    let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+    img.put(sym_off, &syms).put(str_off, names);
+    img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+        .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+    let (_, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(
+        p.gaps,
+        ["malformed: symbols: a defined symbol's name: a name past its string table"]
     );
 }
 
@@ -925,12 +944,13 @@ fn a_long_valid_name_is_no_gap_and_an_unterminated_one_is() {
     assert!(
         gaps.iter()
             .any(|g| g
-                .starts_with("malformed: symbols: a data symbol's name: a name not terminated")),
+                .starts_with("malformed: symbols: a defined symbol's name: a name not terminated")),
         "{gaps:?}"
     );
     // One byte longer than the longest known name (18 bytes), cut by the end of the table:
     // malformed, never "longer than any known name" (review of rev. 2, P2-1).
-    let cut = "malformed: symbols: a data symbol's name: a name not terminated in its string table";
+    let cut =
+        "malformed: symbols: a defined symbol's name: a name not terminated in its string table";
     let gaps = symtab(b"\0exported\0LLAMA_BUILD_NUMBERX");
     assert!(gaps.iter().any(|g| g == cut), "{gaps:?}");
 }
