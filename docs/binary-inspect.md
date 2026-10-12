@@ -58,8 +58,12 @@ a path that is:
 - a directory, a FIFO, or a device;
 - a file SIGIL may `lstat` but not open;
 - a file with a non-UTF-8 name;
-- a file replaced after it was resolved: by a symlink, or by another file (the file read must
-  be the one resolved, by `dev:ino`).
+- a file replaced between its resolution and its opening: by a symlink, or by another file. The
+  file opened, read or over budget, must be the one at its path just before, by `dev:ino`;
+- a file whose directory was replaced after it was resolved. The directory is opened from `/`
+  without following a symlink.
+
+A file changed or replaced while it is read is not fatal: it is recorded, with `Error`.
 
 Inputs are read one at a time, so the number of inputs does not raise the number of open file
 descriptors. An input's directory is opened only to reach the input by name, never listed, so a
@@ -84,11 +88,12 @@ Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them
 - **Replaced, never written through.** SIGIL writes a new file next to that path, readable by
   its owner only, and exchanges it with the existing file. An existing file there is replaced,
   never written through, and its mode and owner are not kept. An input displaced by the
-  exchange is put back, and the run fails.
-- **A crash before the put-back.** The exchange and the put-back are two system calls. A run
-  killed between them leaves the input next to `--out`, at `.<name>.sigil-<pid>-<k>.tmp`, with
-  its contents intact: rename it back. An input is at `--out` then only if another process moved
-  it there after `--out` was checked.
+  exchange is put back, and the run fails. An existing directory at `--out` is refused (exit 2).
+- **Killed after the exchange.** The exchange and the put-back are two system calls. A run
+  killed between them leaves the input in the output's directory, at
+  `.<name>.sigil-<pid>-<k>.tmp` (`<name>`: the output's file name, at most its first 200 bytes),
+  with its contents intact: rename it back over the document. An input is at `--out` then only
+  if another process moved or linked it there after `--out` was checked.
 - **File systems without the exchange.** On a file system that cannot exchange files
   (`RENAME_EXCHANGE`), `--out` must name a file that does not exist yet.
 
