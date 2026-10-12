@@ -43,12 +43,18 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     // At most one entry per known name: a name defined twice has no single value.
     let mut found: Vec<(&str, Kind, u64, u64)> = vec![];
     let mut twice: BTreeSet<&str> = BTreeSet::new();
+    let mut unnamed = None;
     for sym in symbols.symbols() {
         if sym.st_shndx(endian) == elf::SHN_UNDEF || sym.st_type() != elf::STT_OBJECT {
             continue;
         }
-        let Ok(name) = sym.name(endian, symbols.strings()) else {
-            continue;
+        // A name that cannot be read could be a known one: a gap, never a silent skip.
+        let name = match sym.name(endian, symbols.strings()) {
+            Ok(name) => name,
+            Err(e) => {
+                unnamed.get_or_insert(e);
+                continue;
+            }
         };
         if let Some((n, kind)) = KNOWN.iter().find(|(n, _)| n.as_bytes() == name) {
             if found.iter().any(|f| f.0 == *n) {
@@ -59,6 +65,10 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             let size: u64 = sym.st_size(endian).into();
             found.push((n, *kind, addr, size));
         }
+    }
+    if let Some(why) = unnamed {
+        e.gaps
+            .push(format!("malformed: symbols: a data symbol's name: {why}"));
     }
     if found.is_empty() {
         return vec![];

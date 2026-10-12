@@ -465,3 +465,27 @@ fn a_relocatable_object_s_symtab_follows_the_dynsym_rules_and_keeps_known_symbol
         ["LLAMA_COMMIT: not linked yet (a relocatable object)"]
     );
 }
+
+/// Review of #89 (P2): a defined data symbol whose name cannot be read (its `st_name` past the
+/// string table) is a gap, never skipped silently: it could be a known data symbol.
+#[test]
+fn a_data_symbol_whose_name_cannot_be_read_is_a_gap() {
+    let mut img = ElfImage::new(1); // ET_REL
+    let names = b"\0exported\0";
+    let mut syms = vec![0u8; 24];
+    syms.extend_from_slice(&sym64(1, 0x12, 1, 0, 1)); // GLOBAL FUNC "exported"
+    syms.extend_from_slice(&sym64(0xffff, 0x11, 1, 0, 8)); // GLOBAL OBJECT, name out of range
+    let (sym_off, str_off) = (0x1000u64, 0x2000u64);
+    img.put(sym_off, &syms).put(str_off, names);
+    img.sec_linked(".symtab", SHT_SYMTAB, sym_off, 0, syms.len() as u64, 2, 24)
+        .sec(".strtab", SHT_STRTAB, str_off, 0, names.len() as u64);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert!(f.data.is_empty());
+    assert!(
+        p.gaps
+            .iter()
+            .any(|g| g.starts_with("malformed: symbols: a data symbol's name")),
+        "{:?}",
+        p.gaps
+    );
+}
