@@ -97,6 +97,9 @@ fn rel_or_relr_and_unrelocated_position_independent_pointers_are_unknown() {
     assert!(unknown_with(commit, "position-independent"), "{commit:?}");
 }
 
+/// Another machine's relocations are not read, and how many bytes they write is not known: every
+/// value after one is `Unknown`, LLAMA_BUILD_NUMBER (0x4018, after the RELATIVE at 0x4010) too
+/// (review of #91, P1-2).
 #[test]
 fn another_machine_s_relocations_are_not_read() {
     let mut bytes = fixture("elf/libdata.so");
@@ -105,8 +108,7 @@ fn another_machine_s_relocations_are_not_read() {
     assert_eq!(v.len(), 4, "{v:?}");
     assert!(
         v.iter()
-            .filter(|(s, _)| s != "LLAMA_BUILD_NUMBER")
-            .all(|(_, x)| unknown_with(x, "not read")),
+            .all(|(_, x)| unknown_with(x, "relocations of machine 22 are not read")),
         "{v:?}"
     );
 }
@@ -295,6 +297,78 @@ fn a_relocation_overlapping_a_value_or_its_string_makes_it_unknown() {
     let (v, _) = values(&bytes);
     assert_eq!(v.len(), 4, "{v:?}");
     assert!(v.iter().all(|(_, x)| unknown_with(x, "REL/RELR")), "{v:?}");
+}
+
+/// Review of #91 (P1-2): a relocation writes as many bytes as its type does, not a word. In
+/// libdata.so the RELATIVE at 0x4010 (`__dso_handle`) is retyped; LLAMA_BUILD_NUMBER is the 4-byte
+/// int at 0x4018, LLAMA_BUILD_TARGET's pointer is at 0x4020, and LLAMA_COMMIT's at 0x4030.
+#[test]
+fn a_relocation_writes_as_many_bytes_as_its_type_does() {
+    // That relocation at `r_offset`, of type `r_type`, naming symbol `sym`; LLAMA_COMPILER
+    // (symbol 8) made 16 bytes long.
+    let with = |r_offset: u64, r_type: u32, sym: u64| {
+        let mut bytes = fixture("elf/libdata.so");
+        let entry = relative_entry(&bytes, 0x4010, 0x4010);
+        bytes[entry..entry + 8].copy_from_slice(&r_offset.to_le_bytes());
+        bytes[entry + 8..entry + 16]
+            .copy_from_slice(&((sym << 32) | u64::from(r_type)).to_le_bytes());
+        let compiler = dynsym_entry(&bytes, b"LLAMA_COMPILER");
+        bytes[compiler + 16..compiler + 24].copy_from_slice(&16u64.to_le_bytes());
+        values(&bytes)
+    };
+    let value = |v: &[(String, DataValue)], name: &str| {
+        v.iter().find(|(s, _)| s == name).unwrap().1.clone()
+    };
+    // A COPY of symbol 8 writes its 16 bytes, 0x4010..0x4020: over the int, short of the pointers.
+    let (v, p) = with(0x4010, R_X86_64_COPY, 8);
+    assert!(
+        unknown_with(
+            &value(&v, "LLAMA_BUILD_NUMBER"),
+            "a relocation overlaps it (R_X86_64_COPY)"
+        ),
+        "{v:?}"
+    );
+    assert_eq!(value(&v, "LLAMA_BUILD_TARGET"), text("x86_64-linux-gnu"));
+    assert!(
+        p.gaps
+            .contains(&"LLAMA_BUILD_NUMBER: a relocation overlaps it (R_X86_64_COPY)".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    // A TLSDESC writes two words, 0x4010..0x4020.
+    let (v, _) = with(0x4010, R_X86_64_TLSDESC, 0);
+    assert!(
+        unknown_with(
+            &value(&v, "LLAMA_BUILD_NUMBER"),
+            "a relocation overlaps it (R_X86_64_TLSDESC)"
+        ),
+        "{v:?}"
+    );
+    assert_eq!(value(&v, "LLAMA_BUILD_TARGET"), text("x86_64-linux-gnu"));
+    // A COPY naming a symbol past .dynsym: no size bounds it, so it reaches every value after it.
+    let (v, p) = with(0x4010, R_X86_64_COPY, 99);
+    assert!(
+        v.iter()
+            .all(|(_, x)| matches!(x, DataValue::Unknown { .. })),
+        "{v:?}"
+    );
+    assert_eq!(
+        value(&v, "LLAMA_COMMIT"),
+        DataValue::Unknown {
+            why: "relocated more than once".to_string()
+        }
+    );
+    assert!(
+        p.gaps.contains(
+            &"symbols: a relocation names symbol 99 past .dynsym's 13 entries".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+    // A NONE writes nothing: at the int, the int is still read, with no gap.
+    let (v, p) = with(0x4018, R_X86_64_NONE, 0);
+    assert_eq!(value(&v, "LLAMA_BUILD_NUMBER"), DataValue::Int(1));
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
 }
 
 /// The review of the PR-4b-1 plan: the loader walks a relocation table up to its size, so a size

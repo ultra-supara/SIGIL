@@ -953,24 +953,26 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
 
     /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA) whose
     /// written bytes overlap each of `ranges` (`[start, end)`), in `ranges`' order (spec §3.4).
-    /// A relocation is taken to write a word (8 bytes, 4 for ELF32): a narrower one can only make
-    /// a value `Unknown`. At most two are kept per range: two are already "more than once". Only
-    /// those are kept, so a large table costs no more than its read.
+    /// Each writes from its offset as many bytes as its type does ([`Self::write_extent`]). At
+    /// most two are kept per range: two are already "more than once". Only those are kept, so a
+    /// large table costs no more than its read.
     pub(crate) fn relocations(
         &self,
         dynamic: &Dynamic,
+        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
         ranges: &[(u64, u64)],
     ) -> Result<Vec<Vec<Reloc>>, String> {
         let endian = self.endian;
         if let Some(why) = &dynamic.rela_malformed {
             return Err(why.clone());
         }
-        let word = if self.header.is_type_64() { 8 } else { 4 };
         let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
         for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
             for r in self.relocation_table::<H::Rela>(vaddr, size)? {
                 let at: u64 = r.r_offset(endian).into();
-                let end = at.saturating_add(word);
+                let extent =
+                    self.write_extent(r.r_type(endian, false), r.r_sym(endian, false), symbols);
+                let end = extent.map_or(u64::MAX, |n| at.saturating_add(n));
                 for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
                     if at < *stop && *start < end && hits.len() < 2 {
                         hits.push((at, r.r_type(endian, false).0, r.r_addend(endian).into()));
@@ -979,5 +981,46 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             }
         }
         Ok(out)
+    }
+
+    /// How many bytes a RELA relocation of type `t` writes from its offset (review of #91,
+    /// P1-2), or `None` when SIGIL cannot bound it:
+    /// - `R_*_NONE` writes none;
+    /// - `R_*_COPY` copies at most its symbol's `st_size` (glibc the smaller of this symbol and
+    ///   its definition, musl this one); a symbol past `.dynsym` has no size: unbounded;
+    /// - `R_*_TLSDESC` writes two words;
+    /// - any other x86-64 or AArch64 type at most 8 bytes: no wider field exists, and
+    ///   `R_X86_64_64` writes 8 even in x32, so the bound is not the class's word.
+    ///
+    /// Another machine's types are not known: unbounded.
+    fn write_extent(
+        &self,
+        t: elf::RelocationType,
+        sym: u32,
+        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
+    ) -> Option<u64> {
+        let (none, copy, tlsdesc) = match self.header.e_machine(self.endian) {
+            elf::EM_X86_64 => (
+                elf::R_X86_64_NONE,
+                elf::R_X86_64_COPY,
+                elf::R_X86_64_TLSDESC,
+            ),
+            elf::EM_AARCH64 if self.header.is_type_64() => (
+                elf::R_AARCH64_NONE,
+                elf::R_AARCH64_COPY,
+                elf::R_AARCH64_TLSDESC,
+            ),
+            _ => return None,
+        };
+        if t == none {
+            Some(0)
+        } else if t == copy {
+            let sym = symbols.symbols().get(usize::try_from(sym).ok()?)?;
+            Some(sym.st_size(self.endian).into())
+        } else if t == tlsdesc {
+            Some(16)
+        } else {
+            Some(8)
+        }
     }
 }

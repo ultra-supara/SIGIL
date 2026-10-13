@@ -105,7 +105,7 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let relocs = if relocatable {
         Ok(vec![vec![]; found.len()])
     } else {
-        e.relocations(dynamic, &ranges)
+        e.relocations(dynamic, symbols, &ranges)
     };
     let mut out = vec![];
     // The strings read as values: (index in `out`, the string's bytes and its NUL).
@@ -144,7 +144,7 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     // A relocation that writes into a string read as a value: the loaded string is another one.
     if !texts.is_empty() {
         let ranges: Vec<(u64, u64)> = texts.iter().map(|t| t.1).collect();
-        let hits = e.relocations(dynamic, &ranges);
+        let hits = e.relocations(dynamic, symbols, &ranges);
         for (j, (index, _)) in texts.iter().enumerate() {
             let why = match &hits {
                 Ok(hits) => match hits[j].first() {
@@ -179,13 +179,17 @@ fn relative_type(machine: elf::Machine) -> Option<u32> {
 fn type_name(machine: elf::Machine, t: u32) -> String {
     let name = match (machine, t) {
         (elf::EM_X86_64, 1) => "R_X86_64_64",
+        (elf::EM_X86_64, 5) => "R_X86_64_COPY",
         (elf::EM_X86_64, 6) => "R_X86_64_GLOB_DAT",
         (elf::EM_X86_64, 7) => "R_X86_64_JUMP_SLOT",
         (elf::EM_X86_64, 8) => "R_X86_64_RELATIVE",
+        (elf::EM_X86_64, 36) => "R_X86_64_TLSDESC",
         (elf::EM_AARCH64, 257) => "R_AARCH64_ABS64",
+        (elf::EM_AARCH64, 1024) => "R_AARCH64_COPY",
         (elf::EM_AARCH64, 1025) => "R_AARCH64_GLOB_DAT",
         (elf::EM_AARCH64, 1026) => "R_AARCH64_JUMP_SLOT",
         (elf::EM_AARCH64, 1027) => "R_AARCH64_RELATIVE",
+        (elf::EM_AARCH64, 1031) => "R_AARCH64_TLSDESC",
         _ => return format!("type {t}"),
     };
     name.to_string()
