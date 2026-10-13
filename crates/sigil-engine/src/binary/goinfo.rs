@@ -1,6 +1,6 @@
 //! Go build info (spec §4.5), as Go 1.25's `debug/buildinfo` and `runtime/debug.ParseBuildInfo`
 //! read it:
-//! - every address through Go's reader ([`go_reader`]): the first program header of any type
+//! - every address through Go's reader (`go_reader`): the first program header of any type
 //!   that holds it (review of #91);
 //! - the `.go.buildinfo` section at its address (whatever its type), else the first writable,
 //!   non-executable `PT_LOAD` to its `p_memsz`, searched at 16-aligned virtual addresses in Go's
