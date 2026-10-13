@@ -707,13 +707,15 @@ fn a_section_without_its_tag_is_a_gap_when_pt_dynamic_is_read() {
     assert!(p.gaps.is_empty(), "{:?}", p.gaps);
 }
 
-/// Spec §3.2: glibc refuses a `DT_SYMENT` other than its symbol size.
+/// Checked for the third review of #91: no loader reads `DT_SYMENT` (glibc reads it on hppa only,
+/// musl never), so the symbols are read 24 bytes apart whatever it says, as SIGIL reads them.
+/// Spec rev. 3 said glibc refused another size; it does not. No gap.
 #[test]
-fn a_dt_syment_other_than_the_symbol_size_is_a_gap() {
+fn a_dt_syment_other_than_the_symbol_size_is_no_gap() {
     let mut bytes = fixture("elf/libdata.so");
     set_dynamic(&mut bytes, DT_SYMENT, 16);
     let (_, p) = facts_of(&bytes, BinaryBudgets::default());
-    assert_eq!(p.gaps, ["dynamic: malformed: DT_SYMENT is not 24"]);
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
 }
 
 /// Third review of #91: glibc's `elf_get_dynamic_info` and `_ELF_DYNAMIC_DO_RELOC` read a table's

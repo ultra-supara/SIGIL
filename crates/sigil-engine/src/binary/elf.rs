@@ -248,7 +248,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             return out;
         };
         out.read = true;
-        let (mut strtab, mut strsz, mut syment) = (None, None, None);
+        let (mut strtab, mut strsz) = (None, None);
         let (mut rela, mut relasz, mut relaent, mut jmprel, mut pltrelsz, mut pltrel) =
             (None, None, None, None, None, None);
         let mut relacount = None;
@@ -271,7 +271,6 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     strings.push((tag, val))
                 }
                 elf::DT_SYMTAB => out.symtab = Some(val),
-                elf::DT_SYMENT => syment = Some(val),
                 elf::DT_HASH => out.hash = Some(val),
                 elf::DT_GNU_HASH => out.gnu_hash = Some(val),
                 elf::DT_VERSYM => out.versym = Some(val),
@@ -317,11 +316,6 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 out.rel_or_relr = true;
                 out.jmprel_rel = Some((a, n));
             }
-        }
-        // glibc refuses a DT_SYMENT other than its symbol size (spec §3.2).
-        let sym_size = size_of::<H::Sym>() as u64;
-        if syment.is_some_and(|n| n != sym_size) {
-            self.gap(format!("dynamic: malformed: DT_SYMENT is not {sym_size}"));
         }
         // The loader walks a table up to its size, so a partial last entry is applied too, and it
         // refuses an entry size other than its own: checked here, whether or not a value needs
