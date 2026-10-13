@@ -332,6 +332,16 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         {
             malformed.push("DT_PLTRELSZ is not a whole number of entries".to_string());
         }
+        // glibc takes a DT_JMPREL that ends where DT_RELA ends out of DT_RELA's size: a longer one
+        // wraps that size (second review of #91).
+        if let (Some((a, n)), Some((b, m))) = (out.rela, out.jmprel_rela) {
+            if m > n
+                && a.checked_add(n)
+                    .is_some_and(|end| b.checked_add(m) == Some(end))
+            {
+                malformed.push("DT_JMPREL ends where DT_RELA ends and is longer".to_string());
+            }
+        }
         for why in &malformed {
             self.gap(format!("dynamic: malformed: {why}"));
         }
@@ -998,9 +1008,11 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
 
     /// The RELA relocations the loader applies (`DT_RELA`, and `DT_JMPREL` when RELA) whose
     /// written bytes overlap each of `ranges` (`[start, end)`), in `ranges`' order (spec §3.4).
-    /// Each writes from its offset as many bytes as its type does ([`Self::write_extent`]). At
-    /// most two are kept per range: two are already "more than once". Only those are kept, so a
-    /// large table costs no more than its read.
+    /// Each writes from its offset as many bytes as its type does ([`Self::write_extent`]). An
+    /// entry both tables list is one relocation (second review of #91): glibc takes a `DT_JMPREL`
+    /// at `DT_RELA`'s end out of it, and otherwise glibc and musl apply the entry twice, which
+    /// writes the same bytes. At most two are kept per range: two are already "more than once".
+    /// Only those are kept, so a large table costs no more than its read.
     pub(crate) fn relocations(
         &self,
         dynamic: &Dynamic,
@@ -1012,8 +1024,21 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             return Err(why.clone());
         }
         let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
+        let entry = size_of::<H::Rela>() as u64;
+        // The entries of the table already read, `[start, end)`.
+        let mut listed: Option<(u64, u64)> = None;
         for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
-            for r in self.relocation_table::<H::Rela>(vaddr, size)? {
+            for (k, r) in self
+                .relocation_table::<H::Rela>(vaddr, size)?
+                .iter()
+                .enumerate()
+            {
+                let here = vaddr.saturating_add((k as u64).saturating_mul(entry));
+                if listed.is_some_and(|(start, end)| {
+                    (start..end).contains(&here) && (here - start).is_multiple_of(entry)
+                }) {
+                    continue;
+                }
                 let at: u64 = r.r_offset(endian).into();
                 let extent =
                     self.write_extent(r.r_type(endian, false), r.r_sym(endian, false), symbols);
@@ -1024,6 +1049,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     }
                 }
             }
+            listed.get_or_insert((vaddr, vaddr.saturating_add(size)));
         }
         Ok(out)
     }

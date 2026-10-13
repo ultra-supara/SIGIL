@@ -371,6 +371,46 @@ fn a_relocation_writes_as_many_bytes_as_its_type_does() {
     assert!(p.gaps.is_empty(), "{:?}", p.gaps);
 }
 
+/// Second review of #91 (P2): an entry that `DT_RELA` and `DT_JMPREL` both list is one relocation.
+/// glibc takes a `DT_JMPREL` that ends where `DT_RELA` ends out of `DT_RELA`. Otherwise glibc
+/// and musl apply the entry twice, and a RELA entry writes the same bytes each time. In libdata.so,
+/// LLAMA_COMMIT's RELATIVE is `.rela.dyn`'s entry 5, at 0x568.
+#[test]
+fn an_entry_listed_by_dt_rela_and_dt_jmprel_is_one_relocation() {
+    assert_eq!(
+        relative_entry(&fixture("elf/libdata.so"), 0x4030, 0x201c),
+        0x568
+    );
+    // DT_JMPREL on that entry, inside DT_RELA (0xf0 bytes) or at its end (0x90).
+    for relasz in [0xf0, 0x90] {
+        let mut bytes = fixture("elf/libdata.so");
+        set_dynamic(&mut bytes, DT_RELASZ, relasz);
+        set_dynamic(&mut bytes, DT_JMPREL, 0x568);
+        set_dynamic(&mut bytes, DT_PLTRELSZ, 24);
+        let (v, p) = values(&bytes);
+        assert!(
+            v.contains(&("LLAMA_COMMIT".into(), text("6f3a9f3de"))),
+            "DT_RELASZ {relasz:#x}: {v:?}"
+        );
+        assert!(p.gaps.is_empty(), "DT_RELASZ {relasz:#x}: {:?}", p.gaps);
+    }
+    // A DT_JMPREL that ends where DT_RELA ends but is longer: glibc's subtraction wraps.
+    let mut bytes = fixture("elf/libdata.so");
+    set_dynamic(&mut bytes, DT_RELA, 0x568);
+    set_dynamic(&mut bytes, DT_RELASZ, 24);
+    set_dynamic(&mut bytes, DT_RELACOUNT, 1);
+    set_dynamic(&mut bytes, DT_JMPREL, 0x550);
+    set_dynamic(&mut bytes, DT_PLTRELSZ, 48);
+    let (v, p) = values(&bytes);
+    let gap = "dynamic: malformed: DT_JMPREL ends where DT_RELA ends and is longer";
+    assert!(p.gaps.contains(&gap.to_string()), "{:?}", p.gaps);
+    assert!(
+        v.iter()
+            .all(|(_, x)| unknown_with(x, "relocations not read")),
+        "{v:?}"
+    );
+}
+
 /// The review of the PR-4b-1 plan: the loader walks a relocation table up to its size, so a size
 /// that is not a whole number of entries ends in a partial entry SIGIL would not see, and an entry
 /// size other than `Elf64_Rela`'s is refused by the loader. Each is a gap, and the values that
