@@ -28,33 +28,6 @@ fn unknown_with(v: &DataValue, why: &str) -> bool {
     matches!(v, DataValue::Unknown { why: w } if w.contains(why))
 }
 
-/// The ELF64 little-endian program headers of `bytes`: `(p_type, p_offset, p_vaddr, p_filesz)`.
-fn phdrs(bytes: &[u8]) -> Vec<(u32, u64, u64, u64)> {
-    let u16le = |a: usize| u16::from_le_bytes([bytes[a], bytes[a + 1]]) as usize;
-    let u64le = |a: usize| u64::from_le_bytes(bytes[a..a + 8].try_into().unwrap());
-    let (phoff, phnum) = (u64le(32) as usize, u16le(56));
-    (0..phnum)
-        .map(|i| {
-            let p = phoff + i * 56;
-            let t = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
-            (t, u64le(p + 8), u64le(p + 16), u64le(p + 32))
-        })
-        .collect()
-}
-
-/// Replaces every dynamic tag `from` with `to` (e.g. hides DT_RELA as DT_DEBUG).
-fn retag(bytes: &mut [u8], from: i64, to: i64) {
-    let (_, off, _, size) = phdrs(bytes)
-        .into_iter()
-        .find(|p| p.0 == PT_DYNAMIC)
-        .unwrap();
-    for e in (off as usize..(off + size) as usize).step_by(16) {
-        if i64::from_le_bytes(bytes[e..e + 8].try_into().unwrap()) == from {
-            bytes[e..e + 8].copy_from_slice(&to.to_le_bytes());
-        }
-    }
-}
-
 #[test]
 fn x86_64_values_come_from_relative_relocations() {
     let (v, p) = values(&fixture("elf/libdata.so"));

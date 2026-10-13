@@ -455,6 +455,18 @@ fn a_version_table_shorter_than_the_symbols_is_a_gap() {
 /// (`DT_SYMTAB`), its strings at 0x1100, `PT_DYNAMIC` at 0x2000 with `entries` added, and each
 /// `(offset, bytes)` of `extra`. One PT_LOAD maps the file at vaddr == offset.
 fn dynsym_image(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> Vec<u8> {
+    dynsym_image_with(entries, extra, &[])
+}
+
+/// A section for `dynsym_image_with`: `(name, sh_type, sh_offset, sh_addr, sh_size, sh_link)`.
+type ExtraSection<'a> = (&'a str, u32, u64, u64, u64, u32);
+
+/// `dynsym_image` with `secs` after `.dynstr` (sections 3 on).
+fn dynsym_image_with(
+    entries: &[(i64, u64)],
+    extra: &[(u64, &[u8])],
+    secs: &[ExtraSection],
+) -> Vec<u8> {
     let names = b"\0one\0two\0";
     let mut syms = vec![0u8; 24];
     syms.extend_from_slice(&sym64(1, 0x12, 5, 0x3000, 1));
@@ -495,6 +507,9 @@ fn dynsym_image(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> Vec<u8> {
         24,
     )
     .sec(".dynstr", SHT_STRTAB, 0x1100, 0x1100, names.len() as u64);
+    for &(name, sh_type, offset, addr, size, link) in secs {
+        img.sec_linked(name, sh_type, offset, addr, size, link, 0);
+    }
     img.build()
 }
 
@@ -522,6 +537,148 @@ fn dt_versym_without_its_section_is_a_gap() {
     bytes[header + 16..header + 24].copy_from_slice(&(addr + 2).to_le_bytes());
     let (_, p) = facts_of(&bytes, BinaryBudgets::default());
     assert_eq!(p.gaps, ["versions: .gnu.version is not at DT_VERSYM"]);
+}
+
+/// Review of #91 (P1-1): the loader reads `DT_SYMTAB` and `DT_STRTAB` through the PT_LOADs,
+/// object reads `.dynsym` and its strings at their `sh_offset`. With the address right and the
+/// offset on a valid copy elsewhere, SIGIL would read other symbols or names than the loader.
+#[test]
+fn dynsym_and_its_strings_must_be_the_bytes_mapped_at_their_tags() {
+    // The copies: "one" and "two" undefined, and the names "eno" and "owt".
+    let mut imports = vec![0u8; 24];
+    imports.extend_from_slice(&sym64(1, 0x12, 0, 0, 0));
+    imports.extend_from_slice(&sym64(5, 0x12, 0, 0, 0));
+    let bytes = dynsym_image(
+        &[],
+        &[(0x3800, imports.as_slice()), (0x3900, b"\0eno\0owt\0")],
+    );
+    let header = |name: &str| {
+        sections64(&bytes)
+            .into_iter()
+            .find(|s| s.0 == name)
+            .unwrap()
+            .2
+    };
+    // Section `name` with `sh_addr` `addr` and `sh_offset` `offset`.
+    let gaps = |name: &str, addr: u64, offset: u64, symtab: u64| {
+        let mut b = bytes.clone();
+        let h = header(name);
+        b[h + 16..h + 24].copy_from_slice(&addr.to_le_bytes());
+        b[h + 24..h + 32].copy_from_slice(&offset.to_le_bytes());
+        set_dynamic(&mut b, DT_SYMTAB, symtab);
+        facts_of(&b, BinaryBudgets::default()).1.gaps
+    };
+    assert!(gaps(".dynsym", 0x1000, 0x1000, 0x1000).is_empty());
+    assert_eq!(
+        gaps(".dynsym", 0x1000, 0x3800, 0x1000),
+        ["symbols: .dynsym is not the bytes mapped at DT_SYMTAB"]
+    );
+    assert_eq!(
+        gaps(".dynsym", 0x9_0000, 0x1000, 0x9_0000),
+        ["symbols: .dynsym is not the bytes mapped at DT_SYMTAB"],
+        "an address no PT_LOAD maps"
+    );
+    assert_eq!(
+        gaps(".dynstr", 0x1100, 0x3900, 0x1000),
+        ["symbols: .dynsym's string table is not the bytes mapped at DT_STRTAB"]
+    );
+    assert_eq!(
+        gaps(".dynstr", 0x3900, 0x3900, 0x1000),
+        ["symbols: .dynsym's string table is not at DT_STRTAB"]
+    );
+}
+
+/// Review of #91 (P1-1): ld.so reads the versions at `DT_VERSYM`, `DT_VERNEED`, and
+/// `DT_VERDEF`; object reads the first section of each type at its `sh_offset`.
+#[test]
+fn version_sections_must_be_the_bytes_mapped_at_their_tags() {
+    for (tag, tag_name, sh_type, name, link) in [
+        (DT_VERSYM, "DT_VERSYM", SHT_GNU_VERSYM, ".gnu.version", 1),
+        (
+            DT_VERNEED,
+            "DT_VERNEED",
+            SHT_GNU_VERNEED,
+            ".gnu.version_r",
+            2,
+        ),
+        (DT_VERDEF, "DT_VERDEF", SHT_GNU_VERDEF, ".gnu.version_d", 2),
+    ] {
+        // The section at `(sh_offset, sh_addr)`, or none; `DT_*` is 0x3a00.
+        let gaps = |at: Option<(u64, u64)>| {
+            let secs: Vec<ExtraSection> = at
+                .map(|(offset, addr)| (name, sh_type, offset, addr, 6, link))
+                .into_iter()
+                .collect();
+            let bytes = dynsym_image_with(&[(tag, 0x3a00)], &[], &secs);
+            facts_of(&bytes, BinaryBudgets::default()).1.gaps
+        };
+        assert!(gaps(Some((0x3a00, 0x3a00))).is_empty(), "{name}");
+        assert_eq!(
+            gaps(Some((0x3b00, 0x3a00))),
+            [format!(
+                "versions: {name} is not the bytes mapped at {tag_name}"
+            )]
+        );
+        assert_eq!(
+            gaps(Some((0x3a00, 0x3b00))),
+            [format!("versions: {name} is not at {tag_name}")]
+        );
+        assert_eq!(
+            gaps(None),
+            [format!("versions: {tag_name} without a {name} section")]
+        );
+    }
+}
+
+/// Review of #91 (P1-1): on a real version table. object names the versions from the strings of
+/// the symbol table `.gnu.version` links; ld.so from `DT_STRTAB`.
+#[test]
+fn versions_come_from_the_tables_and_strings_the_loader_reads() {
+    // An identical .gnu.version_r past the PT_LOADs: object parses it, the loader never reads it.
+    let mut bytes = fixture("elf/libdata.so");
+    let (_, _, h, offset, size, _) = sections64(&bytes)
+        .into_iter()
+        .find(|s| s.1 == SHT_GNU_VERNEED)
+        .unwrap();
+    let copy = bytes.len() as u64;
+    let section = bytes[offset as usize..(offset + size) as usize].to_vec();
+    bytes.extend_from_slice(&section);
+    bytes[h + 24..h + 32].copy_from_slice(&copy.to_le_bytes());
+    let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        f.imports.iter().any(|i| i.version.is_some()),
+        "the copy parses: {:?}",
+        f.imports
+    );
+    assert_eq!(
+        p.gaps,
+        ["versions: .gnu.version_r is not the bytes mapped at DT_VERNEED"]
+    );
+    // .gnu.version linked to .symtab: the names would come from .strtab.
+    let mut bytes = fixture("elf/libdata.so");
+    let (header, _, _) = versym(&bytes);
+    let symtab = sections64(&bytes)
+        .iter()
+        .position(|s| s.1 == SHT_SYMTAB)
+        .unwrap() as u32;
+    bytes[header + 40..header + 44].copy_from_slice(&symtab.to_le_bytes());
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        p.gaps
+            .contains(&"versions: .gnu.version does not link .dynsym".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    // No DT_STRTAB: the loader has no names for the symbols.
+    let mut bytes = fixture("elf/libdata.so");
+    retag(&mut bytes, DT_STRTAB, DT_DEBUG);
+    let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        p.gaps
+            .contains(&"symbols: DT_SYMTAB without DT_STRTAB".to_string()),
+        "{:?}",
+        p.gaps
+    );
 }
 
 /// Spec §3.2: glibc refuses a `DT_SYMENT` other than its symbol size.

@@ -36,11 +36,16 @@ const NAME_CHUNK: u64 = 256;
 pub(crate) struct Dynamic {
     /// `DT_SYMTAB`: where the loader reads the dynamic symbols.
     pub symtab: Option<u64>,
+    /// `DT_STRTAB`: where the loader reads their names, and the versions' names.
+    pub strtab: Option<u64>,
     /// `DT_HASH` and `DT_GNU_HASH`: the hash tables a lookup goes through.
     pub hash: Option<u64>,
     pub gnu_hash: Option<u64>,
-    /// `DT_VERSYM`: where the loader reads the symbols' versions.
+    /// `DT_VERSYM`: where the loader reads the symbols' versions; `DT_VERNEED` and `DT_VERDEF`:
+    /// the versions they name.
     pub versym: Option<u64>,
+    pub verneed: Option<u64>,
+    pub verdef: Option<u64>,
     /// `DT_RELA`/`DT_RELASZ`: `(vaddr, size)`.
     pub rela: Option<(u64, u64)>,
     /// `DT_JMPREL`/`DT_PLTRELSZ` when `DT_PLTREL` is `DT_RELA`: `(vaddr, size)`.
@@ -264,6 +269,8 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 elf::DT_HASH => out.hash = Some(val),
                 elf::DT_GNU_HASH => out.gnu_hash = Some(val),
                 elf::DT_VERSYM => out.versym = Some(val),
+                elf::DT_VERNEED => out.verneed = Some(val),
+                elf::DT_VERDEF => out.verdef = Some(val),
                 elf::DT_RELA => rela = Some(val),
                 elf::DT_RELASZ => relasz = Some(val),
                 elf::DT_RELAENT => relaent = Some(val),
@@ -280,6 +287,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 _ => {}
             }
         }
+        out.strtab = strtab;
         // Without its DT_NULL the table may go on past what was read: NEEDED could be missing.
         if !terminated {
             self.gap("dynamic: missing DT_NULL");
@@ -738,14 +746,19 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     ) {
         let endian = self.endian;
         let count = symbols.len() as u64;
-        // Where the loader reads the symbols.
+        // Where the loader reads the symbols and their names.
         if let Some(symtab) = dynamic.symtab {
-            let at = table
-                .section(symbols.section())
-                .ok()
-                .map(|s| Into::<u64>::into(s.sh_addr(endian)));
-            if at != Some(symtab) {
-                self.gap("symbols: .dynsym is not at DT_SYMTAB");
+            if let Err(why) = self.loader_reads(table.section(symbols.section()).ok(), symtab) {
+                self.gap(format!("symbols: .dynsym {why} DT_SYMTAB"));
+            }
+            match dynamic.strtab {
+                Some(strtab) => {
+                    let strings = table.section(symbols.string_section()).ok();
+                    if let Err(why) = self.loader_reads(strings, strtab) {
+                        self.gap(format!("symbols: .dynsym's string table {why} DT_STRTAB"));
+                    }
+                }
+                None => self.gap("symbols: DT_SYMTAB without DT_STRTAB"),
             }
         }
         // How many symbols a lookup reaches.
@@ -780,18 +793,63 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Ok(_) => {}
             Err(why) => self.gap(format!("symbols: relocations not read: {why}")),
         }
-        // ld.so checks versions through DT_VERSYM, whatever the sections say.
-        if let Some(versym) = dynamic.versym {
-            match table
-                .iter()
-                .find(|s| s.sh_type(endian) == elf::SHT_GNU_VERSYM)
-            {
-                None => self.gap("versions: DT_VERSYM without a .gnu.version section"),
-                Some(s) if Into::<u64>::into(s.sh_addr(endian)) != versym => {
-                    self.gap("versions: .gnu.version is not at DT_VERSYM")
+        // ld.so checks versions through DT_VERSYM, DT_VERNEED, and DT_VERDEF, whatever the
+        // sections say; object reads the first section of each type.
+        for (tag, at, sh_type, name) in [
+            (
+                "DT_VERSYM",
+                dynamic.versym,
+                elf::SHT_GNU_VERSYM,
+                ".gnu.version",
+            ),
+            (
+                "DT_VERNEED",
+                dynamic.verneed,
+                elf::SHT_GNU_VERNEED,
+                ".gnu.version_r",
+            ),
+            (
+                "DT_VERDEF",
+                dynamic.verdef,
+                elf::SHT_GNU_VERDEF,
+                ".gnu.version_d",
+            ),
+        ] {
+            let Some(at) = at else {
+                continue;
+            };
+            match table.iter().find(|s| s.sh_type(endian) == sh_type) {
+                None => self.gap(format!("versions: {tag} without a {name} section")),
+                Some(s) => {
+                    if let Err(why) = self.loader_reads(Some(s), at) {
+                        self.gap(format!("versions: {name} {why} {tag}"));
+                    }
                 }
-                Some(_) => {}
             }
+        }
+        // object names the versions from the strings of the symbol table `.gnu.version` links,
+        // ld.so from DT_STRTAB: checked above for `.dynsym`'s.
+        if let Some(s) = table
+            .iter()
+            .find(|s| s.sh_type(endian) == elf::SHT_GNU_VERSYM)
+        {
+            if s.sh_link(endian) as usize != symbols.section().0 {
+                self.gap("versions: .gnu.version does not link .dynsym");
+            }
+        }
+    }
+
+    /// Whether section `s` is the table the loader reads at `vaddr` (review of #91): object reads
+    /// a section at its `sh_offset`, the loader reads the address through the `PT_LOAD`s, so both
+    /// the address and the bytes must agree. `Err` says how it does not.
+    fn loader_reads(&self, s: Option<&H::SectionHeader>, vaddr: u64) -> Result<(), &'static str> {
+        let endian = self.endian;
+        let Some(s) = s.filter(|s| Into::<u64>::into(s.sh_addr(endian)) == vaddr) else {
+            return Err("is not at");
+        };
+        match self.loads.place(vaddr, s.sh_size(endian).into()) {
+            Place::File(offset) if offset == s.sh_offset(endian).into() => Ok(()),
+            _ => Err("is not the bytes mapped at"),
         }
     }
 
