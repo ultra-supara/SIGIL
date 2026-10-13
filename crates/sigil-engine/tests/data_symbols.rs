@@ -305,9 +305,11 @@ fn a_relocation_overlapping_a_value_or_its_string_makes_it_unknown() {
 #[test]
 fn a_relocation_writes_as_many_bytes_as_its_type_does() {
     // That relocation at `r_offset`, of type `r_type`, naming symbol `sym`; LLAMA_COMPILER
-    // (symbol 8) made 16 bytes long.
+    // (symbol 8) made 16 bytes long. DT_RELACOUNT is lowered to the 2 entries before it, which
+    // glibc applies as RELATIVE whatever their type.
     let with = |r_offset: u64, r_type: u32, sym: u64| {
         let mut bytes = fixture("elf/libdata.so");
+        set_dynamic(&mut bytes, DT_RELACOUNT, 2);
         let entry = relative_entry(&bytes, 0x4010, 0x4010);
         bytes[entry..entry + 8].copy_from_slice(&r_offset.to_le_bytes());
         bytes[entry + 8..entry + 16]
@@ -408,6 +410,46 @@ fn an_entry_listed_by_dt_rela_and_dt_jmprel_is_one_relocation() {
         v.iter()
             .all(|(_, x)| unknown_with(x, "relocations not read")),
         "{v:?}"
+    );
+}
+
+/// Second review of #91 (P2): glibc applies the first `DT_RELACOUNT` entries of `DT_RELA` as
+/// RELATIVE whatever their type (x86-64 asserts it, without a check in a release build of the
+/// others), and does not stop at `DT_RELASZ`: a count past it reads on past the table. musl
+/// ignores `DT_RELACOUNT`. libdata.so's is 6, and its first 6 entries are RELATIVE.
+#[test]
+fn dt_relacount_must_cover_relative_relocations_within_dt_relasz() {
+    let not_relative = "dynamic: malformed: DT_RELACOUNT covers a relocation that is not RELATIVE";
+    // __dso_handle's RELATIVE (entry 2) retyped NONE: glibc writes it, musl does not.
+    let retyped = |bytes: &mut Vec<u8>| {
+        let entry = relative_entry(bytes, 0x4010, 0x4010);
+        bytes[entry + 8..entry + 16].copy_from_slice(&u64::from(R_X86_64_NONE).to_le_bytes());
+    };
+    let mut bytes = fixture("elf/libdata.so");
+    retyped(&mut bytes);
+    let (v, p) = values(&bytes);
+    assert!(p.gaps.contains(&not_relative.to_string()), "{:?}", p.gaps);
+    assert!(
+        v.iter()
+            .all(|(_, x)| unknown_with(x, "relocations not read")),
+        "{v:?}"
+    );
+    // The same with no known data symbol: the tables are checked where PT_DYNAMIC is read.
+    let mut bytes = without_known_symbols(&fixture("elf/libdata.so"));
+    retyped(&mut bytes);
+    let (v, p) = values(&bytes);
+    assert!(v.is_empty());
+    assert_eq!(p.gaps, [not_relative]);
+    // A count past DT_RELASZ's 10 entries.
+    let mut bytes = fixture("elf/libdata.so");
+    set_dynamic(&mut bytes, DT_RELACOUNT, 11);
+    let (_, p) = values(&bytes);
+    assert!(
+        p.gaps.contains(
+            &"dynamic: malformed: DT_RELACOUNT is past DT_RELASZ's 10 entries".to_string()
+        ),
+        "{:?}",
+        p.gaps
     );
 }
 

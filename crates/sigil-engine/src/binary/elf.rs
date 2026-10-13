@@ -251,6 +251,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let (mut strtab, mut strsz, mut syment) = (None, None, None);
         let (mut rela, mut relasz, mut relaent, mut jmprel, mut pltrelsz, mut pltrel) =
             (None, None, None, None, None, None);
+        let mut relacount = None;
         let (mut rel, mut relsz, mut relent) = (None, None, None);
         // The string tags, in order: (tag, offset into the string table).
         let mut strings: Vec<(elf::DynamicTag, u64)> = vec![];
@@ -278,6 +279,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 elf::DT_RELA => rela = Some(val),
                 elf::DT_RELASZ => relasz = Some(val),
                 elf::DT_RELAENT => relaent = Some(val),
+                elf::DT_RELACOUNT => relacount = Some(val),
                 elf::DT_REL => {
                     rel = Some(val);
                     out.rel_or_relr = true;
@@ -340,6 +342,13 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     .is_some_and(|end| b.checked_add(m) == Some(end))
             {
                 malformed.push("DT_JMPREL ends where DT_RELA ends and is longer".to_string());
+            }
+        }
+        if malformed.is_empty() {
+            if let (Some((a, n)), Some(count)) = (out.rela, relacount) {
+                if let Err(why) = self.relative_prefix(a, n / rela_size, count) {
+                    malformed.push(why);
+                }
             }
         }
         for why in &malformed {
@@ -862,6 +871,36 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 self.gap("versions: .gnu.version does not link .dynsym");
             }
         }
+    }
+
+    /// glibc applies the first `DT_RELACOUNT` entries of `DT_RELA` as RELATIVE whatever their
+    /// type (x86-64 asserts it), and does not stop at `DT_RELASZ`; musl ignores `DT_RELACOUNT`
+    /// and applies each by its type. They agree only when the count is within the `entries` and
+    /// covers RELATIVE relocations (second review of #91). The types are checked on x86-64 and
+    /// AArch64 (ELF64), whose RELATIVE types SIGIL knows. A table that cannot be read is left to
+    /// the reads that need it.
+    fn relative_prefix(&self, vaddr: u64, entries: u64, count: u64) -> Result<(), String> {
+        if count > entries {
+            return Err(format!(
+                "DT_RELACOUNT is past DT_RELASZ's {entries} entries"
+            ));
+        }
+        let relative: &[elf::RelocationType] = match self.header.e_machine(self.endian) {
+            elf::EM_X86_64 => &[elf::R_X86_64_RELATIVE, elf::R_X86_64_RELATIVE64],
+            elf::EM_AARCH64 if self.header.is_type_64() => &[elf::R_AARCH64_RELATIVE],
+            _ => return Ok(()),
+        };
+        let size = count.saturating_mul(size_of::<H::Rela>() as u64);
+        let Ok(prefix) = self.relocation_table::<H::Rela>(vaddr, size) else {
+            return Ok(());
+        };
+        if prefix
+            .iter()
+            .any(|r| !relative.contains(&r.r_type(self.endian, false)))
+        {
+            return Err("DT_RELACOUNT covers a relocation that is not RELATIVE".to_string());
+        }
+        Ok(())
     }
 
     /// Whether section `s` is the table the loader reads at `vaddr` (review of #91): object reads
