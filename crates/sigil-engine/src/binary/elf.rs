@@ -864,7 +864,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             .ok_or(())?;
         let buckets_len = buckets.checked_mul(4).ok_or(())?;
         let mut highest = 0;
-        for bucket in self.mapped(buckets_at, buckets_len)?.chunks_exact(4) {
+        for bucket in self.mapped(buckets_at, buckets_len)?.as_chunks::<4>().0 {
             let bucket = u64::from(self.u32_of(bucket)?);
             // 0 is an empty bucket; any other is the first hashed symbol of its chain.
             if bucket != 0 && bucket < symoffset {
