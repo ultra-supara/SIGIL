@@ -1009,9 +1009,10 @@ fn dt_gnu_hash_must_reach_every_symbol_of_dynsym() {
     );
 }
 
-/// Review of #91 (P2-1): the loader reads the bloom words too. A header at 0x3fe0 whose 0x1802
-/// bloom words run from 0x3ff0 past the first PT_LOAD (it ends at 0x4000) to 0x10000, where a
-/// second PT_LOAD maps the buckets and chains (file 0x3000): the count alone would agree.
+/// Review of #91 (P2-1): the loader reads the bloom words too. A header at 0x3fe0 whose 0x2000
+/// bloom words (a power of two, as the loader requires) run from 0x3ff0 past the first PT_LOAD (it
+/// ends at 0x4000) to 0x13ff0, where a second PT_LOAD maps the buckets and chains (file 0x3000):
+/// the count alone would agree.
 #[test]
 fn dt_gnu_hash_is_read_whole_bloom_words_included() {
     let gaps = |bloom_words: u32| {
@@ -1027,10 +1028,10 @@ fn dt_gnu_hash_is_read_whole_bloom_words_included() {
             &[(DT_GNU_HASH, 0x3fe0)],
             &[(0x3fe0, header.as_slice()), (0x3000, rest.as_slice())],
         );
-        img.seg(PT_LOAD, PF_R, 0x3000, 0x1_0000, 0x100, 0x100);
+        img.seg(PT_LOAD, PF_R, 0x3000, 0x1_3ff0, 0x100, 0x100);
         facts_of(&img.build(), BinaryBudgets::default()).1.gaps
     };
-    assert_eq!(gaps(0x1802), ["symbols: DT_GNU_HASH cannot be read"]);
+    assert_eq!(gaps(0x2000), ["symbols: DT_GNU_HASH cannot be read"]);
 }
 
 /// A `DT_HASH` table: `nbucket`, `nchain`, then that many buckets and chain values (all 0).
