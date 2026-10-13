@@ -452,7 +452,8 @@ fn a_version_table_shorter_than_the_symbols_is_a_gap() {
 }
 
 /// An ET_DYN image: `.dynsym` (null, then the defined GLOBAL FUNCs "one" and "two") at 0x1000
-/// (`DT_SYMTAB`), its strings at 0x1100, `PT_DYNAMIC` at 0x2000 with `entries` added, and each
+/// (`DT_SYMTAB`), its strings at 0x1100, a `DT_GNU_HASH` reaching both at 0x1200, `PT_DYNAMIC` at
+/// 0x2000 with `entries` added (a later tag overrides it, as in the loader), and each
 /// `(offset, bytes)` of `extra`. One PT_LOAD maps the file at vaddr == offset.
 fn dynsym_image(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> Vec<u8> {
     dynsym_elf(entries, extra).build()
@@ -469,12 +470,14 @@ fn dynsym_elf(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> ElfImage {
         (DT_SYMTAB, 0x1000),
         (DT_STRTAB, 0x1100),
         (DT_STRSZ, names.len() as u64),
+        (DT_GNU_HASH, 0x1200),
     ];
     all.extend_from_slice(entries);
     let table = dynamic(&all);
     let mut img = ElfImage::new(3);
     img.put(0x1000, &syms)
         .put(0x1100, names)
+        .put(0x1200, &gnu_hash(1, &[1], &[0x10, 0x21]))
         .put(0x2000, &table);
     for (at, bytes) in extra {
         img.put(*at, bytes);
@@ -669,6 +672,32 @@ fn versions_come_from_the_tables_and_strings_the_loader_reads() {
         "{:?}",
         p.gaps
     );
+}
+
+/// Second review of #91 (P1): ld.so reads the dynamic symbols through `DT_SYMTAB`, their versions
+/// through `DT_VERSYM`, `DT_VERNEED`, and `DT_VERDEF`, and looks them up through a hash table.
+/// When `PT_DYNAMIC` is read, a section the loader has no tag for, or symbols with no hash table,
+/// are not what the loader reads.
+#[test]
+fn a_section_without_its_tag_is_a_gap_when_pt_dynamic_is_read() {
+    for (tag, gap) in [
+        (DT_SYMTAB, "symbols: .dynsym without DT_SYMTAB"),
+        (DT_VERSYM, "versions: .gnu.version without DT_VERSYM"),
+        (DT_VERNEED, "versions: .gnu.version_r without DT_VERNEED"),
+        (
+            DT_GNU_HASH,
+            "symbols: DT_SYMTAB without DT_HASH or DT_GNU_HASH",
+        ),
+    ] {
+        let mut bytes = fixture("elf/libdata.so");
+        retag(&mut bytes, tag, DT_DEBUG);
+        let (_, p) = facts_of(&bytes, BinaryBudgets::default());
+        assert_eq!(p.gaps, [gap], "{gap}");
+    }
+    let mut img = dynsym_elf(&[], &[]);
+    img.sec_linked(".gnu.version_d", SHT_GNU_VERDEF, 0x3a00, 0x3a00, 6, 2, 0);
+    let (_, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(p.gaps, ["versions: .gnu.version_d without DT_VERDEF"]);
 }
 
 /// Spec §3.2: glibc refuses a `DT_SYMENT` other than its symbol size.

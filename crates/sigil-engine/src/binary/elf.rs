@@ -34,6 +34,9 @@ const NAME_CHUNK: u64 = 256;
 /// What `PT_DYNAMIC` says, for the other steps.
 #[derive(Debug, Default)]
 pub(crate) struct Dynamic {
+    /// The `PT_DYNAMIC` table was read: the loader links the file through it, and a section it
+    /// has no tag for is not what the loader reads.
+    pub read: bool,
     /// `DT_SYMTAB`: where the loader reads the dynamic symbols.
     pub symtab: Option<u64>,
     /// `DT_STRTAB`: where the loader reads their names, and the versions' names.
@@ -244,6 +247,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             self.gap("dynamic: outside the file");
             return out;
         };
+        out.read = true;
         let (mut strtab, mut strsz, mut syment) = (None, None, None);
         let (mut rela, mut relasz, mut relaent, mut jmprel, mut pltrelsz, mut pltrel) =
             (None, None, None, None, None, None);
@@ -746,8 +750,15 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     ) {
         let endian = self.endian;
         let count = symbols.len() as u64;
-        // Where the loader reads the symbols and their names.
+        // Where the loader reads the symbols and their names: nowhere without DT_SYMTAB.
+        if dynamic.read && dynamic.symtab.is_none() {
+            self.gap("symbols: .dynsym without DT_SYMTAB");
+        }
         if let Some(symtab) = dynamic.symtab {
+            // Without a hash table, a lookup finds none of the symbols.
+            if dynamic.hash.is_none() && dynamic.gnu_hash.is_none() {
+                self.gap("symbols: DT_SYMTAB without DT_HASH or DT_GNU_HASH");
+            }
             if let Err(why) = self.loader_reads(table.section(symbols.section()).ok(), symtab) {
                 self.gap(format!("symbols: .dynsym {why} DT_SYMTAB"));
             }
@@ -815,12 +826,16 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 ".gnu.version_d",
             ),
         ] {
-            let Some(at) = at else {
-                continue;
-            };
-            match table.iter().find(|s| s.sh_type(endian) == sh_type) {
-                None => self.gap(format!("versions: {tag} without a {name} section")),
-                Some(s) => {
+            match (at, table.iter().find(|s| s.sh_type(endian) == sh_type)) {
+                (None, None) => {}
+                // The loader does not read it: its versions are not the ones the loader uses.
+                (None, Some(_)) => {
+                    if dynamic.read {
+                        self.gap(format!("versions: {name} without {tag}"));
+                    }
+                }
+                (Some(_), None) => self.gap(format!("versions: {tag} without a {name} section")),
+                (Some(at), Some(s)) => {
                     if let Err(why) = self.loader_reads(Some(s), at) {
                         self.gap(format!("versions: {name} {why} {tag}"));
                     }
