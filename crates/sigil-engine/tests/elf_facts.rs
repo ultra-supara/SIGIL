@@ -455,18 +455,12 @@ fn a_version_table_shorter_than_the_symbols_is_a_gap() {
 /// (`DT_SYMTAB`), its strings at 0x1100, `PT_DYNAMIC` at 0x2000 with `entries` added, and each
 /// `(offset, bytes)` of `extra`. One PT_LOAD maps the file at vaddr == offset.
 fn dynsym_image(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> Vec<u8> {
-    dynsym_image_with(entries, extra, &[])
+    dynsym_elf(entries, extra).build()
 }
 
-/// A section for `dynsym_image_with`: `(name, sh_type, sh_offset, sh_addr, sh_size, sh_link)`.
-type ExtraSection<'a> = (&'a str, u32, u64, u64, u64, u32);
-
-/// `dynsym_image` with `secs` after `.dynstr` (sections 3 on).
-fn dynsym_image_with(
-    entries: &[(i64, u64)],
-    extra: &[(u64, &[u8])],
-    secs: &[ExtraSection],
-) -> Vec<u8> {
+/// `dynsym_image` before it is built, for more segments or sections (`.dynsym` is section 1 and
+/// `.dynstr` section 2).
+fn dynsym_elf(entries: &[(i64, u64)], extra: &[(u64, &[u8])]) -> ElfImage {
     let names = b"\0one\0two\0";
     let mut syms = vec![0u8; 24];
     syms.extend_from_slice(&sym64(1, 0x12, 5, 0x3000, 1));
@@ -507,10 +501,7 @@ fn dynsym_image_with(
         24,
     )
     .sec(".dynstr", SHT_STRTAB, 0x1100, 0x1100, names.len() as u64);
-    for &(name, sh_type, offset, addr, size, link) in secs {
-        img.sec_linked(name, sh_type, offset, addr, size, link, 0);
-    }
-    img.build()
+    img
 }
 
 /// Spec §3.1: ld.so checks versions through `DT_VERSYM`. A `.gnu.version` section that is
@@ -605,12 +596,11 @@ fn version_sections_must_be_the_bytes_mapped_at_their_tags() {
     ] {
         // The section at `(sh_offset, sh_addr)`, or none; `DT_*` is 0x3a00.
         let gaps = |at: Option<(u64, u64)>| {
-            let secs: Vec<ExtraSection> = at
-                .map(|(offset, addr)| (name, sh_type, offset, addr, 6, link))
-                .into_iter()
-                .collect();
-            let bytes = dynsym_image_with(&[(tag, 0x3a00)], &[], &secs);
-            facts_of(&bytes, BinaryBudgets::default()).1.gaps
+            let mut img = dynsym_elf(&[(tag, 0x3a00)], &[]);
+            if let Some((offset, addr)) = at {
+                img.sec_linked(name, sh_type, offset, addr, 6, link, 0);
+            }
+            facts_of(&img.build(), BinaryBudgets::default()).1.gaps
         };
         assert!(gaps(Some((0x3a00, 0x3a00))).is_empty(), "{name}");
         assert_eq!(
@@ -836,16 +826,46 @@ fn dt_gnu_hash_must_reach_every_symbol_of_dynsym() {
     );
 }
 
+/// Review of #91 (P2-1): the loader reads the bloom words too. A header at 0x3fe0 whose 0x1802
+/// bloom words run from 0x3ff0 past the first PT_LOAD (it ends at 0x4000) to 0x10000, where a
+/// second PT_LOAD maps the buckets and chains (file 0x3000): the count alone would agree.
+#[test]
+fn dt_gnu_hash_is_read_whole_bloom_words_included() {
+    let gaps = |bloom_words: u32| {
+        let header: Vec<u8> = [1u32, 1, bloom_words, 6]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let rest: Vec<u8> = [1u32, 0x10, 0x21]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let mut img = dynsym_elf(
+            &[(DT_GNU_HASH, 0x3fe0)],
+            &[(0x3fe0, header.as_slice()), (0x3000, rest.as_slice())],
+        );
+        img.seg(PT_LOAD, PF_R, 0x3000, 0x1_0000, 0x100, 0x100);
+        facts_of(&img.build(), BinaryBudgets::default()).1.gaps
+    };
+    assert_eq!(gaps(0x1802), ["symbols: DT_GNU_HASH cannot be read"]);
+}
+
+/// A `DT_HASH` table: `nbucket`, `nchain`, then that many buckets and chain values (all 0).
+fn sysv_hash(nbucket: u32, nchain: u32) -> Vec<u8> {
+    let mut out = [nbucket.to_le_bytes(), nchain.to_le_bytes()].concat();
+    out.resize(8 + 4 * (nbucket as usize + nchain as usize), 0);
+    out
+}
+
 #[test]
 fn dt_hash_must_count_the_symbols_of_dynsym() {
-    let table = |nchain: u32| [1u32.to_le_bytes(), nchain.to_le_bytes()].concat();
     let gaps = |entries: &[(i64, u64)], extra: &[(u64, &[u8])]| {
         facts_of(&dynsym_image(entries, extra), BinaryBudgets::default())
             .1
             .gaps
     };
-    let three = table(3);
-    let two = table(2);
+    let three = sysv_hash(1, 3);
+    let two = sysv_hash(1, 2);
     assert!(gaps(&[(DT_HASH, 0x2800)], &[(0x2800, three.as_slice())]).is_empty());
     assert_eq!(
         gaps(&[(DT_HASH, 0x2800)], &[(0x2800, two.as_slice())]),
@@ -853,6 +873,18 @@ fn dt_hash_must_count_the_symbols_of_dynsym() {
     );
     assert_eq!(
         gaps(&[(DT_HASH, 0x9_0000)], &[]),
+        ["symbols: DT_HASH cannot be read"]
+    );
+    // Review of #91 (P2-1): the buckets and chains are read too. Only the 8-byte header at the
+    // end of the PT_LOAD (0x4000), with `nchain` right; and a size that overflows.
+    let header = &three[..8];
+    assert_eq!(
+        gaps(&[(DT_HASH, 0x3ff8)], &[(0x3ff8, header)]),
+        ["symbols: DT_HASH cannot be read"]
+    );
+    let huge = [u32::MAX.to_le_bytes(), 3u32.to_le_bytes()].concat();
+    assert_eq!(
+        gaps(&[(DT_HASH, 0x2800)], &[(0x2800, huge.as_slice())]),
         ["symbols: DT_HASH cannot be read"]
     );
 }

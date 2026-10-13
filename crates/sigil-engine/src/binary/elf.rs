@@ -897,29 +897,40 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         Ok(self.endian.read_u32(word))
     }
 
-    /// `DT_HASH`'s `nchain`: the number of symbols it covers.
+    /// `DT_HASH`'s `nchain`: the number of symbols it covers. The loader reads the buckets and
+    /// the chains after the header too, so all of it must be file-backed (review of #91, P2-1).
     fn sysv_hash_count(&self, vaddr: u64) -> Result<u64, ()> {
         let header = self.mapped(vaddr, 8)?;
-        Ok(u64::from(self.u32_of(&header[4..])?))
+        let nbucket = u64::from(self.u32_of(&header[0..])?);
+        let nchain = u64::from(self.u32_of(&header[4..])?);
+        let len = nbucket
+            .checked_add(nchain)
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_add(8))
+            .ok_or(())?;
+        self.mapped(vaddr, len)?;
+        Ok(nchain)
     }
 
     /// What `DT_GNU_HASH` says about the symbols, read through the checkpoint (spec §3.2): its
     /// `symoffset` (the symbols below it are in the table, unhashed), and the number a lookup
     /// reaches, one past the end of the chain of its highest bucket, as object's
     /// `GnuHashTable::symbol_table_length` counts it. No count when every bucket is empty: no
-    /// symbol is hashed. `Err`: the table cannot be read where the loader reads it, a non-empty
-    /// bucket is below `symoffset` (the loader would read before the chains), or the chain runs
-    /// out of its `PT_LOAD`'s file-backed range.
+    /// symbol is hashed. `Err`: the table cannot be read where the loader reads it (its bloom
+    /// words included: review of #91, P2-1), a non-empty bucket is below `symoffset` (the loader
+    /// would read before the chains), or the chain runs out of its `PT_LOAD`'s file-backed range.
     fn gnu_hash_count(&self, vaddr: u64) -> Result<(u64, Option<u64>), ()> {
         let header = self.mapped(vaddr, 16)?;
         let buckets = u64::from(self.u32_of(&header[0..])?);
         let symoffset = u64::from(self.u32_of(&header[4..])?);
         let bloom_words = u64::from(self.u32_of(&header[8..])?);
         let word_size = if self.header.is_type_64() { 8 } else { 4 };
-        let buckets_at = bloom_words
+        let bloom_end = bloom_words
             .checked_mul(word_size)
-            .and_then(|bloom| vaddr.checked_add(16)?.checked_add(bloom))
+            .and_then(|bloom| bloom.checked_add(16))
             .ok_or(())?;
+        self.mapped(vaddr, bloom_end)?;
+        let buckets_at = vaddr.checked_add(bloom_end).ok_or(())?;
         let buckets_len = buckets.checked_mul(4).ok_or(())?;
         let mut highest = 0;
         for bucket in self.mapped(buckets_at, buckets_len)?.as_chunks::<4>().0 {
