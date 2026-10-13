@@ -198,7 +198,7 @@ slice in the session, read from the file's own bytes. They are observations, not
   An entry that `DT_RELA` and `DT_JMPREL` both list is one relocation. glibc takes a `DT_JMPREL`
   at `DT_RELA`'s end out of it; in any other overlap, the entry is applied twice and writes the
   same bytes each time. A relocation writes from its offset as many bytes as its type does:
-  - `R_*_NONE` writes none;
+  - `R_*_NONE` writes none, and a write of no bytes overlaps nothing, even inside a value;
   - `R_*_COPY` writes its symbol's `st_size` (glibc copies at most it, musl exactly it), or to the
     end of the address space when its symbol is past `.dynsym`;
   - `R_*_TLSDESC` writes 16 bytes;
