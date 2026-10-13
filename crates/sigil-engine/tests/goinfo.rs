@@ -154,6 +154,23 @@ fn the_section_is_read_at_its_address_as_go_reads_it() {
         gaps,
         ["go.buildinfo: the section is not file-backed at its address"]
     );
+    // Review of #91: a section Go's reader holds only in part (the PT_LOAD ends at 0x4100), with
+    // no magic in that part. Go moves past the rest unread; SIGIL cannot say it holds nothing.
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, b"no build info here").put(0x40ff, &[0]);
+    img.seg(PT_LOAD, PF_R | PF_W, 0, 0, 0x4100, 0x4100).sec(
+        ".go.buildinfo",
+        SHT_PROGBITS,
+        0x4000,
+        0x4000,
+        0x200,
+    );
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: the section is not file-backed at its address"]
+    );
 }
 
 /// An ELF without sections whose first writable PT_LOAD starts at `vaddr` and holds `piece` at
@@ -492,6 +509,22 @@ fn malformed_build_info_is_a_gap_never_a_panic() {
             p.gaps
         );
     }
+}
+
+/// Review of #91: Go's reader gives at most its program header's bytes. A modinfo that claims 100
+/// bytes where the PT_LOAD has 40 left is a gap of its own, not a shorter string.
+#[test]
+fn a_string_cut_by_the_end_of_its_program_header_is_a_gap() {
+    let mut body = uvarint(5);
+    body.extend_from_slice(b"go1.2");
+    body.extend(uvarint(100));
+    body.extend_from_slice(&[b'm'; 40]);
+    let p = go_of(&inline_with(&body), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: a read past the end of its program header"]
+    );
 }
 
 /// An inline piece whose modinfo is exactly `modinfo` (no sentinel added).
