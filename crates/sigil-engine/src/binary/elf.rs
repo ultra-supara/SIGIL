@@ -1013,18 +1013,32 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     }
 
     /// The largest symbol index the loader's relocation tables name (`DT_RELA`, `DT_REL`, and
-    /// `DT_JMPREL` of either kind); `None` without a table.
+    /// `DT_JMPREL` of either kind) and a loader reads the symbol of; `None` without one. Neither
+    /// loader reads an `R_*_NONE`'s: glibc returns before it on x86-64 and AArch64, and musl skips
+    /// the entry (fifth review of #91). Every other type's is read by one of them: musl looks up a
+    /// RELATIVE's nonzero index, and glibc reads an IRELATIVE's. Another machine's types are not
+    /// classified, so each is counted.
     fn largest_symbol_index(&self, dynamic: &Dynamic) -> Result<Option<u32>, String> {
         let endian = self.endian;
+        let none = match self.header.e_machine(endian) {
+            elf::EM_X86_64 => Some(elf::R_X86_64_NONE),
+            elf::EM_AARCH64 if self.header.is_type_64() => Some(elf::R_AARCH64_NONE),
+            _ => None,
+        };
+        let read = |t: elf::RelocationType| none != Some(t);
         let mut largest = None;
         for (vaddr, size) in [dynamic.rela, dynamic.jmprel_rela].into_iter().flatten() {
             for r in self.relocation_table::<H::Rela>(vaddr, size)? {
-                largest = largest.max(Some(r.r_sym(endian, false)));
+                if read(r.r_type(endian, false)) {
+                    largest = largest.max(Some(r.r_sym(endian, false)));
+                }
             }
         }
         for (vaddr, size) in [dynamic.rel, dynamic.jmprel_rel].into_iter().flatten() {
             for r in self.relocation_table::<H::Rel>(vaddr, size)? {
-                largest = largest.max(Some(r.r_sym(endian)));
+                if read(r.r_type(endian)) {
+                    largest = largest.max(Some(r.r_sym(endian)));
+                }
             }
         }
         Ok(largest)

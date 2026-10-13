@@ -1245,6 +1245,45 @@ fn a_relocation_past_dynsym_is_a_gap_with_no_data_symbol() {
     }
 }
 
+/// Fifth review of #91: neither loader reads the symbol of an `R_*_NONE`. glibc returns before it
+/// on x86-64 and AArch64, and musl skips the entry. So its index is not checked there. Every
+/// other type's index is checked, as before:
+/// - musl looks up a RELATIVE's nonzero index (glibc does not);
+/// - glibc reads an IRELATIVE's symbol (`RESOLVE_MAP`);
+/// - GLOB_DAT binds it.
+#[test]
+fn a_symbol_index_is_checked_where_a_loader_reads_the_symbol() {
+    let past = ["symbols: a relocation names symbol 65535 past .dynsym's 3 entries"];
+    let none: [&str; 0] = [];
+    // One relocation at 0x2800 naming symbol 65535: RELA (24 bytes) or REL (16).
+    let gaps = |machine: u16, rela: bool, r_type: u64| {
+        let mut e = 0x3000u64.to_le_bytes().to_vec();
+        e.extend_from_slice(&((65535u64 << 32) | r_type).to_le_bytes());
+        let entries = if rela {
+            e.extend_from_slice(&0u64.to_le_bytes());
+            vec![(DT_RELA, 0x2800), (DT_RELASZ, 24), (DT_RELAENT, 24)]
+        } else {
+            vec![(DT_REL, 0x2800), (DT_RELSZ, 16), (DT_RELENT, 16)]
+        };
+        let mut img = dynsym_elf(&entries, &[(0x2800, e.as_slice())]);
+        img.machine = machine;
+        facts_of(&img.build(), BinaryBudgets::default()).1.gaps
+    };
+    let (x86_64, aarch64, s390) = (62, 183, 22);
+    assert_eq!(gaps(x86_64, true, 0), none, "R_X86_64_NONE");
+    assert_eq!(gaps(x86_64, false, 0), none, "R_X86_64_NONE in a REL table");
+    assert_eq!(gaps(aarch64, true, 0), none, "R_AARCH64_NONE");
+    assert_eq!(gaps(x86_64, true, 8), past, "R_X86_64_RELATIVE");
+    assert_eq!(gaps(x86_64, true, 37), past, "R_X86_64_IRELATIVE");
+    assert_eq!(gaps(x86_64, true, 6), past, "R_X86_64_GLOB_DAT");
+    assert_eq!(gaps(aarch64, true, 1027), past, "R_AARCH64_RELATIVE");
+    assert_eq!(
+        gaps(s390, true, 0),
+        past,
+        "another machine's type 0: not classified"
+    );
+}
+
 /// PR-4b-2a spec §4.4: a relocatable object has no `.dynsym`. Its imports are the undefined
 /// symbols of its link-time symbol table, left for the linker, and its exports its defined
 /// global ones. No versions, no data values.
