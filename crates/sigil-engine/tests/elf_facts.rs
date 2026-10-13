@@ -886,6 +886,48 @@ fn sysv_hash(nbucket: u32, nchain: u32) -> Vec<u8> {
     out
 }
 
+/// A `DT_HASH` table with these buckets and chain values (`nchain` is `chains.len()`).
+fn sysv_hash_with(buckets: &[u32], chains: &[u32]) -> Vec<u8> {
+    [buckets.len() as u32, chains.len() as u32]
+        .iter()
+        .chain(buckets)
+        .chain(chains)
+        .flat_map(|w| w.to_le_bytes())
+        .collect()
+}
+
+/// Second review of #91 (P1): the loader walks each bucket's chain, reading `symtab[i]` and then
+/// `chain[i]`, with no bound. Every index it reaches must be one of the `nchain` symbols, and
+/// each at most once: past them it reads past `.dynsym`, and one reached twice loops (or joins
+/// another chain, which no linker writes).
+#[test]
+fn dt_hash_chains_must_stay_within_its_symbols() {
+    let gaps = |table: Vec<u8>| {
+        let bytes = dynsym_image(&[(DT_HASH, 0x2800)], &[(0x2800, table.as_slice())]);
+        facts_of(&bytes, BinaryBudgets::default()).1.gaps
+    };
+    // Symbols 1 and 2 in one chain, and one in each of two buckets.
+    assert!(gaps(sysv_hash_with(&[1], &[0, 2, 0])).is_empty());
+    assert!(gaps(sysv_hash_with(&[2, 1], &[0, 0, 0])).is_empty());
+    let unreadable = ["symbols: DT_HASH cannot be read"];
+    assert_eq!(
+        gaps(sysv_hash_with(&[99], &[0, 0, 0])),
+        unreadable,
+        "a bucket past nchain"
+    );
+    assert_eq!(
+        gaps(sysv_hash_with(&[0, 1], &[0, 5, 0])),
+        unreadable,
+        "a chain past nchain"
+    );
+    assert_eq!(gaps(sysv_hash_with(&[1], &[0, 2, 1])), unreadable, "a loop");
+    assert_eq!(
+        gaps(sysv_hash_with(&[1, 2], &[0, 2, 0])),
+        unreadable,
+        "two chains joined"
+    );
+}
+
 #[test]
 fn dt_hash_must_count_the_symbols_of_dynsym() {
     let gaps = |entries: &[(i64, u64)], extra: &[(u64, &[u8])]| {

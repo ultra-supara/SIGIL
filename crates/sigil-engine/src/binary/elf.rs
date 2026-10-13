@@ -914,6 +914,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
 
     /// `DT_HASH`'s `nchain`: the number of symbols it covers. The loader reads the buckets and
     /// the chains after the header too, so all of it must be file-backed (review of #91, P2-1).
+    /// It walks each bucket's chain, reading `symtab[i]` and then `chain[i]` until 0, with no
+    /// bound: every index reached must be below `nchain`, and reached once, or the walk reads
+    /// past the symbols, loops, or joins another chain (second review of #91).
     fn sysv_hash_count(&self, vaddr: u64) -> Result<u64, ()> {
         let header = self.mapped(vaddr, 8)?;
         let nbucket = u64::from(self.u32_of(&header[0..])?);
@@ -923,7 +926,23 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             .and_then(|n| n.checked_mul(4))
             .and_then(|n| n.checked_add(8))
             .ok_or(())?;
-        self.mapped(vaddr, len)?;
+        let table = self.mapped(vaddr, len)?;
+        let words = table[8..].as_chunks::<4>().0;
+        let (buckets, chains) = words.split_at(usize::try_from(nbucket).map_err(|_| ())?);
+        // One bit per symbol: at most `nchain` bits, and the table is in the file.
+        let mut reached = vec![0u64; chains.len().div_ceil(64)];
+        for bucket in buckets {
+            let mut i = usize::try_from(self.u32_of(bucket)?).map_err(|_| ())?;
+            while i != 0 {
+                let chain = chains.get(i).ok_or(())?;
+                let (word, bit) = (i / 64, 1u64 << (i % 64));
+                if reached[word] & bit != 0 {
+                    return Err(());
+                }
+                reached[word] |= bit;
+                i = usize::try_from(self.u32_of(chain)?).map_err(|_| ())?;
+            }
+        }
         Ok(nchain)
     }
 
