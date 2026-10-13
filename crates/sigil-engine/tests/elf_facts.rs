@@ -716,6 +716,118 @@ fn a_dt_syment_other_than_the_symbol_size_is_a_gap() {
     assert_eq!(p.gaps, ["dynamic: malformed: DT_SYMENT is not 24"]);
 }
 
+/// Third review of #91: glibc's `elf_get_dynamic_info` and `_ELF_DYNAMIC_DO_RELOC` read a table's
+/// size and entry size with no NULL check, and assert that `DT_PLTREL` names the kind the machine
+/// uses (only `DT_RELA` on x86-64 and AArch64). glibc skips a `DT_JMPREL` without `DT_PLTREL`;
+/// musl applies `DT_JMPREL` and `DT_PLTRELSZ` whatever is missing. A tag missing its partner, and
+/// another kind, are malformed.
+#[test]
+fn the_dynamic_tags_the_loader_reads_together() {
+    let gaps = |machine: u16, entries: &[(i64, u64)]| {
+        let mut img = dynsym_elf(entries, &[(0x2800, &[0u8; 48][..])]);
+        img.machine = machine;
+        facts_of(&img.build(), BinaryBudgets::default()).1.gaps
+    };
+    let (x86_64, s390) = (62, 22);
+    let (rel, rela) = (DT_REL as u64, DT_RELA as u64);
+    for (machine, entries) in [
+        (
+            x86_64,
+            vec![(DT_RELA, 0x2800), (DT_RELASZ, 24), (DT_RELAENT, 24)],
+        ),
+        (
+            x86_64,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 24), (DT_PLTREL, rela)],
+        ),
+        (
+            x86_64,
+            vec![(DT_RELR, 0x2800), (DT_RELRSZ, 8), (DT_RELRENT, 8)],
+        ),
+        (
+            s390,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 16), (DT_PLTREL, rel)],
+        ),
+    ] {
+        assert!(gaps(machine, &entries).is_empty(), "{entries:?}");
+    }
+    for (machine, entries, gap) in [
+        (
+            x86_64,
+            vec![(DT_RELA, 0x2800), (DT_RELASZ, 24)],
+            "DT_RELA without DT_RELAENT",
+        ),
+        (
+            x86_64,
+            vec![(DT_RELA, 0x2800), (DT_RELAENT, 24)],
+            "DT_RELA without DT_RELASZ",
+        ),
+        (
+            x86_64,
+            vec![(DT_REL, 0x2800), (DT_RELSZ, 16)],
+            "DT_REL without DT_RELENT",
+        ),
+        (
+            x86_64,
+            vec![(DT_REL, 0x2800), (DT_RELENT, 16)],
+            "DT_REL without DT_RELSZ",
+        ),
+        (
+            x86_64,
+            vec![(DT_RELR, 0x2800), (DT_RELRSZ, 8)],
+            "DT_RELR without DT_RELRENT",
+        ),
+        (
+            x86_64,
+            vec![(DT_RELR, 0x2800), (DT_RELRENT, 8)],
+            "DT_RELR without DT_RELRSZ",
+        ),
+        (
+            x86_64,
+            vec![(DT_RELR, 0x2800), (DT_RELRSZ, 8), (DT_RELRENT, 4)],
+            "DT_RELRENT is not 8",
+        ),
+        (
+            x86_64,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 24)],
+            "DT_JMPREL without DT_PLTREL",
+        ),
+        (
+            x86_64,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTREL, rela)],
+            "DT_JMPREL without DT_PLTRELSZ",
+        ),
+        (
+            x86_64,
+            vec![(DT_PLTREL, rela), (DT_PLTRELSZ, 24)],
+            "DT_PLTREL without DT_JMPREL",
+        ),
+        (
+            x86_64,
+            vec![(DT_PLTRELSZ, 24)],
+            "DT_PLTRELSZ without DT_JMPREL",
+        ),
+        (
+            x86_64,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 16), (DT_PLTREL, rel)],
+            "DT_PLTREL is not DT_RELA",
+        ),
+        (
+            x86_64,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 0), (DT_PLTREL, 0xdead)],
+            "DT_PLTREL is not DT_RELA",
+        ),
+        (
+            s390,
+            vec![(DT_JMPREL, 0x2800), (DT_PLTRELSZ, 0), (DT_PLTREL, 0xdead)],
+            "DT_PLTREL is neither DT_REL nor DT_RELA",
+        ),
+    ] {
+        let g = gaps(machine, &entries);
+        let want = format!("dynamic: malformed: {gap}");
+        assert!(g.contains(&want), "{entries:?}: {g:?}");
+    }
+}
+
 /// Spec §3.2: REL tables are read for their symbol indices, so their sizes are checked as
 /// RELA's are.
 #[test]
@@ -1022,8 +1134,12 @@ fn a_relocation_past_dynsym_is_a_gap_with_no_data_symbol() {
             ),
         ] {
             let table = entry(sym, rela);
-            let bytes = dynsym_image(&entries, &[(0x2800, table.as_slice())]);
-            let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+            let mut img = dynsym_elf(&entries, &[(0x2800, table.as_slice())]);
+            // x86-64 allows only DT_RELA as DT_PLTREL (third review of #91): REL on S390.
+            if !rela {
+                img.machine = 22;
+            }
+            let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
             assert!(f.data.is_empty(), "{kind}: no known data symbol");
             assert_eq!(
                 p.gaps,

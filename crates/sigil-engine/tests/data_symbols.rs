@@ -453,6 +453,27 @@ fn dt_relacount_must_cover_relative_relocations_within_dt_relasz() {
     );
 }
 
+/// Third review of #91 (P1): glibc dereferences `DT_RELAENT` whenever `DT_RELA` is there; the
+/// reviewer's library with it retagged crashed at load. libdata.so with `DT_RELAENT` retagged
+/// `DT_DEBUG`: malformed, and no value is read from the tables.
+#[test]
+fn dt_rela_without_dt_relaent_is_malformed() {
+    let mut bytes = fixture("elf/libdata.so");
+    retag(&mut bytes, DT_RELAENT, DT_DEBUG);
+    let (v, p) = values(&bytes);
+    assert!(
+        p.gaps
+            .contains(&"dynamic: malformed: DT_RELA without DT_RELAENT".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    assert!(
+        v.iter()
+            .all(|(_, x)| unknown_with(x, "relocations not read")),
+        "{v:?}"
+    );
+}
+
 /// The review of the PR-4b-1 plan: the loader walks a relocation table up to its size, so a size
 /// that is not a whole number of entries ends in a partial entry SIGIL would not see, and an entry
 /// size other than `Elf64_Rela`'s is refused by the loader. Each is a gap, and the values that

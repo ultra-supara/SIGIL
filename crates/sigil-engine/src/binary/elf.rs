@@ -253,6 +253,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             (None, None, None, None, None, None);
         let mut relacount = None;
         let (mut rel, mut relsz, mut relent) = (None, None, None);
+        let (mut relr, mut relrsz, mut relrent) = (None, None, None);
         // The string tags, in order: (tag, offset into the string table).
         let mut strings: Vec<(elf::DynamicTag, u64)> = vec![];
         let mut terminated = false;
@@ -289,7 +290,12 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 elf::DT_JMPREL => jmprel = Some(val),
                 elf::DT_PLTRELSZ => pltrelsz = Some(val),
                 elf::DT_PLTREL => pltrel = Some(val),
-                elf::DT_RELR => out.rel_or_relr = true,
+                elf::DT_RELR => {
+                    relr = Some(val);
+                    out.rel_or_relr = true;
+                }
+                elf::DT_RELRSZ => relrsz = Some(val),
+                elf::DT_RELRENT => relrent = Some(val),
                 _ => {}
             }
         }
@@ -322,6 +328,46 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         // the tables later.
         let rela_size = size_of::<H::Rela>() as u64;
         let mut malformed = vec![];
+        // What glibc's elf_get_dynamic_info and _ELF_DYNAMIC_DO_RELOC take for granted (third
+        // review of #91): a table's size and entry size are read with no NULL check, and
+        // DT_PLTREL must name the machine's kind, only DT_RELA on x86-64 and AArch64
+        // (ELF_MACHINE_NO_REL). glibc skips a DT_JMPREL without DT_PLTREL; musl applies DT_JMPREL
+        // and DT_PLTRELSZ whatever is missing. Those of the RELA and PLT tables leave no value.
+        let present = |tags: &[(&'static str, bool)]| -> Vec<String> {
+            let Some((first, _)) = tags.iter().find(|(_, has)| *has) else {
+                return vec![];
+            };
+            tags.iter()
+                .filter(|(_, has)| !has)
+                .map(|(missing, _)| format!("{first} without {missing}"))
+                .collect()
+        };
+        if rela.is_some() {
+            malformed.extend(present(&[
+                ("DT_RELA", true),
+                ("DT_RELASZ", relasz.is_some()),
+                ("DT_RELAENT", relaent.is_some()),
+            ]));
+        }
+        malformed.extend(present(&[
+            ("DT_JMPREL", jmprel.is_some()),
+            ("DT_PLTREL", pltrel.is_some()),
+            ("DT_PLTRELSZ", pltrelsz.is_some()),
+        ]));
+        let rela_only = matches!(
+            self.header.e_machine(endian),
+            elf::EM_X86_64 | elf::EM_AARCH64
+        );
+        let (dt_rel, dt_rela) = (elf::DT_REL.0 as u64, elf::DT_RELA.0 as u64);
+        match pltrel {
+            Some(v) if rela_only && v != dt_rela => {
+                malformed.push("DT_PLTREL is not DT_RELA".to_string())
+            }
+            Some(v) if v != dt_rel && v != dt_rela => {
+                malformed.push("DT_PLTREL is neither DT_REL nor DT_RELA".to_string())
+            }
+            _ => {}
+        }
         if relaent.is_some_and(|n| n != rela_size) {
             malformed.push(format!("DT_RELAENT is not {rela_size}"));
         }
@@ -355,7 +401,30 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             self.gap(format!("dynamic: malformed: {why}"));
         }
         out.rela_malformed = malformed.into_iter().next();
-        // REL tables are read only for their symbol indices (spec §3.2): the same checks.
+        // REL tables are read only for their symbol indices (spec §3.2), and RELR ones not at all:
+        // the same checks, with no value resting on them.
+        if rel.is_some() {
+            for why in present(&[
+                ("DT_REL", true),
+                ("DT_RELSZ", relsz.is_some()),
+                ("DT_RELENT", relent.is_some()),
+            ]) {
+                self.gap(format!("dynamic: malformed: {why}"));
+            }
+        }
+        if relr.is_some() {
+            for why in present(&[
+                ("DT_RELR", true),
+                ("DT_RELRSZ", relrsz.is_some()),
+                ("DT_RELRENT", relrent.is_some()),
+            ]) {
+                self.gap(format!("dynamic: malformed: {why}"));
+            }
+        }
+        let word = if self.header.is_type_64() { 8 } else { 4 };
+        if relrent.is_some_and(|n| n != word) {
+            self.gap(format!("dynamic: malformed: DT_RELRENT is not {word}"));
+        }
         let rel_size = size_of::<H::Rel>() as u64;
         if relent.is_some_and(|n| n != rel_size) {
             self.gap(format!("dynamic: malformed: DT_RELENT is not {rel_size}"));
