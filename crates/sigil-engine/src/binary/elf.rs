@@ -1033,6 +1033,10 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let header = self.mapped(vaddr, 8)?;
         let nbucket = u64::from(self.u32_of(&header[0..])?);
         let nchain = u64::from(self.u32_of(&header[4..])?);
+        // A lookup takes the hash modulo nbucket (third review of #91).
+        if nbucket == 0 {
+            return Err(());
+        }
         let len = nbucket
             .checked_add(nchain)
             .and_then(|n| n.checked_mul(4))
@@ -1063,13 +1067,20 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     /// reaches, one past the end of the chain of its highest bucket, as object's
     /// `GnuHashTable::symbol_table_length` counts it. No count when every bucket is empty: no
     /// symbol is hashed. `Err`: the table cannot be read where the loader reads it (its bloom
-    /// words included: review of #91, P2-1), a non-empty bucket is below `symoffset` (the loader
-    /// would read before the chains), or the chain runs out of its `PT_LOAD`'s file-backed range.
+    /// words included: review of #91, P2-1), it has no bucket or a bloom word count that is not a
+    /// power of two (the loader could not index it), a non-empty bucket is below `symoffset` (the
+    /// loader would read before the chains), or the chain runs out of its `PT_LOAD`'s file-backed
+    /// range.
     fn gnu_hash_count(&self, vaddr: u64) -> Result<(u64, Option<u64>), ()> {
         let header = self.mapped(vaddr, 16)?;
         let buckets = u64::from(self.u32_of(&header[0..])?);
         let symoffset = u64::from(self.u32_of(&header[4..])?);
         let bloom_words = u64::from(self.u32_of(&header[8..])?);
+        // A lookup takes the hash modulo the bucket count, and indexes the bloom words with
+        // `count - 1` as a mask: glibc asserts a power of two (third review of #91).
+        if buckets == 0 || !bloom_words.is_power_of_two() {
+            return Err(());
+        }
         let word_size = if self.header.is_type_64() { 8 } else { 4 };
         let bloom_end = bloom_words
             .checked_mul(word_size)

@@ -913,15 +913,48 @@ fn dynsym_must_be_where_and_as_long_as_the_loader_reads_it() {
 /// A `DT_GNU_HASH` table (ELF64): `buckets.len()` buckets, `symoffset`, one bloom word, then
 /// the buckets and the chain values (bit 0 ends a chain).
 fn gnu_hash(symoffset: u32, buckets: &[u32], chains: &[u32]) -> Vec<u8> {
+    gnu_hash_bloom(symoffset, 1, buckets, chains)
+}
+
+/// `gnu_hash` with `bloom_words` bloom words (all ones).
+fn gnu_hash_bloom(symoffset: u32, bloom_words: u32, buckets: &[u32], chains: &[u32]) -> Vec<u8> {
     let mut out = vec![];
-    for w in [buckets.len() as u32, symoffset, 1, 6] {
+    for w in [buckets.len() as u32, symoffset, bloom_words, 6] {
         out.extend_from_slice(&w.to_le_bytes());
     }
-    out.extend_from_slice(&u64::MAX.to_le_bytes());
+    for _ in 0..bloom_words {
+        out.extend_from_slice(&u64::MAX.to_le_bytes());
+    }
     for w in buckets.iter().chain(chains) {
         out.extend_from_slice(&w.to_le_bytes());
     }
     out
+}
+
+/// Third review of #91 (P2): glibc and musl index the bloom words with `count - 1` as a mask, and
+/// glibc asserts the count is a power of two (0 passes its assert, and the mask wraps). Both take
+/// a symbol's hash modulo the bucket count, in either table: 0 buckets divides by zero.
+#[test]
+fn hash_tables_must_be_ones_the_loader_can_index() {
+    let gaps = |tag: i64, table: Vec<u8>| {
+        let bytes = dynsym_image(&[(tag, 0x2800)], &[(0x2800, table.as_slice())]);
+        facts_of(&bytes, BinaryBudgets::default()).1.gaps
+    };
+    assert!(gaps(DT_GNU_HASH, gnu_hash_bloom(1, 2, &[1], &[0x10, 0x21])).is_empty());
+    let gnu = ["symbols: DT_GNU_HASH cannot be read"];
+    for words in [0, 3] {
+        assert_eq!(
+            gaps(DT_GNU_HASH, gnu_hash_bloom(1, words, &[1], &[0x10, 0x21])),
+            gnu,
+            "{words} bloom words"
+        );
+    }
+    assert_eq!(gaps(DT_GNU_HASH, gnu_hash(1, &[], &[])), gnu, "no bucket");
+    assert_eq!(
+        gaps(DT_HASH, sysv_hash_with(&[], &[0, 0, 0])),
+        ["symbols: DT_HASH cannot be read"],
+        "no bucket"
+    );
 }
 
 #[test]
