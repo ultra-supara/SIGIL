@@ -305,9 +305,9 @@ fn a_relocation_overlapping_a_value_or_its_string_makes_it_unknown() {
 #[test]
 fn a_relocation_writes_as_many_bytes_as_its_type_does() {
     // That relocation at `r_offset`, of type `r_type`, naming symbol `sym`; LLAMA_COMPILER
-    // (symbol 8) made 16 bytes long. DT_RELACOUNT is lowered to the 2 entries before it, which
+    // (symbol 8) made `size` bytes long. DT_RELACOUNT is lowered to the 2 entries before it, which
     // glibc applies as RELATIVE whatever their type.
-    let with = |r_offset: u64, r_type: u32, sym: u64| {
+    let with_size = |r_offset: u64, r_type: u32, sym: u64, size: u64| {
         let mut bytes = fixture("elf/libdata.so");
         set_dynamic(&mut bytes, DT_RELACOUNT, 2);
         let entry = relative_entry(&bytes, 0x4010, 0x4010);
@@ -315,9 +315,10 @@ fn a_relocation_writes_as_many_bytes_as_its_type_does() {
         bytes[entry + 8..entry + 16]
             .copy_from_slice(&((sym << 32) | u64::from(r_type)).to_le_bytes());
         let compiler = dynsym_entry(&bytes, b"LLAMA_COMPILER");
-        bytes[compiler + 16..compiler + 24].copy_from_slice(&16u64.to_le_bytes());
+        bytes[compiler + 16..compiler + 24].copy_from_slice(&size.to_le_bytes());
         values(&bytes)
     };
+    let with = |r_offset: u64, r_type: u32, sym: u64| with_size(r_offset, r_type, sym, 16);
     let value = |v: &[(String, DataValue)], name: &str| {
         v.iter().find(|(s, _)| s == name).unwrap().1.clone()
     };
@@ -367,10 +368,22 @@ fn a_relocation_writes_as_many_bytes_as_its_type_does() {
         "{:?}",
         p.gaps
     );
-    // A NONE writes nothing: at the int, the int is still read, with no gap.
-    let (v, p) = with(0x4018, R_X86_64_NONE, 0);
-    assert_eq!(value(&v, "LLAMA_BUILD_NUMBER"), DataValue::Int(1));
-    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+    // A NONE writes nothing: at the int or inside it, the int is still read, with no gap. So
+    // does a COPY of a 0-byte symbol inside it (sixth review of #91: an empty write inside a
+    // value is no overlap).
+    for (at, r_type, sym, size) in [
+        (0x4018, R_X86_64_NONE, 0, 16),
+        (0x4019, R_X86_64_NONE, 0, 16),
+        (0x4019, R_X86_64_COPY, 8, 0),
+    ] {
+        let (v, p) = with_size(at, r_type, sym, size);
+        assert_eq!(
+            value(&v, "LLAMA_BUILD_NUMBER"),
+            DataValue::Int(1),
+            "type {r_type} at {at:#x}"
+        );
+        assert!(p.gaps.is_empty(), "type {r_type} at {at:#x}: {:?}", p.gaps);
+    }
 }
 
 /// Second review of #91 (P2): an entry that `DT_RELA` and `DT_JMPREL` both list is one relocation.

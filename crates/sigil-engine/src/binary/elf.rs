@@ -1201,6 +1201,11 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 let extent =
                     self.write_extent(r.r_type(endian, false), r.r_sym(endian, false), symbols);
                 let end = extent.map_or(u64::MAX, |n| at.saturating_add(n));
+                // A write of no bytes (a NONE, a COPY of a 0-byte symbol) overlaps nothing, even
+                // inside a value (sixth review of #91).
+                if at >= end {
+                    continue;
+                }
                 for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
                     if at < *stop && *start < end && hits.len() < 2 {
                         hits.push((at, r.r_type(endian, false).0, r.r_addend(endian).into()));
