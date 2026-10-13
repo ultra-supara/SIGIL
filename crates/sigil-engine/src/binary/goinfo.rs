@@ -1,27 +1,29 @@
-//! Go build info (spec §4.5), as Go's `debug/buildinfo` and `runtime/debug.ParseBuildInfo` read
-//! it:
-//! - the `.go.buildinfo` section, read at its address through the `PT_LOAD`s as Go reads it
-//!   (whatever its type), else the first writable, non-executable `PT_LOAD`, searched to its end
-//!   at 16-aligned virtual addresses, in chunks from an aligned start;
+//! Go build info (spec §4.5), as Go 1.25's `debug/buildinfo` and `runtime/debug.ParseBuildInfo`
+//! read it:
+//! - every address through Go's reader ([`go_reader`]): the first program header of any type
+//!   that holds it (review of #91);
+//! - the `.go.buildinfo` section at its address (whatever its type), else the first writable,
+//!   non-executable `PT_LOAD` to its `p_memsz`, searched at 16-aligned virtual addresses in Go's
+//!   1 MiB chunks from an aligned start;
 //! - the inline (Go 1.18+) or pointer format, in either byte order;
 //! - the sentinel, and the modinfo lines.
 //!
 //! `None` without a gap means the whole range was searched and holds no build info (or Go's own
-//! rule says it is not a Go binary: an empty version). Anything cut short or malformed is a gap,
-//! and no build info is reported then.
+//! rule says it is not a Go binary: an empty version, or a segment search Go's reader stops).
+//! Anything cut short or malformed is a gap, and no build info is reported then.
 
-use object::read::elf::FileHeader;
+use object::read::elf::{FileHeader, ProgramHeader};
 use object::read::{ReadCacheOps, ReadRef};
 use object::Endianness;
 use sigil_model::{GoBuildInfo, GoModule, GoSetting, Loc, UntrustedText};
 
 use super::elf::Elf;
-use super::vaddr::Place;
 
 pub const MAGIC: &[u8] = b"\xff Go buildinf:";
 pub const ALIGN: u64 = 16;
 pub const HEADER: u64 = 32;
-pub const CHUNK: u64 = 64 << 10;
+/// Go's `searchChunkSize`: what one read of the search covers, through one program header.
+pub const CHUNK: u64 = 1 << 20;
 pub const MAX_VERSION: u64 = 1 << 10;
 pub const MAX_MODINFO: u64 = 1 << 20;
 pub const MAX_DEPS: usize = 4096;
@@ -36,23 +38,17 @@ pub(crate) fn find<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'_, R, H>,
     section: Option<(u64, u64)>,
 ) -> Option<GoBuildInfo> {
-    let (vaddr, offset, size, is_section) = match section {
-        // Where the section's address is in the file, as Go's `ReadData` reads it (spec §3.6).
-        Some((v, s)) => match e.loads.place(v, s) {
-            Place::File(o) => (v, o, s, true),
-            Place::ZeroFill | Place::Unmapped => {
-                e.gaps.push(
-                    "go.buildinfo: the section is not file-backed at its address".to_string(),
-                );
-                return None;
-            }
-        },
+    let (vaddr, size, is_section) = match section {
+        // The section's address, read through Go's reader (spec §3.6).
+        Some((v, s)) => (v, s, true),
+        // Go's `DataStart`: the first PT_LOAD that is writable and not executable, to its
+        // `p_memsz` (review of #91).
         None => {
             let l = e.loads.0.iter().find(|l| l.writable && !l.executable)?;
-            (l.vaddr, l.offset, l.filesz, false)
+            (l.vaddr, l.memsz, false)
         }
     };
-    let result = search(e, vaddr, offset, size).and_then(|found| match found {
+    let result = search(e, vaddr, size, is_section).and_then(|found| match found {
         None => Ok(None),
         Some(va) => {
             let at = if is_section {
@@ -63,20 +59,13 @@ pub(crate) fn find<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             } else {
                 Loc::VAddr(va)
             };
-            let header_off = offset
-                .checked_add(va - vaddr)
-                .ok_or_else(|| "address overflow".to_string())?;
             let end = vaddr
                 .checked_add(size)
                 .ok_or_else(|| "address overflow".to_string())?;
             if va.checked_add(HEADER).is_none_or(|h| h > end) {
                 return Err("a truncated header".to_string());
             }
-            let header = e
-                .data
-                .read_bytes_at(header_off, HEADER)
-                .map_err(|()| "the header is outside the file".to_string())?;
-            let header: [u8; HEADER as usize] = header
+            let header: [u8; HEADER as usize] = at_va(e, va, HEADER)?
                 .try_into()
                 .map_err(|_| "a truncated header".to_string())?;
             match strings(e, va, &header)? {
@@ -94,68 +83,110 @@ pub(crate) fn find<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     }
 }
 
-/// The virtual address of the first magic at a multiple of 16 in `[vaddr, vaddr + size)`.
+/// Where Go 1.25's `elfExe.DataReader` reads `va` (review of #91): in the first program header,
+/// of any type, with `p_vaddr <= va <= p_vaddr + p_filesz - 1` computed in wrapping `uint64` as
+/// Go computes it, so one with `p_vaddr` and `p_filesz` 0 takes every address and holds nothing.
+/// The file offset of `va` in it, and how many bytes it has from there; `None` when no header
+/// takes `va`.
+fn go_reader<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    e: &Elf<'_, R, H>,
+    va: u64,
+) -> Option<(u64, u64)> {
+    let endian = e.endian;
+    let p = e.phdrs.iter().find(|p| {
+        let vaddr: u64 = p.p_vaddr(endian).into();
+        let filesz: u64 = p.p_filesz(endian).into();
+        vaddr <= va && va <= vaddr.wrapping_add(filesz).wrapping_sub(1)
+    })?;
+    let into = va - Into::<u64>::into(p.p_vaddr(endian));
+    let room = Into::<u64>::into(p.p_filesz(endian)).saturating_sub(into);
+    // An offset past the end of `u64` holds nothing.
+    Some(
+        match Into::<u64>::into(p.p_offset(endian)).checked_add(into) {
+            Some(offset) => (offset, room),
+            None => (0, 0),
+        },
+    )
+}
+
+/// Go 1.25's `searchMagic`: the virtual address of the first magic at a multiple of 16 in
+/// `[vaddr, vaddr + size)`. Go reads it in 1 MiB chunks from an aligned start, each through its
+/// reader; it searches the bytes it gets, then moves a whole chunk on, and stops where it gets
+/// none. In the section, a byte Go does not read is a gap; in the segment search, Go's stop is its
+/// answer: no build info.
 fn search<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'_, R, H>,
     vaddr: u64,
-    offset: u64,
     size: u64,
+    is_section: bool,
 ) -> Result<Option<u64>, String> {
     let overflow = || "address overflow".to_string();
+    let unread = || "the section is not file-backed at its address".to_string();
     let end = vaddr.checked_add(size).ok_or_else(overflow)?;
     let mut pos = vaddr.checked_add(ALIGN - 1).ok_or_else(overflow)? & !(ALIGN - 1);
+    // Go moves past a misaligned magic, then returns an address off by the bytes it moved.
+    let mut misaligned = false;
     while pos < end {
         let len = (end - pos).min(CHUNK);
-        let file_off = offset.checked_add(pos - vaddr).ok_or_else(overflow)?;
-        let Ok(bytes) = e.data.read_bytes_at(file_off, len) else {
+        let (offset, room) = go_reader(e, pos).unwrap_or((0, 0));
+        let got = len.min(room);
+        if got == 0 {
+            return if is_section { Err(unread()) } else { Ok(None) };
+        }
+        let Ok(bytes) = e.data.read_bytes_at(offset, got) else {
             if e.data.refused() {
                 return Err(format!("search stopped at {} of {size} bytes", pos - vaddr));
             }
             return Err("the searched range is outside the file".to_string());
         };
-        let mut i = 0usize;
-        while i + MAGIC.len() <= bytes.len() {
-            if &bytes[i..i + MAGIC.len()] == MAGIC {
+        let mut from = 0;
+        while let Some(i) = bytes[from..].windows(MAGIC.len()).position(|w| w == MAGIC) {
+            // `pos` is 16-aligned: so is the magic when `i` is.
+            let i = from + i;
+            if (i as u64).is_multiple_of(ALIGN) {
+                if misaligned {
+                    return Err(
+                        "a misaligned magic before it, which Go's search reads at another address"
+                            .to_string(),
+                    );
+                }
                 return Ok(Some(pos + i as u64));
             }
-            i += ALIGN as usize;
+            misaligned = true;
+            from = i + 1;
+        }
+        if got < len && is_section {
+            return Err(unread());
         }
         pos += len;
     }
     Ok(None)
 }
 
-/// `len` bytes at virtual address `va`, from the file.
+/// `len` bytes at virtual address `va`, through Go's reader: fewer is a gap.
 fn at_va<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     va: u64,
     len: u64,
 ) -> Result<&'d [u8], String> {
-    match e.loads.place(va, len) {
-        Place::File(off) => e
-            .data
-            .read_bytes_at(off, len)
-            .map_err(|()| "outside the file or over the budget".to_string()),
-        _ => Err("a pointer outside every PT_LOAD".to_string()),
+    let bytes = prefix_at(e, va, len)?;
+    if (bytes.len() as u64) < len {
+        return Err("a read past the end of its program header".to_string());
     }
+    Ok(bytes)
 }
 
-/// Up to `max` bytes at `va`, as many as its segment has in the file.
+/// Up to `max` bytes at `va`, as many as Go's reader has there (Go's `readData`).
 fn prefix_at<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     va: u64,
     max: u64,
 ) -> Result<&'d [u8], String> {
-    let room = e
-        .loads
-        .0
-        .iter()
-        .find_map(|l| {
-            let end = l.vaddr.checked_add(l.filesz)?;
-            (va >= l.vaddr && va < end).then(|| end - va)
-        })
-        .ok_or_else(|| "a pointer outside every PT_LOAD".to_string())?;
-    at_va(e, va, room.min(max))
+    let (offset, room) =
+        go_reader(e, va).ok_or_else(|| "a pointer outside every program header".to_string())?;
+    e.data
+        .read_bytes_at(offset, room.min(max))
+        .map_err(|()| "outside the file or over the budget".to_string())
 }
 
 /// Go's `binary.Uvarint`: the value and the bytes it took.

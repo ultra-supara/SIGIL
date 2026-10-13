@@ -3,6 +3,7 @@
 mod common;
 
 use common::elf::*;
+use sigil_engine::binary::goinfo::CHUNK;
 use sigil_engine::binary::{parse, BinaryBudgets, Parsed};
 use sigil_model::GoBuildInfo;
 
@@ -183,10 +184,10 @@ fn the_whole_segment_is_searched_from_an_aligned_start() {
         BinaryBudgets::default(),
     );
     check(p.go.as_ref().expect("found past 64 KiB"), "amd64");
-    // An unaligned segment start: the magic sits at the first 16-aligned address past a 64 KiB
-    // chunk measured from the unaligned start, so it would cross that chunk's end.
+    // An unaligned segment start: the magic sits at the first 16-aligned address past one of
+    // Go's 1 MiB chunks measured from the unaligned start, so it would cross that chunk's end.
     let vaddr = 0x40_0003;
-    let magic_va = (vaddr + 0x10000 + 15) & !15;
+    let magic_va = (vaddr + CHUNK + 15) & !15;
     let p = go_of(
         &in_segment(&piece, vaddr, magic_va - vaddr),
         BinaryBudgets::default(),
@@ -224,6 +225,125 @@ fn no_build_info_after_a_full_search_is_not_a_gap() {
         BinaryBudgets::default(),
     );
     assert!(p.go.is_none());
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): Go's `elfExe.DataReader` reads an address through the first program
+/// header of any type that holds it. A PT_NOTE listed before the PT_LOAD maps the section's
+/// address to another piece: Go reads that one, and so does SIGIL.
+#[test]
+fn go_reads_through_the_first_program_header_that_holds_the_address() {
+    let amd64 = fixture("go/go-amd64.buildinfo");
+    let arm64 = fixture("go/go-arm64.buildinfo");
+    let len = arm64.len() as u64;
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, &amd64).put(0x2_0000, &arm64);
+    let end = img.body.len() as u64;
+    img.seg(PT_NOTE, PF_R, 0x2_0000, 0x4000, len, len)
+        .seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end)
+        .sec(".go.buildinfo", SHT_PROGBITS, 0x4000, 0x4000, len);
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    check(
+        p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps)),
+        "arm64",
+    );
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): Go computes `p_vaddr + p_filesz - 1` in `uint64`, so a header with both
+/// 0 (a PT_GNU_STACK) takes every address and holds nothing. Listed first, it hides the section
+/// from Go (a gap) and the segment search finds nothing (no build info, as Go finds none).
+#[test]
+fn a_header_at_address_0_of_size_0_listed_first_takes_every_address() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, &piece);
+    let end = img.body.len() as u64;
+    img.seg(PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0)
+        .seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end)
+        .sec(
+            ".go.buildinfo",
+            SHT_PROGBITS,
+            0x4000,
+            0x4000,
+            piece.len() as u64,
+        );
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: the section is not file-backed at its address"]
+    );
+
+    let mut img = ElfImage::new(2);
+    img.put(0x2000, &piece);
+    let len = piece.len() as u64;
+    img.seg(PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0).seg(
+        PT_LOAD,
+        PF_R | PF_W,
+        0x2000,
+        0x40_0000,
+        len,
+        len,
+    );
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): without the section, Go searches the first writable, non-executable
+/// PT_LOAD to its `p_memsz`, in 1 MiB chunks, each read through its reader: it searches the bytes
+/// it gets, then moves a whole chunk on. Past `p_filesz`, a header listed later that holds the
+/// second chunk's address is read; one that holds an address inside the first chunk is not.
+#[test]
+fn the_segment_search_runs_to_p_memsz_through_any_header() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let vaddr = 0x40_0000;
+    let len = piece.len() as u64;
+    let image = |note_at: u64| {
+        let mut img = ElfImage::new(2);
+        img.put(0x2000, b"just data").put(0x8000, &piece);
+        img.seg(PT_LOAD, PF_R | PF_X, 0, 0, 0x1000, 0x1000)
+            .seg(PT_LOAD, PF_R | PF_W, 0x2000, vaddr, 0x100, 0x20_0000)
+            .seg(PT_NOTE, PF_R, 0x8000, vaddr + note_at, len, len);
+        go_of(&img.build(), BinaryBudgets::default())
+    };
+    let p = image(CHUNK);
+    let info = p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps));
+    check(info, "amd64");
+    assert_eq!(info.at, sigil_model::Loc::VAddr(vaddr + CHUNK));
+    let p = image(0x1_0000);
+    assert!(p.go.is_none(), "Go has moved past it");
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): Go's `searchMagic` moves past a misaligned magic and then returns
+/// `start + i` with `i` counted from where it moved to: another address than the aligned magic's.
+/// A misaligned magic before the build info is a gap; one after it changes nothing.
+#[test]
+fn a_misaligned_magic_before_the_build_info_is_a_gap() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let misaligned = |at: usize| {
+        let mut m = vec![0u8; at];
+        m.extend_from_slice(b"\xff Go buildinf:");
+        m.resize(m.len().next_multiple_of(16), 0);
+        m
+    };
+    let before = [misaligned(3), piece.clone()].concat();
+    let p = go_of(&with_section(&before), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: a misaligned magic before it, which Go's search reads at another address"]
+    );
+    let mut after = piece.clone();
+    after.resize(after.len().next_multiple_of(16), 0);
+    after.extend(misaligned(3));
+    let p = go_of(&with_section(&after), BinaryBudgets::default());
+    check(
+        p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps)),
+        "amd64",
+    );
     assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
 }
 
