@@ -698,6 +698,13 @@ fn a_section_without_its_tag_is_a_gap_when_pt_dynamic_is_read() {
     img.sec_linked(".gnu.version_d", SHT_GNU_VERDEF, 0x3a00, 0x3a00, 6, 2, 0);
     let (_, p) = facts_of(&img.build(), BinaryBudgets::default());
     assert_eq!(p.gaps, ["versions: .gnu.version_d without DT_VERDEF"]);
+    // With no PT_DYNAMIC, no loader links the file: nothing to agree with, so no gap.
+    let mut img = dynsym_elf(&[], &[]);
+    img.segs.retain(|s| s.p_type != PT_DYNAMIC);
+    img.sec_linked(".gnu.version", SHT_GNU_VERSYM, 0x3a00, 0x3a00, 6, 1, 0);
+    let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(f.exports, 2, "the symbols are still read");
+    assert!(p.gaps.is_empty(), "{:?}", p.gaps);
 }
 
 /// Spec §3.2: glibc refuses a `DT_SYMENT` other than its symbol size.
@@ -920,12 +927,13 @@ fn dt_hash_chains_must_stay_within_its_symbols() {
         unreadable,
         "a chain past nchain"
     );
-    assert_eq!(gaps(sysv_hash_with(&[1], &[0, 2, 1])), unreadable, "a loop");
+    // Joined first: without the check, a loop would never end.
     assert_eq!(
         gaps(sysv_hash_with(&[1, 2], &[0, 2, 0])),
         unreadable,
         "two chains joined"
     );
+    assert_eq!(gaps(sysv_hash_with(&[1], &[0, 2, 1])), unreadable, "a loop");
 }
 
 #[test]
