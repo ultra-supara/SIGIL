@@ -28,33 +28,6 @@ fn unknown_with(v: &DataValue, why: &str) -> bool {
     matches!(v, DataValue::Unknown { why: w } if w.contains(why))
 }
 
-/// The ELF64 little-endian program headers of `bytes`: `(p_type, p_offset, p_vaddr, p_filesz)`.
-fn phdrs(bytes: &[u8]) -> Vec<(u32, u64, u64, u64)> {
-    let u16le = |a: usize| u16::from_le_bytes([bytes[a], bytes[a + 1]]) as usize;
-    let u64le = |a: usize| u64::from_le_bytes(bytes[a..a + 8].try_into().unwrap());
-    let (phoff, phnum) = (u64le(32) as usize, u16le(56));
-    (0..phnum)
-        .map(|i| {
-            let p = phoff + i * 56;
-            let t = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
-            (t, u64le(p + 8), u64le(p + 16), u64le(p + 32))
-        })
-        .collect()
-}
-
-/// Replaces every dynamic tag `from` with `to` (e.g. hides DT_RELA as DT_DEBUG).
-fn retag(bytes: &mut [u8], from: i64, to: i64) {
-    let (_, off, _, size) = phdrs(bytes)
-        .into_iter()
-        .find(|p| p.0 == PT_DYNAMIC)
-        .unwrap();
-    for e in (off as usize..(off + size) as usize).step_by(16) {
-        if i64::from_le_bytes(bytes[e..e + 8].try_into().unwrap()) == from {
-            bytes[e..e + 8].copy_from_slice(&to.to_le_bytes());
-        }
-    }
-}
-
 #[test]
 fn x86_64_values_come_from_relative_relocations() {
     let (v, p) = values(&fixture("elf/libdata.so"));
@@ -124,6 +97,9 @@ fn rel_or_relr_and_unrelocated_position_independent_pointers_are_unknown() {
     assert!(unknown_with(commit, "position-independent"), "{commit:?}");
 }
 
+/// Another machine's relocations are not read, and how many bytes they write is not known: every
+/// value after one is `Unknown`, LLAMA_BUILD_NUMBER (0x4018, after the RELATIVE at 0x4010) too
+/// (review of #91, P1-2).
 #[test]
 fn another_machine_s_relocations_are_not_read() {
     let mut bytes = fixture("elf/libdata.so");
@@ -132,8 +108,7 @@ fn another_machine_s_relocations_are_not_read() {
     assert_eq!(v.len(), 4, "{v:?}");
     assert!(
         v.iter()
-            .filter(|(s, _)| s != "LLAMA_BUILD_NUMBER")
-            .all(|(_, x)| unknown_with(x, "not read")),
+            .all(|(_, x)| unknown_with(x, "relocations of machine 22 are not read")),
         "{v:?}"
     );
 }
@@ -206,6 +181,309 @@ fn a_known_symbol_defined_twice_has_no_single_value() {
             .contains(&"LLAMA_COMMIT: defined more than once".to_string()),
         "{:?}",
         p.gaps
+    );
+}
+
+/// The `.dynsym` entry (its file offset) of the symbol named `name`, in an ELF64 little-endian
+/// file.
+fn dynsym_entry(bytes: &[u8], name: &[u8]) -> usize {
+    let secs = sections64(bytes);
+    let (_, _, _, sym_off, sym_size, link) =
+        secs.iter().find(|s| s.1 == SHT_DYNSYM).unwrap().clone();
+    let str_off = secs[link as usize].3 as usize;
+    (sym_off as usize..(sym_off + sym_size) as usize)
+        .step_by(24)
+        .find(|e| {
+            let at = str_off + u32::from_le_bytes(bytes[*e..*e + 4].try_into().unwrap()) as usize;
+            bytes[at..].starts_with(name) && bytes[at + name.len()] == 0
+        })
+        .unwrap()
+}
+
+/// Spec §3.3: a known name is looked for in every defined symbol, whatever its type.
+#[test]
+fn a_known_name_of_another_type_is_unknown_never_absent() {
+    // LLAMA_COMMIT typed STT_FUNC.
+    let mut bytes = fixture("elf/libdata.so");
+    let e = dynsym_entry(&bytes, b"LLAMA_COMMIT");
+    bytes[e + 4] = (bytes[e + 4] & 0xf0) | 2;
+    let (v, p) = values(&bytes);
+    let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+    assert!(
+        unknown_with(commit, "not a data object (STT_FUNC)"),
+        "{commit:?}"
+    );
+    assert!(
+        p.gaps
+            .contains(&"LLAMA_COMMIT: not a data object (STT_FUNC)".to_string()),
+        "{:?}",
+        p.gaps
+    );
+
+    // A second definition of LLAMA_COMMIT typed STT_NOTYPE (LLAMA_COMPILER renamed).
+    let mut bytes = fixture("elf/libdata.so");
+    let commit = dynsym_entry(&bytes, b"LLAMA_COMMIT");
+    let compiler = dynsym_entry(&bytes, b"LLAMA_COMPILER");
+    let st_name = bytes[commit..commit + 4].to_vec();
+    bytes[compiler..compiler + 4].copy_from_slice(&st_name);
+    bytes[compiler + 4] &= 0xf0;
+    let (v, _) = values(&bytes);
+    let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+    assert!(unknown_with(commit, "more than once"), "{v:?}");
+}
+
+/// Spec §3.4: a relocation is matched by the bytes it writes, not by its address alone. In
+/// libdata.so (libdata.so.readelf), LLAMA_BUILD_NUMBER is the 4-byte int at 0x4018, LLAMA_COMMIT's
+/// string "6f3a9f3de" is at 0x201c, and a RELATIVE at 0x4010 (`__dso_handle`, addend 0x4010)
+/// writes 0x4010..0x4018.
+#[test]
+fn a_relocation_overlapping_a_value_or_its_string_makes_it_unknown() {
+    // Moved to 0x4014: it now writes 0x4014..0x401c, over the int.
+    let mut bytes = fixture("elf/libdata.so");
+    let entry = relative_entry(&bytes, 0x4010, 0x4010);
+    bytes[entry..entry + 8].copy_from_slice(&0x4014u64.to_le_bytes());
+    let (v, p) = values(&bytes);
+    let number = &v.iter().find(|(s, _)| s == "LLAMA_BUILD_NUMBER").unwrap().1;
+    assert!(
+        unknown_with(number, "a relocation overlaps it (R_X86_64_RELATIVE)"),
+        "{number:?}"
+    );
+    assert!(
+        p.gaps.contains(
+            &"LLAMA_BUILD_NUMBER: a relocation overlaps it (R_X86_64_RELATIVE)".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+
+    // Moved to 0x2020: it writes into LLAMA_COMMIT's string.
+    let mut bytes = fixture("elf/libdata.so");
+    let entry = relative_entry(&bytes, 0x4010, 0x4010);
+    bytes[entry..entry + 8].copy_from_slice(&0x2020u64.to_le_bytes());
+    let (v, p) = values(&bytes);
+    let commit = &v.iter().find(|(s, _)| s == "LLAMA_COMMIT").unwrap().1;
+    assert!(
+        unknown_with(
+            commit,
+            "a relocation writes into the string (R_X86_64_RELATIVE)"
+        ),
+        "{commit:?}"
+    );
+    assert!(
+        v.contains(&("LLAMA_COMPILER".into(), text("GNU 11.2.1"))),
+        "the other strings are unchanged: {v:?}"
+    );
+    let ContainerFacts::Elf(f) = &p.container else {
+        panic!()
+    };
+    let d = f.data.iter().find(|d| d.symbol == "LLAMA_COMMIT").unwrap();
+    assert_eq!(
+        d.at.len(),
+        1,
+        "an Unknown value has only its symbol: {:?}",
+        d.at
+    );
+    assert!(
+        p.gaps.contains(
+            &"LLAMA_COMMIT: a relocation writes into the string (R_X86_64_RELATIVE)".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+
+    // RELA RELATIVE at every pointer, plus a DT_RELR table: RELR may write the same bytes.
+    let mut bytes = fixture("elf/libdata.so");
+    retag(&mut bytes, DT_RELACOUNT, DT_RELR);
+    let (v, _) = values(&bytes);
+    assert_eq!(v.len(), 4, "{v:?}");
+    assert!(v.iter().all(|(_, x)| unknown_with(x, "REL/RELR")), "{v:?}");
+}
+
+/// Review of #91 (P1-2): a relocation writes as many bytes as its type does, not a word. In
+/// libdata.so the RELATIVE at 0x4010 (`__dso_handle`) is retyped; LLAMA_BUILD_NUMBER is the 4-byte
+/// int at 0x4018, LLAMA_BUILD_TARGET's pointer is at 0x4020, and LLAMA_COMMIT's at 0x4030.
+#[test]
+fn a_relocation_writes_as_many_bytes_as_its_type_does() {
+    // That relocation at `r_offset`, of type `r_type`, naming symbol `sym`; LLAMA_COMPILER
+    // (symbol 8) made `size` bytes long. DT_RELACOUNT is lowered to the 2 entries before it, which
+    // glibc applies as RELATIVE whatever their type.
+    let with_size = |r_offset: u64, r_type: u32, sym: u64, size: u64| {
+        let mut bytes = fixture("elf/libdata.so");
+        set_dynamic(&mut bytes, DT_RELACOUNT, 2);
+        let entry = relative_entry(&bytes, 0x4010, 0x4010);
+        bytes[entry..entry + 8].copy_from_slice(&r_offset.to_le_bytes());
+        bytes[entry + 8..entry + 16]
+            .copy_from_slice(&((sym << 32) | u64::from(r_type)).to_le_bytes());
+        let compiler = dynsym_entry(&bytes, b"LLAMA_COMPILER");
+        bytes[compiler + 16..compiler + 24].copy_from_slice(&size.to_le_bytes());
+        values(&bytes)
+    };
+    let with = |r_offset: u64, r_type: u32, sym: u64| with_size(r_offset, r_type, sym, 16);
+    let value = |v: &[(String, DataValue)], name: &str| {
+        v.iter().find(|(s, _)| s == name).unwrap().1.clone()
+    };
+    // A COPY of symbol 8 writes its 16 bytes, 0x4010..0x4020: over the int, short of the pointers.
+    let (v, p) = with(0x4010, R_X86_64_COPY, 8);
+    assert!(
+        unknown_with(
+            &value(&v, "LLAMA_BUILD_NUMBER"),
+            "a relocation overlaps it (R_X86_64_COPY)"
+        ),
+        "{v:?}"
+    );
+    assert_eq!(value(&v, "LLAMA_BUILD_TARGET"), text("x86_64-linux-gnu"));
+    assert!(
+        p.gaps
+            .contains(&"LLAMA_BUILD_NUMBER: a relocation overlaps it (R_X86_64_COPY)".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    // A TLSDESC writes two words, 0x4010..0x4020.
+    let (v, _) = with(0x4010, R_X86_64_TLSDESC, 0);
+    assert!(
+        unknown_with(
+            &value(&v, "LLAMA_BUILD_NUMBER"),
+            "a relocation overlaps it (R_X86_64_TLSDESC)"
+        ),
+        "{v:?}"
+    );
+    assert_eq!(value(&v, "LLAMA_BUILD_TARGET"), text("x86_64-linux-gnu"));
+    // A COPY naming a symbol past .dynsym: no size bounds it, so it reaches every value after it.
+    let (v, p) = with(0x4010, R_X86_64_COPY, 99);
+    assert!(
+        v.iter()
+            .all(|(_, x)| matches!(x, DataValue::Unknown { .. })),
+        "{v:?}"
+    );
+    assert_eq!(
+        value(&v, "LLAMA_COMMIT"),
+        DataValue::Unknown {
+            why: "relocated more than once".to_string()
+        }
+    );
+    assert!(
+        p.gaps.contains(
+            &"symbols: a relocation names symbol 99 past .dynsym's 13 entries".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+    // A NONE writes nothing: at the int or inside it, the int is still read, with no gap. So
+    // does a COPY of a 0-byte symbol inside it (sixth review of #91: an empty write inside a
+    // value is no overlap).
+    for (at, r_type, sym, size) in [
+        (0x4018, R_X86_64_NONE, 0, 16),
+        (0x4019, R_X86_64_NONE, 0, 16),
+        (0x4019, R_X86_64_COPY, 8, 0),
+    ] {
+        let (v, p) = with_size(at, r_type, sym, size);
+        assert_eq!(
+            value(&v, "LLAMA_BUILD_NUMBER"),
+            DataValue::Int(1),
+            "type {r_type} at {at:#x}"
+        );
+        assert!(p.gaps.is_empty(), "type {r_type} at {at:#x}: {:?}", p.gaps);
+    }
+}
+
+/// Second review of #91 (P2): an entry that `DT_RELA` and `DT_JMPREL` both list is one relocation.
+/// glibc takes a `DT_JMPREL` that ends where `DT_RELA` ends out of `DT_RELA`. Otherwise glibc
+/// and musl apply the entry twice, and a RELA entry writes the same bytes each time. In libdata.so,
+/// LLAMA_COMMIT's RELATIVE is `.rela.dyn`'s entry 5, at 0x568.
+#[test]
+fn an_entry_listed_by_dt_rela_and_dt_jmprel_is_one_relocation() {
+    assert_eq!(
+        relative_entry(&fixture("elf/libdata.so"), 0x4030, 0x201c),
+        0x568
+    );
+    // DT_JMPREL on that entry, inside DT_RELA (0xf0 bytes) or at its end (0x90).
+    for relasz in [0xf0, 0x90] {
+        let mut bytes = fixture("elf/libdata.so");
+        set_dynamic(&mut bytes, DT_RELASZ, relasz);
+        set_dynamic(&mut bytes, DT_JMPREL, 0x568);
+        set_dynamic(&mut bytes, DT_PLTRELSZ, 24);
+        let (v, p) = values(&bytes);
+        assert!(
+            v.contains(&("LLAMA_COMMIT".into(), text("6f3a9f3de"))),
+            "DT_RELASZ {relasz:#x}: {v:?}"
+        );
+        assert!(p.gaps.is_empty(), "DT_RELASZ {relasz:#x}: {:?}", p.gaps);
+    }
+    // A DT_JMPREL that ends where DT_RELA ends but is longer: glibc's subtraction wraps.
+    let mut bytes = fixture("elf/libdata.so");
+    set_dynamic(&mut bytes, DT_RELA, 0x568);
+    set_dynamic(&mut bytes, DT_RELASZ, 24);
+    set_dynamic(&mut bytes, DT_RELACOUNT, 1);
+    set_dynamic(&mut bytes, DT_JMPREL, 0x550);
+    set_dynamic(&mut bytes, DT_PLTRELSZ, 48);
+    let (v, p) = values(&bytes);
+    let gap = "dynamic: malformed: DT_JMPREL ends where DT_RELA ends and is longer";
+    assert!(p.gaps.contains(&gap.to_string()), "{:?}", p.gaps);
+    assert!(
+        v.iter()
+            .all(|(_, x)| unknown_with(x, "relocations not read")),
+        "{v:?}"
+    );
+}
+
+/// Second review of #91 (P2): glibc applies the first `DT_RELACOUNT` entries of `DT_RELA` as
+/// RELATIVE whatever their type (x86-64 asserts it, without a check in a release build of the
+/// others), and does not stop at `DT_RELASZ`: a count past it reads on past the table. musl
+/// ignores `DT_RELACOUNT`. libdata.so's is 6, and its first 6 entries are RELATIVE.
+#[test]
+fn dt_relacount_must_cover_relative_relocations_within_dt_relasz() {
+    let not_relative = "dynamic: malformed: DT_RELACOUNT covers a relocation that is not RELATIVE";
+    // __dso_handle's RELATIVE (entry 2) retyped NONE: glibc writes it, musl does not.
+    let retyped = |bytes: &mut Vec<u8>| {
+        let entry = relative_entry(bytes, 0x4010, 0x4010);
+        bytes[entry + 8..entry + 16].copy_from_slice(&u64::from(R_X86_64_NONE).to_le_bytes());
+    };
+    let mut bytes = fixture("elf/libdata.so");
+    retyped(&mut bytes);
+    let (v, p) = values(&bytes);
+    assert!(p.gaps.contains(&not_relative.to_string()), "{:?}", p.gaps);
+    assert!(
+        v.iter()
+            .all(|(_, x)| unknown_with(x, "relocations not read")),
+        "{v:?}"
+    );
+    // The same with no known data symbol: the tables are checked where PT_DYNAMIC is read.
+    let mut bytes = without_known_symbols(&fixture("elf/libdata.so"));
+    retyped(&mut bytes);
+    let (v, p) = values(&bytes);
+    assert!(v.is_empty());
+    assert_eq!(p.gaps, [not_relative]);
+    // A count past DT_RELASZ's 10 entries.
+    let mut bytes = fixture("elf/libdata.so");
+    set_dynamic(&mut bytes, DT_RELACOUNT, 11);
+    let (_, p) = values(&bytes);
+    assert!(
+        p.gaps.contains(
+            &"dynamic: malformed: DT_RELACOUNT is past DT_RELASZ's 10 entries".to_string()
+        ),
+        "{:?}",
+        p.gaps
+    );
+}
+
+/// Third review of #91 (P1): glibc dereferences `DT_RELAENT` whenever `DT_RELA` is there; the
+/// reviewer's library with it retagged crashed at load. libdata.so with `DT_RELAENT` retagged
+/// `DT_DEBUG`: malformed, and no value is read from the tables.
+#[test]
+fn dt_rela_without_dt_relaent_is_malformed() {
+    let mut bytes = fixture("elf/libdata.so");
+    retag(&mut bytes, DT_RELAENT, DT_DEBUG);
+    let (v, p) = values(&bytes);
+    assert!(
+        p.gaps
+            .contains(&"dynamic: malformed: DT_RELA without DT_RELAENT".to_string()),
+        "{:?}",
+        p.gaps
+    );
+    assert!(
+        v.iter()
+            .all(|(_, x)| unknown_with(x, "relocations not read")),
+        "{v:?}"
     );
 }
 

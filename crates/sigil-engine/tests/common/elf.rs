@@ -28,6 +28,28 @@ pub const DT_SYMTAB: i64 = 6;
 pub const DT_STRSZ: i64 = 10;
 pub const DT_SONAME: i64 = 14;
 pub const DT_RELR: i64 = 36;
+pub const DT_RELRSZ: i64 = 35;
+pub const DT_RELRENT: i64 = 37;
+pub const SHT_NOBITS: u32 = 8;
+pub const DT_HASH: i64 = 4;
+pub const DT_SYMENT: i64 = 11;
+pub const DT_REL: i64 = 17;
+pub const DT_RELSZ: i64 = 18;
+pub const DT_RELENT: i64 = 19;
+pub const DT_PLTREL: i64 = 20;
+pub const DT_JMPREL: i64 = 23;
+pub const DT_GNU_HASH: i64 = 0x6fff_fef5;
+pub const DT_RELACOUNT: i64 = 0x6fff_fff9;
+pub const SHT_GNU_VERNEED: u32 = 0x6fff_fffe;
+pub const SHT_GNU_VERDEF: u32 = 0x6fff_fffd;
+pub const DT_DEBUG: i64 = 21;
+pub const DT_VERSYM: i64 = 0x6fff_fff0;
+pub const DT_VERDEF: i64 = 0x6fff_fffc;
+pub const DT_VERNEED: i64 = 0x6fff_fffe;
+pub const PT_GNU_STACK: u32 = 0x6474_e551;
+pub const R_X86_64_NONE: u32 = 0;
+pub const R_X86_64_COPY: u32 = 5;
+pub const R_X86_64_TLSDESC: u32 = 36;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Seg {
@@ -271,6 +293,16 @@ pub fn sections64(bytes: &[u8]) -> Vec<(String, u32, usize, u64, u64, u32)> {
         .collect()
 }
 
+/// The file offset of the first program header of `p_type` in an ELF64 little-endian file.
+pub fn phdr64(bytes: &[u8], p_type: u32) -> usize {
+    let phoff = u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize;
+    let phnum = u16::from_le_bytes([bytes[56], bytes[57]]) as usize;
+    (0..phnum)
+        .map(|i| phoff + i * 56)
+        .find(|&p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) == p_type)
+        .unwrap_or_else(|| panic!("no program header of type {p_type}"))
+}
+
 /// `Elf64_Dyn` entries, little-endian, ending with `DT_NULL`.
 pub fn dynamic(entries: &[(i64, u64)]) -> Vec<u8> {
     let mut out = vec![];
@@ -296,6 +328,19 @@ pub fn set_dynamic(bytes: &mut [u8], tag: i64, value: u64) {
         .find(|&e| i64::from_le_bytes(bytes[e..e + 8].try_into().unwrap()) == tag)
         .unwrap_or_else(|| panic!("no dynamic tag {tag}"));
     bytes[at + 8..at + 16].copy_from_slice(&value.to_le_bytes());
+}
+
+/// Replaces every dynamic tag `from` with `to` in the `PT_DYNAMIC` of an ELF64 little-endian file
+/// (e.g. hides `DT_RELA` as `DT_DEBUG`).
+pub fn retag(bytes: &mut [u8], from: i64, to: i64) {
+    let p = phdr64(bytes, PT_DYNAMIC);
+    let u64le = |b: &[u8], a: usize| u64::from_le_bytes(b[a..a + 8].try_into().unwrap()) as usize;
+    let (off, size) = (u64le(bytes, p + 8), u64le(bytes, p + 32));
+    for e in (off..off + size).step_by(16) {
+        if i64::from_le_bytes(bytes[e..e + 8].try_into().unwrap()) == from {
+            bytes[e..e + 8].copy_from_slice(&to.to_le_bytes());
+        }
+    }
 }
 
 /// `bytes` with every `LLAMA_` renamed `XLAMA_`: no known data symbol is left.

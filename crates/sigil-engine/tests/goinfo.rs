@@ -3,6 +3,7 @@
 mod common;
 
 use common::elf::*;
+use sigil_engine::binary::goinfo::CHUNK;
 use sigil_engine::binary::{parse, BinaryBudgets, Parsed};
 use sigil_model::GoBuildInfo;
 
@@ -112,6 +113,66 @@ fn real_pieces_match_go_version_m() {
     }
 }
 
+/// Spec §3.6: Go reads `.go.buildinfo` at its address, through the program headers, whatever the
+/// section's type or file offset says.
+#[test]
+fn the_section_is_read_at_its_address_as_go_reads_it() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let section = |sh_type: u32, offset: u64, addr: u64| {
+        let mut img = ElfImage::new(2);
+        img.put(0x4000, &piece);
+        let end = img.body.len() as u64;
+        img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end).sec(
+            ".go.buildinfo",
+            sh_type,
+            offset,
+            addr,
+            piece.len() as u64,
+        );
+        go_of(&img.build(), BinaryBudgets::default())
+    };
+    // A wrong sh_offset: still read at its address.
+    let p = section(SHT_PROGBITS, 0x100, 0x4000);
+    check(
+        p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps)),
+        "amd64",
+    );
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+    // SHT_NOBITS: read as the section, not found by the segment search.
+    let p = section(SHT_NOBITS, 0x4000, 0x4000);
+    let info = p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps));
+    assert!(
+        matches!(info.at, sigil_model::Loc::Section { .. }),
+        "{:?}",
+        info.at
+    );
+    // An address no PT_LOAD maps.
+    let p = section(SHT_PROGBITS, 0x4000, 0x9_0000);
+    assert!(p.go.is_none());
+    let gaps: Vec<String> = go_gaps(&p).into_iter().cloned().collect();
+    assert_eq!(
+        gaps,
+        ["go.buildinfo: the section is not file-backed at its address"]
+    );
+    // Review of #91: a section Go's reader holds only in part (the PT_LOAD ends at 0x4100), with
+    // no magic in that part. Go moves past the rest unread; SIGIL cannot say it holds nothing.
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, b"no build info here").put(0x40ff, &[0]);
+    img.seg(PT_LOAD, PF_R | PF_W, 0, 0, 0x4100, 0x4100).sec(
+        ".go.buildinfo",
+        SHT_PROGBITS,
+        0x4000,
+        0x4000,
+        0x200,
+    );
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: the section is not file-backed at its address"]
+    );
+}
+
 /// An ELF without sections whose first writable PT_LOAD starts at `vaddr` and holds `piece` at
 /// segment offset `at`.
 fn in_segment(piece: &[u8], vaddr: u64, at: u64) -> Vec<u8> {
@@ -140,10 +201,10 @@ fn the_whole_segment_is_searched_from_an_aligned_start() {
         BinaryBudgets::default(),
     );
     check(p.go.as_ref().expect("found past 64 KiB"), "amd64");
-    // An unaligned segment start: the magic sits at the first 16-aligned address past a 64 KiB
-    // chunk measured from the unaligned start, so it would cross that chunk's end.
+    // An unaligned segment start: the magic sits at the first 16-aligned address past one of
+    // Go's 1 MiB chunks measured from the unaligned start, so it would cross that chunk's end.
     let vaddr = 0x40_0003;
-    let magic_va = (vaddr + 0x10000 + 15) & !15;
+    let magic_va = (vaddr + CHUNK + 15) & !15;
     let p = go_of(
         &in_segment(&piece, vaddr, magic_va - vaddr),
         BinaryBudgets::default(),
@@ -181,6 +242,125 @@ fn no_build_info_after_a_full_search_is_not_a_gap() {
         BinaryBudgets::default(),
     );
     assert!(p.go.is_none());
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): Go's `elfExe.DataReader` reads an address through the first program
+/// header of any type that holds it. A PT_NOTE listed before the PT_LOAD maps the section's
+/// address to another piece: Go reads that one, and so does SIGIL.
+#[test]
+fn go_reads_through_the_first_program_header_that_holds_the_address() {
+    let amd64 = fixture("go/go-amd64.buildinfo");
+    let arm64 = fixture("go/go-arm64.buildinfo");
+    let len = arm64.len() as u64;
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, &amd64).put(0x2_0000, &arm64);
+    let end = img.body.len() as u64;
+    img.seg(PT_NOTE, PF_R, 0x2_0000, 0x4000, len, len)
+        .seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end)
+        .sec(".go.buildinfo", SHT_PROGBITS, 0x4000, 0x4000, len);
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    check(
+        p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps)),
+        "arm64",
+    );
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): Go computes `p_vaddr + p_filesz - 1` in `uint64`, so a header with both
+/// 0 (a PT_GNU_STACK) takes every address and holds nothing. Listed first, it hides the section
+/// from Go (a gap) and the segment search finds nothing (no build info, as Go finds none).
+#[test]
+fn a_header_at_address_0_of_size_0_listed_first_takes_every_address() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, &piece);
+    let end = img.body.len() as u64;
+    img.seg(PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0)
+        .seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end)
+        .sec(
+            ".go.buildinfo",
+            SHT_PROGBITS,
+            0x4000,
+            0x4000,
+            piece.len() as u64,
+        );
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: the section is not file-backed at its address"]
+    );
+
+    let mut img = ElfImage::new(2);
+    img.put(0x2000, &piece);
+    let len = piece.len() as u64;
+    img.seg(PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0).seg(
+        PT_LOAD,
+        PF_R | PF_W,
+        0x2000,
+        0x40_0000,
+        len,
+        len,
+    );
+    let p = go_of(&img.build(), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): without the section, Go searches the first writable, non-executable
+/// PT_LOAD to its `p_memsz`, in 1 MiB chunks, each read through its reader: it searches the bytes
+/// it gets, then moves a whole chunk on. Past `p_filesz`, a header listed later that holds the
+/// second chunk's address is read; one that holds an address inside the first chunk is not.
+#[test]
+fn the_segment_search_runs_to_p_memsz_through_any_header() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let vaddr = 0x40_0000;
+    let len = piece.len() as u64;
+    let image = |note_at: u64| {
+        let mut img = ElfImage::new(2);
+        img.put(0x2000, b"just data").put(0x8000, &piece);
+        img.seg(PT_LOAD, PF_R | PF_X, 0, 0, 0x1000, 0x1000)
+            .seg(PT_LOAD, PF_R | PF_W, 0x2000, vaddr, 0x100, 0x20_0000)
+            .seg(PT_NOTE, PF_R, 0x8000, vaddr + note_at, len, len);
+        go_of(&img.build(), BinaryBudgets::default())
+    };
+    let p = image(CHUNK);
+    let info = p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps));
+    check(info, "amd64");
+    assert_eq!(info.at, sigil_model::Loc::VAddr(vaddr + CHUNK));
+    let p = image(0x1_0000);
+    assert!(p.go.is_none(), "Go has moved past it");
+    assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
+}
+
+/// Review of #91 (P2-2): Go's `searchMagic` moves past a misaligned magic and then returns
+/// `start + i` with `i` counted from where it moved to: another address than the aligned magic's.
+/// A misaligned magic before the build info is a gap; one after it changes nothing.
+#[test]
+fn a_misaligned_magic_before_the_build_info_is_a_gap() {
+    let piece = fixture("go/go-amd64.buildinfo");
+    let misaligned = |at: usize| {
+        let mut m = vec![0u8; at];
+        m.extend_from_slice(b"\xff Go buildinf:");
+        m.resize(m.len().next_multiple_of(16), 0);
+        m
+    };
+    let before = [misaligned(3), piece.clone()].concat();
+    let p = go_of(&with_section(&before), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: a misaligned magic before it, which Go's search reads at another address"]
+    );
+    let mut after = piece.clone();
+    after.resize(after.len().next_multiple_of(16), 0);
+    after.extend(misaligned(3));
+    let p = go_of(&with_section(&after), BinaryBudgets::default());
+    check(
+        p.go.as_ref().unwrap_or_else(|| panic!("{:?}", p.gaps)),
+        "amd64",
+    );
     assert!(go_gaps(&p).is_empty(), "{:?}", p.gaps);
 }
 
@@ -329,6 +509,22 @@ fn malformed_build_info_is_a_gap_never_a_panic() {
             p.gaps
         );
     }
+}
+
+/// Review of #91: Go's reader gives at most its program header's bytes. A modinfo that claims 100
+/// bytes where the PT_LOAD has 40 left is a gap of its own, not a shorter string.
+#[test]
+fn a_string_cut_by_the_end_of_its_program_header_is_a_gap() {
+    let mut body = uvarint(5);
+    body.extend_from_slice(b"go1.2");
+    body.extend(uvarint(100));
+    body.extend_from_slice(&[b'm'; 40]);
+    let p = go_of(&inline_with(&body), BinaryBudgets::default());
+    assert!(p.go.is_none());
+    assert_eq!(
+        go_gaps(&p),
+        ["go.buildinfo: a read past the end of its program header"]
+    );
 }
 
 /// An inline piece whose modinfo is exactly `modinfo` (no sentinel added).

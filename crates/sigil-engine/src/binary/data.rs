@@ -1,7 +1,7 @@
 //! Known data symbols (spec §4.4): their value after loading, or `Unknown` with the reason.
 //! Never the stored word as a guess: a word some relocation rewrites at load is not a value.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use object::elf;
 use object::read::elf::{FileHeader, SectionHeader, Sym, SymbolTable};
@@ -9,7 +9,7 @@ use object::read::{ReadCacheOps, ReadRef};
 use object::Endianness;
 use sigil_model::{DataSymbol, DataValue, Loc, UntrustedText};
 
-use super::elf::{Dynamic, Elf};
+use super::elf::{Dynamic, Elf, Reloc};
 use super::read::Bounded;
 use super::vaddr::Place;
 
@@ -31,17 +31,15 @@ pub const KNOWN: &[(&str, Kind)] = &[
 /// The longest string read (bytes before the NUL).
 pub const MAX_STRING: u64 = 256;
 
-/// A relocation the loader applies: `(type, addend)`.
-type Reloc = (u32, i64);
-
 pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'d, R, H>,
     symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
     dynamic: &Dynamic,
 ) -> Vec<DataSymbol> {
     let endian = e.endian;
+    let machine = e.header.e_machine(endian);
     // At most one entry per known name: a name defined twice has no single value.
-    let mut found: Vec<(&str, Kind, u64, u64)> = vec![];
+    let mut found: Vec<(&str, Kind, u64, u64, elf::SymbolType)> = vec![];
     let mut twice: BTreeSet<&str> = BTreeSet::new();
     let mut unnamed = None;
     // The symbols' string table, read for names no longer than the longest known one.
@@ -53,12 +51,14 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         .and_then(|s| s.file_range(endian));
     let longest = KNOWN.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
     for sym in symbols.symbols() {
-        if sym.st_shndx(endian) == elf::SHN_UNDEF || sym.st_type() != elf::STT_OBJECT {
+        // Every defined symbol, whatever its type: a known name defined twice has no single
+        // value, even if one definition is a function (spec §3.3).
+        if sym.st_shndx(endian) == elf::SHN_UNDEF {
             continue;
         }
         // A name that cannot be read could be a known one: a gap, never a silent skip.
         let read = match strings {
-            Some(strings) => e.short_name(strings, sym.st_name(endian), longest),
+            Some(strings) => e.name(strings, sym.st_name(endian), longest),
             None => Err("no string table in the file".to_string()),
         };
         let name = match read {
@@ -77,35 +77,56 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             }
             let addr: u64 = sym.st_value(endian).into();
             let size: u64 = sym.st_size(endian).into();
-            found.push((n, *kind, addr, size));
+            found.push((n, *kind, addr, size, sym.st_type()));
         }
     }
     if let Some(why) = unnamed {
-        e.gaps
-            .push(format!("malformed: symbols: a data symbol's name: {why}"));
+        e.gaps.push(format!(
+            "malformed: symbols: a defined symbol's name: {why}"
+        ));
     }
     if found.is_empty() {
         return vec![];
     }
     // A relocatable object's data is not linked yet: no value can be read (PR-4b-2a).
     let relocatable = e.header.e_type(endian) == elf::ET_REL;
-    let wanted: BTreeSet<u64> = found.iter().map(|f| f.2).collect();
+    // The bytes each value is read from: an integer's, or a string pointer's word (spec §3.4).
+    let word = if e.header.is_type_64() { 8 } else { 4 };
+    let ranges: Vec<(u64, u64)> = found
+        .iter()
+        .map(|&(_, kind, addr, size, _)| {
+            let len = match kind {
+                Kind::Int => size,
+                Kind::Str => word,
+            };
+            (addr, addr.saturating_add(len))
+        })
+        .collect();
     let relocs = if relocatable {
-        Ok(BTreeMap::new())
+        Ok(vec![vec![]; found.len()])
     } else {
-        e.relocations(dynamic, &wanted)
+        e.relocations(dynamic, symbols, &ranges)
     };
     let mut out = vec![];
-    for (name, kind, addr, size) in found {
+    // The strings read as values: (index in `out`, the string's bytes and its NUL).
+    let mut texts: Vec<(usize, (u64, u64))> = vec![];
+    for (i, (name, kind, addr, size, st_type)) in found.into_iter().enumerate() {
         let value = match &relocs {
             _ if twice.contains(name) => Err("defined more than once".to_string()),
+            _ if st_type != elf::STT_OBJECT => {
+                Err(format!("not a data object ({})", symbol_type(st_type)))
+            }
             _ if relocatable => Err("not linked yet (a relocatable object)".to_string()),
             Err(why) => Err(format!("relocations not read: {why}")),
-            Ok(map) => value(e, kind, addr, size, map, dynamic),
+            Ok(hits) => value(e, kind, addr, size, &hits[i], dynamic),
         };
         let mut at = vec![Loc::Symbol(UntrustedText::new(name))];
         let value = match value {
             Ok((v, more)) => {
+                if let (DataValue::Text(text), [Loc::VAddr(ptr)]) = (&v, more.as_slice()) {
+                    let end = ptr.saturating_add(text.as_bytes().len() as u64 + 1);
+                    texts.push((out.len(), (*ptr, end)));
+                }
                 at.extend(more);
                 v
             }
@@ -119,6 +140,27 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             value,
             at,
         });
+    }
+    // A relocation that writes into a string read as a value: the loaded string is another one.
+    if !texts.is_empty() {
+        let ranges: Vec<(u64, u64)> = texts.iter().map(|t| t.1).collect();
+        let hits = e.relocations(dynamic, symbols, &ranges);
+        for (j, (index, _)) in texts.iter().enumerate() {
+            let why = match &hits {
+                Ok(hits) => match hits[j].first() {
+                    Some((_, t, _)) => format!(
+                        "a relocation writes into the string ({})",
+                        type_name(machine, *t)
+                    ),
+                    None => continue,
+                },
+                Err(why) => format!("relocations not read: {why}"),
+            };
+            let d = &mut out[*index];
+            e.gaps.push(format!("{}: {why}", d.symbol));
+            d.value = DataValue::Unknown { why };
+            d.at.truncate(1);
+        }
     }
     out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
     out
@@ -137,41 +179,71 @@ fn relative_type(machine: elf::Machine) -> Option<u32> {
 fn type_name(machine: elf::Machine, t: u32) -> String {
     let name = match (machine, t) {
         (elf::EM_X86_64, 1) => "R_X86_64_64",
+        (elf::EM_X86_64, 5) => "R_X86_64_COPY",
         (elf::EM_X86_64, 6) => "R_X86_64_GLOB_DAT",
         (elf::EM_X86_64, 7) => "R_X86_64_JUMP_SLOT",
         (elf::EM_X86_64, 8) => "R_X86_64_RELATIVE",
+        (elf::EM_X86_64, 36) => "R_X86_64_TLSDESC",
         (elf::EM_AARCH64, 257) => "R_AARCH64_ABS64",
+        (elf::EM_AARCH64, 1024) => "R_AARCH64_COPY",
         (elf::EM_AARCH64, 1025) => "R_AARCH64_GLOB_DAT",
         (elf::EM_AARCH64, 1026) => "R_AARCH64_JUMP_SLOT",
         (elf::EM_AARCH64, 1027) => "R_AARCH64_RELATIVE",
+        (elf::EM_AARCH64, 1031) => "R_AARCH64_TLSDESC",
         _ => return format!("type {t}"),
     };
     name.to_string()
 }
 
-/// One symbol's value after loading (spec §4.4).
+/// A symbol type's name, for the reason.
+fn symbol_type(t: elf::SymbolType) -> String {
+    let name = match t {
+        elf::STT_NOTYPE => "STT_NOTYPE",
+        elf::STT_OBJECT => "STT_OBJECT",
+        elf::STT_FUNC => "STT_FUNC",
+        elf::STT_SECTION => "STT_SECTION",
+        elf::STT_FILE => "STT_FILE",
+        elf::STT_COMMON => "STT_COMMON",
+        elf::STT_TLS => "STT_TLS",
+        elf::STT_GNU_IFUNC => "STT_GNU_IFUNC",
+        _ => return format!("type {}", t.0),
+    };
+    name.to_string()
+}
+
+/// One symbol's value after loading (spec §4.4 of PR-4b-1; §3.4): `relocs` are the relocations
+/// over its bytes.
 fn value<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'_, R, H>,
     kind: Kind,
     addr: u64,
     size: u64,
-    relocs: &BTreeMap<u64, Vec<Reloc>>,
+    relocs: &[Reloc],
     dynamic: &Dynamic,
 ) -> Result<(DataValue, Vec<Loc>), String> {
     let machine = e.header.e_machine(e.endian);
-    let at_addr = relocs.get(&addr).map(Vec::as_slice).unwrap_or_default();
-    let pointer = match (kind, at_addr) {
+    // SIGIL does not apply REL or RELR, and they may write these bytes too (musl applies RELR
+    // after RELA).
+    if dynamic.rel_or_relr {
+        return Err("REL/RELR relocations are not read".to_string());
+    }
+    let pointer = match (kind, relocs) {
         (_, [_, ..]) if relative_type(machine).is_none() => {
             return Err(format!("relocations of machine {} are not read", machine.0));
         }
-        (Kind::Str, [(t, addend)]) if Some(*t) == relative_type(machine) => {
+        (Kind::Str, [(at, t, addend)]) if *at == addr && Some(*t) == relative_type(machine) => {
             u64::try_from(*addend).map_err(|_| "a negative addend".to_string())?
         }
-        (_, [(t, _)]) => return Err(format!("relocated by {}", type_name(machine, *t))),
-        (_, [_, _, ..]) => return Err("relocated more than once".to_string()),
-        (_, []) if dynamic.rel_or_relr => {
-            return Err("REL/RELR relocations are not read".to_string())
+        (_, [(at, t, _)]) if *at == addr => {
+            return Err(format!("relocated by {}", type_name(machine, *t)))
         }
+        (_, [(_, t, _)]) => {
+            return Err(format!(
+                "a relocation overlaps it ({})",
+                type_name(machine, *t)
+            ))
+        }
+        (_, [_, _, ..]) => return Err("relocated more than once".to_string()),
         (Kind::Int, []) => return int(e, addr, size).map(|v| (v, vec![])),
         (Kind::Str, []) if e.header.e_type(e.endian) == elf::ET_EXEC => stored_word(e, addr)?,
         (Kind::Str, []) => return Err("no relocation in a position-independent file".to_string()),
