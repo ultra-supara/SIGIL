@@ -586,22 +586,39 @@ fn dynsym_and_its_strings_must_be_the_bytes_mapped_at_their_tags() {
 /// `DT_VERDEF`; object reads the first section of each type at its `sh_offset`.
 #[test]
 fn version_sections_must_be_the_bytes_mapped_at_their_tags() {
-    for (tag, tag_name, sh_type, name, link) in [
-        (DT_VERSYM, "DT_VERSYM", SHT_GNU_VERSYM, ".gnu.version", 1),
+    // (tag, its name, the section's type, its name, sh_link, the size of one empty entry)
+    for (tag, tag_name, sh_type, name, link, size) in [
+        (DT_VERSYM, "DT_VERSYM", SHT_GNU_VERSYM, ".gnu.version", 1, 6),
         (
             DT_VERNEED,
             "DT_VERNEED",
             SHT_GNU_VERNEED,
             ".gnu.version_r",
             2,
+            16,
         ),
-        (DT_VERDEF, "DT_VERDEF", SHT_GNU_VERDEF, ".gnu.version_d", 2),
+        (
+            DT_VERDEF,
+            "DT_VERDEF",
+            SHT_GNU_VERDEF,
+            ".gnu.version_d",
+            2,
+            20,
+        ),
     ] {
-        // The section at `(sh_offset, sh_addr)`, or none; `DT_*` is 0x3a00.
+        // The section at `(sh_offset, sh_addr)`, or none; `DT_*` is 0x3a00. DT_VERNEED and
+        // DT_VERDEF come with DT_VERSYM and its section at 0x3c00, as the loader needs them.
         let gaps = |at: Option<(u64, u64)>| {
-            let mut img = dynsym_elf(&[(tag, 0x3a00)], &[]);
+            let mut entries = vec![(tag, 0x3a00)];
+            if tag != DT_VERSYM {
+                entries.push((DT_VERSYM, 0x3c00));
+            }
+            let mut img = dynsym_elf(&entries, &[]);
+            if tag != DT_VERSYM {
+                img.sec_linked(".gnu.version", SHT_GNU_VERSYM, 0x3c00, 0x3c00, 6, 1, 0);
+            }
             if let Some((offset, addr)) = at {
-                img.sec_linked(name, sh_type, offset, addr, 6, link, 0);
+                img.sec_linked(name, sh_type, offset, addr, size, link, 0);
             }
             facts_of(&img.build(), BinaryBudgets::default()).1.gaps
         };
@@ -680,19 +697,28 @@ fn versions_come_from_the_tables_and_strings_the_loader_reads() {
 /// are not what the loader reads.
 #[test]
 fn a_section_without_its_tag_is_a_gap_when_pt_dynamic_is_read() {
-    for (tag, gap) in [
-        (DT_SYMTAB, "symbols: .dynsym without DT_SYMTAB"),
-        (DT_VERSYM, "versions: .gnu.version without DT_VERSYM"),
-        (DT_VERNEED, "versions: .gnu.version_r without DT_VERNEED"),
+    for (tag, gaps) in [
+        (DT_SYMTAB, vec!["symbols: .dynsym without DT_SYMTAB"]),
+        (
+            DT_VERSYM,
+            vec![
+                "versions: .gnu.version without DT_VERSYM",
+                "versions: DT_VERNEED without DT_VERSYM",
+            ],
+        ),
+        (
+            DT_VERNEED,
+            vec!["versions: .gnu.version_r without DT_VERNEED"],
+        ),
         (
             DT_GNU_HASH,
-            "symbols: DT_SYMTAB without DT_HASH or DT_GNU_HASH",
+            vec!["symbols: DT_SYMTAB without DT_HASH or DT_GNU_HASH"],
         ),
     ] {
         let mut bytes = fixture("elf/libdata.so");
         retag(&mut bytes, tag, DT_DEBUG);
         let (_, p) = facts_of(&bytes, BinaryBudgets::default());
-        assert_eq!(p.gaps, [gap], "{gap}");
+        assert_eq!(p.gaps, gaps, "{gaps:?}");
     }
     let mut img = dynsym_elf(&[], &[]);
     img.sec_linked(".gnu.version_d", SHT_GNU_VERDEF, 0x3a00, 0x3a00, 6, 2, 0);
@@ -705,6 +731,31 @@ fn a_section_without_its_tag_is_a_gap_when_pt_dynamic_is_read() {
     let (f, p) = facts_of(&img.build(), BinaryBudgets::default());
     assert_eq!(f.exports, 2, "the symbols are still read");
     assert!(p.gaps.is_empty(), "{:?}", p.gaps);
+}
+
+/// Seventh review of #91 (P1): once `DT_VERNEED` or `DT_VERDEF` names a version, glibc's
+/// `_dl_check_map_versions` reads `DT_VERSYM` with no NULL check (the reviewer's libraries
+/// crashed). Without it, the imports' versions are unknown. The case that slipped through also had
+/// no `SHT_GNU_VERSYM` section, so no other check saw it.
+#[test]
+fn version_requirements_or_definitions_need_dt_versym() {
+    // libdata.so: DT_VERSYM retagged, and .gnu.version retyped, so neither is there.
+    let mut bytes = fixture("elf/libdata.so");
+    retag(&mut bytes, DT_VERSYM, DT_DEBUG);
+    let (header, _, _) = versym(&bytes);
+    bytes[header + 4..header + 8].copy_from_slice(&SHT_PROGBITS.to_le_bytes());
+    let (f, p) = facts_of(&bytes, BinaryBudgets::default());
+    assert!(
+        f.imports.iter().all(|i| i.version.is_none()),
+        "{:?}",
+        f.imports
+    );
+    assert_eq!(p.gaps, ["versions: DT_VERNEED without DT_VERSYM"]);
+    // DT_VERDEF and its section, with no DT_VERSYM and no SHT_GNU_VERSYM.
+    let mut img = dynsym_elf(&[(DT_VERDEF, 0x3a00)], &[]);
+    img.sec_linked(".gnu.version_d", SHT_GNU_VERDEF, 0x3a00, 0x3a00, 6, 2, 0);
+    let (_, p) = facts_of(&img.build(), BinaryBudgets::default());
+    assert_eq!(p.gaps, ["versions: DT_VERDEF without DT_VERSYM"]);
 }
 
 /// Checked for the third review of #91: no loader reads `DT_SYMENT` (glibc reads it on hppa only,

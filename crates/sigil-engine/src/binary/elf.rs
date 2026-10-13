@@ -944,6 +944,19 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 }
             }
         }
+        // Once DT_VERNEED or DT_VERDEF names a version, glibc's _dl_check_map_versions reads
+        // DT_VERSYM with no NULL check; without it the imports' versions are not known either
+        // (seventh review of #91).
+        if dynamic.versym.is_none() {
+            for (tag, at) in [
+                ("DT_VERNEED", dynamic.verneed),
+                ("DT_VERDEF", dynamic.verdef),
+            ] {
+                if at.is_some() {
+                    self.gap(format!("versions: {tag} without DT_VERSYM"));
+                }
+            }
+        }
         // object names the versions from the strings of the symbol table `.gnu.version` links,
         // ld.so from DT_STRTAB: checked above for `.dynsym`'s.
         if let Some(s) = table
