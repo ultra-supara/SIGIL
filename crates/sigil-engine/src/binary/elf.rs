@@ -419,6 +419,26 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if relrent.is_some_and(|n| n != word) {
             self.gap(format!("dynamic: malformed: DT_RELRENT is not {word}"));
         }
+        // glibc walks DT_RELR up to an end pointer, a word at a time: a size that is not whole
+        // words reads on past it (fourth review of #91).
+        if relr.is_some() && relrsz.is_some_and(|n| !n.is_multiple_of(word)) {
+            self.gap("dynamic: malformed: DT_RELRSZ is not a whole number of entries");
+        }
+        // The loader reads every relocation table PT_DYNAMIC names, whether or not SIGIL needs it
+        // (fourth review of #91): each must be in the file where the PT_LOADs map it. An empty
+        // one is read nowhere.
+        for (tag, table) in [
+            ("DT_RELA", out.rela),
+            ("DT_REL", out.rel),
+            ("DT_JMPREL", jmprel.zip(pltrelsz)),
+            ("DT_RELR", relr.zip(relrsz)),
+        ] {
+            if let Some((vaddr, size)) = table.filter(|&(_, size)| size > 0) {
+                if !self.file_backed(vaddr, size) {
+                    self.gap(format!("dynamic: {tag} not file-backed"));
+                }
+            }
+        }
         let rel_size = size_of::<H::Rel>() as u64;
         if relent.is_some_and(|n| n != rel_size) {
             self.gap(format!("dynamic: malformed: DT_RELENT is not {rel_size}"));
@@ -1008,6 +1028,17 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             }
         }
         Ok(largest)
+    }
+
+    /// Whether `[vaddr, vaddr + len)` is in the file where a PT_LOAD maps it: in its file-backed
+    /// range, and not past the end of the file (a `p_filesz` can run past it).
+    fn file_backed(&self, vaddr: u64, len: u64) -> bool {
+        match self.loads.place(vaddr, len) {
+            Place::File(offset) => offset
+                .checked_add(len)
+                .is_some_and(|end| self.data.len().is_ok_and(|n| end <= n)),
+            Place::ZeroFill | Place::Unmapped => false,
+        }
     }
 
     /// `len` bytes at virtual address `vaddr`, from a PT_LOAD's file-backed range only.

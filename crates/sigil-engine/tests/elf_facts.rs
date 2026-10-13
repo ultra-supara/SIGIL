@@ -830,6 +830,65 @@ fn the_dynamic_tags_the_loader_reads_together() {
     }
 }
 
+/// Fourth review of #91: the loader reads every relocation table `PT_DYNAMIC` names, whether or not
+/// SIGIL needs it. One the PT_LOADs do not map to the file is a gap: the reviewer's `DT_RELR` at
+/// 0xdeadbeef crashed glibc, with no known data symbol to make a value `Unknown`. So is a
+/// `DT_RELRSZ` that is not a whole number of words: glibc's loop reads on to the next word.
+#[test]
+fn every_relocation_table_must_be_in_the_file() {
+    let gaps = |entries: &[(i64, u64)], beyond: bool| {
+        let mut img = dynsym_elf(entries, &[(0x2800, &[0u8; 48][..])]);
+        // A PT_LOAD whose 64 KiB of p_filesz run past the end of the file, at 0x20000.
+        if beyond {
+            img.seg(PT_LOAD, PF_R, 0x3000, 0x2_0000, 0x1_0000, 0x1_0000);
+        }
+        facts_of(&img.build(), BinaryBudgets::default()).1.gaps
+    };
+    let (relr, rela, rel) = (
+        [(DT_RELRSZ, 24), (DT_RELRENT, 8)],
+        [(DT_RELASZ, 24), (DT_RELAENT, 24)],
+        [(DT_RELSZ, 16), (DT_RELENT, 16)],
+    );
+    assert!(gaps(&[&[(DT_RELR, 0x2800)][..], &relr].concat(), false).is_empty());
+    for (tag, at, beyond) in [
+        ("DT_RELR", 0xdead_beef, false),
+        ("DT_RELR", 0x2_8000, true),
+        ("DT_RELA", 0xdead_beef, false),
+        ("DT_REL", 0xdead_beef, false),
+        ("DT_JMPREL", 0xdead_beef, false),
+    ] {
+        let entries: Vec<(i64, u64)> = match tag {
+            "DT_RELR" => [&[(DT_RELR, at)][..], &relr].concat(),
+            "DT_RELA" => [&[(DT_RELA, at)][..], &rela].concat(),
+            "DT_REL" => [&[(DT_REL, at)][..], &rel].concat(),
+            _ => vec![
+                (DT_JMPREL, at),
+                (DT_PLTRELSZ, 24),
+                (DT_PLTREL, DT_RELA as u64),
+            ],
+        };
+        let g = gaps(&entries, beyond);
+        assert!(
+            g.contains(&format!("dynamic: {tag} not file-backed")),
+            "{tag} at {at:#x}: {g:?}"
+        );
+    }
+    // An empty table: the loader reads nothing, wherever it points.
+    assert!(gaps(
+        &[(DT_RELR, 0xdead_beef), (DT_RELRSZ, 0), (DT_RELRENT, 8)],
+        false
+    )
+    .is_empty());
+    let g = gaps(
+        &[(DT_RELR, 0x2800), (DT_RELRSZ, 25), (DT_RELRENT, 8)],
+        false,
+    );
+    assert!(
+        g.contains(&"dynamic: malformed: DT_RELRSZ is not a whole number of entries".to_string()),
+        "{g:?}"
+    );
+}
+
 /// Spec §3.2: REL tables are read for their symbol indices, so their sizes are checked as
 /// RELA's are.
 #[test]
