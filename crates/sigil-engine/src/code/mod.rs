@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 
 pub mod data;
+pub(crate) mod fde;
 pub(crate) mod reader;
 
 use reader::{Reader, Refusal, MAX_READ};
