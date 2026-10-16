@@ -29,7 +29,8 @@
     "budgets": {"files": 4096},
     "observe_env": false,
     "model_filter": null,
-    "active": []
+    "active": [],
+    "code": false
   },
   "observation": {
     "started_at": "2026-10-07T07:00:00Z",

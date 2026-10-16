@@ -156,7 +156,9 @@ pub enum ArgValue {
         reg: Reg,
         index: u8,
     },
-    /// Describes `[base+offset]` read at `site`. Names an operand; its content stays unknown.
+    /// Describes `[base+offset]` read at `site`: the loaded `width` bits (8, 16, 32, or 64),
+    /// zero-extended. Names an operand; its content stays unknown. A sign-extending load is
+    /// `Unknown`.
     Load {
         reg: Reg,
         base: Box<ArgValue>,
@@ -164,7 +166,8 @@ pub enum ArgValue {
         width: u8,
         site: u64,
     },
-    /// After an 8/16-bit write: only the low `bits` are known.
+    /// Only the low `bits` are known: after an 8/16-bit write (`bits` 8 or 16), or a 32-bit
+    /// register copy (`bits` 32), whose zeroed upper half is not stated.
     Low {
         reg: Reg,
         value: Box<ArgValue>,

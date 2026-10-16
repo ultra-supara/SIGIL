@@ -111,6 +111,7 @@ pub fn base(required: &[&str]) -> Session {
             observe_env: false,
             model_filter: None,
             active: vec![],
+            code: false,
         },
         observation: ObservationMeta {
             started_at: ts("2026-10-07T07:00:00Z"),
@@ -1607,4 +1608,58 @@ pub fn binary_inspect() -> Session {
         gaps: vec![],
     };
     s
+}
+
+/// Example 15 with only the input of `root`: its root, instance, artifact, facts, `Declares`
+/// relations, and `binary.container` entry.
+fn binary_inspect_only(root: &str) -> Session {
+    let mut s = binary_inspect();
+    s.request.roots.retain(|r| r.id.as_str() == root);
+    s.instances.retain(|i| i.root.as_str() == root);
+    let artifacts: Vec<ArtifactId> = s
+        .instances
+        .iter()
+        .filter_map(|i| match &i.content {
+            InstanceContent::Read { artifact } => Some(artifact.clone()),
+            InstanceContent::NotRead { .. } => None,
+        })
+        .collect();
+    s.artifacts.retain(|a| artifacts.contains(&a.id));
+    let slices: Vec<SliceId> = s
+        .artifacts
+        .iter()
+        .flat_map(|a| a.slices.iter().map(|x| x.id.clone()))
+        .collect();
+    s.binaries.retain(|b| slices.contains(&b.slice));
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { from, .. } if !slices.contains(from)));
+    let instances: Vec<InstanceId> = s.instances.iter().map(|i| i.id.clone()).collect();
+    s.coverage
+        .retain(|c| !matches!(&c.scope, Ref::Instance(i) if !instances.contains(i)));
+    s
+}
+
+/// A binary inspection of one x86-64 ELF input with `binary.container` `Complete`: example 15's
+/// shared object alone, which also imports `connect`. PASS + COMPLETE, without code.
+pub fn binary_session_one_elf() -> Session {
+    let mut s = binary_inspect_only("binary-1");
+    let ContainerFacts::Elf(elf) = &mut s.binaries[0].container else {
+        panic!("example 15's first input is an ELF");
+    };
+    elf.imports.insert(
+        0,
+        ElfImport {
+            name: t("connect"),
+            version: Some(t("GLIBC_2.2.5")),
+            weak: false,
+        },
+    );
+    s.outcome.completeness = Completeness::Complete;
+    s
+}
+
+/// A binary inspection of one input with `binary.container` `Unsupported`: example 15's text
+/// file alone. PASS + INCOMPLETE, without code.
+pub fn binary_session_one_unsupported() -> Session {
+    binary_inspect_only("binary-2")
 }

@@ -227,6 +227,8 @@ pub enum ValidationError {
     /// A binary inspection's input, its root, or its `binary.container` disagrees with the
     /// session (B9, B10; PR-4b-2a).
     BinaryInput { at: String, why: String },
+    /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a).
+    Code { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -356,6 +358,7 @@ impl fmt::Display for ValidationError {
             ),
             Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
             BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
+            Code { at, why } => write!(f, "{at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -684,6 +687,7 @@ impl<'a> Validator<'a> {
         self.reference_matches();
         self.binaries();
         self.binary_inputs();
+        self.code_rules();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -1815,6 +1819,173 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn code_error(&mut self, at: &str, why: impl Into<String>) {
+        self.errors.push(code_error(at, why));
+    }
+
+    /// C1–C6 (PR-5a spec §5.2): code facts, `binary.code`, and hints agree with the session.
+    ///
+    /// - C1: a binary inspection has code facts only with `request.code`.
+    /// - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
+    ///   instance; without it, there is none.
+    /// - C3: an input whose container is not read (`OverBytes`, `Error`, `Unsupported`) has the
+    ///   container's state. Any other input is `Unsupported { CODE_UNSUPPORTED }`, or, for an
+    ///   x86-64 ELF, `Complete`/`Partial` with the request's `binary_code_bytes` budget. An
+    ///   x86-64 ELF may be `Unsupported` too: the model records no ELF class or byte order, and
+    ///   an x32 or big-endian file is `x86_64` here (plan R-c).
+    /// - C4: a binary inspection's code facts are of slices whose input's `binary.code` is
+    ///   `Complete` or `Partial`.
+    /// - C5: every value of a call site is well formed ([`c5`]).
+    /// - C6: an `Import` hint names an import of its slice, at `Symbol(value)`.
+    ///
+    /// C1 and C4 are about a binary inspection: outside one, code facts are the M1 analyzer's
+    /// (plan §4.6.5), which the golden install examples carry, and spec §5 is additive.
+    fn code_rules(&mut self) {
+        use crate::artifact::{Arch, Format};
+        use crate::binary::ContainerFacts;
+        use crate::binary_input::{
+            expected_binary_container, is_binary_inspection, is_binary_root, ExpectedContainer,
+            BINARY_CODE, BINARY_CODE_BYTES, BINARY_CONTAINER, CODE_UNSUPPORTED,
+        };
+        use crate::coverage::Coverage;
+        use crate::hint::Signal;
+        use crate::render::subject;
+        let s = self.s;
+        let binary = is_binary_inspection(&s.request);
+        // C1
+        if binary && !s.request.code && !s.code.is_empty() {
+            self.code_error("code", "a binary inspection's code facts need request.code");
+        }
+        // C5
+        for facts in &s.code {
+            for call in &facts.call_sites {
+                let at = format!("code[{}].call_sites[{}]", facts.slice, call.id);
+                let target = match &call.target {
+                    CallTarget::Indirect { value } => Some(value),
+                    _ => None,
+                };
+                for value in call.args.iter().chain(target) {
+                    c5(value, &at, &mut self.errors);
+                }
+            }
+        }
+        // C6
+        for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
+            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
+            if hint.at != Loc::Symbol(hint.value.clone()) {
+                self.code_error(&at, "an import hint's at must be Symbol(value)");
+            }
+            let imported = s.binaries.iter().any(|b| {
+                b.slice == hint.subject
+                    && matches!(&b.container, ContainerFacts::Elf(elf)
+                        if elf.imports.iter().any(|i| i.name == hint.value))
+            });
+            if !imported {
+                self.code_error(&at, "the value is not an import of its slice");
+            }
+        }
+        // C2: every entry needs request.code, and is scoped to an input's instance.
+        let inputs: BTreeMap<&InstanceId, &FileInstance> = s
+            .instances
+            .iter()
+            .filter(|i| is_binary_root(&i.root))
+            .map(|i| (&i.id, i))
+            .collect();
+        let mut per_input: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_CODE)
+        {
+            let at = format!("coverage[{BINARY_CODE} on {}]", subject(&c.scope));
+            if !s.request.code {
+                self.code_error(&at, "binary.code without request.code");
+                continue;
+            }
+            match &c.scope {
+                Ref::Instance(i) if inputs.contains_key(i) => {
+                    per_input.entry(i).or_default().push(c)
+                }
+                _ => self.code_error(&at, "binary.code must be scoped to an input's instance"),
+            }
+        }
+        if !(binary && s.request.code) {
+            return;
+        }
+        let limit = s.request.budgets.get(BINARY_CODE_BYTES).copied();
+        let unsupported = CoverageState::Unsupported {
+            what: CODE_UNSUPPORTED.to_string(),
+        };
+        let analyzed_state = |state: &CoverageState| {
+            matches!(
+                state,
+                CoverageState::Complete | CoverageState::Partial { .. }
+            )
+        };
+        let mut analyzed: BTreeSet<&SliceId> = BTreeSet::new();
+        for i in inputs.values() {
+            let at = i.id.as_str();
+            // C2: exactly one entry.
+            let entries = per_input.get(&i.id).map(Vec::as_slice).unwrap_or_default();
+            let [c] = entries else {
+                self.code_error(
+                    at,
+                    format!(
+                        "{} binary.code entries; an input has exactly one",
+                        entries.len()
+                    ),
+                );
+                continue;
+            };
+            let artifact = match &i.content {
+                InstanceContent::Read { artifact } => {
+                    s.artifacts.iter().find(|a| a.id == *artifact)
+                }
+                InstanceContent::NotRead { .. } => None,
+            };
+            // C3
+            let ok = match expected_binary_container(s, i) {
+                Ok(ExpectedContainer::Exactly(
+                    CoverageState::Complete | CoverageState::Partial { .. },
+                )) => {
+                    let x86_64_elf = artifact.is_some_and(|a| {
+                        matches!(a.format, Format::Elf { .. })
+                            && a.slices.iter().all(|x| x.arch == Arch::X86_64)
+                    });
+                    let budgeted = c.budget.as_ref().is_some_and(|b| {
+                        b.budget == BINARY_CODE_BYTES && Some(b.limit) == limit && b.used <= b.limit
+                    });
+                    (c.state == unsupported && c.budget.is_none())
+                        || (x86_64_elf && analyzed_state(&c.state) && budgeted)
+                }
+                // The container is not read (or B9 refuses the input): its state, exactly.
+                Ok(_) | Err(_) => s.coverage.iter().any(|k| {
+                    k.check.as_str() == BINARY_CONTAINER
+                        && k.scope == Ref::Instance(i.id.clone())
+                        && k.state == c.state
+                }),
+            };
+            if !ok {
+                self.code_error(
+                    at,
+                    "binary.code must be the container's state, Unsupported, or Complete/Partial with the binary_code_bytes budget",
+                );
+            }
+            if analyzed_state(&c.state) {
+                analyzed.extend(artifact.iter().flat_map(|a| a.slices.iter().map(|x| &x.id)));
+            }
+        }
+        // C4
+        for facts in &s.code {
+            if !analyzed.contains(&facts.slice) {
+                self.code_error(
+                    &format!("code[{}]", facts.slice),
+                    "a slice whose input was not analyzed",
+                );
+            }
+        }
+    }
+
     /// V10: a claim by reference matches covers every placement, and its candidates are exactly
     /// the releases that every placement matches.
     fn release_by_rows(
@@ -2676,6 +2847,55 @@ impl<'a> Validator<'a> {
                 });
             }
         }
+    }
+}
+
+fn code_error(at: &str, why: impl Into<String>) -> ValidationError {
+    ValidationError::Code {
+        at: at.to_string(),
+        why: why.into(),
+    }
+}
+
+/// C5: what a recorded value may be (PR-5a spec §4.7). A `Load` reads 8, 16, 32, or 64 bits; a
+/// `Low` keeps 8, 16, or 32 bits of a value that is not a `Low`; a `Set` has 2 to 4 members, none
+/// a `Set` or `Unknown`. Checked on call sites, the values PR-5a records.
+fn c5(value: &ArgValue, at: &str, errors: &mut Vec<ValidationError>) {
+    match value {
+        ArgValue::Load { base, width, .. } => {
+            if ![8, 16, 32, 64].contains(width) {
+                errors.push(code_error(at, "a Load width is 8, 16, 32, or 64"));
+            }
+            c5(base, at, errors);
+        }
+        ArgValue::Low { value, bits, .. } => {
+            if ![8, 16, 32].contains(bits) {
+                errors.push(code_error(at, "Low bits are 8, 16, or 32"));
+            }
+            if matches!(**value, ArgValue::Low { .. }) {
+                errors.push(code_error(at, "a Low of a Low keeps the smaller width"));
+            }
+            c5(value, at, errors);
+        }
+        ArgValue::Set { members, .. } => {
+            if !(2..=4).contains(&members.len()) {
+                errors.push(code_error(at, "a Set has 2 to 4 members"));
+            }
+            if members
+                .iter()
+                .any(|m| matches!(m, ArgValue::Set { .. } | ArgValue::Unknown { .. }))
+            {
+                errors.push(code_error(at, "a Set has no Set or Unknown member"));
+            }
+            for member in members {
+                c5(member, at, errors);
+            }
+        }
+        ArgValue::ConstStr { .. }
+        | ArgValue::ConstInt { .. }
+        | ArgValue::ReturnOf { .. }
+        | ArgValue::Param { .. }
+        | ArgValue::Unknown { .. } => {}
     }
 }
 

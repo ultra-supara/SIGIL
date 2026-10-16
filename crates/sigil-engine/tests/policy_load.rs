@@ -449,6 +449,7 @@ fn scope_input_of_finds_binary_roots() {
         observe_env: false,
         model_filter: None,
         active: vec![],
+        code: false,
     };
     assert!(ScopeInput::of(&request).binary);
     request.roots[0].id = sigil_model::RootId::new("models").unwrap();

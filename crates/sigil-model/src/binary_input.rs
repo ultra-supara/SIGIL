@@ -13,6 +13,13 @@ use crate::text::UntrustedText;
 
 /// The check of a binary inspection: one entry per input, scope `Instance`.
 pub const BINARY_CONTAINER: &str = "binary.container";
+/// The code check of a binary inspection with code (PR-5a): one entry per input, scope
+/// `Instance`.
+pub const BINARY_CODE: &str = "binary.code";
+/// Bytes read for code, per artifact (PR-5a spec §4.10).
+pub const BINARY_CODE_BYTES: &str = "binary_code_bytes";
+/// `binary.code`'s `Unsupported` reason: a container the code analysis does not read.
+pub const CODE_UNSUPPORTED: &str = "code analysis: x86-64 ELF64 little-endian only";
 /// Hashing reads, over all inputs.
 pub const BINARY_BYTES: &str = "binary_bytes";
 /// `binary.container`'s `Unsupported` reason.

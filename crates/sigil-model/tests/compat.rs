@@ -1,6 +1,6 @@
 //! Sessions written before PR #76 (`tests/fixtures/pre-pr76/`, real output of the PR #75 CLI)
-//! still load: `request.active` and `probes` are missing there and read as empty. A session
-//! SIGIL writes always has both.
+//! still load: `request.active` and `probes` are missing there and read as empty, and
+//! `request.code` (PR-5a) reads as false. A session SIGIL writes always has all three.
 
 use std::fs;
 use std::path::PathBuf;
@@ -35,6 +35,7 @@ fn the_fixtures_predate_the_probe_fields() {
         let (_, value) = fixture(name);
         assert_eq!(value["schema"], "sigil-session/1", "{name}");
         assert!(value["request"].get("active").is_none(), "{name}");
+        assert!(value["request"].get("code").is_none(), "{name}");
         assert!(value.get("probes").is_none(), "{name}");
     }
 }
@@ -59,6 +60,7 @@ fn a_session_written_before_pr76_loads_with_nothing_active() {
         let session: Session =
             serde_json::from_value(value).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(session.request.active.is_empty(), "{name}");
+        assert!(!session.request.code, "{name}");
         assert!(session.probes.is_empty(), "{name}");
         if let Err(errors) = session.validate() {
             panic!("{name}: {errors:?}");
@@ -67,15 +69,17 @@ fn a_session_written_before_pr76_loads_with_nothing_active() {
 }
 
 #[test]
-fn written_again_it_gains_only_the_two_empty_lists() {
+fn written_again_it_gains_only_the_two_empty_lists_and_no_code() {
     for name in FIXTURES {
         let (text, old) = fixture(name);
         let session: Session = serde_json::from_str(&text).unwrap();
         let written: Value = serde_json::from_str(&session.to_canonical_json().unwrap()).unwrap();
         assert_eq!(written["request"]["active"], json!([]), "{name}");
+        assert_eq!(written["request"]["code"], json!(false), "{name}");
         assert_eq!(written["probes"], json!([]), "{name}");
         let mut without = written.clone();
         without["request"].as_object_mut().unwrap().remove("active");
+        without["request"].as_object_mut().unwrap().remove("code");
         without.as_object_mut().unwrap().remove("probes");
         assert_eq!(without, old, "{name}: anything else changed");
     }

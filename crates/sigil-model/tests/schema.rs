@@ -109,11 +109,12 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
 }
 
 /// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a,
-/// PR-4b-1). They are optional on read, where a missing one is an empty list. `active` and
-/// `probes` are always written; `reference_matches` and `binaries` only when non-empty, so
-/// sessions without an install keep their bytes.
+/// PR-4b-1, PR-5a). They are optional on read, where a missing list is empty and a missing
+/// `code` is false. `active`, `probes`, and `code` are always written; `reference_matches` and
+/// `binaries` only when non-empty, so sessions without an install keep their bytes.
 const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("RunRequest", "active"),
+    ("RunRequest", "code"),
     ("Session", "probes"),
     ("Session", "reference_matches"),
     ("Session", "binaries"),
@@ -210,18 +211,24 @@ fn the_excerpt_has_the_session_fields_and_requires_none() {
 fn fields_added_later_are_optional_on_read_and_always_written() {
     let schema = schema();
     let session = validator_for(&schema, "Session");
-    // A session written before PR-3b-2: no `request.active`, no `probes`.
+    // A session written before PR-3b-2: no `request.active`, no `probes`, no `request.code`.
     let mut old = serde_json::to_value(fail_incomplete()).unwrap();
     old["request"].as_object_mut().unwrap().remove("active");
+    old["request"].as_object_mut().unwrap().remove("code");
     old.as_object_mut().unwrap().remove("probes");
-    assert_valid_against(&session, &old, "a session without the PR-3b-2 fields");
+    assert_valid_against(
+        &session,
+        &old,
+        "a session without the PR-3b-2 and PR-5a fields",
+    );
     let read: Session = serde_json::from_value(old).unwrap();
-    assert!(read.request.active.is_empty() && read.probes.is_empty());
+    assert!(read.request.active.is_empty() && read.probes.is_empty() && !read.request.code);
     assert_valid(&read);
     assert_eq!(read, fail_incomplete());
-    // Written again, both are explicit.
+    // Written again, all three are explicit.
     let written = serde_json::to_value(&read).unwrap();
     assert_eq!(written["request"]["active"], json!([]));
+    assert_eq!(written["request"]["code"], json!(false));
     assert_eq!(written["probes"], json!([]));
     // The other fields stay required by both.
     for (outer, field) in [(Some("request"), "observe_env"), (None, "listeners")] {

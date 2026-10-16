@@ -1155,8 +1155,9 @@ fn the_ten_sentences_are_representable_without_message_strings() {
             && v.value.as_str() == Some("0.12.0")));
     assert!(claim.assertions.iter().any(|a| matches!(a, IdentityAssertion::KnownHash { matched: true, release, .. } if release == "v0.30.6")));
 
-    // 2. "The import exists, but a call has not been established."
-    let mut s = complete_pass();
+    // 2. "The import exists, but a call has not been established." An import hint names an
+    // import of its slice's container facts (C6).
+    let mut s = binary_session_one_elf();
     let slice = s.artifacts[0].slices[0].id.clone();
     s.hints.push(FeatureHint {
         subject: slice.clone(),

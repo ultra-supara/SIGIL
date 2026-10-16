@@ -20,7 +20,8 @@
     "budgets": {"binary_bytes": 68719476736, "binary_imports": 4096, "binary_parse_bytes": 67108864},
     "observe_env": false,
     "model_filter": null,
-    "active": []
+    "active": [],
+    "code": false
   },
   "observation": {
     "started_at": "2026-10-07T07:00:00Z",

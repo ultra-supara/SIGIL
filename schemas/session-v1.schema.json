@@ -392,10 +392,14 @@
           "description": "Active features explicitly requested (--active); empty for none. Added to sigil-session/1 in PR-3b-2: optional on read (missing means empty), always written by SIGIL.",
           "type": "array",
           "items": {"$ref": "#/$defs/ActiveFeature"}
+        },
+        "code": {
+          "description": "Whether code was analyzed (binary inspect --code; PR-5a): the direct call sites of the capability imports. Optional on read (missing means false), always written by SIGIL.",
+          "type": "boolean"
         }
       }
     },
-    "Mode": {"type": "string", "enum": ["Static", "Observe"]},
+    "Mode":{"type": "string", "enum": ["Static", "Observe"]},
     "ActiveFeature": {
       "oneOf": [
         {
