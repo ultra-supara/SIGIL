@@ -29,7 +29,11 @@ pub const STRING_BYTES: u64 = 4096;
 pub struct CodeBudgets {
     pub bytes: u64,
     pub references: usize,
+    /// FDEs read from `.eh_frame`.
     pub fdes: usize,
+    /// GOT slots (`JUMP_SLOT`/`GLOB_DAT` addresses) collected (P1-2): past it the run stops, and
+    /// the slots not collected are absent from the image.
+    pub slots: usize,
     pub instructions: u64,
     pub call_sites: usize,
     pub gaps: usize,
@@ -41,6 +45,7 @@ impl Default for CodeBudgets {
             bytes: 256 << 20,
             references: 65_536,
             fdes: 1 << 20,
+            slots: 1 << 20,
             instructions: 4_000_000,
             call_sites: 65_536,
             gaps: 256,
@@ -295,9 +300,10 @@ mod tests {
                 b.fdes,
                 b.instructions,
                 b.call_sites,
-                b.gaps
+                b.gaps,
+                b.slots
             ),
-            (256 << 20, 65_536, 1 << 20, 4_000_000, 65_536, 256)
+            (256 << 20, 65_536, 1 << 20, 4_000_000, 65_536, 256, 1 << 20)
         );
     }
 

@@ -1,6 +1,7 @@
 //! The image of an executable or shared object (PR-5a spec §4.2, §4.4): code and string
 //! regions, overlapped pages, PLT stubs, GOT slots, text relocations, and FDEs.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
@@ -200,23 +201,31 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     if dynamic.rel.is_some() {
         run.gap("code: DT_REL relocations are not modeled".to_string());
     }
-    // GOT slots, and the dynamic relocations that write code (text relocations): RELA entries
-    // with their symbol, and the words DT_RELR relocates. Together at most `references` (R-f).
+    // GOT slots, at most `slots` (P1-2), and the dynamic relocations that write code (text
+    // relocations): RELA entries with their symbol, and the words DT_RELR relocates. Together at
+    // most `references` (R-f).
     let mut slot_syms: BTreeMap<u64, Option<u32>> = BTreeMap::new();
+    let slot_limit = run.budgets.slots;
+    let mut slots_over = false;
     let mut textrel: Vec<(u64, u64, Option<u32>)> = vec![];
     let limit = run.budgets.references;
     let mut over = false;
     let code = &img.code;
     let walk = e.for_each_rela(dynamic, symbols, |r: Rela| {
         if r.r_type == rtype::JUMP_SLOT || r.r_type == rtype::GLOB_DAT {
-            slot_syms
-                .entry(r.at)
-                .and_modify(|s| {
-                    if *s != Some(r.sym) {
-                        *s = None;
+            // A slot listed again is checked, never added: only new slots count.
+            let full = slot_syms.len() >= slot_limit;
+            match slot_syms.entry(r.at) {
+                Entry::Occupied(mut s) => {
+                    if *s.get() != Some(r.sym) {
+                        s.insert(None);
                     }
-                })
-                .or_insert(Some(r.sym));
+                }
+                Entry::Vacant(_) if full => slots_over = true,
+                Entry::Vacant(s) => {
+                    s.insert(Some(r.sym));
+                }
+            }
         }
         let (at, end) = textrel_range(&r);
         if meets(code, at, end) {
@@ -249,6 +258,9 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     });
     if let Err(why) = walk {
         run.gap(format!("code: DT_RELR: {why}"));
+    }
+    if slots_over {
+        run.limit("GOT-slot", slot_limit as u64);
     }
     if over {
         run.limit("references", limit as u64);
@@ -879,6 +891,40 @@ mod tests {
             assert_eq!(**first, *name);
             assert!(img.slots.values().all(|s| Rc::ptr_eq(&s.name, first)));
             assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
+        });
+    }
+
+    /// P1-2: the GOT slots collected are limited too. The slots past the limit are absent, and
+    /// the run is stopped.
+    #[test]
+    fn got_slots_stop_at_the_slot_limit() {
+        let bytes = dso(&Dso {
+            names: &[b"connect", b"socket", b"getenv"],
+            relas: &[
+                (SLOTS, rtype::JUMP_SLOT, 1),
+                (SLOTS + 8, rtype::GLOB_DAT, 2),
+                (SLOTS, rtype::JUMP_SLOT, 1),
+                (SLOTS + 16, rtype::JUMP_SLOT, 3),
+                (SLOTS + 24, rtype::GLOB_DAT, 1),
+            ],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert_eq!(img.slots.len(), 4);
+            assert!(!run.stopped());
+        });
+        let two = CodeBudgets {
+            slots: 2,
+            ..CodeBudgets::default()
+        };
+        with_dso(&bytes, two, |img, run, _| {
+            // A slot listed again is no new slot: the first two slots are kept.
+            assert_eq!(
+                img.slots.keys().copied().collect::<Vec<_>>(),
+                [SLOTS, SLOTS + 8]
+            );
+            assert!(run.stopped());
+            assert_eq!(run.clone_gaps(), ["code: GOT-slot limit 2 reached"]);
         });
     }
 
