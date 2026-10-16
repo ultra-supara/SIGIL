@@ -10,7 +10,7 @@ use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 pub mod data;
 pub(crate) mod reader;
 
-use reader::{Reader, Refusal};
+use reader::{Reader, Refusal, MAX_READ};
 
 /// Instructions decoded per function (plan §4.9).
 pub const FUNCTION_INSTRUCTIONS: u64 = 200_000;
@@ -85,7 +85,9 @@ impl Run {
         }
     }
 
-    /// Records a gap. Past `budgets.gaps` listed ones, it is counted instead.
+    /// Records a gap. A gap already listed is not recorded again. Past `budgets.gaps` listed
+    /// ones, it is counted in `more` instead: every such call counts, a repeat of a gap not
+    /// listed included.
     pub fn gap(&mut self, gap: String) {
         if self.gaps.contains(&gap) {
             return;
@@ -97,7 +99,9 @@ impl Run {
         }
     }
 
-    /// A gap listed whatever the count: a limit, or a refused read.
+    /// A gap listed whatever the count. Only for a small fixed set of strings: the limits, and
+    /// `binary_code_bytes` exceeded. So the listed gaps can pass `budgets.gaps` by those, plus
+    /// the line counting `more`.
     pub fn gap_always(&mut self, gap: String) {
         self.gaps.insert(gap);
     }
@@ -113,15 +117,21 @@ impl Run {
         self.stopped
     }
 
-    /// Records why a read of `what` was refused.
-    pub fn refusal(&mut self, why: Refusal, what: &str, limit: u64) {
+    /// Records why `reader` refused a read of `what`. The budget stops the run; any other
+    /// refusal is a gap, under the cap.
+    pub fn refusal(&mut self, why: Refusal, what: &str, reader: &Reader<'_>) {
         match why {
             Refusal::Budget => {
+                let limit = reader.limit();
                 self.gap_always(format!("{BINARY_CODE_BYTES}: {limit} exceeded"));
                 self.stopped = true;
             }
             Refusal::OutsideFile => self.gap(format!("code: {what}: outside the file")),
             Refusal::Io => self.gap(format!("code: {what}: read error")),
+            Refusal::TooLarge(len) => self.gap(format!(
+                "code: {what}: a read of {len} bytes over the {} MiB read limit",
+                MAX_READ >> 20
+            )),
         }
     }
 
@@ -157,7 +167,8 @@ impl Run {
     }
 }
 
-/// `gaps` (sorted, from the set), with a line counting the `more` not listed, sorted in.
+/// `gaps` (sorted, from the set), with a line counting the `more` calls of [`Run::gap`] past the
+/// cap (repeats of gaps not listed included), sorted in.
 // Used outside tests from Task 11 (`analyze`); until then only tests construct it.
 #[allow(dead_code)]
 fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
@@ -172,6 +183,8 @@ fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
 
     fn small(gaps: usize) -> CodeBudgets {
         CodeBudgets {
@@ -219,6 +232,80 @@ mod tests {
                 b.gaps
             ),
             (256 << 20, 65_536, 1 << 20, 4_000_000, 65_536, 256)
+        );
+    }
+
+    fn eight_bytes() -> File {
+        let mut f = tempfile::tempfile().unwrap();
+        f.write_all(&[0; 8]).unwrap();
+        f
+    }
+
+    #[test]
+    fn the_budget_refusal_is_listed_exactly_and_stops_the_run() {
+        let f = eight_bytes();
+        let mut reader = Reader::new(&f, 8, 6);
+        let mut run = Run::new(small(0)); // no room for gaps: still listed
+        let why = reader.read(0, 8).unwrap_err();
+        assert_eq!(why, Refusal::Budget);
+        run.refusal(why, ".eh_frame", &reader);
+        assert!(run.stopped());
+        assert_eq!(run.into_gaps(), ["binary_code_bytes: 6 exceeded"]);
+    }
+
+    #[test]
+    fn other_refusals_are_capped_gaps_that_do_not_stop_the_run() {
+        let f = eight_bytes();
+        let reader = Reader::new(&f, 8, 6);
+        let mut run = Run::new(CodeBudgets::default());
+        run.refusal(Refusal::OutsideFile, "string", &reader);
+        run.refusal(Refusal::Io, ".text", &reader);
+        run.refusal(Refusal::TooLarge(MAX_READ + 1), ".eh_frame", &reader);
+        assert!(!run.stopped());
+        assert_eq!(
+            run.into_gaps(),
+            [
+                "code: .eh_frame: a read of 67108865 bytes over the 64 MiB read limit",
+                "code: .text: read error",
+                "code: string: outside the file",
+            ]
+        );
+
+        let mut run = Run::new(small(1));
+        run.refusal(Refusal::Io, ".text", &reader);
+        run.refusal(Refusal::TooLarge(MAX_READ + 1), ".eh_frame", &reader);
+        assert!(!run.stopped());
+        assert_eq!(
+            run.into_gaps(),
+            ["code: .text: read error", "code: 1 more gaps not listed"]
+        );
+    }
+
+    #[test]
+    fn finish_reports_the_reader_use_and_sorted_gaps() {
+        let f = eight_bytes();
+        let mut reader = Reader::new(&f, 8, 100);
+        reader.read(0, 4).unwrap();
+        let mut run = Run::new(small(2));
+        for gap in ["code: z", "code: b", "code: c"] {
+            run.gap(gap.to_string());
+        }
+        assert_eq!(
+            run.finish(&reader, vec![], vec![]),
+            CodeOutcome::Analyzed {
+                functions: vec![],
+                call_sites: vec![],
+                gaps: vec![
+                    "code: 1 more gaps not listed".to_string(),
+                    "code: b".to_string(),
+                    "code: z".to_string(),
+                ],
+                budget: BudgetUse {
+                    budget: "binary_code_bytes".to_string(),
+                    used: 4,
+                    limit: 100,
+                },
+            }
         );
     }
 }
