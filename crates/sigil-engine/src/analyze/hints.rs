@@ -1,12 +1,12 @@
 //! Level B capability hints (PR-5a spec §4.9): one per capability import of an ELF slice. They
 //! say the import exists, never that it is called; `binary inspect --code` adds the call sites.
 
-use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, FeatureKey, Loc, Signal};
+use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal};
 
 use crate::code::data::signatures;
 
-/// The hints of `binaries`, sorted by (slice, feature, name). `Err` only if the embedded
-/// signatures are invalid.
+/// The hints of `binaries`, sorted by (slice, feature, name). A Mach-O slice has none: its facts
+/// record no imports. `Err` only if the embedded signatures are invalid.
 pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
     let sig = signatures()?;
     let mut out = vec![];
@@ -20,7 +20,7 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
             };
             out.push(FeatureHint {
                 subject: b.slice.clone(),
-                feature: FeatureKey::new(cap.feature.as_str()).map_err(|e| e.to_string())?,
+                feature: cap.feature.clone(),
                 signal: Signal::Import,
                 value: import.name.clone(),
                 at: Loc::Symbol(import.name.clone()),
@@ -42,7 +42,9 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sigil_model::{BinaryFacts, ContainerFacts, ElfFacts, ElfImport, SliceId, UntrustedText};
+    use sigil_model::{
+        BinaryFacts, ContainerFacts, ElfFacts, ElfImport, MachOFacts, SliceId, UntrustedText,
+    };
 
     fn facts(slice: &str, imports: &[(&str, Option<&str>)]) -> BinaryFacts {
         BinaryFacts {
@@ -78,6 +80,10 @@ mod tests {
 
     const SLICE: &str =
         "sha256:0000000000000000000000000000000000000000000000000000000000000000#x86_64@0";
+    const OTHER: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0";
+    const MACHO: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222#aarch64@0";
 
     #[test]
     fn one_hint_per_capability_import() {
@@ -123,5 +129,45 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(derive(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_same_import_in_two_slices_is_two_hints() {
+        let hints = derive(&[
+            facts(OTHER, &names(&["connect"])),
+            facts(SLICE, &names(&["connect"])),
+        ])
+        .unwrap();
+        let got: Vec<(&str, &str)> = hints
+            .iter()
+            .map(|h| (h.subject.as_str(), h.value.as_str().unwrap()))
+            .collect();
+        assert_eq!(got, [(SLICE, "connect"), (OTHER, "connect")]);
+    }
+
+    #[test]
+    fn a_macho_slice_gives_no_hints() {
+        // Mach-O facts record no imports; the names elsewhere in them are not imports.
+        let macho = BinaryFacts {
+            slice: SliceId::new(MACHO).unwrap(),
+            container: ContainerFacts::MachO(MachOFacts {
+                is_64: true,
+                cpu_type: 0x0100_000c,
+                cpu_subtype: 0,
+                fat_cpu_type: None,
+                fat_cpu_subtype: None,
+                fat_alignment: None,
+                file_type: 6,
+                flags: 0,
+                uuid: None,
+                id_dylib: Some(UntrustedText::new("connect")),
+                load_dylibs: vec![UntrustedText::new("_connect")],
+                rpaths: vec![],
+                dylinker: None,
+            }),
+            go: None,
+            gaps: vec![],
+        };
+        assert!(derive(&[macho]).unwrap().is_empty());
     }
 }

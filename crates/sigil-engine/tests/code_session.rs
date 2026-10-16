@@ -11,12 +11,21 @@ use sigil_engine::inspect::{
     binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, StoreRequest,
 };
 use sigil_engine::policy::Policy;
+use sigil_model::Session;
 use tempfile::TempDir;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/code")
         .join(name)
+}
+
+/// The session's hints as (feature, value).
+fn hint_pairs(s: &Session) -> Vec<(String, String)> {
+    s.hints
+        .iter()
+        .map(|h| (h.feature.to_string(), h.value.as_str().unwrap().to_string()))
+        .collect()
 }
 
 #[test]
@@ -33,13 +42,8 @@ fn a_binary_session_has_the_import_hints() {
         common::policy_time(),
     )
     .unwrap();
-    let hints: Vec<_> = s
-        .hints
-        .iter()
-        .map(|h| (h.feature.to_string(), h.value.as_str().unwrap().to_string()))
-        .collect();
     assert_eq!(
-        hints,
+        hint_pairs(&s),
         [("posix.network".to_string(), "connect".to_string())]
     );
     assert!(s.validate().is_ok());
@@ -72,13 +76,8 @@ fn an_install_session_has_the_import_hints() {
         common::policy_time(),
     )
     .unwrap();
-    let hints: Vec<_> = s
-        .hints
-        .iter()
-        .map(|h| (h.feature.to_string(), h.value.as_str().unwrap().to_string()))
-        .collect();
     assert_eq!(
-        hints,
+        hint_pairs(&s),
         [("posix.network".to_string(), "connect".to_string())]
     );
     assert_eq!(s.hints[0].subject, s.binaries[0].slice);

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
+use sigil_model::FeatureKey;
 
 const CAPABILITIES: &str = include_str!("../../signatures/capabilities.toml");
 const NORETURN: &str = include_str!("../../signatures/noreturn.toml");
@@ -12,7 +13,7 @@ const NORETURN: &str = include_str!("../../signatures/noreturn.toml");
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capability {
     /// e.g. `posix.network`.
-    pub feature: String,
+    pub feature: FeatureKey,
     /// The SysV argument registers a call can read.
     pub arity: u8,
 }
@@ -68,21 +69,23 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
         toml::from_str(capabilities).map_err(|e| format!("capabilities.toml: {e}"))?;
     let mut table = BTreeMap::new();
     for c in raw.capability {
-        sigil_model::FeatureKey::new(c.feature.as_str())
-            .map_err(|e| format!("capabilities.toml: {e}"))?;
+        let feature = FeatureKey::new(c.feature).map_err(|e| format!("capabilities.toml: {e}"))?;
         for s in c.symbols {
-            if s.arity > 6 || s.name.is_empty() {
+            if s.name.is_empty() {
+                return Err(format!("capabilities.toml: {feature}: an empty name"));
+            }
+            if s.arity > 6 {
                 return Err(format!(
-                    "capabilities.toml: {:?}: arity {}",
+                    "capabilities.toml: {:?}: arity {} is over 6",
                     s.name, s.arity
                 ));
             }
             let entry = Capability {
-                feature: c.feature.clone(),
+                feature: feature.clone(),
                 arity: s.arity,
             };
             if table.insert(s.name.clone().into_bytes(), entry).is_some() {
-                return Err(format!("capabilities.toml: {} listed twice", s.name));
+                return Err(format!("capabilities.toml: {:?} listed twice", s.name));
             }
         }
     }
@@ -126,16 +129,52 @@ impl Signatures {
 mod tests {
     use super::*;
 
+    /// Spec §4.3: v0.1's names, by feature, with their arities.
+    const TABLE: [(&str, &str, u8); 28] = [
+        ("connect", "posix.network", 3),
+        ("getaddrinfo", "posix.network", 4),
+        ("send", "posix.network", 4),
+        ("sendto", "posix.network", 6),
+        ("recv", "posix.network", 4),
+        ("recvfrom", "posix.network", 6),
+        ("socket", "posix.network", 3),
+        ("open", "posix.file_read", 3),
+        ("openat", "posix.file_read", 4),
+        ("fopen", "posix.file_read", 2),
+        ("read", "posix.file_read", 3),
+        ("pread", "posix.file_read", 4),
+        ("write", "posix.file_write", 3),
+        ("pwrite", "posix.file_write", 4),
+        ("fwrite", "posix.file_write", 4),
+        ("creat", "posix.file_write", 2),
+        ("rename", "posix.file_write", 2),
+        ("unlink", "posix.file_write", 1),
+        ("execve", "posix.process_spawn", 3),
+        ("fork", "posix.process_spawn", 0),
+        ("posix_spawn", "posix.process_spawn", 6),
+        ("system", "posix.process_spawn", 1),
+        ("dlopen", "posix.dynamic_loading", 2),
+        ("dlsym", "posix.dynamic_loading", 2),
+        ("getenv", "posix.environment_access", 1),
+        ("setenv", "posix.environment_access", 3),
+        ("putenv", "posix.environment_access", 1),
+        ("ptrace", "posix.anti_debug", 4),
+    ];
+
     #[test]
     fn the_embedded_signatures_parse() {
         let s = signatures().unwrap();
-        assert_eq!(s.capability(b"connect").unwrap().feature, "posix.network");
-        assert_eq!(s.capability(b"connect").unwrap().arity, 3);
-        assert_eq!(
-            s.capability(b"dlsym").unwrap().feature,
-            "posix.dynamic_loading"
-        );
-        assert_eq!(s.capability(b"ptrace").unwrap().feature, "posix.anti_debug");
+        for (name, feature, arity) in TABLE {
+            let cap = s.capability(name.as_bytes());
+            assert_eq!(
+                cap,
+                Some(&Capability {
+                    feature: FeatureKey::new(feature).unwrap(),
+                    arity,
+                }),
+                "{name}"
+            );
+        }
         assert!(
             s.capability(b"connect@GLIBC_2.2.5").is_none(),
             "exact names only"
@@ -165,16 +204,25 @@ mod tests {
 
     #[test]
     fn invalid_data_is_an_error_not_a_panic() {
-        assert!(parse(
-            "[[capability]]\nfeature = \"posix.network\"\nsymbols = [{ name = \"connect\", arity = 7 }]",
-            NORETURN
-        )
-        .is_err());
-        assert!(parse(
-            "[[capability]]\nfeature = \"posix.network\"\nsymbols = [{ name = \"a\", arity = 1 }, { name = \"a\", arity = 1 }]",
-            NORETURN
-        )
-        .is_err());
+        let one = |symbols: &str| {
+            parse(
+                &format!("[[capability]]\nfeature = \"posix.network\"\nsymbols = [{symbols}]"),
+                NORETURN,
+            )
+            .map(|_| ())
+        };
+        assert_eq!(
+            one("{ name = \"connect\", arity = 7 }"),
+            Err("capabilities.toml: \"connect\": arity 7 is over 6".to_string())
+        );
+        assert_eq!(
+            one("{ name = \"\", arity = 1 }"),
+            Err("capabilities.toml: posix.network: an empty name".to_string())
+        );
+        assert_eq!(
+            one("{ name = \"a\", arity = 1 }, { name = \"a\", arity = 1 }"),
+            Err("capabilities.toml: \"a\" listed twice".to_string())
+        );
         assert!(parse(CAPABILITIES, "prefixes = []").is_err());
         assert!(parse(CAPABILITIES, "prefixes = [\"\"]\nnames = []").is_err());
     }
