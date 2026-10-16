@@ -370,6 +370,15 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
+impl ValidationError {
+    fn code(at: &str, why: impl Into<String>) -> Self {
+        ValidationError::Code {
+            at: at.to_string(),
+            why: why.into(),
+        }
+    }
+}
+
 impl Session {
     /// Checks the invariants described in the module documentation. Returns every violation.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
@@ -687,7 +696,8 @@ impl<'a> Validator<'a> {
         self.reference_matches();
         self.binaries();
         self.binary_inputs();
-        self.code_rules();
+        self.code_coverage();
+        self.import_hints();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -1820,38 +1830,31 @@ impl<'a> Validator<'a> {
     }
 
     fn code_error(&mut self, at: &str, why: impl Into<String>) {
-        self.errors.push(code_error(at, why));
+        self.errors.push(ValidationError::code(at, why));
     }
 
-    /// C1–C6 (PR-5a spec §5.2): code facts, `binary.code`, and hints agree with the session.
+    /// C1–C4 (PR-5a spec §5.2): code facts and `binary.code` agree with the request and the
+    /// inputs. C5 is checked on each value by [`Validator::arg`], C6 by
+    /// [`Validator::import_hints`].
     ///
     /// - C1: a binary inspection has code facts only with `request.code`, and `request.code` is
-    ///   only for a binary inspection.
+    ///   only for a binary inspection, with a `binary_code_bytes` budget.
     /// - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
     ///   instance; without it, there is none.
-    /// - C3: an input whose container is not read (`OverBytes`, `Error`, `Unsupported`) has the
-    ///   container's state. Any other input is `Unsupported { CODE_UNSUPPORTED }`, or, for an
-    ///   x86-64 ELF, `Complete`/`Partial` with the request's `binary_code_bytes` budget. An
-    ///   x86-64 ELF may be `Unsupported` too: the model records no ELF class or byte order, and
-    ///   an x32 or big-endian file is `x86_64` here (plan R-c). An ELF without slices was not
-    ///   parsed, so its code is `Partial` at best, never `Complete`.
+    /// - C3: each entry is in the state its input implies ([`expected_binary_code`]).
     /// - C4: a binary inspection's code facts are of slices whose input's `binary.code` is
     ///   `Complete` or `Partial`.
-    /// - C5: every value in code facts is well formed ([`c5`]): call arguments, indirect
-    ///   targets, predicate-check atoms, and guard comparisons.
-    /// - C6: an `Import` hint names an import of its slice, at `Symbol(value)`.
     ///
     /// C1 and C4 are about a binary inspection: outside one, code facts are the M1 analyzer's
     /// (plan §4.6.5), which the golden install examples carry, and spec §5 is additive.
-    fn code_rules(&mut self) {
-        use crate::artifact::{Arch, Format};
-        use crate::binary::ContainerFacts;
+    ///
+    /// [`expected_binary_code`]: crate::binary_input::expected_binary_code
+    fn code_coverage(&mut self) {
         use crate::binary_input::{
-            expected_binary_container, is_binary_inspection, is_binary_root, ExpectedContainer,
-            BINARY_CODE, BINARY_CODE_BYTES, BINARY_CONTAINER, CODE_UNSUPPORTED,
+            expected_binary_code, is_binary_inspection, is_binary_root, BINARY_CODE,
+            BINARY_CODE_BYTES,
         };
         use crate::coverage::Coverage;
-        use crate::hint::Signal;
         use crate::render::subject;
         let s = self.s;
         let binary = is_binary_inspection(&s.request);
@@ -1861,57 +1864,6 @@ impl<'a> Validator<'a> {
         }
         if binary && !s.request.code && !s.code.is_empty() {
             self.code_error("code", "a binary inspection's code facts need request.code");
-        }
-        // C5, on every value the code-fact types hold.
-        for facts in &s.code {
-            let slice = &facts.slice;
-            for call in &facts.call_sites {
-                let at = format!("code[{slice}].call_sites[{}]", call.id);
-                let target = match &call.target {
-                    CallTarget::Indirect { value } => Some(value),
-                    CallTarget::Internal { .. }
-                    | CallTarget::OwnExportViaPlt { .. }
-                    | CallTarget::Import { .. } => None,
-                };
-                for value in call.args.iter().chain(target) {
-                    c5(value, &at, &mut self.errors);
-                }
-            }
-            for check in &facts.predicate_checks {
-                let at = format!("code[{slice}].predicate_checks[{}]", check.function);
-                for atom in &check.atoms {
-                    c5(&atom.value, &at, &mut self.errors);
-                }
-            }
-            for region in &facts.guard_regions {
-                let at = format!(
-                    "code[{slice}].guard_regions[{} -> {}]",
-                    region.function, region.to
-                );
-                for guard in &region.guards {
-                    match &guard.cond {
-                        crate::code::GuardCond::Compare { value, .. } => {
-                            c5(value, &at, &mut self.errors)
-                        }
-                        crate::code::GuardCond::Unmodeled { .. } => {}
-                    }
-                }
-            }
-        }
-        // C6
-        for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
-            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
-            if hint.at != Loc::Symbol(hint.value.clone()) {
-                self.code_error(&at, "an import hint's at must be Symbol(value)");
-            }
-            let imported = s.binaries.iter().any(|b| {
-                b.slice == hint.subject
-                    && matches!(&b.container, ContainerFacts::Elf(elf)
-                        if elf.imports.iter().any(|i| i.name == hint.value))
-            });
-            if !imported {
-                self.code_error(&at, "the value is not an import of its slice");
-            }
         }
         // C2: every entry needs request.code, and is scoped to an input's instance.
         let inputs: BTreeMap<&InstanceId, &FileInstance> = s
@@ -1941,24 +1893,20 @@ impl<'a> Validator<'a> {
         if !(binary && s.request.code) {
             return;
         }
-        let limit = s.request.budgets.get(BINARY_CODE_BYTES).copied();
-        let unsupported = CoverageState::Unsupported {
-            what: CODE_UNSUPPORTED.to_string(),
-        };
-        let analyzed_state = |state: &CoverageState| {
-            matches!(
-                state,
-                CoverageState::Complete | CoverageState::Partial { .. }
-            )
-        };
+        if !s.request.budgets.contains_key(BINARY_CODE_BYTES) {
+            self.code_error(
+                "request",
+                format!("request.code without a {BINARY_CODE_BYTES} budget"),
+            );
+        }
         let mut analyzed: BTreeSet<&SliceId> = BTreeSet::new();
         for i in inputs.values() {
-            let at = i.id.as_str();
+            let at = format!("coverage[{BINARY_CODE} on {}]", i.id);
             // C2: exactly one entry.
             let entries = per_input.get(&i.id).map(Vec::as_slice).unwrap_or_default();
             let [c] = entries else {
                 self.code_error(
-                    at,
+                    &at,
                     format!(
                         "{} binary.code entries; an input has exactly one",
                         entries.len()
@@ -1966,49 +1914,24 @@ impl<'a> Validator<'a> {
                 );
                 continue;
             };
-            let artifact = match &i.content {
-                InstanceContent::Read { artifact } => {
-                    s.artifacts.iter().find(|a| a.id == *artifact)
+            // C3. An input that cannot be judged has its error from B9 or the budget above.
+            if let Ok(expected) = expected_binary_code(s, i) {
+                if let Err(why) = expected.admits(c) {
+                    self.code_error(&at, why);
                 }
-                InstanceContent::NotRead { .. } => None,
-            };
-            // C3
-            let ok = match expected_binary_container(s, i) {
-                Ok(ExpectedContainer::Exactly(
-                    CoverageState::Complete | CoverageState::Partial { .. },
-                )) => {
-                    let elf = artifact.filter(|a| matches!(a.format, Format::Elf { .. }));
-                    let analyzable = match elf {
-                        // Not parsed: no slice to analyze.
-                        Some(a) if a.slices.is_empty() => {
-                            matches!(c.state, CoverageState::Partial { .. })
-                        }
-                        Some(a) => {
-                            a.slices.iter().all(|x| x.arch == Arch::X86_64)
-                                && analyzed_state(&c.state)
-                        }
-                        None => false,
-                    };
-                    let budgeted = c.budget.as_ref().is_some_and(|b| {
-                        b.budget == BINARY_CODE_BYTES && Some(b.limit) == limit && b.used <= b.limit
-                    });
-                    (c.state == unsupported && c.budget.is_none()) || (analyzable && budgeted)
-                }
-                // The container is not read (or B9 refuses the input): its state, exactly.
-                Ok(_) | Err(_) => s.coverage.iter().any(|k| {
-                    k.check.as_str() == BINARY_CONTAINER
-                        && k.scope == Ref::Instance(i.id.clone())
-                        && k.state == c.state
-                }),
-            };
-            if !ok {
-                self.code_error(
-                    at,
-                    "binary.code must be the container's state, Unsupported, or Complete/Partial with the binary_code_bytes budget",
-                );
             }
-            if analyzed_state(&c.state) {
-                analyzed.extend(artifact.iter().flat_map(|a| a.slices.iter().map(|x| &x.id)));
+            if matches!(
+                c.state,
+                CoverageState::Complete | CoverageState::Partial { .. }
+            ) {
+                if let InstanceContent::Read { artifact } = &i.content {
+                    let slices = s
+                        .artifacts
+                        .iter()
+                        .filter(|a| a.id == *artifact)
+                        .flat_map(|a| a.slices.iter().map(|x| &x.id));
+                    analyzed.extend(slices);
+                }
             }
         }
         // C4
@@ -2018,6 +1941,27 @@ impl<'a> Validator<'a> {
                     &format!("code[{}]", facts.slice),
                     "a slice whose input was not analyzed",
                 );
+            }
+        }
+    }
+
+    /// C6 (PR-5a spec §5.2): an `Import` hint names an import of its slice, at `Symbol(value)`.
+    fn import_hints(&mut self) {
+        use crate::binary::ContainerFacts;
+        use crate::hint::Signal;
+        let s = self.s;
+        for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
+            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
+            if hint.at != Loc::Symbol(hint.value.clone()) {
+                self.code_error(&at, "an import hint's at must be Symbol(value)");
+            }
+            let imported = s.binaries.iter().any(|b| {
+                b.slice == hint.subject
+                    && matches!(&b.container, ContainerFacts::Elf(elf)
+                        if elf.imports.iter().any(|i| i.name == hint.value))
+            });
+            if !imported {
+                self.code_error(&at, "the value is not an import of its slice");
             }
         }
     }
@@ -2076,7 +2020,13 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// Resolves the calls `value` names, and checks its shape (C5), at every level. Every value
+    /// in code facts goes through here: call arguments, indirect targets, predicate-check atoms,
+    /// and guard comparisons.
     fn arg(&mut self, slice: &SliceId, value: &ArgValue, at: &str) {
+        for why in c5(value) {
+            self.code_error(at, why);
+        }
         match value {
             ArgValue::ReturnOf { call, .. } => self.call_ref(slice, call.as_str(), at),
             ArgValue::Load { base, .. } => self.arg(slice, base, at),
@@ -2886,45 +2836,40 @@ impl<'a> Validator<'a> {
     }
 }
 
-fn code_error(at: &str, why: impl Into<String>) -> ValidationError {
-    ValidationError::Code {
-        at: at.to_string(),
-        why: why.into(),
-    }
-}
-
-/// C5: what a recorded value may be (PR-5a spec §4.7). A `Load` reads 8, 16, 32, or 64 bits; a
-/// `Low` keeps 8, 16, or 32 bits of a value that is not a `Low`; a `Set` has 2 to 4 members, none
-/// a `Set` or `Unknown`.
-fn c5(value: &ArgValue, at: &str, errors: &mut Vec<ValidationError>) {
+/// C5 (PR-5a spec §4.7): what one value may be, apart from the values inside it. A `Load` reads
+/// 8, 16, 32, or 64 bits; a `Low` keeps 8, 16, or 32 bits of a value that is not a `Low`; a `Set`
+/// has 2 to 4 members, none a `Set` or `Unknown`.
+fn c5(value: &ArgValue) -> Vec<String> {
+    let mut why = vec![];
     match value {
-        ArgValue::Load { base, width, .. } => {
+        ArgValue::Load { width, .. } => {
             if ![8, 16, 32, 64].contains(width) {
-                errors.push(code_error(at, "a Load width is 8, 16, 32, or 64"));
+                why.push(format!("a Load width is 8, 16, 32, or 64, not {width}"));
             }
-            c5(base, at, errors);
         }
         ArgValue::Low { value, bits, .. } => {
             if ![8, 16, 32].contains(bits) {
-                errors.push(code_error(at, "Low bits are 8, 16, or 32"));
+                why.push(format!("Low bits are 8, 16, or 32, not {bits}"));
             }
-            if matches!(**value, ArgValue::Low { .. }) {
-                errors.push(code_error(at, "a Low of a Low keeps the smaller width"));
+            if let ArgValue::Low { bits: inner, .. } = **value {
+                why.push(format!(
+                    "a Low's value is a Low (of {inner} bits): only the smaller width is kept"
+                ));
             }
-            c5(value, at, errors);
         }
         ArgValue::Set { members, .. } => {
             if !(2..=4).contains(&members.len()) {
-                errors.push(code_error(at, "a Set has 2 to 4 members"));
+                why.push(format!("a Set has 2 to 4 members, not {}", members.len()));
             }
-            if members
-                .iter()
-                .any(|m| matches!(m, ArgValue::Set { .. } | ArgValue::Unknown { .. }))
-            {
-                errors.push(code_error(at, "a Set has no Set or Unknown member"));
-            }
-            for member in members {
-                c5(member, at, errors);
+            for (n, member) in members.iter().enumerate() {
+                let kind = match member {
+                    ArgValue::Set { .. } => "a Set",
+                    ArgValue::Unknown { .. } => "Unknown",
+                    _ => continue,
+                };
+                why.push(format!(
+                    "a Set has no Set or Unknown member, but member {n} is {kind}"
+                ));
             }
         }
         ArgValue::ConstStr { .. }
@@ -2933,6 +2878,7 @@ fn c5(value: &ArgValue, at: &str, errors: &mut Vec<ValidationError>) {
         | ArgValue::Param { .. }
         | ArgValue::Unknown { .. } => {}
     }
+    why
 }
 
 /// The coverage states recorded for `check`.

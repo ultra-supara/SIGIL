@@ -2174,7 +2174,7 @@
                   "minimum": -9223372036854775808,
                   "maximum": 9223372036854775807
                 },
-                "width": {"type": "integer", "minimum": 0, "maximum": 255},
+                "width": {"description": "Bits read, zero-extended: 8, 16, 32, or 64.", "type": "integer", "minimum": 0, "maximum": 255},
                 "site": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
               }
             }
@@ -2192,7 +2192,7 @@
               "properties": {
                 "reg": {"$ref": "#/$defs/Reg"},
                 "value": {"$ref": "#/$defs/ArgValue"},
-                "bits": {"type": "integer", "minimum": 0, "maximum": 255}
+                "bits": {"description": "The low bits known: 8, 16, or 32.", "type": "integer", "minimum": 0, "maximum": 255}
               }
             }
           }
