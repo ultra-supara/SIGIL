@@ -7,7 +7,7 @@ use std::mem::size_of;
 
 use object::elf;
 use object::read::elf::{
-    Dyn, FileHeader, ProgramHeader, Rel, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
+    Dyn, FileHeader, ProgramHeader, Rel, Rela as _, SectionHeader, SectionTable, Sym, SymbolTable,
 };
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
@@ -68,12 +68,41 @@ pub(crate) struct Dynamic {
 /// A relocation the loader applies: `(r_offset, type, addend)`.
 pub(crate) type Reloc = (u64, u32, i64);
 
+/// One RELA entry the loader applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Rela {
+    pub at: u64,
+    pub r_type: u32,
+    pub sym: u32,
+    pub addend: i64,
+    /// Bytes written from `at` ([`Elf::write_extent`]); `None` when unbounded.
+    pub extent: Option<u64>,
+}
+
 /// The sections' results the other steps need.
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
+    /// The section header table; `None` when there is none, or it cannot be read.
+    // Read by the code step from Task 6 (`code::image`); until then only set.
+    #[allow(dead_code)]
+    pub table: Option<SectionTable<'d, H, &'d Bounded<R>>>,
     /// The symbols the data step reads: `.dynsym`, or a relocatable object's `.symtab`.
     pub symbols: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
+    /// Whether `symbols` is the `.dynsym` the loader binds through: a linked file's, with no
+    /// `symbols:` gap from [`Elf::loader_agrees`]. `false` without symbols, and for a relocatable
+    /// object, where it is not used (plan review P1-1).
+    // Read by the code step from Task 6 (`code::image`); until then only set.
+    #[allow(dead_code)]
+    pub dynamic_symbols_agree: bool,
     /// `.go.buildinfo`: `(sh_addr, sh_size)`, read where Go reads it (spec §3.6).
     pub go_section: Option<(u64, u64)>,
+}
+
+/// What the container steps leave for the later ones (data symbols, Go, code).
+pub(crate) struct Parts<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
+    pub elf: Elf<'d, R, H>,
+    pub facts: ElfFacts,
+    pub dynamic: Dynamic,
+    pub sections: Sections<'d, R, H>,
 }
 
 /// The parse of one ELF, generic over class and byte order.
@@ -131,6 +160,28 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
 ) -> Option<Parsed> {
+    let Parts {
+        elf: mut e,
+        mut facts,
+        dynamic,
+        sections,
+    } = parts::<R, H>(data, budgets)?;
+    if let Some(symbols) = &sections.symbols {
+        facts.data = data::read(&mut e, symbols, &dynamic);
+    }
+    let go = goinfo::find(&mut e, sections.go_section);
+    Some(Parsed {
+        container: ContainerFacts::Elf(facts),
+        go,
+        gaps: e.gaps,
+    })
+}
+
+/// The header, program headers, `PT_DYNAMIC`, build-id, and sections of the ELF in `data`.
+pub(crate) fn parts<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    data: &'d Bounded<R>,
+    budgets: BinaryBudgets,
+) -> Option<Parts<'d, R, H>> {
     let header = H::parse(data).ok()?;
     let endian = header.endian().ok()?;
     let mut gaps = vec![];
@@ -171,14 +222,11 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let dynamic = e.dynamic(&mut facts);
     facts.build_id = e.build_id();
     let sections = e.sections(&mut facts, &dynamic, budgets);
-    if let Some(symbols) = &sections.symbols {
-        facts.data = data::read(&mut e, symbols, &dynamic);
-    }
-    let go = goinfo::find(&mut e, sections.go_section);
-    Some(Parsed {
-        container: ContainerFacts::Elf(facts),
-        go,
-        gaps: e.gaps,
+    Some(Parts {
+        elf: e,
+        facts,
+        dynamic,
+        sections,
     })
 }
 
@@ -576,11 +624,20 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     /// The first section named `name`, after the null section. A section whose name cannot be
     /// read could be it: a gap, never "absent" (review of #89). The gap does not start with
     /// `sections: `, which B8 keeps for a table that cannot be read.
-    fn section_named(
+    pub(crate) fn section_named(
         &mut self,
         table: &SectionTable<'d, H, &'d Bounded<R>>,
         name: &[u8],
     ) -> Option<&'d H::SectionHeader> {
+        self.section_index_named(table, name).map(|(_, s)| s)
+    }
+
+    /// The section named `name`, with its index ([`Self::section_named`]).
+    pub(crate) fn section_index_named(
+        &mut self,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        name: &[u8],
+    ) -> Option<(usize, &'d H::SectionHeader)> {
         let endian = self.endian;
         // The string table `sections()` names them from (`e_shstrndx`).
         let strings = self
@@ -589,13 +646,13 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             .ok()
             .and_then(|i| table.section(SectionIndex(i as usize)).ok())
             .and_then(|s| s.file_range(endian));
-        for s in table.iter().skip(1) {
+        for (i, s) in table.iter().enumerate().skip(1) {
             let read = match strings {
                 Some(strings) => self.name(strings, s.sh_name(endian), name.len()),
                 None => Err("no section-name table in the file".to_string()),
             };
             match read {
-                Ok(Some(n)) if n == name => return Some(s),
+                Ok(Some(n)) if n == name => return Some((i, s)),
                 Ok(_) => {}
                 Err(e) => self.gap(format!("malformed: section names: {e}")),
             }
@@ -657,7 +714,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let endian = self.endian;
         let data = self.data;
         let none = Sections {
+            table: None,
             symbols: None,
+            dynamic_symbols_agree: false,
             go_section: None,
         };
         let table = match self.header.sections(endian, data) {
@@ -724,7 +783,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Err(e) => {
                 self.gap(format!("malformed: symbols: {e}"));
                 return Sections {
+                    table: Some(table),
                     symbols: None,
+                    dynamic_symbols_agree: false,
                     go_section,
                 };
             }
@@ -736,7 +797,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 self.gap("symbols: no SHT_DYNSYM");
             }
             return Sections {
+                table: Some(table),
                 symbols: None,
+                dynamic_symbols_agree: false,
                 go_section,
             };
         }
@@ -759,9 +822,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if versym_entries.is_some_and(|n| n < symbols.len() as u64) {
             self.gap("versions: .gnu.version is shorter than .dynsym");
         }
-        if !relocatable {
-            self.loader_agrees(&table, &symbols, dynamic);
-        }
+        let dynamic_symbols_agree = !relocatable && self.loader_agrees(&table, &symbols, dynamic);
         // The symbols' string table, for the names object cannot read (spec §3.7).
         let strings = table
             .section(symbols.string_section())
@@ -837,74 +898,105 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         facts.imports = imports.into_iter().collect();
         Sections {
+            table: Some(table),
             symbols: Some(symbols),
+            dynamic_symbols_agree,
             go_section,
         }
     }
 
     /// What the loader uses agrees with the sections SIGIL reads (spec §3.1, §3.2): each
-    /// disagreement is a gap. Not for a relocatable object, which no loader reads.
+    /// disagreement is a gap. Not for a relocatable object, which no loader reads. `false` when
+    /// it recorded a `symbols:` gap: `.dynsym` is then not known to be the table the loader binds
+    /// through (plan review P1-1). The `versions:` gaps do not change it.
     fn loader_agrees(
         &mut self,
         table: &SectionTable<'d, H, &'d Bounded<R>>,
         symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
         dynamic: &Dynamic,
-    ) {
+    ) -> bool {
         let endian = self.endian;
         let count = symbols.len() as u64;
+        let mut agree = true;
         // Where the loader reads the symbols and their names: nowhere without DT_SYMTAB.
         if dynamic.read && dynamic.symtab.is_none() {
+            agree = false;
             self.gap("symbols: .dynsym without DT_SYMTAB");
         }
         if let Some(symtab) = dynamic.symtab {
             // Without a hash table, a lookup finds none of the symbols.
             if dynamic.hash.is_none() && dynamic.gnu_hash.is_none() {
+                agree = false;
                 self.gap("symbols: DT_SYMTAB without DT_HASH or DT_GNU_HASH");
             }
             if let Err(why) = self.loader_reads(table.section(symbols.section()).ok(), symtab) {
+                agree = false;
                 self.gap(format!("symbols: .dynsym {why} DT_SYMTAB"));
             }
             match dynamic.strtab {
                 Some(strtab) => {
                     let strings = table.section(symbols.string_section()).ok();
                     if let Err(why) = self.loader_reads(strings, strtab) {
+                        agree = false;
                         self.gap(format!("symbols: .dynsym's string table {why} DT_STRTAB"));
                     }
                 }
-                None => self.gap("symbols: DT_SYMTAB without DT_STRTAB"),
+                None => {
+                    agree = false;
+                    self.gap("symbols: DT_SYMTAB without DT_STRTAB");
+                }
             }
         }
         // How many symbols a lookup reaches.
         if let Some(hash) = dynamic.hash {
             match self.sysv_hash_count(hash) {
                 Ok(n) if n != count => {
-                    self.gap(format!("symbols: .dynsym has {count} entries, DT_HASH {n}"))
+                    agree = false;
+                    self.gap(format!("symbols: .dynsym has {count} entries, DT_HASH {n}"));
                 }
                 Ok(_) => {}
-                Err(()) => self.gap("symbols: DT_HASH cannot be read"),
+                Err(()) => {
+                    agree = false;
+                    self.gap("symbols: DT_HASH cannot be read");
+                }
             }
         }
         if let Some(gnu_hash) = dynamic.gnu_hash {
             match self.gnu_hash_count(gnu_hash) {
                 // The unhashed symbols are in the table too, whether or not one is hashed.
-                Ok((symoffset, _)) if symoffset > count => self.gap(format!(
-                    "symbols: .dynsym has {count} entries, DT_GNU_HASH's symoffset {symoffset}"
-                )),
-                Ok((_, Some(n))) if n != count => self.gap(format!(
-                    "symbols: .dynsym has {count} entries, DT_GNU_HASH {n}"
-                )),
+                Ok((symoffset, _)) if symoffset > count => {
+                    agree = false;
+                    self.gap(format!(
+                        "symbols: .dynsym has {count} entries, DT_GNU_HASH's symoffset {symoffset}"
+                    ));
+                }
+                Ok((_, Some(n))) if n != count => {
+                    agree = false;
+                    self.gap(format!(
+                        "symbols: .dynsym has {count} entries, DT_GNU_HASH {n}"
+                    ));
+                }
                 // Empty (no count, symoffset within the table), or in agreement.
                 Ok(_) => {}
-                Err(()) => self.gap("symbols: DT_GNU_HASH cannot be read"),
+                Err(()) => {
+                    agree = false;
+                    self.gap("symbols: DT_GNU_HASH cannot be read");
+                }
             }
         }
         // Which symbols a relocation binds: the imports.
         match self.largest_symbol_index(dynamic) {
-            Ok(Some(i)) if u64::from(i) >= count => self.gap(format!(
-                "symbols: a relocation names symbol {i} past .dynsym's {count} entries"
-            )),
+            Ok(Some(i)) if u64::from(i) >= count => {
+                agree = false;
+                self.gap(format!(
+                    "symbols: a relocation names symbol {i} past .dynsym's {count} entries"
+                ));
+            }
             Ok(_) => {}
-            Err(why) => self.gap(format!("symbols: relocations not read: {why}")),
+            Err(why) => {
+                agree = false;
+                self.gap(format!("symbols: relocations not read: {why}"));
+            }
         }
         // ld.so checks versions through DT_VERSYM, DT_VERNEED, and DT_VERDEF, whatever the
         // sections say; object reads the first section of each type.
@@ -967,6 +1059,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 self.gap("versions: .gnu.version does not link .dynsym");
             }
         }
+        agree
     }
 
     /// glibc applies the first `DT_RELACOUNT` entries of `DT_RELA` as RELATIVE whatever their
@@ -1190,11 +1283,38 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
         ranges: &[(u64, u64)],
     ) -> Result<Vec<Vec<Reloc>>, String> {
+        let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
+        self.for_each_rela(dynamic, Some(symbols), |r| {
+            let end = r.extent.map_or(u64::MAX, |n| r.at.saturating_add(n));
+            // A write of no bytes (a NONE, a COPY of a 0-byte symbol) overlaps nothing, even
+            // inside a value (sixth review of #91).
+            if r.at >= end {
+                return;
+            }
+            for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
+                if r.at < *stop && *start < end && hits.len() < 2 {
+                    hits.push((r.at, r.r_type, r.addend));
+                }
+            }
+        })?;
+        Ok(out)
+    }
+
+    /// Every RELA entry of `DT_RELA` and a RELA `DT_JMPREL`, once, in table order (an entry both
+    /// tables list counts once, as in [`Self::relocations`]). `Err` before any entry when the
+    /// tables are malformed (`dynamic: malformed:`), or when a table cannot be read where the
+    /// loader reads it; `f` has then seen the entries of the tables before it. Without
+    /// `symbols` (no `.dynsym`), a COPY's extent is unknown: `None` (unbounded).
+    pub(crate) fn for_each_rela(
+        &self,
+        dynamic: &Dynamic,
+        symbols: Option<&SymbolTable<'d, H, &'d Bounded<R>>>,
+        mut f: impl FnMut(Rela),
+    ) -> Result<(), String> {
         let endian = self.endian;
         if let Some(why) = &dynamic.rela_malformed {
             return Err(why.clone());
         }
-        let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
         let entry = size_of::<H::Rela>() as u64;
         // The entries of the table already read, `[start, end)`.
         let mut listed: Option<(u64, u64)> = None;
@@ -1210,41 +1330,37 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 }) {
                     continue;
                 }
-                let at: u64 = r.r_offset(endian).into();
-                let extent =
-                    self.write_extent(r.r_type(endian, false), r.r_sym(endian, false), symbols);
-                let end = extent.map_or(u64::MAX, |n| at.saturating_add(n));
-                // A write of no bytes (a NONE, a COPY of a 0-byte symbol) overlaps nothing, even
-                // inside a value (sixth review of #91).
-                if at >= end {
-                    continue;
-                }
-                for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
-                    if at < *stop && *start < end && hits.len() < 2 {
-                        hits.push((at, r.r_type(endian, false).0, r.r_addend(endian).into()));
-                    }
-                }
+                let t = r.r_type(endian, false);
+                let sym = r.r_sym(endian, false);
+                f(Rela {
+                    at: r.r_offset(endian).into(),
+                    r_type: t.0,
+                    sym,
+                    addend: r.r_addend(endian).into(),
+                    extent: self.write_extent(t, sym, symbols),
+                });
             }
             listed.get_or_insert((vaddr, vaddr.saturating_add(size)));
         }
-        Ok(out)
+        Ok(())
     }
 
     /// How many bytes a RELA relocation of type `t` writes from its offset (review of #91,
     /// P1-2), or `None` when SIGIL cannot bound it:
     /// - `R_*_NONE` writes none;
     /// - `R_*_COPY` copies at most its symbol's `st_size` (glibc the smaller of this symbol and
-    ///   its definition, musl this one); a symbol past `.dynsym` has no size: unbounded;
+    ///   its definition, musl this one); a symbol past `.dynsym`, or without `symbols`, has no
+    ///   size: unbounded;
     /// - `R_*_TLSDESC` writes two words;
     /// - any other x86-64 or AArch64 type at most 8 bytes: no wider field exists, and
     ///   `R_X86_64_64` writes 8 even in x32, so the bound is not the class's word.
     ///
     /// Another machine's types are not known: unbounded.
-    fn write_extent(
+    pub(crate) fn write_extent(
         &self,
         t: elf::RelocationType,
         sym: u32,
-        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
+        symbols: Option<&SymbolTable<'d, H, &'d Bounded<R>>>,
     ) -> Option<u64> {
         let (none, copy, tlsdesc) = match self.header.e_machine(self.endian) {
             elf::EM_X86_64 => (
@@ -1262,7 +1378,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if t == none {
             Some(0)
         } else if t == copy {
-            let sym = symbols.symbols().get(usize::try_from(sym).ok()?)?;
+            let sym = symbols?.symbols().get(usize::try_from(sym).ok()?)?;
             Some(sym.st_size(self.endian).into())
         } else if t == tlsdesc {
             Some(16)
