@@ -902,7 +902,8 @@ fn c3_a_missing_container_entry_is_b9s_error_only() {
         budget: None,
     });
     b9(&s);
-    // Over binary_bytes: the state needs the entry's `used`, so only B9 speaks.
+    // Over binary_bytes: the state needs the entry's `used`, so only B9 speaks, whether the
+    // entry is missing or in a state B9 refuses.
     let mut s = session(true);
     let limit = s.request.budgets[BINARY_BYTES];
     s.artifacts.clear();
@@ -922,6 +923,22 @@ fn c3_a_missing_container_entry_is_b9s_error_only() {
         None,
     );
     b9(&s);
+    let mut s = s;
+    s.coverage.push(Coverage {
+        check: CheckId::new(BINARY_CONTAINER).unwrap(),
+        scope: Ref::Instance(s.instances[0].id.clone()),
+        state: CoverageState::Complete,
+        budget: None,
+    });
+    let s = with_code(s, CoverageState::Complete, code_bytes(0, LIMIT));
+    assert!(
+        errors(&s)
+            .iter()
+            .any(|e| e.contains("but the input is over binary_bytes")),
+        "{:?}",
+        errors(&s)
+    );
+    assert_eq!(code_errors(&s), Vec::<String>::new());
 }
 
 #[test]
@@ -983,6 +1000,8 @@ fn expected_binary_code_of_each_input() {
     };
     let mut s = with_container(s, over.clone());
     assert_eq!(expected(&s), Ok(ExpectedCode::Exactly(over)));
+    let wrong = with_container(s.clone(), CoverageState::Complete);
+    assert!(expected(&wrong).is_err(), "with an entry B9 refuses");
     s.coverage.retain(|c| c.check.as_str() != BINARY_CONTAINER);
     assert!(expected(&s).is_err(), "without its entry");
     // Analyzed without the budget, or without request.code: no answer.
