@@ -1,4 +1,224 @@
 //! Level C for the capability imports (PR-5a spec): where each is called directly, with the
-//! argument values, in x86-64 ELF64 little-endian files. Nothing is executed or mapped.
+//! argument values, in x86-64 ELF64 little-endian files. Nothing is executed or mapped: every
+//! byte is read with `pread` and charged to `binary_code_bytes` first, and every collection that
+//! grows with the input has a limit (spec §4.10).
+
+use std::collections::BTreeSet;
+
+use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 
 pub mod data;
+pub(crate) mod reader;
+
+use reader::{Reader, Refusal};
+
+/// Instructions decoded per function (plan §4.9).
+pub const FUNCTION_INSTRUCTIONS: u64 = 200_000;
+/// The longest FDE decoded.
+pub const FDE_BYTES: u64 = 16 << 20;
+/// Times one block is processed before its values are given up.
+pub const VALUE_PASSES: u32 = 32;
+/// The longest constant string read (plan §4.9).
+pub const STRING_BYTES: u64 = 4096;
+
+/// The code budgets of one artifact (spec §4.10). `bytes` is `binary_code_bytes`; the others are
+/// the aggregate limits, constants outside tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodeBudgets {
+    pub bytes: u64,
+    pub references: usize,
+    pub fdes: usize,
+    pub instructions: u64,
+    pub call_sites: usize,
+    pub gaps: usize,
+}
+
+impl Default for CodeBudgets {
+    fn default() -> Self {
+        CodeBudgets {
+            bytes: 256 << 20,
+            references: 65_536,
+            fdes: 1 << 20,
+            instructions: 4_000_000,
+            call_sites: 65_536,
+            gaps: 256,
+        }
+    }
+}
+
+/// What code analysis gave for one slice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeOutcome {
+    /// Analyzed: the recorded facts, the gaps (sorted), and the `binary_code_bytes` use.
+    Analyzed {
+        functions: Vec<Function>,
+        call_sites: Vec<CallSite>,
+        gaps: Vec<String>,
+        budget: BudgetUse,
+    },
+    /// Not an x86-64 ELF64 little-endian slice.
+    Unsupported,
+}
+
+/// The gaps and limits of one artifact's analysis.
+// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
+#[allow(dead_code)]
+pub(crate) struct Run {
+    pub budgets: CodeBudgets,
+    gaps: BTreeSet<String>,
+    more: u64,
+    stopped: bool,
+    /// Instructions decoded so far, over all functions.
+    pub instructions: u64,
+}
+
+// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
+#[allow(dead_code)]
+impl Run {
+    pub fn new(budgets: CodeBudgets) -> Run {
+        Run {
+            budgets,
+            gaps: BTreeSet::new(),
+            more: 0,
+            stopped: false,
+            instructions: 0,
+        }
+    }
+
+    /// Records a gap. Past `budgets.gaps` listed ones, it is counted instead.
+    pub fn gap(&mut self, gap: String) {
+        if self.gaps.contains(&gap) {
+            return;
+        }
+        if self.gaps.len() < self.budgets.gaps {
+            self.gaps.insert(gap);
+        } else {
+            self.more = self.more.saturating_add(1);
+        }
+    }
+
+    /// A gap listed whatever the count: a limit, or a refused read.
+    pub fn gap_always(&mut self, gap: String) {
+        self.gaps.insert(gap);
+    }
+
+    /// An aggregate limit was reached: listed, and the analysis ends in order.
+    pub fn limit(&mut self, what: &str, n: u64) {
+        self.gap_always(format!("code: {what} limit {n} reached"));
+        self.stopped = true;
+    }
+
+    /// Whether a limit or the read budget stopped the analysis.
+    pub fn stopped(&self) -> bool {
+        self.stopped
+    }
+
+    /// Records why a read of `what` was refused.
+    pub fn refusal(&mut self, why: Refusal, what: &str, limit: u64) {
+        match why {
+            Refusal::Budget => {
+                self.gap_always(format!("{BINARY_CODE_BYTES}: {limit} exceeded"));
+                self.stopped = true;
+            }
+            Refusal::OutsideFile => self.gap(format!("code: {what}: outside the file")),
+            Refusal::Io => self.gap(format!("code: {what}: read error")),
+        }
+    }
+
+    /// The listed gaps, sorted, with the count of the rest.
+    pub fn into_gaps(self) -> Vec<String> {
+        listed(self.gaps.into_iter(), self.more)
+    }
+
+    /// What [`Run::into_gaps`] would give, without ending the run (tests only).
+    #[cfg(test)]
+    pub fn clone_gaps(&self) -> Vec<String> {
+        listed(self.gaps.iter().cloned(), self.more)
+    }
+
+    /// The outcome, with the reader's use of `binary_code_bytes`.
+    pub fn finish(
+        self,
+        reader: &Reader<'_>,
+        functions: Vec<Function>,
+        call_sites: Vec<CallSite>,
+    ) -> CodeOutcome {
+        let budget = BudgetUse {
+            budget: BINARY_CODE_BYTES.to_string(),
+            used: reader.used(),
+            limit: reader.limit(),
+        };
+        CodeOutcome::Analyzed {
+            functions,
+            call_sites,
+            gaps: self.into_gaps(),
+            budget,
+        }
+    }
+}
+
+/// `gaps` (sorted, from the set), with a line counting the `more` not listed, sorted in.
+// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
+#[allow(dead_code)]
+fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
+    let mut gaps: Vec<String> = gaps.collect();
+    if more > 0 {
+        gaps.push(format!("code: {more} more gaps not listed"));
+        gaps.sort();
+    }
+    gaps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn small(gaps: usize) -> CodeBudgets {
+        CodeBudgets {
+            gaps,
+            ..CodeBudgets::default()
+        }
+    }
+
+    #[test]
+    fn gaps_are_listed_up_to_the_limit_then_counted() {
+        let mut run = Run::new(small(2));
+        for k in 0..5 {
+            run.gap(format!("code: g{k}"));
+        }
+        run.gap("code: g0".to_string()); // a repeat of a listed gap is not counted
+        let gaps = run.into_gaps();
+        assert_eq!(
+            gaps,
+            ["code: 3 more gaps not listed", "code: g0", "code: g1"]
+        );
+    }
+
+    #[test]
+    fn a_limit_is_always_listed_and_stops_the_run() {
+        let mut run = Run::new(small(1));
+        run.gap("code: first".to_string());
+        assert!(!run.stopped());
+        run.limit("references", 65_536);
+        assert!(run.stopped());
+        assert!(run
+            .into_gaps()
+            .contains(&"code: references limit 65536 reached".to_string()));
+    }
+
+    #[test]
+    fn the_defaults_are_the_spec_values() {
+        let b = CodeBudgets::default();
+        assert_eq!(
+            (
+                b.bytes,
+                b.references,
+                b.fdes,
+                b.instructions,
+                b.call_sites,
+                b.gaps
+            ),
+            (256 << 20, 65_536, 1 << 20, 4_000_000, 65_536, 256)
+        );
+    }
+}
