@@ -97,12 +97,14 @@ pub(crate) enum PltError {
 }
 
 /// The stubs of one PLT section: each near `jmp [rip+slot]` to a known slot, and an `endbr64`
-/// right before it. A slot has at most one `jmp` in a section, so the stubs are at most twice the
-/// slots. `Err`: no stub of the section is kept.
+/// right before it. A slot has at most one `jmp` in all the PLT sections (`claimed`: the slots
+/// earlier sections have), so the stubs are at most twice the slots. `Err`: no stub of the
+/// section is kept.
 pub(crate) fn plt_stubs(
     bytes: &[u8],
     start: u64,
     slots: &BTreeMap<u64, Sym>,
+    claimed: &BTreeSet<u64>,
 ) -> Result<Vec<(u64, u64)>, PltError> {
     let mut dec = Decoder::with_ip(64, bytes, start, DecoderOptions::NONE);
     let mut ins = Instruction::default();
@@ -119,7 +121,7 @@ pub(crate) fn plt_stubs(
         if ins.code() == Code::Jmp_rm64 && ins.is_ip_rel_memory_operand() {
             let slot = ins.ip_rel_memory_address();
             if slots.contains_key(&slot) {
-                if !seen.insert(slot) {
+                if claimed.contains(&slot) || !seen.insert(slot) {
                     return Err(PltError::TwoStubs(slot));
                 }
                 out.push((ins.ip(), slot));
@@ -293,6 +295,8 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         }
     }
     img.set_textrel(textrel.into_iter().map(|(at, end, _)| (at, end)).collect());
+    // The slots the PLT sections so far have a stub for.
+    let mut claimed = BTreeSet::new();
     for (name, via) in [
         (".plt", ImportVia::Plt),
         (".plt.got", ImportVia::Plt),
@@ -318,9 +322,10 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 continue;
             }
         };
-        match plt_stubs(&bytes, start, &img.slots) {
+        match plt_stubs(&bytes, start, &img.slots, &claimed) {
             Ok(found) => {
                 for (stub, slot) in found {
+                    claimed.insert(slot);
                     img.stubs.insert(stub, (slot, via));
                 }
             }
@@ -627,14 +632,15 @@ mod tests {
                 defined: None,
             },
         )]);
+        let none = BTreeSet::new();
         // jmp [rip+0x1ffa] at 0x1000 (next ip 0x1006 → slot 0x3000), then an invalid byte pair.
         let bytes = [0xff, 0x25, 0xfa, 0x1f, 0x00, 0x00, 0xff, 0xff];
         assert_eq!(
-            plt_stubs(&bytes[..6], 0x1000, &slots),
+            plt_stubs(&bytes[..6], 0x1000, &slots, &none),
             Ok(vec![(0x1000, 0x3000)])
         );
         assert_eq!(
-            plt_stubs(&bytes, 0x1000, &slots),
+            plt_stubs(&bytes, 0x1000, &slots, &none),
             Err(PltError::Invalid(0x1006))
         );
     }
@@ -779,26 +785,33 @@ mod tests {
                 defined: None,
             },
         )]);
+        let none = BTreeSet::new();
         // endbr64; bnd jmp [rip→0x3000]: both are stubs.
         let bytes = [&ENDBR64[..], &jmp(&[0xf2], 0x1004, 0x3000)].concat();
         assert_eq!(
-            plt_stubs(&bytes, 0x1000, &slots),
+            plt_stubs(&bytes, 0x1000, &slots, &none),
             Ok(vec![(0x1000, 0x3000), (0x1004, 0x3000)])
         );
         // endbr64; nop; jmp: the endbr64 is not right before the jmp.
         let bytes = [&ENDBR64[..], &[0x90], &jmp(&[], 0x1005, 0x3000)].concat();
         assert_eq!(
-            plt_stubs(&bytes, 0x1000, &slots),
+            plt_stubs(&bytes, 0x1000, &slots, &none),
             Ok(vec![(0x1005, 0x3000)])
         );
         // jmp far [rip→0x3000] (FF /5) is not a stub (review M3).
         let disp = (0x3000i64 - 0x1006) as i32;
         let far = [&[0xff, 0x2d][..], &disp.to_le_bytes()].concat();
-        assert_eq!(plt_stubs(&far, 0x1000, &slots), Ok(vec![]));
+        assert_eq!(plt_stubs(&far, 0x1000, &slots, &none), Ok(vec![]));
         // Two jmps on one slot: no stub of the section is kept (review I1).
         let two = [jmp(&[], 0x1000, 0x3000), jmp(&[], 0x1006, 0x3000)].concat();
         assert_eq!(
-            plt_stubs(&two, 0x1000, &slots),
+            plt_stubs(&two, 0x1000, &slots, &none),
+            Err(PltError::TwoStubs(0x3000))
+        );
+        // A slot an earlier PLT section claimed: the same (review: stubs ≤ 2 × slots).
+        let claimed = BTreeSet::from([0x3000]);
+        assert_eq!(
+            plt_stubs(&jmp(&[], 0x1000, 0x3000), 0x1000, &slots, &claimed),
             Err(PltError::TwoStubs(0x3000))
         );
     }
@@ -830,6 +843,26 @@ mod tests {
             assert_eq!(
                 run.clone_gaps(),
                 ["code: .plt: two stubs for GOT slot 0x40000000"]
+            );
+        });
+    }
+
+    #[test]
+    fn one_stub_per_slot_across_the_plt_sections() {
+        // `.plt` and `.plt.sec` both jump through one slot: the later section's stubs are dropped.
+        let text = [jmp(&[], TEXT, SLOTS), jmp(&[], TEXT + 6, SLOTS)].concat();
+        let bytes = dso(&Dso {
+            names: &[b"connect"],
+            relas: &[(SLOTS, rtype::JUMP_SLOT, 1)],
+            text: &text,
+            secs: &[(".plt", TEXT, 6), (".plt.sec", TEXT + 6, 6)],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert_eq!(img.stubs, BTreeMap::from([(TEXT, (SLOTS, ImportVia::Plt))]));
+            assert_eq!(
+                run.clone_gaps(),
+                ["code: .plt.sec: two stubs for GOT slot 0x40000000"]
             );
         });
     }

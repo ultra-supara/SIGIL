@@ -134,9 +134,9 @@ pub(crate) enum Meaning {
 pub(crate) enum FdeAt {
     /// No FDE.
     None,
-    /// This FDE, which overlaps no other.
+    /// This FDE alone.
     One((u64, u64)),
-    /// An FDE that overlaps another.
+    /// Two FDEs or more (spec §4.5: a gap).
     Overlap,
 }
 
@@ -167,10 +167,10 @@ pub(crate) struct Image {
     pub targets: BTreeSet<Name>,
     /// FDE ranges, sorted by start ([`Image::set_fdes`]).
     pub fdes: Vec<(u64, u64)>,
-    /// `fde_ends[i]`: the largest end among `fdes[..=i]`.
-    pub fde_ends: Vec<u64>,
-    /// `fde_overlaps[i]`: whether `fdes[i]` overlaps another FDE.
-    pub fde_overlaps: Vec<bool>,
+    /// `fde_max[i]`: the index of an FDE with the largest end among `fdes[..=i]`.
+    pub fde_max: Vec<usize>,
+    /// Where two FDEs or more cover: sorted, merged ranges.
+    pub fde_shared: Vec<(u64, u64)>,
 }
 
 impl Image {
@@ -188,51 +188,55 @@ impl Image {
             rel_syms: BTreeMap::new(),
             targets: BTreeSet::new(),
             fdes: vec![],
-            fde_ends: vec![],
-            fde_overlaps: vec![],
+            fde_max: vec![],
+            fde_shared: vec![],
         }
     }
 
-    /// Sets the FDEs, sorted, with their running maximum end and which overlap another: one
-    /// overlaps an earlier FDE when it starts before the largest end so far, and a later one when
-    /// the next FDE (the earliest later start) starts before its end.
+    /// Sets the FDEs, sorted, with which one reaches furthest so far and where two or more
+    /// cover. An FDE meets an earlier one exactly where it starts before the furthest end so far:
+    /// `[start, min(end, that end))`, covered by both. Those ranges, merged, are every address two
+    /// FDEs hold.
     pub fn set_fdes(&mut self, mut fdes: Vec<(u64, u64)>) {
         fdes.sort_unstable();
-        let mut max = 0;
-        let mut ends = Vec::with_capacity(fdes.len());
-        let mut overlaps = Vec::with_capacity(fdes.len());
-        for (i, f) in fdes.iter().enumerate() {
-            let earlier = f.0 < max;
-            let later = fdes.get(i + 1).is_some_and(|g| g.0 < f.1);
-            overlaps.push(earlier || later);
-            max = max.max(f.1);
-            ends.push(max);
+        let mut max: Option<(u64, usize)> = None;
+        let mut fde_max = Vec::with_capacity(fdes.len());
+        let mut shared: Vec<(u64, u64)> = vec![];
+        for (i, &(start, end)) in fdes.iter().enumerate() {
+            if let Some((reach, _)) = max {
+                let cut = (start, end.min(reach));
+                if cut.0 < cut.1 {
+                    match shared.last_mut() {
+                        Some(last) if cut.0 <= last.1 => last.1 = last.1.max(cut.1),
+                        _ => shared.push(cut),
+                    }
+                }
+            }
+            if max.is_none_or(|(reach, _)| end > reach) {
+                max = Some((end, i));
+            }
+            fde_max.push(max.map_or(i, |(_, at)| at));
         }
         self.fdes = fdes;
-        self.fde_ends = ends;
-        self.fde_overlaps = overlaps;
+        self.fde_max = fde_max;
+        self.fde_shared = shared;
     }
 
-    /// The FDE holding `addr`, by binary search. The last FDE starting at or before `addr` holds
-    /// it, or an earlier one does exactly when their largest end passes `addr`; that one overlaps
-    /// the last.
+    /// The FDE holding `addr`, by binary search. In a range two FDEs cover: `Overlap`. Elsewhere
+    /// at most one FDE holds `addr`, and if one does, the one reaching furthest among those
+    /// starting at or before `addr` does.
     pub fn fde_at(&self, addr: u64) -> FdeAt {
-        let i = self.fdes.partition_point(|f| f.0 <= addr);
-        let Some(last) = i.checked_sub(1) else {
-            return FdeAt::None;
-        };
-        let (Some(f), Some(overlaps)) = (self.fdes.get(last), self.fde_overlaps.get(last)) else {
-            return FdeAt::None;
-        };
-        if addr < f.1 {
-            return if *overlaps {
-                FdeAt::Overlap
-            } else {
-                FdeAt::One(*f)
-            };
+        let s = self.fde_shared.partition_point(|r| r.1 <= addr);
+        if self.fde_shared.get(s).is_some_and(|r| r.0 <= addr) {
+            return FdeAt::Overlap;
         }
-        match last.checked_sub(1).and_then(|j| self.fde_ends.get(j)) {
-            Some(end) if *end > addr => FdeAt::Overlap,
+        let i = self.fdes.partition_point(|f| f.0 <= addr);
+        match i
+            .checked_sub(1)
+            .and_then(|last| self.fde_max.get(last))
+            .and_then(|at| self.fdes.get(*at))
+        {
+            Some(f) if addr < f.1 => FdeAt::One(*f),
             _ => FdeAt::None,
         }
     }
@@ -410,11 +414,8 @@ pub(crate) fn target_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endiannes
                     Ok(Some(name))
                 }
                 Ok(_) => Ok(None),
-                // As unreadable with any longer bound: kept.
-                Err(why) => {
-                    names.read.insert(key, Err(why.clone()));
-                    Err(why)
-                }
+                // Not kept: one gap says it, and no string is held per name.
+                Err(why) => Err(why),
             },
         };
         match read {
@@ -443,20 +444,17 @@ mod tests {
             (0x2000, 0x2100),
             (0x2100, 0x2200),
         ]);
+        let long = FdeAt::One((0x300, 0x1000));
         assert_eq!(img.fde_at(0x50), FdeAt::None, "before every FDE");
         assert_eq!(img.fde_at(0x150), FdeAt::One((0x100, 0x200)));
         assert_eq!(img.fde_at(0x250), FdeAt::None, "between FDEs");
-        assert_eq!(
-            img.fde_at(0x350),
-            FdeAt::Overlap,
-            "the long one, which overlaps"
-        );
-        assert_eq!(img.fde_at(0x450), FdeAt::Overlap, "the short one inside it");
-        assert_eq!(
-            img.fde_at(0x600),
-            FdeAt::Overlap,
-            "past the short one: the long earlier one still holds it"
-        );
+        // Spec §4.5: only an address in the overlap is a gap.
+        assert_eq!(img.fde_at(0x350), long, "only in the long one");
+        assert_eq!(img.fde_at(0x400), FdeAt::Overlap, "the overlap's start");
+        assert_eq!(img.fde_at(0x450), FdeAt::Overlap, "in both");
+        assert_eq!(img.fde_at(0x4ff), FdeAt::Overlap, "the overlap's last byte");
+        assert_eq!(img.fde_at(0x500), long, "past the short one");
+        assert_eq!(img.fde_at(0xfff), long);
         assert_eq!(img.fde_at(0x1000), FdeAt::None, "the long one's end");
         assert_eq!(img.fde_at(0x20ff), FdeAt::One((0x2000, 0x2100)));
         assert_eq!(
@@ -465,6 +463,17 @@ mod tests {
             "touching is no overlap"
         );
         assert_eq!(img.fde_at(u64::MAX), FdeAt::None);
+
+        // A chain: [0, 0x10) and [5, 0x20) share [5, 0x10); [0x10, 0x18) shares [0x10, 0x18)
+        // with the second: one overlap [5, 0x18). [0x15, 0x30) adds [0x18, 0x20).
+        img.set_fdes(vec![(0, 0x10), (5, 0x20), (0x10, 0x18), (0x15, 0x30)]);
+        assert_eq!(img.fde_at(4), FdeAt::One((0, 0x10)));
+        for addr in [5, 0xf, 0x10, 0x17, 0x18, 0x1f] {
+            assert_eq!(img.fde_at(addr), FdeAt::Overlap, "{addr:#x}");
+        }
+        assert_eq!(img.fde_at(0x20), FdeAt::One((0x15, 0x30)));
+        assert_eq!(img.fde_at(0x2f), FdeAt::One((0x15, 0x30)));
+        assert_eq!(img.fde_at(0x30), FdeAt::None);
     }
 
     #[test]
