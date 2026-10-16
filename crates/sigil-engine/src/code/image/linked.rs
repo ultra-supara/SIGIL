@@ -1,16 +1,17 @@
 //! The image of an executable or shared object (PR-5a spec §4.2, §4.4): code and string
 //! regions, overlapped pages, PLT stubs, GOT slots, text relocations, and FDEs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::ControlFlow;
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, Mnemonic};
+use iced_x86::{Code, Decoder, DecoderOptions, Instruction, Mnemonic};
 use object::elf;
 use object::read::elf::{FileHeader, ProgramHeader, SectionHeader};
 use object::read::ReadCacheOps;
 use object::Endianness;
 use sigil_model::ImportVia;
 
-use super::{read_sym, rtype, target_names, Image, Kind, Region, Sym, PAGE};
+use super::{rtype, target_names, Image, Kind, Names, Region, Sym, PAGE};
 use crate::binary::elf::{Dynamic, Elf, Rela, Sections};
 use crate::binary::vaddr::{Load, Loads, Place};
 use crate::code::data::Signatures;
@@ -45,8 +46,10 @@ pub(crate) fn overlapped_pages(loads: &Loads) -> Vec<(u64, u64)> {
     out
 }
 
-/// The file-backed ranges of the `PT_LOAD`s `want` selects, minus `cuts`, sorted. A segment
-/// whose file range passes 2^64 is in no file: it gives none.
+/// The file-backed ranges of the `PT_LOAD`s `want` selects, minus `cuts` (sorted and disjoint,
+/// as [`overlapped_pages`] gives them), sorted. Each segment finds its first cut by binary search
+/// and walks only the cuts it meets (review I2). A segment whose file range passes 2^64 is in no
+/// file: it gives none.
 pub(crate) fn regions(loads: &Loads, want: fn(&Load) -> bool, cuts: &[(u64, u64)]) -> Vec<Region> {
     let mut out = vec![];
     for l in loads.0.iter().filter(|l| want(l)) {
@@ -56,53 +59,68 @@ pub(crate) fn regions(loads: &Loads, want: fn(&Load) -> bool, cuts: &[(u64, u64)
         ) else {
             continue;
         };
-        let mut parts = vec![(l.vaddr, end)];
-        for (cs, ce) in cuts {
-            parts = parts
-                .into_iter()
-                .flat_map(|(s, e)| {
-                    if *ce <= s || e <= *cs {
-                        vec![(s, e)]
-                    } else {
-                        [(s, (*cs).max(s)), ((*ce).min(e), e)]
-                            .into_iter()
-                            .filter(|(a, b)| a < b)
-                            .collect()
-                    }
-                })
-                .collect();
+        let mut piece = |s: u64, e: u64| {
+            if s < e {
+                out.push(Region {
+                    start: s,
+                    end: e,
+                    offset: l.offset + (s - l.vaddr),
+                });
+            }
+        };
+        let mut from = l.vaddr;
+        let first = cuts.partition_point(|c| c.1 <= from);
+        for (cs, ce) in cuts.get(first..).unwrap_or_default() {
+            if *cs >= end {
+                break;
+            }
+            piece(from, (*cs).max(from));
+            from = from.max(*ce);
+            if from >= end {
+                break;
+            }
         }
-        for (s, e) in parts {
-            out.push(Region {
-                start: s,
-                end: e,
-                offset: l.offset + (s - l.vaddr),
-            });
-        }
+        piece(from, end);
     }
     out.sort_unstable();
     out
 }
 
-/// The stubs of one PLT section: each `jmp [rip+slot]` to a known slot, and an `endbr64` right
-/// before it. `Err(addr)`: an invalid instruction at `addr`, and no stub of the section is kept.
+/// Why a PLT section gives no stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PltError {
+    /// An invalid instruction at this address.
+    Invalid(u64),
+    /// A second `jmp` on this GOT slot (review I1).
+    TwoStubs(u64),
+}
+
+/// The stubs of one PLT section: each near `jmp [rip+slot]` to a known slot, and an `endbr64`
+/// right before it. A slot has at most one `jmp` in a section, so the stubs are at most twice the
+/// slots. `Err`: no stub of the section is kept.
 pub(crate) fn plt_stubs(
     bytes: &[u8],
     start: u64,
     slots: &BTreeMap<u64, Sym>,
-) -> Result<Vec<(u64, u64)>, u64> {
+) -> Result<Vec<(u64, u64)>, PltError> {
     let mut dec = Decoder::with_ip(64, bytes, start, DecoderOptions::NONE);
     let mut ins = Instruction::default();
     let mut prev: Option<Instruction> = None;
+    let mut seen = BTreeSet::new();
     let mut out = vec![];
     while dec.can_decode() {
         dec.decode_out(&mut ins);
         if ins.is_invalid() {
-            return Err(ins.ip());
+            return Err(PltError::Invalid(ins.ip()));
         }
-        if ins.flow_control() == FlowControl::IndirectBranch && ins.is_ip_rel_memory_operand() {
+        // `jmp r/m64` only: not `jmp far` (review M3). A `bnd` or `notrack` prefix is the same
+        // instruction.
+        if ins.code() == Code::Jmp_rm64 && ins.is_ip_rel_memory_operand() {
             let slot = ins.ip_rel_memory_address();
             if slots.contains_key(&slot) {
+                if !seen.insert(slot) {
+                    return Err(PltError::TwoStubs(slot));
+                }
                 out.push((ins.ip(), slot));
                 if let Some(p) =
                     prev.filter(|p| p.mnemonic() == Mnemonic::Endbr64 && p.next_ip() == ins.ip())
@@ -115,6 +133,12 @@ pub(crate) fn plt_stubs(
     }
     out.sort_unstable();
     Ok(out)
+}
+
+/// Whether `[start, end)` meets `regions` (sorted and disjoint), by binary search (review I3).
+fn meets(regions: &[Region], start: u64, end: u64) -> bool {
+    let i = regions.partition_point(|r| r.end <= start);
+    start < end && regions.get(i).is_some_and(|r| r.start < end)
 }
 
 /// The image of an executable or shared object, or `None` when it has no section headers.
@@ -168,15 +192,21 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         );
         return Some(img);
     }
+    let mut names = Names::default();
     if let Some(symbols) = symbols {
-        img.targets = target_names(e, symbols, sig, run);
+        img.targets = target_names(e, table, symbols, sig, &mut names, run);
     }
-    // GOT slots, and the dynamic relocations that write code (text relocations).
+    // musl applies DT_REL on x86-64 (glibc does not); SIGIL does not read it.
+    if dynamic.rel.is_some() {
+        run.gap("code: DT_REL relocations are not modeled".to_string());
+    }
+    // GOT slots, and the dynamic relocations that write code (text relocations): RELA entries
+    // with their symbol, and the words DT_RELR relocates. Together at most `references` (R-f).
     let mut slot_syms: BTreeMap<u64, Option<u32>> = BTreeMap::new();
-    let mut textrel_syms: Vec<(u64, u64, u32)> = vec![];
-    let code = img.code.clone();
+    let mut textrel: Vec<(u64, u64, Option<u32>)> = vec![];
     let limit = run.budgets.references;
     let mut over = false;
+    let code = &img.code;
     let walk = e.for_each_rela(dynamic, symbols, |r: Rela| {
         if r.r_type == rtype::JUMP_SLOT || r.r_type == rtype::GLOB_DAT {
             slot_syms
@@ -189,45 +219,68 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 .or_insert(Some(r.sym));
         }
         let (at, end) = textrel_range(&r);
-        if at < end && code.iter().any(|c| at < c.end && c.start < end) {
-            if textrel_syms.len() >= limit {
+        if meets(code, at, end) {
+            if textrel.len() >= limit {
                 over = true;
             } else {
-                textrel_syms.push((at, end, r.sym));
+                textrel.push((at, end, Some(r.sym)));
             }
         }
     });
     if let Err(why) = walk {
         run.gap(format!("code: relocations: {why}"));
     }
+    let word = if e.header.is_type_64() { 8 } else { 4 };
+    let walk = e.for_each_relr(dynamic, |entry| {
+        let (lo, hi) = entry.span(word);
+        if !meets(code, lo, hi) {
+            return ControlFlow::Continue(());
+        }
+        for (at, end) in entry.words(word) {
+            if meets(code, at, end) {
+                if textrel.len() >= limit {
+                    over = true;
+                    return ControlFlow::Break(());
+                }
+                textrel.push((at, end, None));
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    if let Err(why) = walk {
+        run.gap(format!("code: DT_RELR: {why}"));
+    }
     if over {
         run.limit("references", limit as u64);
     }
-    for (at, end, sym) in &textrel_syms {
-        img.textrel.push((*at, *end));
-        if let Some(s) = symbols.and_then(|t| read_sym(endian, t, *sym)) {
-            if img.is_target(&s) {
-                run.gap(format!(
-                    "code: {}: text relocation at {at:#x}",
-                    String::from_utf8_lossy(&s.name)
-                ));
+    if let Some(symbols) = symbols {
+        for (at, _, sym) in &textrel {
+            let Some(index) = sym else {
+                continue;
+            };
+            if let Ok(s) = names.sym(e, table, symbols, *index) {
+                if img.is_target(&s) {
+                    run.gap(format!(
+                        "code: {}: text relocation at {at:#x}",
+                        String::from_utf8_lossy(&s.name)
+                    ));
+                }
             }
         }
-    }
-    if let Some(symbols) = symbols {
         for (at, sym) in slot_syms {
             let Some(index) = sym else {
                 run.gap(format!("code: GOT slot {at:#x} has two symbols"));
                 continue;
             };
-            match read_sym(endian, symbols, index) {
-                Some(s) => {
+            match names.sym(e, table, symbols, index) {
+                Ok(s) => {
                     img.slots.insert(at, s);
                 }
-                None => run.gap(format!("code: GOT slot {at:#x}: symbol {index} unreadable")),
+                Err(_) => run.gap(format!("code: GOT slot {at:#x}: symbol {index} unreadable")),
             }
         }
     }
+    img.set_textrel(textrel.into_iter().map(|(at, end, _)| (at, end)).collect());
     for (name, via) in [
         (".plt", ImportVia::Plt),
         (".plt.got", ImportVia::Plt),
@@ -259,13 +312,26 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                     img.stubs.insert(stub, (slot, via));
                 }
             }
-            Err(at) => run.gap(format!("code: {name}: decode failure at {at:#x}")),
+            Err(PltError::Invalid(at)) => {
+                run.gap(format!("code: {name}: decode failure at {at:#x}"))
+            }
+            Err(PltError::TwoStubs(slot)) => {
+                run.gap(format!("code: {name}: two stubs for GOT slot {slot:#x}"))
+            }
         }
     }
+    // `.eh_frame` is read where code would be (review M1): file-backed, and in no page two
+    // PT_LOADs share.
     if let Some(s) = e.section_named(table, b".eh_frame") {
         let start: u64 = s.sh_addr(endian).into();
         let size: u64 = s.sh_size(endian).into();
+        let shared = start
+            .checked_add(size)
+            .is_none_or(|end| meets_cut(&overlaps, start, end));
         match e.loads.place(start, size) {
+            _ if shared => {
+                run.gap("code: .eh_frame: in a page two PT_LOAD segments share".to_string())
+            }
             Place::File(off) => match reader.read(off, size) {
                 Ok(bytes) => img.set_fdes(fde::parse(&bytes, start, run)),
                 Err(why) => run.refusal(why, ".eh_frame", reader),
@@ -274,6 +340,12 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         }
     }
     Some(img)
+}
+
+/// Whether `[start, end)` meets one of `cuts` (sorted and disjoint).
+fn meets_cut(cuts: &[(u64, u64)], start: u64, end: u64) -> bool {
+    let i = cuts.partition_point(|c| c.1 <= start);
+    cuts.get(i).is_some_and(|c| c.0 < end)
 }
 
 /// The bytes a dynamic relocation writes (plan review P2): `[at, at + extent)` from
@@ -286,14 +358,159 @@ pub(crate) fn textrel_range(r: &Rela) -> (u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code::testing::with_image;
+    use crate::code::image::Name;
+    use crate::code::synth;
+    use crate::code::testing::{with_image, with_image_at};
     use crate::code::CodeBudgets;
+    use std::io::Write;
+    use std::path::Path;
+    use std::rc::Rc;
 
     fn name_of(img: &Image, addr: u64) -> String {
         img.symbol_at(addr)
-            .map(|(s, _)| String::from_utf8(s.name).unwrap())
+            .map(|(s, _)| String::from_utf8(s.name.to_vec()).unwrap())
             .unwrap_or_default()
     }
+
+    /// Where [`dso`] puts the code, and the GOT slots.
+    const TEXT: u64 = 0x1000;
+    const SLOTS: u64 = 0x4000_0000;
+
+    /// A shared object for the tests, file-backed at vaddr == offset:
+    /// - `text` at [`TEXT`], in an R+X `PT_LOAD` (at most 0x1000 bytes);
+    /// - from 0x2000, in an R `PT_LOAD`: `.dynsym` (symbol `i + 1` is `names[i]`, undefined),
+    ///   `.dynstr`, a `DT_HASH` over them, the `DT_RELA` entries `relas` (`(offset, type,
+    ///   symbol)`), the `DT_RELR` entries `relr`, and `PT_DYNAMIC` (with `dynamic` added);
+    /// - [`SLOTS`]: a zero-filled RW `PT_LOAD` for the GOT slots;
+    /// - the `PROGBITS` sections `secs` (`(name, address, size)`), and the R `PT_LOAD`s `loads`
+    ///   (`(vaddr, size)`).
+    #[derive(Default)]
+    struct Dso<'a> {
+        names: &'a [&'a [u8]],
+        relas: &'a [(u64, u32, u32)],
+        relr: &'a [u64],
+        text: &'a [u8],
+        dynamic: &'a [(i64, u64)],
+        secs: &'a [(&'a str, u64, u64)],
+        loads: &'a [(u64, u64)],
+    }
+
+    fn dso(d: &Dso) -> Vec<u8> {
+        use synth::*;
+        let align = |n: usize, a: usize| n.div_ceil(a) * a;
+        let mut syms = vec![0u8; 24];
+        let mut strs = vec![0u8];
+        for n in d.names {
+            syms.extend_from_slice(&sym64(strs.len() as u32, 0x12, 0, 0, 0));
+            strs.extend_from_slice(n);
+            strs.push(0);
+        }
+        // DT_HASH: one bucket, chained 1 → 2 → … → the last symbol.
+        let count = d.names.len() as u32 + 1;
+        let mut words = vec![1, count, u32::from(count > 1), 0];
+        words.extend((1..count).map(|i| if i + 1 < count { i + 1 } else { 0 }));
+        let hash: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let rela: Vec<u8> = d
+            .relas
+            .iter()
+            .flat_map(|(at, t, sym)| {
+                let info = (u64::from(*sym) << 32) | u64::from(*t);
+                [at.to_le_bytes(), info.to_le_bytes(), 0u64.to_le_bytes()].concat()
+            })
+            .collect();
+        let relr: Vec<u8> = d.relr.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let syms_at = 0x2000;
+        let strs_at = align(syms_at + syms.len(), 16);
+        let hash_at = align(strs_at + strs.len(), 8);
+        let rela_at = align(hash_at + hash.len(), 8);
+        let relr_at = align(rela_at + rela.len(), 8);
+        let dyn_at = align(relr_at + relr.len(), 16);
+        let mut tags = vec![
+            (DT_SYMTAB, syms_at as u64),
+            (DT_STRTAB, strs_at as u64),
+            (DT_STRSZ, strs.len() as u64),
+            (DT_HASH, hash_at as u64),
+        ];
+        if !rela.is_empty() {
+            tags.extend([
+                (DT_RELA, rela_at as u64),
+                (DT_RELASZ, rela.len() as u64),
+                (DT_RELAENT, 24),
+            ]);
+        }
+        if !relr.is_empty() {
+            tags.extend([
+                (DT_RELR, relr_at as u64),
+                (DT_RELRSZ, relr.len() as u64),
+                (DT_RELRENT, 8),
+            ]);
+        }
+        tags.extend_from_slice(d.dynamic);
+        let table = dynamic(&tags);
+        let mut img = ElfImage::new(3);
+        img.put(TEXT, d.text)
+            .put(syms_at as u64, &syms)
+            .put(strs_at as u64, &strs)
+            .put(hash_at as u64, &hash)
+            .put(rela_at as u64, &rela)
+            .put(relr_at as u64, &relr)
+            .put(dyn_at as u64, &table);
+        let (text, end) = (d.text.len() as u64, (dyn_at + table.len()) as u64);
+        img.seg(PT_LOAD, PF_R | PF_X, TEXT, TEXT, text, text)
+            .seg(PT_LOAD, PF_R, 0x2000, 0x2000, end - 0x2000, end - 0x2000)
+            .seg(PT_LOAD, PF_R | PF_W, 0, SLOTS, 0, 0x1000_0000)
+            .seg(
+                PT_DYNAMIC,
+                PF_R | PF_W,
+                dyn_at as u64,
+                dyn_at as u64,
+                table.len() as u64,
+                table.len() as u64,
+            );
+        for (vaddr, size) in d.loads {
+            img.seg(PT_LOAD, PF_R, *vaddr, *vaddr, *size, *size);
+        }
+        img.sec_linked(
+            ".dynsym",
+            SHT_DYNSYM,
+            syms_at as u64,
+            syms_at as u64,
+            syms.len() as u64,
+            2,
+            24,
+        )
+        .sec(
+            ".dynstr",
+            SHT_STRTAB,
+            strs_at as u64,
+            strs_at as u64,
+            strs.len() as u64,
+        );
+        for (name, addr, size) in d.secs {
+            img.sec(name, SHT_PROGBITS, *addr, *addr, *size);
+        }
+        img.build()
+    }
+
+    /// [`with_image_at`] for the file `bytes`.
+    fn with_dso<T>(
+        bytes: &[u8],
+        budgets: CodeBudgets,
+        f: impl FnOnce(&Image, &mut Run, &mut Reader<'_>) -> T,
+    ) -> T {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(bytes).unwrap();
+        with_image_at(file.path(), budgets, f)
+    }
+
+    /// `jmp [rip+disp]` at `at` to `slot`, with the prefix `prefix` (e.g. `bnd`).
+    fn jmp(prefix: &[u8], at: u64, slot: u64) -> Vec<u8> {
+        let next = at + prefix.len() as u64 + 6;
+        let disp = (slot as i64 - next as i64) as i32;
+        [prefix, &[0xff, 0x25], &disp.to_le_bytes()].concat()
+    }
+
+    const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];
 
     #[test]
     fn plt_stubs_and_slots_of_a_plt_file() {
@@ -333,7 +550,7 @@ mod tests {
             assert!(img
                 .slots
                 .values()
-                .any(|s| s.name == b"connect" && s.defined.is_none()));
+                .any(|s| &*s.name == b"connect" && s.defined.is_none()));
             assert!(!img.stubs.keys().any(|a| name_of(img, *a) == "connect"));
         });
     }
@@ -394,7 +611,7 @@ mod tests {
         let slots = BTreeMap::from([(
             0x3000,
             Sym {
-                name: b"connect".to_vec(),
+                name: Name::from(&b"connect"[..]),
                 defined: None,
             },
         )]);
@@ -404,7 +621,10 @@ mod tests {
             plt_stubs(&bytes[..6], 0x1000, &slots),
             Ok(vec![(0x1000, 0x3000)])
         );
-        assert_eq!(plt_stubs(&bytes, 0x1000, &slots), Err(0x1006));
+        assert_eq!(
+            plt_stubs(&bytes, 0x1000, &slots),
+            Err(PltError::Invalid(0x1006))
+        );
     }
 
     #[test]
@@ -474,5 +694,300 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn adjacent_overlaps_are_merged_into_one_cut() {
+        let load = |vaddr, memsz| Load {
+            vaddr,
+            offset: vaddr,
+            filesz: memsz,
+            memsz,
+            writable: false,
+            executable: true,
+        };
+        // Pages [0x1000, 0x3000), [0x2000, 0x4000), [0x3000, 0x4000): the cuts [0x2000, 0x3000)
+        // and [0x3000, 0x4000) touch, and are one.
+        let loads = Loads(vec![
+            load(0x1000, 0x1800),
+            load(0x2400, 0x1400),
+            load(0x3400, 0x100),
+        ]);
+        assert_eq!(overlapped_pages(&loads), [(0x2000, 0x4000)]);
+    }
+
+    #[test]
+    fn regions_skip_every_cut_a_segment_meets() {
+        let loads = Loads(vec![
+            Load {
+                vaddr: 0x1000,
+                offset: 0x11000,
+                filesz: 0x8000,
+                memsz: 0x8000,
+                writable: false,
+                executable: true,
+            },
+            Load {
+                vaddr: 0x2800,
+                offset: 0x2800,
+                filesz: 0x1800,
+                memsz: 0x1800,
+                writable: false,
+                executable: false,
+            },
+        ]);
+        let cuts = [
+            (0x0, 0x800),
+            (0x2000, 0x3000),
+            (0x5000, 0x6000),
+            (0x9000, 0xa000),
+        ];
+        let region = |start, end, offset| Region { start, end, offset };
+        assert_eq!(
+            regions(&loads, |l| l.executable, &cuts),
+            [
+                region(0x1000, 0x2000, 0x11000),
+                region(0x3000, 0x5000, 0x13000),
+                region(0x6000, 0x9000, 0x16000),
+            ]
+        );
+        // A segment that starts inside a cut.
+        assert_eq!(
+            regions(&loads, |l| !l.executable, &cuts),
+            [region(0x3000, 0x4000, 0x3000)]
+        );
+    }
+
+    #[test]
+    fn plt_stubs_take_bnd_jmp_and_only_an_adjacent_endbr64() {
+        let slots = BTreeMap::from([(
+            0x3000,
+            Sym {
+                name: Name::from(&b"connect"[..]),
+                defined: None,
+            },
+        )]);
+        // endbr64; bnd jmp [rip→0x3000]: both are stubs.
+        let bytes = [&ENDBR64[..], &jmp(&[0xf2], 0x1004, 0x3000)].concat();
+        assert_eq!(
+            plt_stubs(&bytes, 0x1000, &slots),
+            Ok(vec![(0x1000, 0x3000), (0x1004, 0x3000)])
+        );
+        // endbr64; nop; jmp: the endbr64 is not right before the jmp.
+        let bytes = [&ENDBR64[..], &[0x90], &jmp(&[], 0x1005, 0x3000)].concat();
+        assert_eq!(
+            plt_stubs(&bytes, 0x1000, &slots),
+            Ok(vec![(0x1005, 0x3000)])
+        );
+        // jmp far [rip→0x3000] (FF /5) is not a stub (review M3).
+        let disp = (0x3000i64 - 0x1006) as i32;
+        let far = [&[0xff, 0x2d][..], &disp.to_le_bytes()].concat();
+        assert_eq!(plt_stubs(&far, 0x1000, &slots), Ok(vec![]));
+        // Two jmps on one slot: no stub of the section is kept (review I1).
+        let two = [jmp(&[], 0x1000, 0x3000), jmp(&[], 0x1006, 0x3000)].concat();
+        assert_eq!(
+            plt_stubs(&two, 0x1000, &slots),
+            Err(PltError::TwoStubs(0x3000))
+        );
+    }
+
+    #[test]
+    fn a_plt_with_two_stubs_for_one_slot_is_a_gap_and_keeps_none() {
+        let one = jmp(&[], TEXT, SLOTS);
+        let bytes = dso(&Dso {
+            names: &[b"connect"],
+            relas: &[(SLOTS, rtype::JUMP_SLOT, 1)],
+            text: &one,
+            secs: &[(".plt", TEXT, one.len() as u64)],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert_eq!(name_of(img, TEXT), "connect", "the builder's stub");
+            assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
+        });
+        let two = [jmp(&[], TEXT, SLOTS), jmp(&[], TEXT + 6, SLOTS)].concat();
+        let bytes = dso(&Dso {
+            names: &[b"connect"],
+            relas: &[(SLOTS, rtype::JUMP_SLOT, 1)],
+            text: &two,
+            secs: &[(".plt", TEXT, two.len() as u64)],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert!(img.stubs.is_empty());
+            assert_eq!(
+                run.clone_gaps(),
+                ["code: .plt: two stubs for GOT slot 0x40000000"]
+            );
+        });
+    }
+
+    #[test]
+    fn a_plt_outside_executable_bytes_is_a_gap() {
+        let bytes = dso(&Dso {
+            names: &[b"connect"],
+            relas: &[(SLOTS, rtype::JUMP_SLOT, 1)],
+            secs: &[(".plt", 0x2000, 0x10)],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert_eq!(img.plt, [(0x2000, 0x2010)]);
+            assert!(img.stubs.is_empty());
+            assert_eq!(run.clone_gaps(), ["code: .plt: not in executable bytes"]);
+        });
+    }
+
+    #[test]
+    fn two_symbols_on_one_slot_are_a_gap_and_no_slot() {
+        let bytes = dso(&Dso {
+            names: &[b"connect", b"socket"],
+            relas: &[
+                (SLOTS, rtype::GLOB_DAT, 1),
+                (SLOTS, rtype::JUMP_SLOT, 2),
+                (SLOTS + 8, rtype::JUMP_SLOT, 1),
+            ],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert!(!img.slots.contains_key(&SLOTS));
+            assert_eq!(&*img.slots[&(SLOTS + 8)].name, b"connect");
+            assert_eq!(
+                run.clone_gaps(),
+                ["code: GOT slot 0x40000000 has two symbols"]
+            );
+        });
+    }
+
+    /// Review C1 and M2: 400,000 JUMP_SLOTs naming one 5,000-byte name. Copied per slot, that is
+    /// 2 GB, past the 1 GiB cap the limit tests run under; held once, a few MB. 5,000 bytes is
+    /// also past the 4,096 that object reads: the name is read on, not a gap.
+    #[test]
+    fn many_slots_naming_one_long_name_hold_it_once_limit() {
+        let name = vec![b'n'; 5000];
+        let n = 400_000;
+        let relas: Vec<(u64, u32, u32)> = (0..n)
+            .map(|i| (SLOTS + 8 * i, rtype::JUMP_SLOT, 1))
+            .collect();
+        let bytes = dso(&Dso {
+            names: &[&name],
+            relas: &relas,
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert_eq!(img.slots.len(), n as usize);
+            let first = &img.slots[&SLOTS].name;
+            assert_eq!(**first, *name);
+            assert!(img.slots.values().all(|s| Rc::ptr_eq(&s.name, first)));
+            assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
+        });
+    }
+
+    /// R-f: text relocations count against `references`.
+    #[test]
+    fn text_relocations_count_against_the_references_limit() {
+        let budgets = CodeBudgets {
+            references: 0,
+            ..CodeBudgets::default()
+        };
+        with_image("textrel.so", budgets, |img, run, _| {
+            assert!(img.textrel.is_empty());
+            assert!(run.stopped());
+            assert!(run
+                .clone_gaps()
+                .contains(&"code: references limit 0 reached".to_string()));
+        });
+    }
+
+    #[test]
+    fn dt_rel_is_a_gap() {
+        let bytes = dso(&Dso {
+            dynamic: &[
+                (synth::DT_REL, 0x2000),
+                (synth::DT_RELSZ, 16),
+                (synth::DT_RELENT, 16),
+            ],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |_, run, _| {
+            assert_eq!(
+                run.clone_gaps(),
+                ["code: DT_REL relocations are not modeled"]
+            );
+        });
+    }
+
+    #[test]
+    fn relr_words_in_code_are_text_relocations() {
+        let text = [0x90; 0x40];
+        // The word at TEXT + 8; a bitmap from TEXT + 0x10 with its second word (TEXT + 0x18);
+        // a word in the data, not code.
+        let relr = [TEXT + 8, 0b101, 0x2000];
+        let bytes = dso(&Dso {
+            relr: &relr,
+            text: &text,
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert_eq!(img.textrel, [(0x1008, 0x1010), (0x1018, 0x1020)]);
+            assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
+        });
+        let one = CodeBudgets {
+            references: 1,
+            ..CodeBudgets::default()
+        };
+        with_dso(&bytes, one, |img, run, _| {
+            assert_eq!(img.textrel, [(0x1008, 0x1010)]);
+            assert!(run.stopped());
+            assert!(run
+                .clone_gaps()
+                .contains(&"code: references limit 1 reached".to_string()));
+        });
+        // A bitmap before any address: glibc writes from address 0, musl from nowhere known.
+        let bytes = dso(&Dso {
+            relr: &[0b11],
+            text: &text,
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, _| {
+            assert!(img.textrel.is_empty());
+            assert_eq!(
+                run.clone_gaps(),
+                ["code: DT_RELR: a bitmap before any address"]
+            );
+        });
+    }
+
+    #[test]
+    fn a_packed_relative_file_has_no_text_relocation() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata-relr.so");
+        with_image_at(&path, CodeBudgets::default(), |img, run, _| {
+            assert!(img.textrel.is_empty());
+            assert!(
+                !run.clone_gaps().iter().any(|g| g.contains("RELR")),
+                "{:?}",
+                run.clone_gaps()
+            );
+        });
+    }
+
+    /// Review M1: `.eh_frame` is read only where code would be: file-backed, in no shared page.
+    #[test]
+    fn an_eh_frame_in_a_shared_page_is_not_read() {
+        let bytes = dso(&Dso {
+            secs: &[(".eh_frame", 0x2000, 0x10)],
+            loads: &[(0x2800, 0x100)],
+            ..Dso::default()
+        });
+        with_dso(&bytes, CodeBudgets::default(), |img, run, reader| {
+            assert!(img.fdes.is_empty());
+            assert_eq!(reader.used(), 0, "nothing read");
+            assert_eq!(
+                run.clone_gaps(),
+                [
+                    "code: .eh_frame: in a page two PT_LOAD segments share",
+                    "code: PT_LOAD segments overlap at 0x2000",
+                ]
+            );
+        });
     }
 }

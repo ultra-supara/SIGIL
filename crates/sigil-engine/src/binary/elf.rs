@@ -4,8 +4,10 @@
 
 use std::collections::BTreeSet;
 use std::mem::size_of;
+use std::ops::ControlFlow;
 
 use object::elf;
+use object::endian::{U32, U64};
 use object::read::elf::{
     Dyn, FileHeader, ProgramHeader, Rel, Rela as _, SectionHeader, SectionTable, Sym, SymbolTable,
 };
@@ -57,6 +59,9 @@ pub(crate) struct Dynamic {
     /// `(vaddr, size)`. Read only for their symbol indices (spec §3.2).
     pub rel: Option<(u64, u64)>,
     pub jmprel_rel: Option<(u64, u64)>,
+    /// `DT_RELR`/`DT_RELRSZ`: `(vaddr, size)`. glibc and musl both apply it; no data value is
+    /// read through it (spec §3.4), and the code step reads the words it writes.
+    pub relr: Option<(u64, u64)>,
     /// `DT_REL`, `DT_RELR`, or a REL `DT_JMPREL` exists: SIGIL does not apply them, so no
     /// data value is read (spec §3.4).
     pub rel_or_relr: bool,
@@ -77,6 +82,76 @@ pub(crate) struct Rela {
     pub addend: i64,
     /// Bytes written from `at` ([`Elf::write_extent`]); `None` when unbounded.
     pub extent: Option<u64>,
+}
+
+/// One `DT_RELR` entry: the words it relocates (gABI; glibc's `ELF_DYNAMIC_DO_RELR`, musl's
+/// `do_relr_relocs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Relr {
+    /// An even entry: the word at this address. The next bitmap starts one word after it.
+    Word(u64),
+    /// An odd entry, shifted right once: bit `k` relocates the word at `base + k * word`, for the
+    /// `8 * word - 1` bits. The next bitmap starts that many words after `base`.
+    Bitmap { base: u64, bits: u64 },
+}
+
+impl Relr {
+    /// `[start, end)` the entry may write: its word, or its bitmap's words, set or not.
+    pub fn span(&self, word: u64) -> (u64, u64) {
+        match *self {
+            Relr::Word(at) => (at, at.saturating_add(word)),
+            Relr::Bitmap { base, .. } => (
+                base,
+                base.saturating_add((8 * word - 1).saturating_mul(word)),
+            ),
+        }
+    }
+
+    /// The words the entry writes, `[start, end)` each, in order.
+    pub fn words(&self, word: u64) -> impl Iterator<Item = (u64, u64)> {
+        let (base, bits, count) = match *self {
+            Relr::Word(at) => (at, 1, 1),
+            Relr::Bitmap { base, bits } => (base, bits, 8 * word - 1),
+        };
+        (0..count)
+            .filter(move |k| bits >> k & 1 == 1)
+            .map(move |k| {
+                let at = base.saturating_add(k.saturating_mul(word));
+                (at, at.saturating_add(word))
+            })
+    }
+}
+
+/// Decodes `DT_RELR` entries of `word` bytes, giving each to `f` in order until it breaks. `Err`:
+/// a bitmap before any address (glibc writes from address 0, musl through an unset pointer), or
+/// one past 2^64; the entries before it were given.
+pub(crate) fn relr_decode(
+    entries: impl IntoIterator<Item = u64>,
+    word: u64,
+    mut f: impl FnMut(Relr) -> ControlFlow<()>,
+) -> Result<(), String> {
+    let bits = 8 * word - 1;
+    // Where the next bitmap starts.
+    let mut next: Result<u64, &str> = Err("a bitmap before any address");
+    for entry in entries {
+        let r = if entry & 1 == 0 {
+            next = entry.checked_add(word).ok_or("a bitmap past 2^64");
+            Relr::Word(entry)
+        } else {
+            let base = next.map_err(str::to_string)?;
+            next = base
+                .checked_add(bits.saturating_mul(word))
+                .ok_or("a bitmap past 2^64");
+            Relr::Bitmap {
+                base,
+                bits: entry >> 1,
+            }
+        };
+        if f(r).is_break() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// The sections' results the other steps need.
@@ -352,6 +427,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         if let (Some(a), Some(n)) = (rel, relsz) {
             out.rel = Some((a, n));
+        }
+        if let (Some(a), Some(n)) = (relr, relrsz) {
+            out.relr = Some((a, n));
         }
         if let (Some(a), Some(n)) = (jmprel, pltrelsz) {
             if pltrel == Some(elf::DT_RELA.0 as u64) {
@@ -1341,6 +1419,33 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         Ok(())
     }
 
+    /// Every `DT_RELR` entry, decoded ([`relr_decode`]), read where the loader reads the table.
+    /// `Err` when it cannot be read there, a bitmap comes before any address, or its size is not a
+    /// whole number of entries (after the whole ones were given to `f`).
+    pub(crate) fn for_each_relr(
+        &self,
+        dynamic: &Dynamic,
+        f: impl FnMut(Relr) -> ControlFlow<()>,
+    ) -> Result<(), String> {
+        let Some((vaddr, size)) = dynamic.relr else {
+            return Ok(());
+        };
+        let endian = self.endian;
+        let word = if self.header.is_type_64() {
+            let table = self.relocation_table::<U64<Endianness>>(vaddr, size)?;
+            relr_decode(table.iter().map(|w| w.get(endian)), 8, f)?;
+            8
+        } else {
+            let table = self.relocation_table::<U32<Endianness>>(vaddr, size)?;
+            relr_decode(table.iter().map(|w| u64::from(w.get(endian))), 4, f)?;
+            4
+        };
+        if !size.is_multiple_of(word) {
+            return Err("DT_RELRSZ is not a whole number of entries".to_string());
+        }
+        Ok(())
+    }
+
     /// How many bytes a RELA relocation of type `t` writes from its offset (review of #91,
     /// P1-2), or `None` when SIGIL cannot bound it:
     /// - `R_*_NONE` writes none;
@@ -1381,5 +1486,46 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         } else {
             Some(8)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::ControlFlow;
+
+    fn words(entries: &[u64]) -> (Vec<(u64, u64)>, Result<(), String>) {
+        let mut out = vec![];
+        let r = relr_decode(entries.iter().copied(), 8, |e| {
+            out.extend(e.words(8));
+            ControlFlow::Continue(())
+        });
+        (out, r)
+    }
+
+    #[test]
+    fn relr_entries_decode_as_the_loaders_apply_them() {
+        // libdata-relr.so's `.relr.dyn` (its `.readelf`): 3 entries, 6 words.
+        let (out, r) = words(&[0x3da8, 0x3, 0x74001]);
+        assert_eq!(r, Ok(()));
+        let at: Vec<u64> = out.iter().map(|w| w.0).collect();
+        assert_eq!(at, [0x3da8, 0x3db0, 0x4010, 0x4020, 0x4028, 0x4030]);
+        assert!(out.iter().all(|(s, e)| e - s == 8));
+        // A bitmap covers 63 words, then the next bitmap starts after them.
+        let (out, _) = words(&[0x1000, u64::MAX, 0b11]);
+        assert_eq!(out.len(), 1 + 63 + 1);
+        assert_eq!(out[63], (0x1000 + 63 * 8, 0x1000 + 64 * 8));
+        assert_eq!(out[64], (0x1000 + 64 * 8, 0x1000 + 65 * 8));
+        // A bitmap before any address.
+        let (out, r) = words(&[0x3]);
+        assert!(out.is_empty());
+        assert_eq!(r, Err("a bitmap before any address".to_string()));
+        // The span of a bitmap: its 63 words.
+        let bitmap = Relr::Bitmap {
+            base: 0x2000,
+            bits: 1,
+        };
+        assert_eq!(bitmap.span(8), (0x2000, 0x2000 + 63 * 8));
+        assert_eq!(Relr::Word(0x10).span(8), (0x10, 0x18));
     }
 }

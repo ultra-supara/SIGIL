@@ -9,9 +9,10 @@
 mod linked;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use object::elf;
-use object::read::elf::{FileHeader, SectionHeader, Sym as _, SymbolTable};
+use object::read::elf::{FileHeader, SectionHeader, SectionTable, Sym as _, SymbolTable};
 use object::read::{ReadCacheOps, SymbolIndex};
 use object::Endianness;
 use sigil_model::ImportVia;
@@ -19,7 +20,7 @@ use sigil_model::ImportVia;
 use super::data::Signatures;
 use super::reader::Reader;
 use super::{Run, STRING_BYTES};
-use crate::binary::elf::Elf;
+use crate::binary::elf::{Elf, MAX_IMPORT_NAME};
 use crate::binary::read::Bounded;
 
 // Called outside tests from Task 11 (`analyze`); until then only the test helper calls it.
@@ -44,6 +45,10 @@ pub(crate) mod rtype {
     pub const REX_GOTPCRELX: u32 = 42;
 }
 
+/// A symbol name. An image reads and holds each distinct string once ([`Names`]), however many
+/// slots, stubs, or relocations name it (review C1). A clone is a count.
+pub(crate) type Name = Rc<[u8]>;
+
 /// `[start, end)` of an address space, at file offset `offset`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Region {
@@ -58,7 +63,7 @@ impl Region {
     }
 
     /// The file offset of `addr`, an address of the region. A region's offsets do not overflow
-    /// ([`regions`]); the arithmetic saturates all the same, so a misuse cannot panic.
+    /// (`linked::regions`); the arithmetic saturates all the same, so a misuse cannot panic.
     pub fn offset_of(&self, addr: u64) -> u64 {
         self.offset.saturating_add(addr.saturating_sub(self.start))
     }
@@ -67,7 +72,7 @@ impl Region {
 /// A symbol a slot or stub names: undefined (`defined: None`) or defined at an address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Sym {
-    pub name: Vec<u8>,
+    pub name: Name,
     pub defined: Option<u64>,
 }
 
@@ -90,7 +95,7 @@ pub(crate) struct FieldReloc {
 /// by its file offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelSym {
-    pub name: Option<Vec<u8>>,
+    pub name: Option<Name>,
     pub at: Option<u64>,
 }
 
@@ -105,7 +110,7 @@ pub(crate) enum Use {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Callee {
-    Import(Vec<u8>),
+    Import(Name),
     Internal(u64),
 }
 
@@ -117,14 +122,22 @@ pub(crate) enum Meaning {
     /// A defined address.
     Address(u64),
     /// An undefined symbol's address.
-    SymbolAddr(Vec<u8>),
+    SymbolAddr(Name),
     /// The memory operand is the callee's GOT entry.
     GotEntry(Callee),
     /// Not modeled. `symbol` is the relocation's undefined symbol, if any.
-    Unknown {
-        symbol: Option<Vec<u8>>,
-        why: String,
-    },
+    Unknown { symbol: Option<Name>, why: String },
+}
+
+/// Which FDE holds an address ([`Image::fde_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FdeAt {
+    /// No FDE.
+    None,
+    /// This FDE, which overlaps no other.
+    One((u64, u64)),
+    /// An FDE that overlaps another.
+    Overlap,
 }
 
 /// The image of one file.
@@ -132,7 +145,7 @@ pub(crate) enum Meaning {
 pub(crate) struct Image {
     pub kind: Kind,
     /// Executable bytes: file-backed `PF_X` ranges minus overlapped pages, or a relocatable
-    /// object's `SHF_EXECINSTR` sections. Sorted and disjoint.
+    /// object's `SHF_EXECINSTR` sections. Sorted and disjoint: [`Image::code_at`] searches it.
     pub code: Vec<Region>,
     /// Where a constant string may be.
     pub strings: Vec<Region>,
@@ -144,17 +157,20 @@ pub(crate) struct Image {
     pub stubs: BTreeMap<u64, (u64, ImportVia)>,
     /// GOT slot (`JUMP_SLOT`/`GLOB_DAT`) → its symbol.
     pub slots: BTreeMap<u64, Sym>,
-    /// Bytes inside code that a dynamic relocation writes.
+    /// Bytes inside code that a dynamic relocation writes: sorted and merged
+    /// ([`Image::set_textrel`]).
     pub textrel: Vec<(u64, u64)>,
     /// A relocatable object's relocations on code, by field address.
     pub relocs: BTreeMap<u64, FieldReloc>,
     pub rel_syms: BTreeMap<u32, RelSym>,
     /// The capability imports this file has (undefined symbols).
-    pub targets: BTreeSet<Vec<u8>>,
-    /// FDE ranges, sorted by start.
+    pub targets: BTreeSet<Name>,
+    /// FDE ranges, sorted by start ([`Image::set_fdes`]).
     pub fdes: Vec<(u64, u64)>,
-    /// `fde_ends[i]`: the largest end among `fdes[..=i]`, for containment queries.
+    /// `fde_ends[i]`: the largest end among `fdes[..=i]`.
     pub fde_ends: Vec<u64>,
+    /// `fde_overlaps[i]`: whether `fdes[i]` overlaps another FDE.
+    pub fde_overlaps: Vec<bool>,
 }
 
 impl Image {
@@ -173,48 +189,84 @@ impl Image {
             targets: BTreeSet::new(),
             fdes: vec![],
             fde_ends: vec![],
+            fde_overlaps: vec![],
         }
     }
 
-    /// Sets the FDEs (sorted) and their running maximum end.
-    pub fn set_fdes(&mut self, fdes: Vec<(u64, u64)>) {
+    /// Sets the FDEs, sorted, with their running maximum end and which overlap another: one
+    /// overlaps an earlier FDE when it starts before the largest end so far, and a later one when
+    /// the next FDE (the earliest later start) starts before its end.
+    pub fn set_fdes(&mut self, mut fdes: Vec<(u64, u64)>) {
+        fdes.sort_unstable();
         let mut max = 0;
-        self.fde_ends = fdes
-            .iter()
-            .map(|f| {
-                max = max.max(f.1);
-                max
-            })
-            .collect();
+        let mut ends = Vec::with_capacity(fdes.len());
+        let mut overlaps = Vec::with_capacity(fdes.len());
+        for (i, f) in fdes.iter().enumerate() {
+            let earlier = f.0 < max;
+            let later = fdes.get(i + 1).is_some_and(|g| g.0 < f.1);
+            overlaps.push(earlier || later);
+            max = max.max(f.1);
+            ends.push(max);
+        }
         self.fdes = fdes;
+        self.fde_ends = ends;
+        self.fde_overlaps = overlaps;
     }
 
-    /// The code region holding `[start, end)` whole.
+    /// The FDE holding `addr`, by binary search. The last FDE starting at or before `addr` holds
+    /// it, or an earlier one does exactly when their largest end passes `addr`; that one overlaps
+    /// the last.
+    pub fn fde_at(&self, addr: u64) -> FdeAt {
+        let i = self.fdes.partition_point(|f| f.0 <= addr);
+        let Some(last) = i.checked_sub(1) else {
+            return FdeAt::None;
+        };
+        let (Some(f), Some(overlaps)) = (self.fdes.get(last), self.fde_overlaps.get(last)) else {
+            return FdeAt::None;
+        };
+        if addr < f.1 {
+            return if *overlaps {
+                FdeAt::Overlap
+            } else {
+                FdeAt::One(*f)
+            };
+        }
+        match last.checked_sub(1).and_then(|j| self.fde_ends.get(j)) {
+            Some(end) if *end > addr => FdeAt::Overlap,
+            _ => FdeAt::None,
+        }
+    }
+
+    /// The code region holding `[start, end)` whole, by binary search. In sorted, disjoint
+    /// regions only the first one not ending before `start`, or the next if it starts at `start`,
+    /// can.
     pub fn code_at(&self, start: u64, end: u64) -> Option<&Region> {
-        self.code.iter().find(|r| r.holds(start, end))
+        let i = self.code.partition_point(|r| r.end < start);
+        self.code
+            .get(i..)?
+            .iter()
+            .take(2)
+            .find(|r| r.holds(start, end))
     }
 
-    /// The FDEs containing `addr`.
-    pub fn fdes_at(&self, addr: u64) -> Vec<(u64, u64)> {
-        let mut out = vec![];
-        let mut i = self.fdes.partition_point(|f| f.0 <= addr);
-        while i > 0 {
-            i -= 1;
-            if self.fde_ends.get(i).is_none_or(|e| *e <= addr) {
-                break;
-            }
-            if let Some(f) = self.fdes.get(i) {
-                if addr < f.1 {
-                    out.push(*f);
-                }
+    /// Sets the bytes dynamic relocations write in code: sorted, and merged where they meet.
+    pub fn set_textrel(&mut self, mut ranges: Vec<(u64, u64)>) {
+        ranges.retain(|r| r.0 < r.1);
+        ranges.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
             }
         }
-        out
+        self.textrel = merged;
     }
 
-    /// Whether `[start, end)` meets bytes a dynamic relocation writes.
+    /// Whether `[start, end)` meets bytes a dynamic relocation writes, by binary search.
     pub fn textrel_overlaps(&self, start: u64, end: u64) -> bool {
-        self.textrel.iter().any(|(s, e)| start < *e && *s < end)
+        let i = self.textrel.partition_point(|t| t.1 <= start);
+        self.textrel.get(i).is_some_and(|t| t.0 < end)
     }
 
     /// The symbol a stub or a slot address names, with its `via`.
@@ -250,34 +302,96 @@ impl Image {
     }
 }
 
-/// A symbol of `symbols` by index: its name and, if defined, its value.
-pub(crate) fn read_sym<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
-    endian: Endianness,
+/// The name of `sym`, read as the imports step reads it (spec §3.7): object's read first (cached
+/// by the imports step), then, past the 4096 bytes object reads, on through [`Elf::name`], up to
+/// `max` bytes. `Ok(None)`: longer than `max`. The bytes are the parse cache's: nothing is copied.
+pub(crate) fn name_of<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    e: &Elf<'d, R, H>,
+    table: &SectionTable<'d, H, &'d Bounded<R>>,
     symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
-    index: u32,
-) -> Option<Sym> {
-    let sym = symbols.symbol(SymbolIndex(index as usize)).ok()?;
-    let name = sym.name(endian, symbols.strings()).ok()?.to_vec();
-    let defined = (sym.st_shndx(endian) != elf::SHN_UNDEF).then(|| sym.st_value(endian).into());
-    Some(Sym { name, defined })
+    sym: &H::Sym,
+    max: usize,
+) -> Result<Option<&'d [u8]>, String> {
+    let endian = e.endian;
+    if let Ok(name) = sym.name(endian, symbols.strings()) {
+        return Ok((name.len() <= max).then_some(name));
+    }
+    match table
+        .section(symbols.string_section())
+        .ok()
+        .and_then(|s| s.file_range(endian))
+    {
+        Some(strings) => e.name(strings, sym.st_name(endian), max),
+        None => Err("no string table in the file".to_string()),
+    }
 }
 
-/// The undefined `GLOBAL`/`WEAK` symbols of `symbols` that the capability table names.
-///
-/// A name that cannot be read could be a capability's: a gap, never a silent skip (as for the
-/// data symbols, PR-4b). object's read, cached by the imports step, comes first; when it fails
-/// (it stops looking for the NUL after 4096 bytes), the name is read on, only as far as the
-/// longest capability name: a longer one is not one.
+/// The symbol names of one image, each read and held once, by (string table, `st_name`) (review
+/// C1). The first read of a name goes through the parse cache, which charges it to
+/// `binary_parse_bytes` (once, in the imports step, for most), and a read the cache serves again
+/// is not copied again: the names held are bounded by that budget, not by how many symbols,
+/// slots, or relocations name them.
+#[derive(Debug, Default)]
+pub(crate) struct Names {
+    /// `Ok(None)`: longer than [`MAX_IMPORT_NAME`].
+    read: BTreeMap<(usize, u32), Result<Option<Name>, String>>,
+}
+
+impl Names {
+    /// The name of `sym` of `symbols` ([`name_of`]), up to [`MAX_IMPORT_NAME`] bytes, as the
+    /// imports step keeps it. `Err`: why it cannot be read, a longer name included.
+    pub fn of<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+        &mut self,
+        e: &Elf<'d, R, H>,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
+        sym: &H::Sym,
+    ) -> Result<Name, String> {
+        let key = (symbols.string_section().0, sym.st_name(e.endian));
+        let found = match self.read.get(&key) {
+            Some(found) => found.clone(),
+            None => {
+                let found = name_of(e, table, symbols, sym, MAX_IMPORT_NAME)
+                    .map(|name| name.map(Name::from));
+                self.read.insert(key, found.clone());
+                found
+            }
+        };
+        found.and_then(|name| name.ok_or_else(|| format!("a name over {MAX_IMPORT_NAME} bytes")))
+    }
+
+    /// Symbol `index` of `symbols`: its name ([`Self::of`]) and, if defined, its value.
+    pub fn sym<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+        &mut self,
+        e: &Elf<'d, R, H>,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
+        index: u32,
+    ) -> Result<Sym, String> {
+        let sym = symbols
+            .symbol(SymbolIndex(index as usize))
+            .map_err(|e| e.to_string())?;
+        let name = self.of(e, table, symbols, sym)?;
+        let defined =
+            (sym.st_shndx(e.endian) != elf::SHN_UNDEF).then(|| sym.st_value(e.endian).into());
+        Ok(Sym { name, defined })
+    }
+}
+
+/// The undefined `GLOBAL`/`WEAK` symbols of `symbols` that the capability table names, held in
+/// `names`. A name is read only as far as the longest capability name ([`name_of`]): a longer
+/// one is not one, and nothing is held for it. A name that cannot be read could be a
+/// capability's: a gap, never a silent skip (as for the data symbols, PR-4b).
 pub(crate) fn target_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
+    table: &SectionTable<'d, H, &'d Bounded<R>>,
     symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
     sig: &Signatures,
+    names: &mut Names,
     run: &mut Run,
-) -> BTreeSet<Vec<u8>> {
+) -> BTreeSet<Name> {
     let endian = e.endian;
     let mut out = BTreeSet::new();
-    // The symbols' string table (its file range), found at the first name object cannot read.
-    let mut strings: Option<Option<(u64, u64)>> = None;
     for sym in symbols.symbols().iter().skip(1) {
         let bind = sym.st_bind();
         if sym.st_shndx(endian) != elf::SHN_UNDEF
@@ -285,33 +399,30 @@ pub(crate) fn target_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endiannes
         {
             continue;
         }
-        let name = match sym.name(endian, symbols.strings()) {
-            Ok(name) => name,
-            Err(_) => {
-                let range = *strings.get_or_insert_with(|| {
-                    e.header
-                        .sections(endian, e.data)
-                        .ok()
-                        .and_then(|t| t.section(symbols.string_section()).ok())
-                        .and_then(|s| s.file_range(endian))
-                });
-                let read = match range {
-                    Some(range) => e.name(range, sym.st_name(endian), sig.longest()),
-                    None => Err("no string table in the file".to_string()),
-                };
-                match read {
-                    Ok(Some(name)) => name,
-                    // Longer than every capability name.
-                    Ok(None) => continue,
-                    Err(why) => {
-                        run.gap(format!("code: an import's name cannot be read: {why}"));
-                        continue;
-                    }
+        let key = (symbols.string_section().0, sym.st_name(endian));
+        let read = match names.read.get(&key) {
+            Some(found) => found.clone(),
+            None => match name_of(e, table, symbols, sym, sig.longest()) {
+                // A complete name: held only if it is a capability's.
+                Ok(Some(name)) if sig.capability(name).is_some() => {
+                    let name = Name::from(name);
+                    names.read.insert(key, Ok(Some(name.clone())));
+                    Ok(Some(name))
                 }
-            }
+                Ok(_) => Ok(None),
+                // As unreadable with any longer bound: kept.
+                Err(why) => {
+                    names.read.insert(key, Err(why.clone()));
+                    Err(why)
+                }
+            },
         };
-        if name.len() <= sig.longest() && sig.capability(name).is_some() {
-            out.insert(name.to_vec());
+        match read {
+            Ok(Some(name)) if sig.capability(&name).is_some() => {
+                out.insert(name);
+            }
+            Ok(_) => {}
+            Err(why) => run.gap(format!("code: an import's name cannot be read: {why}")),
         }
     }
     out
@@ -320,6 +431,81 @@ pub(crate) fn target_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endiannes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fde_at_tells_none_one_and_overlap() {
+        let mut img = Image::empty(Kind::Shared);
+        // A long FDE holding a short one; one beside them; one far off; two that touch.
+        img.set_fdes(vec![
+            (0x100, 0x200),
+            (0x300, 0x1000),
+            (0x400, 0x500),
+            (0x2000, 0x2100),
+            (0x2100, 0x2200),
+        ]);
+        assert_eq!(img.fde_at(0x50), FdeAt::None, "before every FDE");
+        assert_eq!(img.fde_at(0x150), FdeAt::One((0x100, 0x200)));
+        assert_eq!(img.fde_at(0x250), FdeAt::None, "between FDEs");
+        assert_eq!(
+            img.fde_at(0x350),
+            FdeAt::Overlap,
+            "the long one, which overlaps"
+        );
+        assert_eq!(img.fde_at(0x450), FdeAt::Overlap, "the short one inside it");
+        assert_eq!(
+            img.fde_at(0x600),
+            FdeAt::Overlap,
+            "past the short one: the long earlier one still holds it"
+        );
+        assert_eq!(img.fde_at(0x1000), FdeAt::None, "the long one's end");
+        assert_eq!(img.fde_at(0x20ff), FdeAt::One((0x2000, 0x2100)));
+        assert_eq!(
+            img.fde_at(0x2100),
+            FdeAt::One((0x2100, 0x2200)),
+            "touching is no overlap"
+        );
+        assert_eq!(img.fde_at(u64::MAX), FdeAt::None);
+    }
+
+    #[test]
+    fn code_at_finds_the_region_holding_a_range() {
+        let mut img = Image::empty(Kind::Shared);
+        let region = |start, end| Region {
+            start,
+            end,
+            offset: start,
+        };
+        img.code = vec![
+            region(0x1000, 0x2000),
+            region(0x2000, 0x3000),
+            region(0x5000, 0x6000),
+        ];
+        assert_eq!(img.code_at(0x1ff0, 0x2000), Some(&region(0x1000, 0x2000)));
+        assert_eq!(img.code_at(0x2000, 0x2010), Some(&region(0x2000, 0x3000)));
+        assert_eq!(img.code_at(0x2000, 0x2000), Some(&region(0x1000, 0x2000)));
+        assert_eq!(img.code_at(0x1ff0, 0x2010), None, "across two regions");
+        assert_eq!(img.code_at(0x4000, 0x4001), None);
+        assert_eq!(img.code_at(0x5000, 0x6000), Some(&region(0x5000, 0x6000)));
+        assert_eq!(img.code_at(0x6000, 0x6001), None);
+    }
+
+    #[test]
+    fn text_relocations_are_sorted_merged_and_searched() {
+        let mut img = Image::empty(Kind::Shared);
+        img.set_textrel(vec![
+            (0x30, 0x38),
+            (0x10, 0x18),
+            (0x18, 0x20),
+            (0x5, 0x5),
+            (0x100, u64::MAX),
+        ]);
+        assert_eq!(img.textrel, [(0x10, 0x20), (0x30, 0x38), (0x100, u64::MAX)]);
+        assert!(!img.textrel_overlaps(0x20, 0x30));
+        assert!(img.textrel_overlaps(0x1f, 0x21));
+        assert!(!img.textrel_overlaps(0x38, 0x100));
+        assert!(img.textrel_overlaps(0x200, 0x201));
+        assert!(!img.textrel_overlaps(0, 0x10));
+    }
 
     #[test]
     fn types_match_object() {

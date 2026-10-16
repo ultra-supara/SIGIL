@@ -182,6 +182,11 @@ fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
     gaps
 }
 
+/// The integration tests' ELF builder (`tests/common/elf.rs`), for the unit tests' synthetic files.
+#[cfg(test)]
+#[path = "../../tests/common/elf.rs"]
+pub(crate) mod synth;
+
 #[cfg(test)]
 pub(crate) mod testing {
     use std::fs::File;
