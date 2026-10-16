@@ -1825,7 +1825,8 @@ impl<'a> Validator<'a> {
 
     /// C1–C6 (PR-5a spec §5.2): code facts, `binary.code`, and hints agree with the session.
     ///
-    /// - C1: a binary inspection has code facts only with `request.code`.
+    /// - C1: a binary inspection has code facts only with `request.code`, and `request.code` is
+    ///   only for a binary inspection.
     /// - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
     ///   instance; without it, there is none.
     /// - C3: an input whose container is not read (`OverBytes`, `Error`, `Unsupported`) has the
@@ -1835,7 +1836,8 @@ impl<'a> Validator<'a> {
     ///   an x32 or big-endian file is `x86_64` here (plan R-c).
     /// - C4: a binary inspection's code facts are of slices whose input's `binary.code` is
     ///   `Complete` or `Partial`.
-    /// - C5: every value of a call site is well formed ([`c5`]).
+    /// - C5: every value in code facts is well formed ([`c5`]): call arguments, indirect
+    ///   targets, predicate-check atoms, and guard comparisons.
     /// - C6: an `Import` hint names an import of its slice, at `Symbol(value)`.
     ///
     /// C1 and C4 are about a binary inspection: outside one, code facts are the M1 analyzer's
@@ -1853,19 +1855,45 @@ impl<'a> Validator<'a> {
         let s = self.s;
         let binary = is_binary_inspection(&s.request);
         // C1
+        if s.request.code && !binary {
+            self.code_error("request", "request.code is only for a binary inspection");
+        }
         if binary && !s.request.code && !s.code.is_empty() {
             self.code_error("code", "a binary inspection's code facts need request.code");
         }
-        // C5
+        // C5, on every value the code-fact types hold.
         for facts in &s.code {
+            let slice = &facts.slice;
             for call in &facts.call_sites {
-                let at = format!("code[{}].call_sites[{}]", facts.slice, call.id);
+                let at = format!("code[{slice}].call_sites[{}]", call.id);
                 let target = match &call.target {
                     CallTarget::Indirect { value } => Some(value),
-                    _ => None,
+                    CallTarget::Internal { .. }
+                    | CallTarget::OwnExportViaPlt { .. }
+                    | CallTarget::Import { .. } => None,
                 };
                 for value in call.args.iter().chain(target) {
                     c5(value, &at, &mut self.errors);
+                }
+            }
+            for check in &facts.predicate_checks {
+                let at = format!("code[{slice}].predicate_checks[{}]", check.function);
+                for atom in &check.atoms {
+                    c5(&atom.value, &at, &mut self.errors);
+                }
+            }
+            for region in &facts.guard_regions {
+                let at = format!(
+                    "code[{slice}].guard_regions[{} -> {}]",
+                    region.function, region.to
+                );
+                for guard in &region.guards {
+                    match &guard.cond {
+                        crate::code::GuardCond::Compare { value, .. } => {
+                            c5(value, &at, &mut self.errors)
+                        }
+                        crate::code::GuardCond::Unmodeled { .. } => {}
+                    }
                 }
             }
         }
@@ -2859,7 +2887,7 @@ fn code_error(at: &str, why: impl Into<String>) -> ValidationError {
 
 /// C5: what a recorded value may be (PR-5a spec §4.7). A `Load` reads 8, 16, 32, or 64 bits; a
 /// `Low` keeps 8, 16, or 32 bits of a value that is not a `Low`; a `Set` has 2 to 4 members, none
-/// a `Set` or `Unknown`. Checked on call sites, the values PR-5a records.
+/// a `Set` or `Unknown`.
 fn c5(value: &ArgValue, at: &str, errors: &mut Vec<ValidationError>) {
     match value {
         ArgValue::Load { base, width, .. } => {

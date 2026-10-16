@@ -359,7 +359,7 @@
                   "reg": "rax",
                   "base": {"ReturnOf": {"reg": "rax", "call": "cs:0xd303"}},
                   "offset": 40,
-                  "width": 1,
+                  "width": 8,
                   "site": 54042
                 }
               }

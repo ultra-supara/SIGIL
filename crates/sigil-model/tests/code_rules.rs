@@ -474,3 +474,97 @@ fn c6_an_import_hint_names_an_import_of_its_slice() {
     s.hints[0].signal = Signal::String;
     assert_eq!(code_errors(&s), Vec::<String>::new());
 }
+
+#[test]
+fn c1_request_code_is_only_for_a_binary_inspection() {
+    for s in [common::complete_pass(), common::store_and_runtime()] {
+        let mut s = s;
+        assert!(!is_binary_inspection(&s.request));
+        assert_eq!(code_errors(&s), Vec::<String>::new());
+        s.request.code = true;
+        assert!(
+            code_errors(&s)
+                .iter()
+                .any(|e| e.contains("request.code is only for a binary inspection")),
+            "{:?}",
+            code_errors(&s)
+        );
+    }
+    // A binary inspection may ask for code.
+    assert_eq!(errors(&session(true)), Vec::<String>::new());
+}
+
+#[test]
+fn every_example_validates_with_its_values_in_bits() {
+    for (name, s) in common::examples() {
+        assert_eq!(errors(&s), Vec::<String>::new(), "{name}");
+    }
+}
+
+#[test]
+fn c5_checks_predicate_atoms_and_guard_comparisons_too() {
+    // The M1 examples' `T` atom loads a byte: 8 bits. As 1, it is refused.
+    let mut s = common::target_verified();
+    let Some(ArgValue::Load { width, .. }) = s.code[0]
+        .predicate_checks
+        .iter_mut()
+        .flat_map(|c| c.atoms.iter_mut())
+        .map(|a| &mut a.value)
+        .find(|v| matches!(v, ArgValue::Load { .. }))
+    else {
+        panic!("the example has a Load atom");
+    };
+    assert_eq!(*width, 8);
+    *width = 1;
+    assert!(
+        code_errors(&s)
+            .iter()
+            .any(|e| e.contains("predicate_checks") && e.contains("a Load width")),
+        "{:?}",
+        code_errors(&s)
+    );
+    // A guard comparison on a Set of one member.
+    let mut s = common::target_verified();
+    s.code[0].guard_regions.push(GuardRegion {
+        function: FnId::new("fn:0xc590").unwrap(),
+        from: Loc::CallSite(CallId::new("cs:0xd303").unwrap()),
+        to: CallId::new("cs:0xe26d").unwrap(),
+        region: RegionKind::PerIteration,
+        guards: vec![GuardBranch {
+            at: 0xd4c0,
+            cond: GuardCond::Compare {
+                value: ArgValue::Set {
+                    reg: Reg::Rax,
+                    members: vec![ArgValue::ConstInt {
+                        reg: Reg::Rax,
+                        value: 0,
+                    }],
+                },
+                op: CmpOp::Eq,
+                constant: 0,
+            },
+            dominates_to: true,
+            exit: ExitKind::Skip,
+        }],
+        converging: 0,
+        indirect: vec![],
+        complete: TriState::Unknown,
+    });
+    assert!(
+        code_errors(&s)
+            .iter()
+            .any(|e| e.contains("guard_regions") && e.contains("2 to 4 members")),
+        "{:?}",
+        code_errors(&s)
+    );
+    // The same guard on a known value is valid.
+    let region = s.code[0].guard_regions.last_mut().unwrap();
+    let GuardCond::Compare { value, .. } = &mut region.guards[0].cond else {
+        unreachable!()
+    };
+    *value = ArgValue::ReturnOf {
+        reg: Reg::Rax,
+        call: CallId::new("cs:0xd5a0").unwrap(),
+    };
+    assert_eq!(errors(&s), Vec::<String>::new());
+}

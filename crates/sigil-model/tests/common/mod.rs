@@ -467,7 +467,7 @@ pub fn add_loader_code(s: &mut Session, g: &Placed) {
                         reg: Reg::Rax,
                         base: Box::new(ret(Reg::Rax, "cs:0xd303")),
                         offset: 0x28,
-                        width: 1,
+                        width: 8,
                         site: 0xd31a,
                     },
                 },
