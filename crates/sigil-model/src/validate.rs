@@ -1833,7 +1833,8 @@ impl<'a> Validator<'a> {
     ///   container's state. Any other input is `Unsupported { CODE_UNSUPPORTED }`, or, for an
     ///   x86-64 ELF, `Complete`/`Partial` with the request's `binary_code_bytes` budget. An
     ///   x86-64 ELF may be `Unsupported` too: the model records no ELF class or byte order, and
-    ///   an x32 or big-endian file is `x86_64` here (plan R-c).
+    ///   an x32 or big-endian file is `x86_64` here (plan R-c). An ELF without slices was not
+    ///   parsed, so its code is `Partial` at best, never `Complete`.
     /// - C4: a binary inspection's code facts are of slices whose input's `binary.code` is
     ///   `Complete` or `Partial`.
     /// - C5: every value in code facts is well formed ([`c5`]): call arguments, indirect
@@ -1976,15 +1977,22 @@ impl<'a> Validator<'a> {
                 Ok(ExpectedContainer::Exactly(
                     CoverageState::Complete | CoverageState::Partial { .. },
                 )) => {
-                    let x86_64_elf = artifact.is_some_and(|a| {
-                        matches!(a.format, Format::Elf { .. })
-                            && a.slices.iter().all(|x| x.arch == Arch::X86_64)
-                    });
+                    let elf = artifact.filter(|a| matches!(a.format, Format::Elf { .. }));
+                    let analyzable = match elf {
+                        // Not parsed: no slice to analyze.
+                        Some(a) if a.slices.is_empty() => {
+                            matches!(c.state, CoverageState::Partial { .. })
+                        }
+                        Some(a) => {
+                            a.slices.iter().all(|x| x.arch == Arch::X86_64)
+                                && analyzed_state(&c.state)
+                        }
+                        None => false,
+                    };
                     let budgeted = c.budget.as_ref().is_some_and(|b| {
                         b.budget == BINARY_CODE_BYTES && Some(b.limit) == limit && b.used <= b.limit
                     });
-                    (c.state == unsupported && c.budget.is_none())
-                        || (x86_64_elf && analyzed_state(&c.state) && budgeted)
+                    (c.state == unsupported && c.budget.is_none()) || (analyzable && budgeted)
                 }
                 // The container is not read (or B9 refuses the input): its state, exactly.
                 Ok(_) | Err(_) => s.coverage.iter().any(|k| {

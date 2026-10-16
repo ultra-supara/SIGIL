@@ -399,7 +399,7 @@
         }
       }
     },
-    "Mode":{"type": "string", "enum": ["Static", "Observe"]},
+    "Mode": {"type": "string", "enum": ["Static", "Observe"]},
     "ActiveFeature": {
       "oneOf": [
         {

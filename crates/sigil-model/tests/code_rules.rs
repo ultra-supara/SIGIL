@@ -382,6 +382,39 @@ fn c5_widths_low_bits_and_sets() {
             "Unknown member",
         ),
         (
+            ArgValue::Set {
+                reg: Reg::Rdi,
+                members: vec![
+                    ArgValue::ConstInt {
+                        reg: Reg::Rdi,
+                        value: 1,
+                    },
+                    ArgValue::Set {
+                        reg: Reg::Rdi,
+                        members: (2..4)
+                            .map(|value| ArgValue::ConstInt {
+                                reg: Reg::Rdi,
+                                value,
+                            })
+                            .collect(),
+                    },
+                ],
+            },
+            "no Set or Unknown member",
+        ),
+        (
+            ArgValue::Set {
+                reg: Reg::Rdi,
+                members: (0..5)
+                    .map(|value| ArgValue::ConstInt {
+                        reg: Reg::Rdi,
+                        value,
+                    })
+                    .collect(),
+            },
+            "2 to 4 members",
+        ),
+        (
             // Nested in an indirect call's target, inside a Load's base.
             ArgValue::Load {
                 reg: Reg::Rdi,
@@ -567,4 +600,218 @@ fn c5_checks_predicate_atoms_and_guard_comparisons_too() {
         call: CallId::new("cs:0xd5a0").unwrap(),
     };
     assert_eq!(errors(&s), Vec::<String>::new());
+}
+
+// --- C3, clause by clause ------------------------------------------------------------------------
+
+const LIMIT: u64 = 1 << 28;
+
+fn budget(name: &str, used: u64, limit: u64) -> Option<BudgetUse> {
+    Some(BudgetUse {
+        budget: name.to_string(),
+        used,
+        limit,
+    })
+}
+
+fn code_bytes(used: u64, limit: u64) -> Option<BudgetUse> {
+    budget(BINARY_CODE_BYTES, used, limit)
+}
+
+fn code_unsupported() -> CoverageState {
+    CoverageState::Unsupported {
+        what: CODE_UNSUPPORTED.to_string(),
+    }
+}
+
+/// `s` with its `binary.code` entry in `state`, with `budget`.
+fn with_code(mut s: Session, state: CoverageState, budget: Option<BudgetUse>) -> Session {
+    let c = binary_code(&mut s);
+    c.state = state;
+    c.budget = budget;
+    s
+}
+
+/// `s` with its `binary.container` entry in `state`, which leaves the required check open.
+fn with_container(mut s: Session, state: CoverageState) -> Session {
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CONTAINER)
+        .unwrap()
+        .state = state;
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![CheckId::new(BINARY_CONTAINER).unwrap()],
+        gaps: vec![],
+    };
+    s
+}
+
+fn rejected_by_c3(s: &Session, what: &str) {
+    assert!(
+        code_errors(s)
+            .iter()
+            .any(|e| e.contains("binary.code must be")),
+        "{what}: {:?}",
+        code_errors(s)
+    );
+}
+
+#[test]
+fn c3_the_budget_and_reason_of_an_analyzed_elf() {
+    let ok = with_code(
+        session(true),
+        CoverageState::Complete,
+        code_bytes(LIMIT, LIMIT),
+    );
+    assert_eq!(
+        errors(&ok),
+        Vec::<String>::new(),
+        "used may equal the limit"
+    );
+    for (state, budget, what) in [
+        (
+            CoverageState::Complete,
+            code_bytes(LIMIT + 1, LIMIT),
+            "used over the limit",
+        ),
+        (
+            CoverageState::Complete,
+            budget(BINARY_BYTES, 0, LIMIT),
+            "another budget with the right limit",
+        ),
+        (
+            code_unsupported(),
+            code_bytes(0, LIMIT),
+            "Unsupported with a budget",
+        ),
+        (
+            CoverageState::Unsupported {
+                what: BINARY_UNSUPPORTED.to_string(),
+            },
+            None,
+            "Unsupported for another reason",
+        ),
+    ] {
+        rejected_by_c3(&with_code(session(true), state, budget), what);
+    }
+}
+
+#[test]
+fn c3_a_mach_o_is_unsupported() {
+    const X86_64: i32 = 0x0100_0007;
+    for format in [Format::MachO, Format::MachOFat] {
+        let fat = format == Format::MachOFat;
+        let mut s = session(true);
+        s.artifacts[0].format = format;
+        s.relations
+            .retain(|r| !matches!(r, Relation::Declares { .. }));
+        s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+            is_64: true,
+            cpu_type: X86_64,
+            cpu_subtype: 3,
+            fat_cpu_type: fat.then_some(X86_64),
+            fat_cpu_subtype: fat.then_some(3),
+            fat_alignment: fat.then_some(12),
+            file_type: 2,
+            flags: 0,
+            uuid: None,
+            id_dylib: None,
+            load_dylibs: vec![],
+            rpaths: vec![],
+            dylinker: None,
+        });
+        // An x86_64 slice, analyzed: refused.
+        rejected_by_c3(&s, "an analyzed Mach-O");
+        let s = with_code(s, code_unsupported(), None);
+        assert_eq!(errors(&s), Vec::<String>::new(), "{format:?}");
+    }
+}
+
+#[test]
+fn c3_an_input_over_binary_bytes_has_the_container_state() {
+    let limit = 64u64 << 30;
+    let over_bytes = CoverageState::BudgetExceeded {
+        budget: BINARY_BYTES.to_string(),
+        used: limit - 10,
+        limit,
+    };
+    let over = |state: CoverageState, budget: Option<BudgetUse>| {
+        let mut s = session(true);
+        assert_eq!(s.request.budgets[BINARY_BYTES], limit);
+        s.artifacts.clear();
+        s.binaries.clear();
+        s.relations.clear();
+        s.instances[0].content = InstanceContent::NotRead {
+            why: NotReadReason::BudgetExceeded,
+        };
+        with_code(with_container(s, over_bytes.clone()), state, budget)
+    };
+    assert_eq!(
+        errors(&over(over_bytes.clone(), None)),
+        Vec::<String>::new()
+    );
+    rejected_by_c3(
+        &over(CoverageState::Complete, code_bytes(0, LIMIT)),
+        "analyzed",
+    );
+    rejected_by_c3(
+        &over(
+            CoverageState::BudgetExceeded {
+                budget: BINARY_BYTES.to_string(),
+                used: limit - 9,
+                limit,
+            },
+            None,
+        ),
+        "another used",
+    );
+}
+
+#[test]
+fn c3_an_input_read_with_a_change_has_the_container_error() {
+    let error = |message: &str| CoverageState::Error {
+        message: UntrustedText::new(message),
+    };
+    let changed = |state: CoverageState, budget: Option<BudgetUse>| {
+        let mut s = session(true);
+        s.binaries.clear();
+        s.relations.clear();
+        s.instances[0].stability = Stability::ChangedDuringRead;
+        with_code(with_container(s, error(BINARY_CHANGED)), state, budget)
+    };
+    assert_eq!(
+        errors(&changed(error(BINARY_CHANGED), None)),
+        Vec::<String>::new()
+    );
+    rejected_by_c3(
+        &changed(CoverageState::Complete, code_bytes(0, LIMIT)),
+        "analyzed",
+    );
+    rejected_by_c3(&changed(error(BINARY_VANISHED), None), "another error");
+}
+
+#[test]
+fn c3_an_elf_without_slices_is_partial_at_best() {
+    let not_parsed = || CoverageState::Partial {
+        missing: vec![BINARY_NOT_PARSED.to_string()],
+    };
+    let unparsed = |state: CoverageState, budget: Option<BudgetUse>| {
+        let mut s = session(true);
+        s.artifacts[0].slices.clear();
+        s.binaries.clear();
+        s.relations.clear();
+        with_code(with_container(s, not_parsed()), state, budget)
+    };
+    for (state, budget) in [
+        (not_parsed(), code_bytes(0, LIMIT)),
+        (code_unsupported(), None),
+    ] {
+        let s = unparsed(state.clone(), budget);
+        assert_eq!(errors(&s), Vec::<String>::new(), "{state:?}");
+    }
+    rejected_by_c3(
+        &unparsed(CoverageState::Complete, code_bytes(0, LIMIT)),
+        "Complete without a slice",
+    );
+    rejected_by_c3(&unparsed(not_parsed(), None), "Partial without a budget");
 }
