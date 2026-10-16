@@ -1,0 +1,27 @@
+
+suspicious_kernel-clang-O0.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <kernel>:
+   0:	55                   	push   %rbp
+   1:	48 89 e5             	mov    %rsp,%rbp
+   4:	48 83 ec 10          	sub    $0x10,%rsp
+   8:	89 7d fc             	mov    %edi,-0x4(%rbp)
+   b:	89 75 f8             	mov    %esi,-0x8(%rbp)
+   e:	89 55 f4             	mov    %edx,-0xc(%rbp)
+  11:	8b 45 fc             	mov    -0x4(%rbp),%eax
+  14:	0f af 45 f8          	imul   -0x8(%rbp),%eax
+  18:	03 45 f4             	add    -0xc(%rbp),%eax
+  1b:	89 45 f0             	mov    %eax,-0x10(%rbp)
+  1e:	31 d2                	xor    %edx,%edx
+  20:	31 c0                	xor    %eax,%eax
+  22:	89 c6                	mov    %eax,%esi
+  24:	89 d7                	mov    %edx,%edi
+  26:	e8 00 00 00 00       	call   2b <kernel+0x2b>
+			27: R_X86_64_PLT32	connect-0x4
+  2b:	8b 45 f0             	mov    -0x10(%rbp),%eax
+  2e:	48 83 c4 10          	add    $0x10,%rsp
+  32:	5d                   	pop    %rbp
+  33:	c3                   	ret

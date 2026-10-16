@@ -1,0 +1,18 @@
+
+gotrel.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <g>:
+   0:	ff 15 00 00 00 00    	call   *0x0(%rip)        # 6 <g+0x6>
+			2: R_X86_64_GOTPCRELX	connect
+   6:	48 8d 05 00 00 00 00 	lea    0x0(%rip),%rax        # d <g+0xd>
+			9: R_X86_64_GOTPCREL	connect-0x4
+   d:	48 39 05 00 00 00 00 	cmp    %rax,0x0(%rip)        # 14 <g+0x14>
+			10: R_X86_64_GOTPCREL	connect-0x4
+  14:	48 8d 0d 00 00 00 00 	lea    0x0(%rip),%rcx        # 1b <g+0x1b>
+			17: R_X86_64_PLT32	connect-0x4
+  1b:	48 8b 15 00 00 00 00 	mov    0x0(%rip),%rdx        # 22 <g+0x22>
+			1e: R_X86_64_PC32	extern_data-0x4
+  22:	c3                   	ret

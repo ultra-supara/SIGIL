@@ -1,0 +1,73 @@
+
+cfg.so:     file format elf64-x86-64
+
+
+Disassembly of section .plt:
+
+0000000000001000 <abort@plt-0x10>:
+    1000:	ff 35 ea 2f 00 00    	push   0x2fea(%rip)        # 3ff0 <_GLOBAL_OFFSET_TABLE_+0x8>
+    1006:	ff 25 ec 2f 00 00    	jmp    *0x2fec(%rip)        # 3ff8 <_GLOBAL_OFFSET_TABLE_+0x10>
+    100c:	0f 1f 40 00          	nopl   0x0(%rax)
+
+0000000000001010 <abort@plt>:
+    1010:	ff 25 ea 2f 00 00    	jmp    *0x2fea(%rip)        # 4000 <abort@GLIBC_2.2.5>
+    1016:	68 00 00 00 00       	push   $0x0
+    101b:	e9 e0 ff ff ff       	jmp    1000 <abort@plt-0x10>
+
+0000000000001020 <connect@plt>:
+    1020:	ff 25 e2 2f 00 00    	jmp    *0x2fe2(%rip)        # 4008 <connect@GLIBC_2.2.5>
+    1026:	68 01 00 00 00       	push   $0x1
+    102b:	e9 d0 ff ff ff       	jmp    1000 <abort@plt-0x10>
+
+Disassembly of section .text:
+
+0000000000001030 <jumptable>:
+    1030:	ff e7                	jmp    *%rdi
+    1032:	31 ff                	xor    %edi,%edi
+    1034:	31 f6                	xor    %esi,%esi
+    1036:	31 d2                	xor    %edx,%edx
+    1038:	e8 e3 ff ff ff       	call   1020 <connect@plt>
+    103d:	c3                   	ret
+
+000000000000103e <after_noreturn>:
+    103e:	48 83 ec 08          	sub    $0x8,%rsp
+    1042:	85 ff                	test   %edi,%edi
+    1044:	74 07                	je     104d <after_noreturn+0xf>
+    1046:	e8 c5 ff ff ff       	call   1010 <abort@plt>
+    104b:	ff                   	(bad)
+    104c:	ff 31                	push   (%rcx)
+    104e:	ff 31                	push   (%rcx)
+    1050:	f6 31                	divb   (%rcx)
+    1052:	d2 e8                	shr    %cl,%al
+    1054:	c8 ff ff ff          	enter  $0xffff,$0xff
+    1058:	48 83 c4 08          	add    $0x8,%rsp
+    105c:	c3                   	ret
+
+000000000000105d <into_insn>:
+    105d:	85 ff                	test   %edi,%edi
+    105f:	75 01                	jne    1062 <into_insn+0x5>
+    1061:	b8 90 90 90 90       	mov    $0x90909090,%eax
+    1066:	31 ff                	xor    %edi,%edi
+    1068:	31 f6                	xor    %esi,%esi
+    106a:	31 d2                	xor    %edx,%edx
+    106c:	e8 af ff ff ff       	call   1020 <connect@plt>
+    1071:	c3                   	ret
+
+0000000000001072 <noeh_code>:
+    1072:	31 ff                	xor    %edi,%edi
+    1074:	31 f6                	xor    %esi,%esi
+    1076:	31 d2                	xor    %edx,%edx
+    1078:	e8 a3 ff ff ff       	call   1020 <connect@plt>
+    107d:	c3                   	ret
+
+000000000000107e <hot>:
+    107e:	85 ff                	test   %edi,%edi
+    1080:	75 01                	jne    1083 <cold_part>
+    1082:	c3                   	ret
+
+0000000000001083 <cold_part>:
+    1083:	31 ff                	xor    %edi,%edi
+    1085:	31 f6                	xor    %esi,%esi
+    1087:	31 d2                	xor    %edx,%edx
+    1089:	e8 92 ff ff ff       	call   1020 <connect@plt>
+    108e:	0f 0b                	ud2
