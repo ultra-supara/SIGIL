@@ -82,16 +82,12 @@ pub(crate) struct Rela {
 /// The sections' results the other steps need.
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
     /// The section header table; `None` when there is none, or it cannot be read.
-    // Read by the code step from Task 6 (`code::image`); until then only set.
-    #[allow(dead_code)]
     pub table: Option<SectionTable<'d, H, &'d Bounded<R>>>,
     /// The symbols the data step reads: `.dynsym`, or a relocatable object's `.symtab`.
     pub symbols: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
     /// Whether `symbols` is the `.dynsym` the loader binds through: a linked file's, with no
     /// `symbols:` gap from [`Elf::loader_agrees`]. `false` without symbols, and for a relocatable
     /// object, where it is not used (plan review P1-1).
-    // Read by the code step from Task 6 (`code::image`); until then only set.
-    #[allow(dead_code)]
     pub dynamic_symbols_agree: bool,
     /// `.go.buildinfo`: `(sh_addr, sh_size)`, read where Go reads it (spec §3.6).
     pub go_section: Option<(u64, u64)>,

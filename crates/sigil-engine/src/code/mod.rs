@@ -9,6 +9,7 @@ use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 
 pub mod data;
 pub(crate) mod fde;
+pub(crate) mod image;
 pub(crate) mod reader;
 
 use reader::{Reader, Refusal, MAX_READ};
@@ -179,6 +180,65 @@ fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
         gaps.sort();
     }
     gaps
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::fs::File;
+    use std::path::Path;
+
+    use object::elf::FileHeader64;
+    use object::Endianness;
+
+    use super::image::{self, Image};
+    use super::reader::Reader;
+    use super::{data, CodeBudgets, Run};
+    use crate::binary::read::{Bounded, Budgeted};
+    use crate::binary::{elf, BinaryBudgets};
+
+    /// Builds the image of a fixture of `tests/fixtures/code/` and passes it to `f`.
+    pub fn with_image<T>(
+        fixture: &str,
+        budgets: CodeBudgets,
+        f: impl FnOnce(&Image, &mut Run, &mut Reader<'_>) -> T,
+    ) -> T {
+        let path = format!(
+            "{}/tests/fixtures/code/{fixture}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        with_image_at(Path::new(&path), budgets, f)
+    }
+
+    /// [`with_image`] for the file at `path`. The fixture's kind is told by its file name: every
+    /// relocatable fixture ends in `.o`.
+    pub fn with_image_at<T>(
+        path: &Path,
+        budgets: CodeBudgets,
+        f: impl FnOnce(&Image, &mut Run, &mut Reader<'_>) -> T,
+    ) -> T {
+        let file = File::open(path).unwrap();
+        let size = file.metadata().unwrap().len();
+        let data = Bounded::new(Budgeted::new(&file, size), size, 64 << 20);
+        let mut p =
+            elf::parts::<_, FileHeader64<Endianness>>(&data, BinaryBudgets::default()).unwrap();
+        let sig = data::signatures().unwrap();
+        let mut run = Run::new(budgets);
+        let mut reader = Reader::new(&file, size, budgets.bytes);
+        let relocatable = path.extension().is_some_and(|e| e == "o");
+        // The relocatable builder, `image::relocatable`, comes with Task 7, which routes `.o`
+        // files to it here.
+        assert!(!relocatable, "no relocatable image yet: {}", path.display());
+        let img = image::linked(
+            &mut p.elf,
+            &p.sections,
+            &p.dynamic,
+            sig,
+            &mut reader,
+            &mut run,
+        )
+        .unwrap();
+        f(&img, &mut run, &mut reader)
+    }
 }
 
 #[cfg(test)]
