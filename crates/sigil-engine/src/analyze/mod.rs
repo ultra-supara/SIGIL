@@ -4,6 +4,7 @@
 pub mod binary;
 pub mod container;
 pub mod exposure;
+pub mod hints;
 pub mod model_store;
 pub mod release;
 pub mod runtime_api;

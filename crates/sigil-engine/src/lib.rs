@@ -18,6 +18,7 @@
 
 pub mod analyze;
 pub mod binary;
+pub mod code;
 pub mod collect;
 pub mod explain;
 pub mod inspect;

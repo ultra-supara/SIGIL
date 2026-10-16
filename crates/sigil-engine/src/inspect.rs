@@ -11,7 +11,7 @@ use sigil_model::{
     ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
 };
 
-use crate::analyze::{binary, container, exposure, model_store, release, runtime_api};
+use crate::analyze::{binary, container, exposure, hints, model_store, release, runtime_api};
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
 use crate::collect::named::{self, NamedBudgets};
@@ -61,6 +61,9 @@ pub enum InspectError {
     Reference(Vec<String>),
     /// An input of `binary inspect` that cannot be inspected (exit 1; plan §4.9).
     Input(String),
+    /// Embedded data the engine cannot use, e.g. invalid signatures (a bug, reported rather than
+    /// panicking).
+    Internal(String),
 }
 
 impl fmt::Display for InspectError {
@@ -77,6 +80,7 @@ impl fmt::Display for InspectError {
                 errors.join("; ")
             ),
             InspectError::Input(e) => write!(f, "{e}"),
+            InspectError::Internal(e) => write!(f, "internal error: {e}"),
         }
     }
 }
@@ -255,6 +259,7 @@ fn assemble(
     }
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
+    let hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -282,7 +287,7 @@ fn assemble(
         releases,
         reference_matches,
         binaries,
-        hints: vec![],
+        hints,
         code: vec![],
         relations,
         rule_support: vec![],
@@ -351,6 +356,7 @@ pub fn binary_session(
         ),
         ("binary_imports".to_string(), req.budgets.binary.imports),
     ]);
+    let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -378,7 +384,7 @@ pub fn binary_session(
         releases: vec![],
         reference_matches: vec![],
         binaries: facts.binaries,
-        hints: vec![],
+        hints,
         code: vec![],
         relations,
         rule_support: vec![],

@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
-use sigil_model::{InstanceId, RootId};
+use sigil_model::{InstanceId, ObservationMeta, RootId, Timestamp, ToolInfo};
 
 pub const MODEL_MEDIA: &str = "application/vnd.ollama.image.model";
 pub const LIB: &str = "registry.ollama.ai/library/m/latest";
@@ -61,4 +61,33 @@ pub fn privileged(dir: &Path) -> bool {
     fs::set_permissions(&probe, fs::Permissions::from_mode(0o600)).unwrap();
     fs::remove_file(&probe).unwrap();
     readable
+}
+
+/// The tool a test session records.
+pub fn tool() -> ToolInfo {
+    ToolInfo {
+        name: "sigil".to_string(),
+        version: "0.0.0-test".to_string(),
+        git_rev: None,
+    }
+}
+
+/// The observation a test session records, as `binary_session.rs` has it.
+pub fn observation() -> ObservationMeta {
+    ObservationMeta {
+        started_at: Timestamp::new("2026-10-10T00:00:00Z").unwrap(),
+        finished_at: Timestamp::new("2026-10-10T00:00:01Z").unwrap(),
+        uid: 1000,
+        gid: 1000,
+        capabilities: vec![],
+        boot_id: String::new(),
+        kernel: "6.8.0".to_string(),
+        net_ns: None,
+        mnt_ns: None,
+    }
+}
+
+/// The policy time of a test session: the observation's start.
+pub fn policy_time() -> Timestamp {
+    observation().started_at
 }
