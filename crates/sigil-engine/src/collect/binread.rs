@@ -3,7 +3,7 @@
 //! - hashes the file within a byte limit;
 //! - identifies ELF and Mach-O containers;
 //! - parses each content once, on the fd that hashed it;
-//! - keeps the facts only from a read that saw no change.
+//! - keeps the facts, and the code outcomes, only from a read that saw no change.
 
 use std::collections::BTreeMap;
 
@@ -14,6 +14,7 @@ use sigil_model::{
 
 use super::fs::{FileRead, ReadSpec, RelPath, SafeFs};
 use crate::binary::{self, BinaryBudgets, ParsedArtifact};
+use crate::code::CodeOutcome;
 
 /// Reads `rel` under `root` without following any symlink. The file is hashed only if it is at
 /// most `limit` bytes (a larger one is `NotRead { BudgetExceeded }`), and a recognized content
@@ -80,24 +81,29 @@ pub(crate) fn read(
     read
 }
 
-/// One `BinaryFacts` per parsed content, for its slice, sorted by slice.
+/// One `BinaryFacts` per parsed content, for its slice, and the code outcome of each slice that
+/// has one (PR-5a), each sorted by slice. `parsed` holds only the contents of reads that saw no
+/// change ([`read`]), so neither part comes from a read that saw one.
 pub(crate) fn binaries(
     parsed: BTreeMap<ArtifactId, ParsedArtifact>,
     artifacts: &[Artifact],
-) -> Vec<BinaryFacts> {
-    let mut out = vec![];
+) -> (Vec<BinaryFacts>, Vec<(SliceId, CodeOutcome)>) {
+    let (mut out, mut code) = (vec![], vec![]);
     for (id, parsed_artifact) in parsed {
         let Some(artifact) = artifacts.iter().find(|a| a.id == id) else {
             continue;
         };
         for parsed_slice in parsed_artifact.slices {
-            let Some(container) = parsed_slice.container else {
-                continue;
-            };
             let slice_id = SliceId::from_parts(&id, parsed_slice.arch, parsed_slice.offset);
             if !artifact.slices.iter().any(|slice| slice.id == slice_id) {
                 continue;
             }
+            if let Some(outcome) = parsed_slice.code {
+                code.push((slice_id.clone(), outcome));
+            }
+            let Some(container) = parsed_slice.container else {
+                continue;
+            };
             out.push(BinaryFacts {
                 slice: slice_id,
                 container,
@@ -107,5 +113,6 @@ pub(crate) fn binaries(
         }
     }
     out.sort_by(|a, b| a.slice.cmp(&b.slice));
-    out
+    code.sort_by(|a, b| a.0.cmp(&b.0));
+    (out, code)
 }

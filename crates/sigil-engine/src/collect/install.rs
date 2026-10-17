@@ -117,7 +117,8 @@ fn collect_with(
             c.state()
         }
     };
-    let binaries = super::binread::binaries(c.parsed, &c.artifacts);
+    // An install scan never asks for code (`BinaryBudgets.code` is `None`): no outcomes.
+    let (binaries, _) = super::binread::binaries(c.parsed, &c.artifacts);
     Ok(InstallFacts {
         root_path,
         instances: c.instances,

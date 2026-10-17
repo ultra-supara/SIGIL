@@ -5,13 +5,15 @@ use std::fmt;
 use std::path::PathBuf;
 
 use sigil_model::{
-    ActiveFeature, ApiProbe, Artifact, CheckId, Completeness, Coverage, CoverageState, Format,
-    KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion,
-    Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict,
-    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
+    ActiveFeature, ApiProbe, Artifact, CheckId, CodeFacts, Completeness, Coverage, CoverageState,
+    Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
+    SchemaVersion, Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText,
+    Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES,
+    BINARY_CODE_BYTES, INSTALL_ROOT,
 };
 
 use crate::analyze::{binary, container, exposure, hints, model_store, release, runtime_api};
+use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
 use crate::collect::named::{self, NamedBudgets};
@@ -331,8 +333,9 @@ pub struct BinaryRequest {
 }
 
 /// Inspects the files of `req` and evaluates `policy`'s binary scope on the result (spec §4.5).
-/// An input that cannot be inspected is [`InspectError::Input`]. The session is in canonical
-/// order and passes `Session::validate`.
+/// With `req.budgets.binary.code`, the session has `request.code`, the code facts, and one
+/// `binary.code` entry per input (PR-5a spec §5). An input that cannot be inspected is
+/// [`InspectError::Input`]. The session is in canonical order and passes `Session::validate`.
 pub fn binary_session(
     req: &BinaryRequest,
     policy: &Policy,
@@ -348,7 +351,7 @@ pub fn binary_session(
         binary: true,
     });
     let relations = container::declares(&facts.binaries);
-    let budgets = BTreeMap::from([
+    let mut budgets = BTreeMap::from([
         (BINARY_BYTES.to_string(), req.budgets.bytes),
         (
             "binary_parse_bytes".to_string(),
@@ -356,7 +359,34 @@ pub fn binary_session(
         ),
         ("binary_imports".to_string(), req.budgets.binary.imports),
     ]);
+    // With code (PR-5a): its byte budget. Its aggregate limits are constants, not recorded.
+    let code_request = req.budgets.binary.code;
+    if let Some(c) = code_request {
+        budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
+    }
     let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
+    // The facts of each analyzed slice that has a call site; one content named twice is one
+    // slice, so one entry.
+    let code = facts
+        .code
+        .iter()
+        .filter_map(|(slice, o)| match o {
+            CodeOutcome::Analyzed {
+                functions,
+                call_sites,
+                ..
+            } if !call_sites.is_empty() => Some(CodeFacts {
+                slice: slice.clone(),
+                functions: functions.clone(),
+                call_sites: call_sites.clone(),
+                predicate_checks: vec![],
+                close_checks: vec![],
+                guard_regions: vec![],
+                param_mappings: vec![],
+            }),
+            _ => None,
+        })
+        .collect();
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -370,7 +400,7 @@ pub fn binary_session(
             observe_env: false,
             model_filter: None,
             active: vec![],
-            code: false,
+            code: code_request.is_some(),
         },
         observation,
         artifacts: facts.artifacts,
@@ -385,7 +415,7 @@ pub fn binary_session(
         reference_matches: vec![],
         binaries: facts.binaries,
         hints,
-        code: vec![],
+        code,
         relations,
         rule_support: vec![],
         bindings: vec![],
@@ -405,7 +435,12 @@ pub fn binary_session(
             policy_time: policy_time.clone(),
         },
     };
+    // The container's entries first: an input over `binary_bytes` copies its state to
+    // `binary.code`.
     session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
+    let code_coverage =
+        binary::code_coverage(&session, &facts.code).map_err(InspectError::BadId)?;
+    session.coverage.extend(code_coverage);
     evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
     session.canonicalize();
     session.validate().map_err(|errors| {
