@@ -1780,4 +1780,80 @@ mod tests {
         let s = states_before_calls(&bytes);
         assert_eq!(s[&at[3]][7], lo(Val::Param(0), 32));
     }
+
+    /// `mov dst, src` (64-bit), by [`gpr`] index.
+    fn mov_rr(dst: usize, src: usize) -> Vec<u8> {
+        let rex = 0x48 | if src >= 8 { 4 } else { 0 } | if dst >= 8 { 1 } else { 0 };
+        vec![rex, 0x89, 0xc0 | ((src as u8 & 7) << 3) | (dst as u8 & 7)]
+    }
+
+    /// `mov dst32, imm`, by [`gpr`] index.
+    fn mov_ri(dst: usize, imm: u32) -> Vec<u8> {
+        let mut v = if dst >= 8 { vec![0x41] } else { vec![] };
+        v.push(0xb8 + (dst as u8 & 7));
+        v.extend(imm.to_le_bytes());
+        v
+    }
+
+    /// Loops nested in `levels` order (the first outermost), each with its level's body before
+    /// the next loop, then `test eax, eax; jne` back to its start.
+    fn nest(out: &mut Vec<u8>, levels: &[Vec<u8>]) {
+        let Some((body, inner)) = levels.split_first() else {
+            return;
+        };
+        let start = out.len();
+        out.extend(body);
+        nest(out, inner);
+        out.extend([0x85, 0xc0]);
+        let rel = start as i64 - (out.len() as i64 + 6);
+        out.extend([0x0f, 0x85]);
+        out.extend((rel as i32).to_le_bytes());
+    }
+
+    /// The 15 GPRs but rsp, by [`gpr`] index.
+    const NOT_RSP: [usize; 15] = [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+    /// A function whose values settle only after 48 passes: the first 14 registers hold the
+    /// constants 1 to 14, and four nested loops shift one chain r15 → r14 → … → rax (r15 is
+    /// unknown), each loop a part of it, the outermost the start. Each change a loop passes on
+    /// runs through every loop inside it again: real nested loops (curl's `fopen` function,
+    /// CUDA libraries) needed up to 256 passes in Task 15's survey.
+    fn needs_48_passes() -> Vec<u8> {
+        let mut bytes: Vec<u8> = NOT_RSP[..14]
+            .iter()
+            .enumerate()
+            .flat_map(|(i, r)| mov_ri(*r, i as u32 + 1))
+            .collect();
+        let shift = |regs: &[usize]| -> Vec<u8> {
+            regs.windows(2).flat_map(|w| mov_rr(w[0], w[1])).collect()
+        };
+        let levels = [
+            shift(&NOT_RSP[11..]),
+            shift(&NOT_RSP[7..=11]),
+            shift(&NOT_RSP[3..=7]),
+            shift(&NOT_RSP[..=3]),
+        ];
+        nest(&mut bytes, &levels);
+        bytes.extend(CALL0);
+        bytes.extend(RET);
+        bytes
+    }
+
+    #[test]
+    fn nested_loops_settle_within_the_value_passes() {
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&needs_48_passes(), &img);
+        assert_eq!(cfg.insns.len(), 38);
+        assert_eq!(
+            propagate(&cfg, &img, 47, |_, _, _| {}).err(),
+            Some(Failure::Unsettled)
+        );
+        assert!(propagate(&cfg, &img, 48, |_, _, _| {}).is_ok());
+        // More than the 32 passes PR-5a began with, within VALUE_PASSES.
+        let v = solve(&cfg, &img).unwrap();
+        let call = *cfg.insns.keys().next_back().unwrap() - 5;
+        // rax is at the chain's end: r15's unknown value reached it.
+        let at = v.at(call).unwrap();
+        assert_eq!(at.args[0], Val::Unknown(Why::MergedDisagreeing), "rdi");
+    }
 }

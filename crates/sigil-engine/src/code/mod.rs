@@ -30,8 +30,10 @@ use record::Recorder;
 pub const FUNCTION_INSTRUCTIONS: u64 = 200_000;
 /// The longest FDE decoded.
 pub const FDE_BYTES: u64 = 16 << 20;
-/// Times one block is processed before its values are given up.
-pub const VALUE_PASSES: u32 = 32;
+/// Times one block is processed before its values are given up (the function fails). Real nested
+/// loops need more than 32: in Task 15's survey, 32 left 392 references in 17 files unsettled, 128
+/// left 24, and 256 none, at no measurable cost.
+pub const VALUE_PASSES: u32 = 256;
 /// The longest constant string read (plan §4.9).
 pub const STRING_BYTES: u64 = 4096;
 

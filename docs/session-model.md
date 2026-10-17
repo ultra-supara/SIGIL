@@ -627,8 +627,10 @@ The other limits do not stop the analysis:
   `code: <what>: a read of <n> bytes over the 64 MiB read limit`;
 - **one function**: a function whose FDE is over 16 MiB is not decoded (`code: <symbol>
   referenced at <p>: function at <entry>: <n> bytes`), and one that passes 200,000 decoded
-  instructions fails (`… function at <entry>: more than 200000 instructions`). Such a function
-  records no call site, and its references are gaps.
+  instructions fails (`… function at <entry>: more than 200000 instructions`). So does one whose
+  register values have not settled after 256 passes over one of its blocks (`… function at
+  <entry>: values did not settle`). Such a function records no call site, and its references are
+  gaps.
 
 **Order.** `Session::canonicalize` sorts `code`, and each entry's `functions` and `call_sites`, by
 their JSON text. The order is deterministic, but it is not numeric address order: `fn:0x1000`
