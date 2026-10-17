@@ -28,8 +28,6 @@ use crate::binary::elf::{Elf, Sections, MAX_IMPORT_NAME};
 use crate::binary::read::Bounded;
 
 /// What a call or jump reaches (spec §4.6).
-// Used outside tests from Task 11 (`search`, `analyze`); until then only tests resolve.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Resolved {
     /// A symbol by name: an import (`defined: None`), or the file's own export through its PLT
@@ -84,8 +82,6 @@ fn branch_meaning(insn: &Insn, img: &Image) -> Option<Meaning> {
 
 /// Where a direct branch goes, relocations applied (for `decode`). `None`: not a near branch,
 /// or a relocation sends it out of reach (an import, or a relocation not modeled).
-// Used outside tests from Task 11 (`search`); until then only tests decode with it.
-#[allow(dead_code)]
 pub(crate) fn branch_target(insn: &Insn, img: &Image) -> Option<u64> {
     if !op0_is(insn, OpKind::NearBranch64) {
         return None;
@@ -134,8 +130,6 @@ fn symbol_of(of: &SymRef) -> Resolved {
 
 /// What a call or jump reaches (spec §4.6). `kept`: what is kept before it, for a target in a
 /// register ([`Kept::target`]); without it, a register target is unknown.
-// Used outside tests from Task 11 (`search`); until then only tests resolve.
-#[allow(dead_code)]
 pub(crate) fn resolve(insn: &Insn, kept: Option<&Kept>, img: &Image) -> Resolved {
     if insn.ins.op_count() < 1 {
         return Resolved::Unresolved(None);
@@ -236,8 +230,6 @@ fn memory(insn: &Insn, img: &Image) -> Resolved {
 
 /// Whether a call never returns: only a near call or a call through memory resolved to a symbol
 /// that the noreturn list names (R-a).
-// Used outside tests from Task 11 (`search`); until then only tests decode with it.
-#[allow(dead_code)]
 pub(crate) fn noreturn(insn: &Insn, img: &Image, sig: &Signatures) -> bool {
     if !(op0_is(insn, OpKind::NearBranch64) || op0_is(insn, OpKind::Memory)) {
         return false;
@@ -282,8 +274,6 @@ fn call_id(ip: u64) -> Option<CallId> {
 }
 
 /// The sites of the calls whose return values `v` holds: in a `Set`, a `Load` base, or a `Low`.
-// Used outside tests from Task 11 (`analyze`); until then only tests record.
-#[allow(dead_code)]
 pub(crate) fn ret_sites(v: &Val, out: &mut Vec<u64>) {
     match v {
         Val::Ret(site) => out.push(*site),
@@ -414,8 +404,6 @@ fn call_kind(insn: &Insn, img: &Image, entry: u64, end: u64) -> Option<CallKind>
 
 /// What one recorded function says of its references, for their confirmation (spec §4.4,
 /// §4.7).
-// Used outside tests from Task 11 (`search`); until then only tests record.
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Consumed {
     /// The instructions whose reference became a call's target: a call or jump's own address
@@ -451,8 +439,6 @@ fn escapes(v: &Val, img: &Image, out: &mut BTreeSet<u64>) {
 }
 
 /// The recorded facts of one artifact.
-// Used outside tests from Task 11 (`search`, `analyze`); until then only tests record.
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub(crate) struct Recorder {
     pub functions: Vec<Function>,
@@ -465,8 +451,6 @@ pub(crate) struct Recorder {
     name_bytes: u64,
 }
 
-// Used outside tests from Task 11 (`search`, `analyze`); until then only tests record.
-#[allow(dead_code)]
 impl Recorder {
     /// Records one function's calls to the capability imports and their `ReturnOf` closure
     /// (spec §4.8), with the function. A function records all of its calls or none:

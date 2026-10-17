@@ -13,6 +13,8 @@ use std::fs::File;
 
 use sigil_model::{Arch, ContainerFacts, Format, GoBuildInfo, Sha256Hex};
 
+use crate::code::{CodeBudgets, CodeOutcome};
+
 /// Budgets of one artifact's parse, recorded as `binary_parse_bytes` and `binary_imports`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BinaryBudgets {
@@ -20,6 +22,8 @@ pub struct BinaryBudgets {
     pub parse_bytes: u64,
     /// Imports kept per slice.
     pub imports: u64,
+    /// The code budgets when code is analyzed (PR-5a spec §4.1); `None`: no code analysis.
+    pub code: Option<CodeBudgets>,
 }
 
 impl Default for BinaryBudgets {
@@ -27,16 +31,18 @@ impl Default for BinaryBudgets {
         BinaryBudgets {
             parse_bytes: 64 << 20,
             imports: 4096,
+            code: None,
         }
     }
 }
 
-/// One parsed slice's container facts and gaps.
+/// One parsed slice's container facts and gaps, and its code analysis when it was asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
     pub container: ContainerFacts,
     pub go: Option<GoBuildInfo>,
     pub gaps: Vec<String>,
+    pub code: Option<CodeOutcome>,
 }
 
 /// One parsed architecture slice of an artifact.
@@ -48,7 +54,10 @@ pub struct ParsedSlice {
     pub sha256: Sha256Hex,
     pub container: Option<ContainerFacts>,
     pub go: Option<GoBuildInfo>,
+    /// The container's gaps. The code's are its own ([`CodeOutcome::Analyzed`]).
     pub gaps: Vec<String>,
+    /// The code analysis, when `BinaryBudgets.code` asked for it.
+    pub code: Option<CodeOutcome>,
 }
 
 /// The format and parsed slices of one artifact.
@@ -58,11 +67,11 @@ pub struct ParsedArtifact {
     pub slices: Vec<ParsedSlice>,
 }
 
-/// Parses the ELF content of `file` (of `size` bytes, from the read's `fstat`). Never fails:
-/// what cannot be read is a gap.
+/// Parses the ELF content of `file` (of `size` bytes, from the read's `fstat`), and analyzes its
+/// code on the same fd when `budgets.code` asks for it. Never fails: what cannot be read is a gap.
 pub fn parse(file: &File, size: u64, budgets: BinaryBudgets) -> Parsed {
     let data = read::Bounded::new(read::Budgeted::new(file, size), size, budgets.parse_bytes);
-    elf::parse(&data, budgets)
+    elf::parse(&data, budgets, Some((file, size)))
 }
 
 /// Parses a recognized ELF or Mach-O artifact. A recognized but malformed Mach-O is returned
@@ -86,6 +95,7 @@ pub fn parse_artifact(
                 container: Some(parsed.container),
                 go: parsed.go,
                 gaps: parsed.gaps,
+                code: parsed.code,
             }],
         });
     }

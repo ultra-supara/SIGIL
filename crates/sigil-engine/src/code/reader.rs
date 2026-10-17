@@ -10,8 +10,6 @@ pub const MAX_READ: u64 = 64 << 20;
 
 /// Why a read was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
-#[allow(dead_code)]
 pub(crate) enum Refusal {
     /// It would pass `binary_code_bytes`.
     Budget,
@@ -24,8 +22,6 @@ pub(crate) enum Refusal {
 }
 
 /// The charged reader of one artifact.
-// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
-#[allow(dead_code)]
 pub(crate) struct Reader<'f> {
     file: &'f File,
     size: u64,
@@ -33,8 +29,6 @@ pub(crate) struct Reader<'f> {
     used: u64,
 }
 
-// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
-#[allow(dead_code)]
 impl<'f> Reader<'f> {
     /// `size`: the file's size from the read's `fstat`; `limit`: `binary_code_bytes`.
     pub fn new(file: &'f File, size: u64, limit: u64) -> Reader<'f> {

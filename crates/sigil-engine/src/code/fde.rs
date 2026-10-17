@@ -19,8 +19,6 @@ type Slice<'a> = EndianSlice<'a, LittleEndian>;
 /// - An entry that cannot be parsed is a gap and ends the walk; the FDEs before it are kept.
 /// - A zero length (the terminator) ends the walk; non-zero bytes after it are a gap.
 /// - Every FDE read counts against `run.budgets.fdes`, empty and failing ones included.
-// Used outside tests from Task 11 (`analyze`); until then only tests call it.
-#[allow(dead_code)]
 pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
     let mut frame = EhFrame::new(bytes, LittleEndian);
     // ELF64: an address is 8 bytes, whatever the host's word (gimli's default).

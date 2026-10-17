@@ -8,9 +8,6 @@
 //!   ([`Kept`]), review I1.
 //! - [`Val::Sym`] (spec rev. 2's `SymbolAddr`) is internal: it never leaves the engine.
 
-// Used outside tests from Tasks 10–11 (`record`, `analyze`); until then only tests solve.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::rc::Rc;
 

@@ -3,9 +3,6 @@
 //! a relocatable object the relocations on code fields. The builders are [`linked`] (an
 //! executable or shared object) and [`relocatable`].
 
-// Used outside tests from Task 11 (`analyze`); until then only tests build an image.
-#![allow(dead_code)]
-
 mod linked;
 mod relocatable;
 
@@ -25,11 +22,7 @@ use super::{Run, STRING_BYTES};
 use crate::binary::elf::{Elf, MAX_IMPORT_NAME};
 use crate::binary::read::Bounded;
 
-// Called outside tests from Task 11 (`analyze`); until then only the test helper calls it.
-#[allow(unused_imports)]
 pub(crate) use linked::linked;
-// Called outside tests from Task 11 (`analyze`); until then only the test helper calls it.
-#[allow(unused_imports)]
 pub(crate) use relocatable::relocatable;
 pub(crate) use relocatable::symbol_offset;
 

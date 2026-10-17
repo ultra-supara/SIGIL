@@ -11,8 +11,6 @@ use super::image::Image;
 use super::{Run, FUNCTION_INSTRUCTIONS};
 
 /// A decoded instruction and where its displacement and immediate are.
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 pub(crate) struct Insn {
     pub ins: Instruction,
     pub offs: ConstantOffsets,
@@ -20,8 +18,6 @@ pub(crate) struct Insn {
 
 /// One function's CFG. Every block start is a decoded instruction, and each decoded instruction
 /// is in exactly one block.
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 pub(crate) struct Cfg {
     pub entry: u64,
     pub end: u64,
@@ -30,8 +26,6 @@ pub(crate) struct Cfg {
     pub blocks: BTreeMap<u64, Block>,
 }
 
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 impl Cfg {
     /// The instructions of the block starting at `start`, in order. They are contiguous: no
     /// decoded instruction lies between two of them, as it would overlap one. A `start` past
@@ -54,8 +48,6 @@ pub(crate) struct Block {
     succs: Succs,
 }
 
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 impl Block {
     /// Its successors inside the function, in increasing order.
     pub fn succs(&self) -> impl Iterator<Item = u64> + '_ {
@@ -77,8 +69,6 @@ fn succs(a: Option<u64>, b: Option<u64>) -> Succs {
 }
 
 /// Why a function fails.
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Failure {
     Decode(u64),
@@ -92,8 +82,6 @@ pub(crate) enum Failure {
     Unsettled,
 }
 
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 impl Failure {
     pub fn reason(&self, entry: u64) -> String {
         match self {
@@ -160,8 +148,6 @@ fn flow(
 /// Every decode attempt is charged to `run.instructions` before it is made, whether it succeeds
 /// or not; at `run.budgets.instructions` the run stops. The caller must not call it once
 /// `run.stopped()`: `analyze` checks before each function.
-// Used outside tests from Task 11 (`analyze`); until then only tests decode.
-#[allow(dead_code)]
 pub(crate) fn decode(
     bytes: &[u8],
     entry: u64,

@@ -4,8 +4,15 @@
 //! grows with the input has a limit (spec §4.10).
 
 use std::collections::BTreeSet;
+use std::fs::File;
 
+use object::elf;
+use object::read::elf::FileHeader;
+use object::read::ReadCacheOps;
+use object::{Endian, Endianness};
 use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
+
+use crate::binary::elf::{Dynamic, Elf, Sections};
 
 pub mod data;
 pub(crate) mod decode;
@@ -13,9 +20,11 @@ pub(crate) mod fde;
 pub(crate) mod image;
 pub(crate) mod reader;
 pub(crate) mod record;
+pub(crate) mod search;
 pub(crate) mod value;
 
 use reader::{Reader, Refusal, MAX_READ};
+use record::Recorder;
 
 /// Instructions decoded per function (plan §4.9).
 pub const FUNCTION_INSTRUCTIONS: u64 = 200_000;
@@ -80,8 +89,6 @@ pub enum CodeOutcome {
 }
 
 /// The gaps and limits of one artifact's analysis.
-// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
-#[allow(dead_code)]
 pub(crate) struct Run {
     pub budgets: CodeBudgets,
     gaps: BTreeSet<String>,
@@ -91,8 +98,6 @@ pub(crate) struct Run {
     pub instructions: u64,
 }
 
-// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
-#[allow(dead_code)]
 impl Run {
     pub fn new(budgets: CodeBudgets) -> Run {
         Run {
@@ -188,8 +193,6 @@ impl Run {
 
 /// `gaps` (sorted, from the set), with a line counting the `more` calls of [`Run::gap`] past the
 /// cap (repeats of gaps not listed included), sorted in.
-// Used outside tests from Task 11 (`analyze`); until then only tests construct it.
-#[allow(dead_code)]
 fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
     let mut gaps: Vec<String> = gaps.collect();
     if more > 0 {
@@ -197,6 +200,69 @@ fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
         gaps.sort();
     }
     gaps
+}
+
+/// Code analysis of one ELF slice (spec §4): the image, the references, their confirmation, and
+/// the names of what was recorded. It runs after the container facts, on the same parse and the
+/// same fd (`file`, of `size` bytes from the read's `fstat`). It never fails: what cannot be
+/// analyzed is a gap. Only an x86-64 ELF64 little-endian file is analyzed (R-c).
+///
+/// R-h: nothing it does reaches the container's facts or gaps.
+/// - A section name it cannot read (`Elf::section_named`) is a gap of the code, `code: …`, not of
+///   the container, whose list is set aside while the code step runs.
+/// - A `binary_parse_bytes` refusal while it runs is the gap `code: binary_parse_bytes
+///   exceeded`, unless only names were refused ([`Recorder::fill_names`]): names are not
+///   references, and a name left out costs no coverage.
+pub(crate) fn analyze<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    e: &mut Elf<'d, R, H>,
+    sections: &Sections<'d, R, H>,
+    dynamic: &Dynamic,
+    file: &File,
+    size: u64,
+    budgets: CodeBudgets,
+) -> CodeOutcome {
+    let endian = e.endian;
+    if e.header.e_machine(endian) != elf::EM_X86_64
+        || !e.header.is_class_64()
+        || !endian.is_little_endian()
+    {
+        return CodeOutcome::Unsupported;
+    }
+    let container = std::mem::take(&mut e.gaps);
+    let mut run = Run::new(budgets);
+    let mut reader = Reader::new(file, size, budgets.bytes);
+    let mut rec = Recorder::default();
+    let refusals = e.data.refusals();
+    let img = match data::signatures() {
+        Err(why) => {
+            run.gap_always(format!("code: signatures: {why}"));
+            None
+        }
+        Ok(sig) => {
+            let img = if e.header.e_type(endian) == elf::ET_REL {
+                image::relocatable(e, sections, sig, &mut reader, &mut run)
+            } else {
+                image::linked(e, sections, dynamic, sig, &mut reader, &mut run)
+            };
+            // A limit reached while the image was built (slots, relocations, FDEs, the bytes)
+            // ends the analysis there: nothing is searched.
+            if let Some(img) = img.as_ref().filter(|_| !run.stopped()) {
+                let refs = search::references(img, &mut reader, &mut run);
+                search::confirm(img, refs, sig, &mut reader, &mut run, &mut rec);
+            }
+            img
+        }
+    };
+    if e.data.refusals() > refusals {
+        run.gap_always("code: binary_parse_bytes exceeded".to_string());
+    }
+    if let Some(img) = &img {
+        rec.fill_names(e, sections, img, &run);
+    }
+    for gap in std::mem::replace(&mut e.gaps, container) {
+        run.gap(format!("code: {gap}"));
+    }
+    run.finish(&reader, rec.functions, rec.call_sites)
 }
 
 /// The integration tests' ELF builder (`tests/common/elf.rs`), for the unit tests' synthetic files.

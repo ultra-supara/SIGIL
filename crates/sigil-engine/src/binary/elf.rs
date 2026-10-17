@@ -3,6 +3,7 @@
 //! through the budgeted checkpoint ([`Bounded`]).
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::mem::size_of;
 use std::ops::ControlFlow;
 
@@ -13,11 +14,14 @@ use object::read::elf::{
 };
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
-use sigil_model::{ContainerFacts, ElfFacts, ElfImport, UntrustedText};
+use sigil_model::{
+    BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText, BINARY_CODE_BYTES,
+};
 
 use super::read::Bounded;
 use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
+use crate::code::{self, CodeOutcome};
 
 /// Output limits (spec §4.9).
 pub const MAX_DYNAMIC: u64 = 65_536;
@@ -202,26 +206,46 @@ fn empty() -> ElfFacts {
     }
 }
 
-/// The facts of the ELF in `data`. Never fails: what cannot be read is a gap.
-pub fn parse<R: ReadCacheOps>(data: &Bounded<R>, budgets: BinaryBudgets) -> Parsed {
+/// The facts of the ELF in `data`, and with `budgets.code` and `file` (the fd `data` reads, and
+/// its `fstat` size) its code analysis (PR-5a spec §4.1). Never fails: what cannot be read is a
+/// gap.
+pub fn parse<R: ReadCacheOps>(
+    data: &Bounded<R>,
+    budgets: BinaryBudgets,
+    file: Option<(&File, u64)>,
+) -> Parsed {
     let parsed = match FileKind::parse(data) {
-        Ok(FileKind::Elf32) => parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets),
-        Ok(FileKind::Elf64) => parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets),
+        Ok(FileKind::Elf32) => parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file),
+        Ok(FileKind::Elf64) => parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file),
         _ => None,
     };
-    let mut parsed = parsed.unwrap_or_else(|| Parsed {
-        container: ContainerFacts::Elf(empty()),
-        go: None,
-        gaps: vec![
+    let mut parsed = parsed.unwrap_or_else(|| {
+        let mut gaps = vec![
             "malformed: header: not a complete ELF header".to_string(),
             "sections: no readable ELF header".to_string(),
-        ],
+        ];
+        if data.refused() {
+            gaps.push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+        }
+        Parsed {
+            container: ContainerFacts::Elf(empty()),
+            go: None,
+            gaps,
+            code: budgets
+                .code
+                .filter(|_| file.is_some())
+                .map(|c| CodeOutcome::Analyzed {
+                    functions: vec![],
+                    call_sites: vec![],
+                    gaps: vec!["code: no readable ELF header".to_string()],
+                    budget: BudgetUse {
+                        budget: BINARY_CODE_BYTES.to_string(),
+                        used: 0,
+                        limit: c.bytes,
+                    },
+                }),
+        }
     });
-    if data.refused() {
-        parsed
-            .gaps
-            .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
-    }
     parsed.gaps.sort();
     parsed.gaps.dedup();
     parsed
@@ -230,6 +254,7 @@ pub fn parse<R: ReadCacheOps>(data: &Bounded<R>, budgets: BinaryBudgets) -> Pars
 fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
+    file: Option<(&File, u64)>,
 ) -> Option<Parsed> {
     let Parts {
         elf: mut e,
@@ -241,10 +266,21 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         facts.data = data::read(&mut e, symbols, &dynamic);
     }
     let go = goinfo::find(&mut e, sections.go_section);
+    // R-h: the container's parse-budget gap is decided here, before the code step reads through
+    // the same cache: a refusal during the code step is the code's gap, never the container's.
+    if data.refused() {
+        e.gaps
+            .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+    }
+    let code = match (budgets.code, file) {
+        (Some(c), Some((f, size))) => Some(code::analyze(&mut e, &sections, &dynamic, f, size, c)),
+        _ => None,
+    };
     Some(Parsed {
         container: ContainerFacts::Elf(facts),
         go,
         gaps: e.gaps,
+        code,
     })
 }
 
