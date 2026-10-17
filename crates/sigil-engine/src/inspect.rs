@@ -191,6 +191,7 @@ fn assemble(
         active: !active.features.is_empty(),
         install: req.install.is_some(),
         binary: false,
+        code: false,
     });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
@@ -345,11 +346,13 @@ pub fn binary_session(
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
     let facts = named::collect(&req.paths, req.budgets).map_err(InspectError::Input)?;
+    // With code, `binary_code_audit` is added: what `evaluate` derives from `request.code`.
     let (audit, required_checks) = policy.scope(&ScopeInput {
         mode: Mode::Static,
         active: false,
         install: false,
         binary: true,
+        code: req.budgets.binary.code.is_some(),
     });
     let relations = container::declares(&facts.binaries);
     let mut budgets = BTreeMap::from([

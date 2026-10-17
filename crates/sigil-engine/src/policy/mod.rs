@@ -31,23 +31,32 @@ pub const SCHEMA: &str = "sigil-policy/1";
 /// The audit scope of a binary inspection, and what a policy without `binary_audit` requires.
 pub const BINARY_SCOPE: &str = "binary";
 
+/// The audit scope a binary inspection with code adds, and what a policy without
+/// `binary_code_audit` requires (PR-5a).
+pub const BINARY_CODE_SCOPE: &str = "binary_code";
+
 const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
 /// What decides the audit scope: the mode, whether an active feature was requested, whether an
-/// installation is inspected (an `install` root), and whether this is a binary inspection.
+/// installation is inspected (an `install` root), whether this is a binary inspection, and
+/// whether its code is analyzed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScopeInput {
     pub mode: Mode,
     pub active: bool,
     pub install: bool,
-    /// A binary inspection (`binary-<n>` roots): only `binary_audit` applies (PR-4b-2a).
+    /// A binary inspection (`binary-<n>` roots): only `binary_audit` applies (PR-4b-2a), and
+    /// `binary_code_audit` with `code`.
     pub binary: bool,
+    /// Code is analyzed (`request.code`; PR-5a): a binary inspection adds `binary_code_audit`.
+    /// It has no effect on an `inspect ollama` run.
+    pub code: bool,
 }
 
 impl ScopeInput {
     /// What a recorded request implies: an active feature if it lists one, an installation if it
     /// has an [`INSTALL_ROOT`](sigil_model::INSTALL_ROOT) root, a binary inspection if it has a
-    /// `binary-<n>` root.
+    /// `binary-<n>` root, and code analysis if it has `code`.
     pub fn of(request: &sigil_model::RunRequest) -> ScopeInput {
         ScopeInput {
             mode: request.mode,
@@ -57,6 +66,7 @@ impl ScopeInput {
                 .iter()
                 .any(|r| r.id.as_str() == sigil_model::INSTALL_ROOT),
             binary: sigil_model::is_binary_inspection(request),
+            code: request.code,
         }
     }
 }
@@ -78,6 +88,9 @@ pub struct Policy {
     /// Scopes of a binary inspection (`sigil binary inspect`); `["binary"]` when the policy file
     /// omits the list. The lists above and `extra_required` apply to `inspect ollama` only.
     pub binary_audit: Vec<AuditScope>,
+    /// Scopes a binary inspection with code adds (`binary inspect --code`; PR-5a);
+    /// `["binary_code"]` when the policy file omits the list.
+    pub binary_code_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.
     pub extra_required: Vec<CheckId>,
     pub open_questions: OqPolicy,
@@ -267,6 +280,11 @@ impl Policy {
             Some(list) => scopes(list)?,
             None => scopes(&[BINARY_SCOPE.to_string()])?,
         };
+        // Omitted: the built-in scope, so a request for code fails closed, as above.
+        let binary_code_audit = match &raw.scope.binary_code_audit {
+            Some(list) => scopes(list)?,
+            None => scopes(&[BINARY_CODE_SCOPE.to_string()])?,
+        };
         let extra_required = raw
             .scope
             .extra_required
@@ -399,6 +417,7 @@ impl Policy {
             active_audit,
             install_audit,
             binary_audit,
+            binary_code_audit,
             extra_required,
             open_questions,
             accept,
@@ -420,11 +439,16 @@ impl Policy {
     /// The audit scope requested for `input`, and the checks it requires (in catalog order, then
     /// `extra_required`, without repeats). The assembler and `evaluate` both compute it, so a
     /// session's required checks are what its own request implies. A binary inspection audits
-    /// `binary_audit` only: an organization's extra checks for an Ollama installation do not
-    /// apply to it (PR-4b-2a spec §4.6).
+    /// `binary_audit` only, then `binary_code_audit` when its code is analyzed: an organization's
+    /// extra checks for an Ollama installation do not apply to it (PR-4b-2a spec §4.6).
     pub fn scope(&self, input: &ScopeInput) -> (Vec<AuditScope>, Vec<CheckId>) {
         if input.binary {
-            return requirements(self.binary_audit.iter(), &[]);
+            let code = if input.code {
+                self.binary_code_audit.as_slice()
+            } else {
+                &[]
+            };
+            return requirements(self.binary_audit.iter().chain(code), &[]);
         }
         let observe = match input.mode {
             Mode::Observe => self.observe_audit.as_slice(),

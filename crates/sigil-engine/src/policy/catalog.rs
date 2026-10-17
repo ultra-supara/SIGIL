@@ -127,6 +127,11 @@ pub const SCOPES: &[ScopeInfo] = &[
         id: "binary",
         checks: &["binary.container"],
     },
+    // PR-5a: the direct call sites of the capability imports (`binary inspect --code`).
+    ScopeInfo {
+        id: "binary_code",
+        checks: &["binary.code"],
+    },
 ];
 
 /// An assumption a finding condition may rest on, if the policy accepts it.

@@ -40,6 +40,11 @@ pub(super) struct RawScope {
     /// under an older policy still requires its check. Only an explicit `[]` requires nothing.
     #[serde(default)]
     pub binary_audit: Option<Vec<String>>,
+    /// Added in PR-5a: the scopes a binary inspection with code adds. A missing list is `None`,
+    /// meaning the built-in `["binary_code"]`, so a request for code under an older policy still
+    /// requires its check. Only an explicit `[]` requires nothing.
+    #[serde(default)]
+    pub binary_code_audit: Option<Vec<String>>,
     #[serde(default)]
     pub extra_required: Vec<String>,
 }

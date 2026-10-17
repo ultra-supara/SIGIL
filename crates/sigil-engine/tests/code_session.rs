@@ -178,6 +178,27 @@ fn gaps_make_binary_code_partial() {
 }
 
 #[test]
+fn a_partial_binary_code_makes_the_session_incomplete() {
+    let s = with_code(&[fixture("cfg.so")]);
+    assert!(s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == BINARY_CODE));
+    assert!(s.request.audit.iter().any(|a| a.as_str() == "binary_code"));
+    assert!(
+        matches!(&s.outcome.completeness, sigil_model::Completeness::Incomplete { missing_required, .. }
+            if missing_required.iter().any(|c| c.as_str() == BINARY_CODE)),
+        "{:?}",
+        s.outcome.completeness
+    );
+    s.validate().unwrap();
+    let s = with_code(&[fixture("suspicious_kernel-gcc-O2.o")]);
+    assert_eq!(s.outcome.completeness, sigil_model::Completeness::Complete);
+    s.validate().unwrap();
+}
+
+#[test]
 fn unsupported_inputs() {
     let text = fixture("README.md");
     let arm =
@@ -348,6 +369,11 @@ fn a_mach_o_input_is_unsupported() {
 fn without_code_there_is_no_binary_code() {
     let s = session_of(&[fixture("net-plt-gcc.so")], NamedBudgets::default());
     assert!(!s.request.code);
+    assert!(!s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == BINARY_CODE));
     assert!(!s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE));
     assert!(!s.request.budgets.contains_key(BINARY_CODE_BYTES));
     assert!(s.code.is_empty());
