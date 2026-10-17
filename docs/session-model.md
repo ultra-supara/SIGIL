@@ -605,9 +605,11 @@ the function's control flow:
 Each aggregate limit below counts per artifact. Reaching one records its gap and stops the
 analysis. What was confirmed is kept, and each reference not yet confirmed is a gap
 (`not confirmed: a limit was reached`). The function being decoded when the decoded-instruction
-limit is reached gets `not decoded: a limit was reached` instead. A limit reached while the image
-is built stops the analysis before the search, so no reference has a gap then. That is the GOT
-slots, the relocations, the FDEs, the references (by text relocations), or `binary_code_bytes`.
+limit is reached gets `not decoded: a limit was reached` instead, and the one being solved when
+the value-step limit is reached gets `not solved: a limit was reached`. A limit reached while the
+image is built stops the analysis before the search, so no reference has a gap then. That is the
+GOT slots, the relocations, the FDEs, the references (by text relocations), or
+`binary_code_bytes`.
 
 | Limit | Default | Counts | Gap |
 |---|---|---|---|
@@ -616,6 +618,7 @@ slots, the relocations, the FDEs, the references (by text relocations), or `bina
 | GOT slots | 1,048,576 | `JUMP_SLOT` and `GLOB_DAT` slots collected | `code: GOT-slot limit 1048576 reached` |
 | relocations | 1,048,576 | a relocatable object's relocations, on code and on `.eh_frame` | `code: relocation limit 1048576 reached` |
 | decoded instructions | 4,000,000 | instructions of all functions together | `code: decoded-instruction limit 4000000 reached` |
+| value steps | 67,108,864 (2^26) | register-value steps of all functions together: one instruction's transfer, in every pass of each function's fixpoint and in the pass that keeps its calls' values | `code: value-step limit 67108864 reached` |
 | call sites | 65,536 | recorded call sites, the `ReturnOf` closure included | `code: call-site limit 65536 reached` |
 | name bytes | 16 MiB | bytes of names copied into recorded call sites | `code: name-byte limit 16777216 reached` |
 

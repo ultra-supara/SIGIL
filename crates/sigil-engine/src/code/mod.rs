@@ -52,6 +52,11 @@ pub struct CodeBudgets {
     /// the run stops, and the relocations not read are absent from the image.
     pub relocations: usize,
     pub instructions: u64,
+    /// Register-value steps (one instruction's transfer, `value::Machine::step`) of all functions
+    /// together: every pass of each function's fixpoint, and the pass that keeps the values its
+    /// calls need. Charged before each step: past it the run stops, and the function being solved
+    /// fails.
+    pub value_steps: u64,
     pub call_sites: usize,
     /// The bytes of symbol names copied into the recorded facts (review I2). A function's call
     /// targets' names count with the call-site limit: past it the run stops, and the function
@@ -69,6 +74,9 @@ impl Default for CodeBudgets {
             slots: 1 << 20,
             relocations: 1 << 20,
             instructions: 4_000_000,
+            // 16 times the most real files needed (2,165,594 steps, cuda_v12/libggml-cuda.so, in
+            // Task 15's survey), rounded up to a power of two.
+            value_steps: 1 << 26,
             call_sites: 65_536,
             name_bytes: 16 << 20,
             gaps: 256,
@@ -98,6 +106,8 @@ pub(crate) struct Run {
     stopped: bool,
     /// Instructions decoded so far, over all functions.
     pub instructions: u64,
+    /// Register-value steps so far, over all functions (`CodeBudgets::value_steps`).
+    pub value_steps: u64,
 }
 
 impl Run {
@@ -108,6 +118,7 @@ impl Run {
             more: 0,
             stopped: false,
             instructions: 0,
+            value_steps: 0,
         }
     }
 
@@ -379,6 +390,7 @@ mod tests {
                 b.references,
                 b.fdes,
                 b.instructions,
+                b.value_steps,
                 b.call_sites,
                 b.gaps,
                 b.slots,
@@ -390,6 +402,7 @@ mod tests {
                 65_536,
                 1 << 20,
                 4_000_000,
+                1 << 26,
                 65_536,
                 256,
                 1 << 20,

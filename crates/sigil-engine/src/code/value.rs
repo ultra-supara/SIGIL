@@ -18,7 +18,7 @@ use sigil_model::ImportVia;
 
 use super::decode::{Block, Cfg, Failure, Insn};
 use super::image::{Callee, Image, Kind, Meaning, Name, Use};
-use super::VALUE_PASSES;
+use super::{Run, VALUE_PASSES};
 
 /// Why a value is unknown (`ValueUnknown`, with an order for sets).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -938,9 +938,10 @@ impl<'c> Graph<'c> {
 }
 
 /// Propagates values to a fixpoint (each block at most [`VALUE_PASSES`] times), then keeps what
-/// each kept instruction needs ([`Kept`]), sorted by address. `Err(Failure::Unsettled)`: the
-/// values did not settle, and the function fails.
-pub(crate) fn solve(cfg: &Cfg, img: &Image) -> Result<Values, Failure> {
+/// each kept instruction needs ([`Kept`]), sorted by address. Every step is charged to `run`
+/// ([`charge`]). The function fails with `Failure::Unsettled` when the values did not settle, and
+/// with `Failure::ArtifactValueSteps` at the value-step limit, which stops the run.
+pub(crate) fn solve(cfg: &Cfg, img: &Image, run: &mut Run) -> Result<Values, Failure> {
     let count = cfg
         .blocks
         .iter()
@@ -951,7 +952,7 @@ pub(crate) fn solve(cfg: &Cfg, img: &Image) -> Result<Values, Failure> {
         })
         .sum();
     let mut kept = Vec::with_capacity(count);
-    propagate(cfg, img, VALUE_PASSES, |at, insn, s| {
+    propagate(cfg, img, VALUE_PASSES, run, |at, insn, s| {
         kept.push((at, Kept::of(insn, s)))
     })?;
     // A chain may run backwards (a `jmp` to an earlier block), so the visits are not in order.
@@ -959,12 +960,25 @@ pub(crate) fn solve(cfg: &Cfg, img: &Image) -> Result<Values, Failure> {
     Ok(Values { kept })
 }
 
+/// Charges one [`Machine::step`] to the artifact's value-step budget, before it is made (review
+/// of Task 15: 256 passes over up to 200,000 instructions per function need an aggregate bound,
+/// as decoding has). At `budgets.value_steps` the run stops, and the function fails.
+fn charge(run: &mut Run) -> Result<(), Failure> {
+    if run.value_steps >= run.budgets.value_steps {
+        run.limit("value-step", run.budgets.value_steps);
+        return Err(Failure::ArtifactValueSteps);
+    }
+    run.value_steps += 1;
+    Ok(())
+}
+
 /// The fixpoint, each chain processed at most `passes` times; then `visit` is called with the
-/// state before each kept instruction ([`kept`]).
+/// state before each kept instruction ([`kept`]). Every step, of both, is charged to `run`.
 fn propagate(
     cfg: &Cfg,
     img: &Image,
     passes: u32,
+    run: &mut Run,
     mut visit: impl FnMut(u64, &Insn, &State),
 ) -> Result<(), Failure> {
     let Some(g) = Graph::of(cfg) else {
@@ -991,6 +1005,7 @@ fn propagate(
         for b in g.chain(h) {
             last = b;
             for (_, insn) in g.insns(b).into_iter().flat_map(|(_, i)| i) {
+                charge(run)?;
                 m.step(&mut s, insn);
             }
         }
@@ -1016,6 +1031,7 @@ fn propagate(
                 if kept(at, insn, blk) {
                     visit(at, insn, &s);
                 }
+                charge(run)?;
                 m.step(&mut s, insn);
             }
         }
@@ -1092,6 +1108,11 @@ mod tests {
         (bytes, at)
     }
 
+    /// A run with the default budgets.
+    fn fresh() -> Run {
+        Run::new(CodeBudgets::default())
+    }
+
     fn cfg_of(bytes: &[u8], img: &Image) -> Cfg {
         let mut run = Run::new(CodeBudgets::default());
         let end = 0x1000 + bytes.len() as u64;
@@ -1110,7 +1131,7 @@ mod tests {
     /// The whole state before each kept instruction (the tests look at every register).
     fn states(cfg: &Cfg, img: &Image) -> BTreeMap<u64, State> {
         let mut out = BTreeMap::new();
-        propagate(cfg, img, VALUE_PASSES, |at, _, s| {
+        propagate(cfg, img, VALUE_PASSES, &mut fresh(), |at, _, s| {
             out.insert(at, s.clone());
         })
         .unwrap();
@@ -1555,12 +1576,12 @@ mod tests {
         ]);
         let img = Image::empty(Kind::Shared);
         let cfg = cfg_of(&bytes, &img);
-        let v = solve(&cfg, &img).unwrap();
+        let v = solve(&cfg, &img, &mut fresh()).unwrap();
         assert_eq!(v.at(at[3]).unwrap().args[0], Val::Unknown(Why::FromMemory));
         // The loop's block is processed 6 times: with 5 passes the values do not settle.
-        assert!(propagate(&cfg, &img, 6, |_, _, _| {}).is_ok());
+        assert!(propagate(&cfg, &img, 6, &mut fresh(), |_, _, _| {}).is_ok());
         assert_eq!(
-            propagate(&cfg, &img, 5, |_, _, _| {}).err(),
+            propagate(&cfg, &img, 5, &mut fresh(), |_, _, _| {}).err(),
             Some(Failure::Unsettled)
         );
         assert_eq!(
@@ -1682,7 +1703,7 @@ mod tests {
         let img = Image::empty(Kind::Shared);
         let cfg = cfg_of(&bytes, &img);
         assert_eq!(cfg.blocks.len(), calls + 1);
-        let v = solve(&cfg, &img).unwrap();
+        let v = solve(&cfg, &img, &mut fresh()).unwrap();
         assert_eq!(v.kept.len(), calls);
         assert!(v.kept.windows(2).all(|w| w[0].0 < w[1].0));
         let last = 0x1000 + 5 * (calls as u64 - 1);
@@ -1705,6 +1726,7 @@ mod tests {
         let v = solve(
             &cfg_of(&bytes, &Image::empty(Kind::Shared)),
             &Image::empty(Kind::Shared),
+            &mut fresh(),
         )
         .unwrap();
         assert_eq!(
@@ -1756,7 +1778,7 @@ mod tests {
         let (bytes, at) = code(&[&[0xeb, 0x06], &CALL0, &RET, &CALL0, &[0xeb, 0xf3]]);
         assert_eq!((at[1], at[3]), (0x1002, 0x1008));
         let img = Image::empty(Kind::Shared);
-        let v = solve(&cfg_of(&bytes, &img), &img).unwrap();
+        let v = solve(&cfg_of(&bytes, &img), &img, &mut fresh()).unwrap();
         assert_eq!(
             v.kept.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
             [0x1002, 0x1008]
@@ -1845,15 +1867,63 @@ mod tests {
         let cfg = cfg_of(&needs_48_passes(), &img);
         assert_eq!(cfg.insns.len(), 38);
         assert_eq!(
-            propagate(&cfg, &img, 47, |_, _, _| {}).err(),
+            propagate(&cfg, &img, 47, &mut fresh(), |_, _, _| {}).err(),
             Some(Failure::Unsettled)
         );
-        assert!(propagate(&cfg, &img, 48, |_, _, _| {}).is_ok());
+        assert!(propagate(&cfg, &img, 48, &mut fresh(), |_, _, _| {}).is_ok());
         // More than the 32 passes PR-5a began with, within VALUE_PASSES.
-        let v = solve(&cfg, &img).unwrap();
+        let v = solve(&cfg, &img, &mut fresh()).unwrap();
         let call = *cfg.insns.keys().next_back().unwrap() - 5;
         // rax is at the chain's end: r15's unknown value reached it.
         let at = v.at(call).unwrap();
         assert_eq!(at.args[0], Val::Unknown(Why::MergedDisagreeing), "rdi");
+    }
+
+    #[test]
+    fn value_step_limit_counts_every_step_of_every_function() {
+        // call; ret: one chain of two instructions, settled in one pass, then recorded: 4 steps.
+        let (bytes, _) = code(&[&CALL0, &RET]);
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&bytes, &img);
+        let at = |value_steps| {
+            Run::new(CodeBudgets {
+                value_steps,
+                ..CodeBudgets::default()
+            })
+        };
+        let mut run = Run::new(CodeBudgets::default());
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        assert_eq!(
+            run.value_steps, 4,
+            "the fixpoint's and the recording pass's"
+        );
+        let mut run = at(4);
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        assert!(!run.stopped());
+        // Charged before each step: the 4th is refused, in the recording pass.
+        let mut run = at(3);
+        assert_eq!(
+            solve(&cfg, &img, &mut run).err(),
+            Some(Failure::ArtifactValueSteps)
+        );
+        assert!(run.stopped());
+        assert_eq!(run.into_gaps(), ["code: value-step limit 3 reached"]);
+        // Every function's steps count against the artifact's one budget.
+        let mut run = at(7);
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        assert_eq!(
+            solve(&cfg, &img, &mut run).err(),
+            Some(Failure::ArtifactValueSteps)
+        );
+        assert_eq!(
+            Failure::ArtifactValueSteps.reason(0x1000),
+            "not solved: a limit was reached"
+        );
+        // A function that needs many passes is charged for each: 48 passes of the nested loops.
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&needs_48_passes(), &img);
+        let mut run = Run::new(CodeBudgets::default());
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        assert!(run.value_steps > 48 * 6, "{}", run.value_steps);
     }
 }

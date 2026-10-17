@@ -80,6 +80,9 @@ pub(crate) enum Failure {
     /// Its register values did not reach a fixpoint within `VALUE_PASSES` per block (spec §4.7;
     /// `value::solve`).
     Unsettled,
+    /// The artifact's value-step limit was reached while its values were solved
+    /// (`CodeBudgets::value_steps`).
+    ArtifactValueSteps,
 }
 
 impl Failure {
@@ -98,6 +101,7 @@ impl Failure {
                 format!("function at {entry:#x}: instruction at {a:#x} not modeled")
             }
             Failure::Unsettled => format!("function at {entry:#x}: values did not settle"),
+            Failure::ArtifactValueSteps => "not solved: a limit was reached".to_string(),
         }
     }
 }

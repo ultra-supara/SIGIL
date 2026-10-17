@@ -435,7 +435,7 @@ pub(crate) fn confirm(
         let bt = |insn: &Insn| record::branch_target(insn, img);
         let nr = |insn: &Insn| record::noreturn(insn, img, sig);
         let solved = decode::decode(&bytes, start, end, img, &bt, &nr, run)
-            .and_then(|cfg| value::solve(&cfg, img).map(|values| (cfg, values)));
+            .and_then(|cfg| value::solve(&cfg, img, run).map(|values| (cfg, values)));
         drop(bytes);
         let (cfg, values) = match solved {
             Ok(s) => s,

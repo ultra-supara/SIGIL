@@ -1485,7 +1485,7 @@ mod tests {
             run,
         )
         .unwrap();
-        let values = solve(&cfg, img).unwrap();
+        let values = solve(&cfg, img, run).unwrap();
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(file).unwrap();
         let mut reader = Reader::new(f.as_file(), file.len() as u64, 1 << 20);

@@ -709,6 +709,38 @@ fn byte_budget_is_a_gap() {
     assert!(budget.used <= 64);
 }
 
+/// The value-step limit: the function being solved fails (`not solved`), the run stops, and every
+/// reference not yet confirmed is a gap. No call site is recorded past it.
+#[test]
+fn value_step_limit_stops_the_analysis() {
+    let (calls, functions, gaps) = outcome_with(
+        "net-plt-gcc.so",
+        CodeBudgets {
+            value_steps: 1,
+            ..CodeBudgets::default()
+        },
+    );
+    assert!(calls.is_empty() && functions.is_empty());
+    assert!(
+        gaps.contains(&"code: value-step limit 1 reached".to_string()),
+        "{gaps:#?}"
+    );
+    assert!(
+        gaps.iter()
+            .any(|g| g.ends_with(": not solved: a limit was reached")),
+        "{gaps:#?}"
+    );
+    assert!(
+        gaps.iter().all(|g| g == "code: value-step limit 1 reached"
+            || g.ends_with(": not solved: a limit was reached")
+            || g.ends_with(": not confirmed: a limit was reached")),
+        "{gaps:#?}"
+    );
+    // With the default budget, the same file records its calls.
+    let (calls, _, _) = outcome("net-plt-gcc.so");
+    assert!(!calls.is_empty());
+}
+
 /// A limit reached while the image is built ends the analysis there: nothing is searched, so no
 /// reference adds a gap of its own (an FDE limit in a linked file, the relocation limit in an
 /// object, both with references to connect past them).
