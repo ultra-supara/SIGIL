@@ -709,6 +709,33 @@ fn byte_budget_is_a_gap() {
     assert!(budget.used <= 64);
 }
 
+/// A limit reached while the image is built ends the analysis there: nothing is searched, so no
+/// reference adds a gap of its own (an FDE limit in a linked file, the relocation limit in an
+/// object, both with references to connect past them).
+#[test]
+fn a_limit_reached_while_the_image_is_built_searches_nothing() {
+    let fdes = CodeBudgets {
+        fdes: 1,
+        ..CodeBudgets::default()
+    };
+    let relocations = CodeBudgets {
+        relocations: 2,
+        ..CodeBudgets::default()
+    };
+    for (f, budgets, gap) in [
+        ("net-plt-gcc.so", fdes, "code: FDE limit 1 reached"),
+        (
+            "calls-noplt-gcc-O0.o",
+            relocations,
+            "code: relocation limit 2 reached",
+        ),
+    ] {
+        let (calls, functions, gaps) = outcome_with(f, budgets);
+        assert!(calls.is_empty() && functions.is_empty(), "{f}");
+        assert_eq!(gaps, [gap], "{f}");
+    }
+}
+
 #[test]
 fn non_x86_64_is_unsupported() {
     let path =
