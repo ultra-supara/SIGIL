@@ -1780,18 +1780,23 @@ mod tests {
     const GLOBAL_OBJECT: u8 = 0x11;
     const HIDDEN: u8 = 2;
 
-    /// Parses `bytes` and fills `rec`'s names from its symbol tables, as an image of `kind`.
-    fn fill(bytes: &[u8], kind: Kind, rec: &mut Recorder) {
+    /// Parses `bytes` and fills `rec`'s names from its symbol tables, as an image of `kind`;
+    /// `agree`: whether `.dynsym` is the table the loader binds through, as the parse found it
+    /// (`None`) or as given.
+    fn fill(bytes: &[u8], kind: Kind, agree: Option<bool>, rec: &mut Recorder) {
         use crate::binary::read::{Bounded, Budgeted};
         use crate::binary::{elf as binelf, BinaryBudgets};
         use object::elf::FileHeader64;
         let file = crate::code::synth::file(bytes);
         let size = bytes.len() as u64;
         let data = Bounded::new(Budgeted::new(&file, size), size, 64 << 20);
-        let p =
+        let mut p =
             binelf::parts::<_, FileHeader64<Endianness>>(&data, BinaryBudgets::default()).unwrap();
         if kind != Kind::Relocatable {
             assert!(p.sections.dynamic_symbols_agree, "{:?}", p.elf.gaps);
+        }
+        if let Some(agree) = agree {
+            p.sections.dynamic_symbols_agree = agree;
         }
         rec.fill_names(&p.elf, &p.sections, &Image::empty(kind));
         assert!(!data.refused());
@@ -1850,7 +1855,13 @@ mod tests {
         // Past the 4096 bytes object reads: read on as the image reads names.
         let long = vec![b'n'; 5000];
         let (dynstr, d) = strtab(&[
-            b"connect", b"helper", b"alias_b", b"hidden", b"caller", b"obj", b"ifunc",
+            b"connect",
+            b"helper",
+            b"alias_b",
+            b"a_hidden",
+            b"caller",
+            b"obj",
+            b"ifunc",
         ]);
         let dynsym = [
             [0u8; 24],
@@ -1890,8 +1901,9 @@ mod tests {
         .sec(".dynstr", SHT_STRTAB, 0x1400, 0x1400, dynstr.len() as u64)
         .sec_linked(".symtab", SHT_SYMTAB, 0x2000, 0, symtab.len() as u64, 4, 24)
         .sec(".strtab", SHT_STRTAB, 0x2400, 0, strs.len() as u64);
+        let bytes = img.build();
         let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
-        fill(&img.build(), Kind::Shared, &mut rec);
+        fill(&bytes, Kind::Shared, None, &mut rec);
         assert_eq!(
             names_of(&rec),
             [(
@@ -1912,6 +1924,20 @@ mod tests {
                 (0x1000, Some(text(b"caller"))),
             ]
         );
+        // A .dynsym the loader does not bind through is not read, as the image does not.
+        let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
+        fill(&bytes, Kind::Shared, Some(false), &mut rec);
+        assert_eq!(
+            names_of(&rec),
+            [(
+                0x1000,
+                vec![text(b"caller"), text(b"local_caller"), text(&long)]
+            )]
+        );
+        assert_eq!(
+            exports_of(&rec),
+            [(0x1800, None), (0x1900, None), (0x1000, None)]
+        );
     }
 
     #[test]
@@ -1921,7 +1947,7 @@ mod tests {
             b"f",
             b"g",
             b"g_local",
-            b"g_hidden",
+            b"_g_hidden",
             b"abs",
             b"in_bss",
             b"raw_value",
@@ -1947,14 +1973,14 @@ mod tests {
             .sec(".strtab", SHT_STRTAB, 0x1600, 0, strs.len() as u64)
             .sec(".bss", SHT_NOBITS, 0x1100, 0, 0x10);
         let mut rec = recorded(&[0x1010, 0x1100], &[0x1100, 0x2100]);
-        fill(&img.build(), Kind::Relocatable, &mut rec);
+        fill(&img.build(), Kind::Relocatable, None, &mut rec);
         assert_eq!(
             names_of(&rec),
             [
                 (0x1010, vec![text(b"f")]),
                 (
                     0x1100,
-                    vec![text(b"g"), text(b"g_hidden"), text(b"g_local")]
+                    vec![text(b"_g_hidden"), text(b"g"), text(b"g_local")]
                 ),
             ]
         );
