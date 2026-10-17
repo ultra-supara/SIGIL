@@ -653,6 +653,42 @@ mod tests {
     }
 
     #[test]
+    fn an_8_byte_absolute_value_above_4_gib_is_a_candidate_in_an_executable() {
+        // connect's stub at 0x1_0000_2000 on its slot 0x1_0000_3000: an address no 4-byte field
+        // holds. 1000: movabs rdi, 0x1_0000_2000 (48 bf + imm64); 100a: ret.
+        let (stub, slot) = (0x1_0000_2000_u64, 0x1_0000_3000_u64);
+        let mut code = vec![0x48, 0xbf];
+        code.extend(stub.to_le_bytes());
+        code.push(0xc3);
+        for kind in [Kind::Executable, Kind::Shared] {
+            let (mut img, f) = image(&code, kind);
+            img.slots = [(
+                slot,
+                Sym {
+                    name: name("connect"),
+                    defined: None,
+                },
+            )]
+            .into();
+            img.stubs = [(stub, (slot, ImportVia::Plt))].into();
+            img.plt = vec![(stub, stub + 0x10)];
+            let (rec, gaps) = run_on(&img, &f);
+            assert!(rec.call_sites.is_empty());
+            if kind == Kind::Executable {
+                assert_eq!(refs_of(&img, &f), [0x1002]);
+                assert_eq!(
+                    gaps,
+                    ["code: connect: address taken at 0x1002, not traced to a call"]
+                );
+            } else {
+                // A shared object's absolute value is no address (the load base is added).
+                assert_eq!(refs_of(&img, &f), Vec::<u64>::new());
+                assert_eq!(gaps, Vec::<String>::new());
+            }
+        }
+    }
+
+    #[test]
     fn a_call_is_confirmed_and_recorded() {
         // 1000: call 0x2000; 1005: ret.
         let mut code = vec![0xe8];
