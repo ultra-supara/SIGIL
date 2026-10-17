@@ -95,7 +95,8 @@ impl Image {
 
 /// The image of a relocatable object (spec §4.2), or `None` without section headers or `.symtab`:
 /// its regions ([`regions`]), targets, relocations on code ([`relocations`]) and their symbols
-/// ([`symbols`]), and the FDEs of `.eh_frame`, relocated ([`eh_frame`]).
+/// ([`symbols`]), and the FDEs of `.eh_frame`, relocated ([`eh_frame`]). With no target, an
+/// empty image: nothing past the symbols is read.
 pub(crate) fn relocatable<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'d, R, H>,
     sections: &Sections<'d, R, H>,
@@ -112,9 +113,13 @@ pub(crate) fn relocatable<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness
         return None;
     };
     let mut img = Image::empty(Kind::Relocatable);
-    regions(&mut img, table, e.endian, run);
     let mut names = Names::default();
     img.targets = target_names(e, table, symtab, sig, &mut names, run);
+    // No target: nothing to search (spec §4.4), so nothing else is read.
+    if img.targets.is_empty() {
+        return Some(img);
+    }
+    regions(&mut img, table, e.endian, run);
     let targets = target_indices(e.endian, symtab, &names, &img.targets);
     // clang types it `SHT_X86_64_UNWIND`, gcc `SHT_PROGBITS`: found by name.
     let eh = e
@@ -971,6 +976,14 @@ mod tests {
             ("gotrel.o", true),
         ] {
             with_image(f, CodeBudgets::default(), |img, run, _| {
+                assert_eq!(img.targets.contains(b"connect".as_slice()), target, "{f}");
+                assert!(run.clone_gaps().is_empty(), "{f}: {:?}", run.clone_gaps());
+                if !target {
+                    // Nothing to search (spec §4.4): nothing past the symbols is read.
+                    assert!(img.fdes.is_empty() && img.code.is_empty(), "{f}");
+                    assert!(img.relocs.is_empty() && img.rel_syms.is_empty(), "{f}");
+                    return;
+                }
                 // clang's `.eh_frame` is `SHT_X86_64_UNWIND`: found by name all the same.
                 assert!(!img.fdes.is_empty(), "{f}");
                 assert!(
@@ -1092,12 +1105,12 @@ mod tests {
     }
 
     /// A relocatable object: `.text` (section 1: 16 `nop`s at 0x1000), `.eh_frame` (2: 64 zero
-    /// bytes at 0x1100), `.symtab` (3: the null symbol and `.text`'s section symbol) and
-    /// `.strtab` (4), then `count` `.rela.eh_frame` sections (from 5) that all name one table of
-    /// `entries` `PC32` relocations against `.text`, at 0x2000.
+    /// bytes at 0x1100), `.symtab` (3: the null symbol, `.text`'s section symbol, and `connect`
+    /// undefined, a target) and `.strtab` (4), then `count` `.rela.eh_frame` sections (from 5)
+    /// that all name one table of `entries` `PC32` relocations against `.text`, at 0x2000.
     fn object(count: usize, entries: usize) -> Vec<u8> {
         use synth::*;
-        let symtab = [[0u8; 24], sym64(0, 3, 1, 0, 0)].concat();
+        let symtab = [[0u8; 24], sym64(0, 3, 1, 0, 0), sym64(1, 0x10, 0, 0, 0)].concat();
         let info = (1u64 << 32) | u64::from(rtype::PC32);
         let rela: Vec<u8> = (0..entries)
             .flat_map(|_| [8u64.to_le_bytes(), info.to_le_bytes(), [0; 8]].concat())
@@ -1106,12 +1119,12 @@ mod tests {
         img.put(0x1000, &[0x90; 16])
             .put(0x1100, &[0; 64])
             .put(0x1200, &symtab)
-            .put(0x1300, &[0])
+            .put(0x1300, b"\0connect\0")
             .put(0x2000, &rela);
         img.sec(".text", SHT_PROGBITS, 0x1000, 0, 16)
             .sec(".eh_frame", SHT_PROGBITS, 0x1100, 0, 64)
-            .sec_linked(".symtab", SHT_SYMTAB, 0x1200, 0, 48, 4, 24)
-            .sec(".strtab", SHT_STRTAB, 0x1300, 0, 1);
+            .sec_linked(".symtab", SHT_SYMTAB, 0x1200, 0, 72, 4, 24)
+            .sec(".strtab", SHT_STRTAB, 0x1300, 0, 9);
         for _ in 0..count {
             img.sec_linked(".rela.eh_frame", 4, 0x2000, 0, rela.len() as u64, 3, 24);
         }

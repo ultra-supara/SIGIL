@@ -25,14 +25,18 @@ fn slice_at(path: &Path, budgets: BinaryBudgets) -> ParsedSlice {
 
 /// The first slice of the file at `path`, if `parse_artifact` recognizes it.
 fn try_slice_at(path: &Path, budgets: BinaryBudgets) -> Option<ParsedSlice> {
+    try_slices_at(path, budgets).and_then(|s| s.into_iter().next())
+}
+
+/// Every slice of the file at `path`, if `parse_artifact` recognizes it.
+fn try_slices_at(path: &Path, budgets: BinaryBudgets) -> Option<Vec<ParsedSlice>> {
     let file = File::open(path).unwrap();
     let size = file.metadata().unwrap().len();
     let mut prefix = vec![0u8; 64];
     let n = file.read_at(&mut prefix, 0).unwrap();
     prefix.truncate(n);
     let digest = Sha256Hex::new("0".repeat(64)).unwrap();
-    let mut parsed = parse_artifact(&file, size, &digest, &prefix, budgets)?;
-    (!parsed.slices.is_empty()).then(|| parsed.slices.remove(0))
+    parse_artifact(&file, size, &digest, &prefix, budgets).map(|p| p.slices)
 }
 
 fn with_code(code: CodeBudgets) -> BinaryBudgets {
@@ -717,9 +721,75 @@ fn non_x86_64_is_unsupported() {
 fn a_mach_o_slice_is_unsupported_when_code_is_asked_for() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/macho/hello-universal");
-    let slice = slice_at(&path, with_code(CodeBudgets::default()));
-    assert_eq!(slice.code, Some(CodeOutcome::Unsupported));
-    assert_eq!(slice_at(&path, BinaryBudgets::default()).code, None);
+    let slices = try_slices_at(&path, with_code(CodeBudgets::default())).unwrap();
+    assert_eq!(slices.len(), 2);
+    for slice in slices {
+        assert_eq!(
+            slice.code,
+            Some(CodeOutcome::Unsupported),
+            "{}",
+            slice.offset
+        );
+    }
+    for slice in try_slices_at(&path, BinaryBudgets::default()).unwrap() {
+        assert_eq!(slice.code, None);
+    }
+}
+
+#[test]
+fn a_file_without_a_target_has_nothing_to_search() {
+    // Spec §4.4: Complete, with zero bytes scanned. No image is built: no `.eh_frame`, no PLT,
+    // and none of their gaps.
+    for path in [
+        fixture("clean_kernel-clang-O0.o"),
+        fixture("clean_kernel-gcc-O2.o"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/exe-nopie"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libsym64.so"),
+    ] {
+        assert_eq!(
+            slice_at(&path, with_code(CodeBudgets::default())).code,
+            Some(CodeOutcome::Analyzed {
+                functions: vec![],
+                call_sites: vec![],
+                gaps: vec![],
+                budget: BudgetUse {
+                    budget: "binary_code_bytes".to_string(),
+                    used: 0,
+                    limit: CodeBudgets::default().bytes,
+                },
+            }),
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn a_relocation_type_not_modeled_against_a_target_is_named() {
+    // suspicious_kernel-gcc-O2.o's one `.rela.text` entry (PLT32 connect at .text+0xe, the call's
+    // rel32 at 0x4e) patched to R_X86_64_PC8 (15) at .text+0xf, inside the rel32: §4.4's gap
+    // names the type, whatever the field.
+    use object::{Object, ObjectSection};
+    let mut bytes = std::fs::read(fixture("suspicious_kernel-gcc-O2.o")).unwrap();
+    let (at, size) = object::File::parse(&*bytes)
+        .unwrap()
+        .section_by_name(".rela.text")
+        .unwrap()
+        .file_range()
+        .unwrap();
+    assert_eq!(size, 24, "one entry");
+    let at = at as usize;
+    let r_offset = u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    assert_eq!(r_offset, 0xe);
+    assert_eq!(bytes[at + 8..at + 12], 4u32.to_le_bytes(), "PLT32");
+    bytes[at..at + 8].copy_from_slice(&(r_offset + 1).to_le_bytes());
+    bytes[at + 8..at + 12].copy_from_slice(&15u32.to_le_bytes());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pc8.o");
+    std::fs::write(&path, bytes).unwrap();
+    let (calls, _, gaps) = outcome_at(&path, CodeBudgets::default());
+    assert!(calls.is_empty(), "{calls:#?}");
+    assert_eq!(gaps, ["code: connect: relocation type 15 at 0x4f"]);
 }
 
 #[test]
@@ -898,23 +968,28 @@ fn binaries(dir: &str) -> Vec<PathBuf> {
 
 #[test]
 fn a_code_request_never_changes_the_container() {
-    // R-h: every fixture's container facts and gaps (and the rest of the slice) are the same
-    // with and without a code request.
+    // R-h: every slice of every fixture has the same container facts and gaps (and the rest of
+    // the slice) with and without a code request.
     let mut seen = 0;
     for path in binaries("tests/fixtures/code")
         .into_iter()
         .chain(binaries("tests/fixtures/elf"))
         .chain(binaries("tests/fixtures/macho"))
     {
-        let Some(without) = try_slice_at(&path, BinaryBudgets::default()) else {
+        let Some(without) = try_slices_at(&path, BinaryBudgets::default()) else {
             continue;
         };
-        let mut with = slice_at(&path, with_code(CodeBudgets::default()));
-        assert!(with.code.is_some(), "{}", path.display());
-        assert!(without.code.is_none());
-        with.code = None;
-        assert_eq!(with, without, "{}", path.display());
-        seen += 1;
+        let with = try_slices_at(&path, with_code(CodeBudgets::default())).unwrap();
+        assert_eq!(with.len(), without.len(), "{}", path.display());
+        assert!(!with.is_empty(), "{}", path.display());
+        for (mut w, wo) in with.into_iter().zip(without) {
+            assert!(w.code.is_some(), "{}", path.display());
+            assert!(wo.code.is_none());
+            w.code = None;
+            assert_eq!(w, wo, "{} at {}", path.display(), wo.offset);
+            seen += 1;
+        }
     }
-    assert!(seen >= 36, "{seen} fixtures");
+    // 28 code fixtures, 7 ELF fixtures, and hello-universal's two slices.
+    assert!(seen >= 37, "{seen} slices");
 }

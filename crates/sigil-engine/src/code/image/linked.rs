@@ -144,7 +144,8 @@ fn meets(regions: &[Region], start: u64, end: u64) -> bool {
     start < end && regions.get(i).is_some_and(|r| r.start < end)
 }
 
-/// The image of an executable or shared object, or `None` when it has no section headers.
+/// The image of an executable or shared object, or `None` when it has no section headers. A file
+/// with no target gets an empty image, and nothing past its symbols is read.
 pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'d, R, H>,
     sections: &Sections<'d, R, H>,
@@ -164,22 +165,6 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         Kind::Shared
     };
     let mut img = Image::empty(kind);
-    let overlaps = overlapped_pages(&e.loads);
-    for (start, _) in &overlaps {
-        run.gap(format!("code: PT_LOAD segments overlap at {start:#x}"));
-    }
-    img.code = regions(&e.loads, |l| l.executable, &overlaps);
-    img.strings = regions(&e.loads, |l| !l.writable && !l.executable, &overlaps);
-    for s in table.iter() {
-        if s.sh_flags(endian).0 & elf::SHF_EXECINSTR.0 != 0 && s.sh_type(endian) != elf::SHT_NOBITS
-        {
-            let start: u64 = s.sh_addr(endian).into();
-            let size: u64 = s.sh_size(endian).into();
-            if let Some(end) = start.checked_add(size) {
-                img.sections.push((start, end));
-            }
-        }
-    }
     // The loader binds imports through PT_DYNAMIC (DT_SYMTAB, DT_STRTAB, the relocations), never
     // through section headers. Without the very table it reads, the imports cannot be listed, and
     // "no target" would be a false Complete (plan review P1-1): a gap instead, and no search.
@@ -198,6 +183,27 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let mut names = Names::default();
     if let Some(symbols) = symbols {
         img.targets = target_names(e, table, symbols, sig, &mut names, run);
+    }
+    // No target: nothing to search (spec §4.4), so nothing else is read. A text relocation
+    // against a target, or DT_REL's, would need one.
+    if img.targets.is_empty() {
+        return Some(img);
+    }
+    let overlaps = overlapped_pages(&e.loads);
+    for (start, _) in &overlaps {
+        run.gap(format!("code: PT_LOAD segments overlap at {start:#x}"));
+    }
+    img.code = regions(&e.loads, |l| l.executable, &overlaps);
+    img.strings = regions(&e.loads, |l| !l.writable && !l.executable, &overlaps);
+    for s in table.iter() {
+        if s.sh_flags(endian).0 & elf::SHF_EXECINSTR.0 != 0 && s.sh_type(endian) != elf::SHT_NOBITS
+        {
+            let start: u64 = s.sh_addr(endian).into();
+            let size: u64 = s.sh_size(endian).into();
+            if let Some(end) = start.checked_add(size) {
+                img.sections.push((start, end));
+            }
+        }
     }
     // musl applies DT_REL on x86-64 (glibc does not); SIGIL does not read it.
     if dynamic.rel.is_some() {
@@ -914,7 +920,7 @@ mod tests {
             .map(|i| (SLOTS + 8 * i, rtype::JUMP_SLOT, 1))
             .collect();
         let bytes = dso(&Dso {
-            names: &[&name],
+            names: &[&name, b"connect"],
             relas: &relas,
             ..Dso::default()
         });
@@ -980,6 +986,7 @@ mod tests {
     #[test]
     fn dt_rel_is_a_gap() {
         let bytes = dso(&Dso {
+            names: &[b"connect"],
             dynamic: &[
                 (synth::DT_REL, 0x2000),
                 (synth::DT_RELSZ, 16),
@@ -1002,6 +1009,7 @@ mod tests {
         // a word in the data, not code.
         let relr = [TEXT + 8, 0b101, 0x2000];
         let bytes = dso(&Dso {
+            names: &[b"connect"],
             relr: &relr,
             text: &text,
             ..Dso::default()
@@ -1023,6 +1031,7 @@ mod tests {
         });
         // A bitmap before any address: glibc writes from address 0, musl from nowhere known.
         let bytes = dso(&Dso {
+            names: &[b"connect"],
             relr: &[0b11],
             text: &text,
             ..Dso::default()
@@ -1053,6 +1062,7 @@ mod tests {
     #[test]
     fn an_eh_frame_in_a_shared_page_is_not_read() {
         let bytes = dso(&Dso {
+            names: &[b"connect"],
             secs: &[(".eh_frame", 0x2000, 0x10)],
             loads: &[(0x2800, 0x100)],
             ..Dso::default()

@@ -12,7 +12,7 @@ use iced_x86::{Mnemonic, OpKind, Register};
 
 use super::data::Signatures;
 use super::decode::{self, Insn};
-use super::image::{FdeAt, Image, Kind, Meaning, Name, Region, Use};
+use super::image::{rtype, FdeAt, Image, Kind, Meaning, Name, Region, Reloc, RelocWhy, Use};
 use super::reader::Reader;
 use super::record::{self, Consumed, Recorder};
 use super::{value, Run, FDE_BYTES};
@@ -163,11 +163,21 @@ pub(crate) fn references(img: &Image, reader: &mut Reader<'_>, run: &mut Run) ->
     };
     let executable = img.kind == Kind::Executable;
     'ranges: for (region, s, e) in scan_ranges(img) {
+        // The code region starting where this one ends (two PT_LOADs that meet): a field that
+        // starts here may end there.
+        let next = img
+            .code
+            .get(img.code.partition_point(|r| r.start < region.end))
+            .filter(|n| n.start == region.end)
+            .copied();
         let mut pos = s;
         while pos < e {
             let end = pos.saturating_add(CHUNK).min(e);
-            let read_end = end.saturating_add(OVERLAP).min(e);
-            let bytes = match reader.read(region.offset_of(pos), read_end - pos) {
+            // A field that starts in the chunk is read whole: past the range's end as far as its
+            // region goes, and across the seam into the next region's first bytes.
+            let want = end.saturating_add(OVERLAP);
+            let read_end = want.min(region.end);
+            let mut bytes = match reader.read(region.offset_of(pos), read_end - pos) {
                 Ok(b) => b,
                 Err(why) => {
                     run.refusal(why, &format!("code at {pos:#x}"), reader);
@@ -178,6 +188,18 @@ pub(crate) fn references(img: &Image, reader: &mut Reader<'_>, run: &mut Run) ->
                     continue;
                 }
             };
+            if let Some(n) = next.filter(|_| want > region.end) {
+                let seam = (want - region.end).min(OVERLAP - 1).min(n.end - n.start);
+                match reader.read(n.offset, seam) {
+                    Ok(b) => bytes.extend(b),
+                    Err(why) => {
+                        run.refusal(why, &format!("code at {:#x}", n.start), reader);
+                        if run.stopped() {
+                            break 'ranges;
+                        }
+                    }
+                }
+            }
             for (i, p) in (pos..end).enumerate() {
                 let w4 = bytes
                     .get(i..i.saturating_add(4))
@@ -275,6 +297,15 @@ enum Class {
 fn classify(r: &Reference, cfg: &decode::Cfg, img: &Image, targets: &BTreeMap<u64, Name>) -> Class {
     let name = shown(&r.symbol);
     let p = r.at;
+    // A relocation type §4.2 gives no meaning on code is unexplained, whatever its field (§4.4).
+    if let Some(Reloc::One(f)) = img.relocs.get(&p).filter(|_| img.kind == Kind::Relocatable) {
+        if !rtype::on_code(f.r_type) {
+            return Class::Gap(format!(
+                "code: {name}: {} at {p:#x}",
+                RelocWhy::Type(f.r_type)
+            ));
+        }
+    }
     let Some((&ip, insn)) = cfg
         .insns
         .range(..=p)
@@ -287,14 +318,13 @@ fn classify(r: &Reference, cfg: &decode::Cfg, img: &Image, targets: &BTreeMap<u6
         ));
     };
     let field = field_at(insn, p);
-    let base = insn.ins.memory_base();
+    // `[rip+disp]` or `[eip+disp]`: relative to the next instruction.
+    let ip_rel = insn.ins.is_ip_rel_memory_operand();
     if img.kind == Kind::Relocatable {
         let use_ = match field {
             Some(Field::Branch) => Use::Branch,
-            Some(Field::Disp) if base == Register::RIP && insn.ins.mnemonic() == Mnemonic::Lea => {
-                Use::Lea
-            }
-            Some(Field::Disp) if base == Register::RIP => Use::Memory,
+            Some(Field::Disp) if ip_rel && insn.ins.mnemonic() == Mnemonic::Lea => Use::Lea,
+            Some(Field::Disp) if ip_rel => Use::Memory,
             Some(Field::Disp) => Use::Absolute,
             Some(Field::Imm) => Use::Immediate,
             None => {
@@ -316,8 +346,8 @@ fn classify(r: &Reference, cfg: &decode::Cfg, img: &Image, targets: &BTreeMap<u6
     let absolute = img.kind == Kind::Executable;
     let points = match field {
         Some(Field::Branch) => Some(insn.ins.near_branch_target()),
-        Some(Field::Disp) if base == Register::RIP => Some(insn.ins.ip_rel_memory_address()),
-        Some(Field::Disp) if base == Register::None && absolute => {
+        Some(Field::Disp) if ip_rel => Some(insn.ins.ip_rel_memory_address()),
+        Some(Field::Disp) if insn.ins.memory_base() == Register::None && absolute => {
             Some(insn.ins.memory_displacement64())
         }
         Some(Field::Imm) if absolute => immediate(insn),
@@ -861,6 +891,102 @@ mod tests {
                 "code: connect referenced at 0x1009: FDEs overlap there",
                 "code: connect referenced at 0x100e: function at 0x1008 not recorded",
             ]
+        );
+    }
+
+    #[test]
+    fn an_eip_relative_operand_is_not_a_coincidence() {
+        // 1000: call [eip+X] (67 ff 15 disp32) through connect's slot 0x3000; 1007: ret. Not a
+        // call the engine resolves (§4.6: memory other than `[rip+slot]`), so the slot's
+        // address is taken.
+        let mut code = vec![0x67, 0xff, 0x15];
+        code.extend(rel32(0x1007, 0x3000));
+        code.push(0xc3);
+        for kind in [Kind::Executable, Kind::Shared] {
+            let (rec, gaps) = confirmed(&code, kind);
+            assert!(rec.call_sites.is_empty(), "{kind:?}");
+            assert_eq!(
+                gaps,
+                ["code: connect: address taken at 0x1003, not traced to a call"],
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// The positions [`references`] finds in `img`, whose bytes are `f`.
+    fn refs_of(img: &Image, f: &tempfile::NamedTempFile) -> Vec<u64> {
+        let mut run = Run::new(CodeBudgets::default());
+        let len = f.as_file().metadata().unwrap().len();
+        let mut reader = Reader::new(f.as_file(), len, 1 << 20);
+        let found = references(img, &mut reader, &mut run);
+        assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
+        found.iter().map(|r| r.at).collect()
+    }
+
+    #[test]
+    fn a_field_crossing_the_end_of_a_scanned_range_is_read_whole() {
+        // The code region is [0x1000, 0x1010); only the section [0x1000, 0x1008) is scanned.
+        // The call at 0x1005 has its rel32 at 0x1006..0x100a, past the range's end.
+        let mut code = vec![0x90; 5];
+        code.push(0xe8);
+        code.extend(rel32(0x100a, 0x2000));
+        code.extend([0x90; 6]);
+        let (mut img, f) = image(&code, Kind::Shared);
+        img.sections = vec![(0x1000, 0x1008)];
+        img.set_fdes(vec![]);
+        assert_eq!(refs_of(&img, &f), [0x1006]);
+    }
+
+    #[test]
+    fn a_field_crossing_a_seam_between_regions_is_read_from_both() {
+        // Regions [0x1000, 0x1008) at file offset 0 and [0x1008, 0x1010) at 0x30 (two PT_LOADs
+        // that meet). The call at 0x1005 has its rel32 at 0x1006..0x100a: two bytes in each.
+        // The file bytes between the regions are 0xcc, so a read across them would be wrong.
+        let rel = rel32(0x100a, 0x2000);
+        let mut file = vec![0xcc; 0x40];
+        file[..5].fill(0x90);
+        file[0x05] = 0xe8;
+        file[0x06..0x08].copy_from_slice(&rel[..2]);
+        file[0x30..0x32].copy_from_slice(&rel[2..]);
+        file[0x32..0x38].fill(0x90);
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(&file).unwrap();
+        let region = |start, end, offset| Region { start, end, offset };
+        let mut img = Image::empty(Kind::Shared);
+        img.code = vec![region(0x1000, 0x1008, 0), region(0x1008, 0x1010, 0x30)];
+        img.sections = vec![(0x1000, 0x1010)];
+        img.slots.insert(
+            0x3000,
+            Sym {
+                name: name("connect"),
+                defined: None,
+            },
+        );
+        img.stubs.insert(0x2000, (0x3000, ImportVia::Plt));
+        img.targets.insert(name("connect"));
+        assert_eq!(refs_of(&img, &f), [0x1006]);
+        // Regions that do not meet have no seam: the field's last bytes are not code.
+        img.code = vec![region(0x1000, 0x1008, 0), region(0x1009, 0x1011, 0x30)];
+        img.sections = vec![(0x1000, 0x1011)];
+        assert_eq!(refs_of(&img, &f), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn a_relocation_type_not_modeled_is_named_whatever_its_field() {
+        use crate::code::image::rtype;
+        // 40: jmp short +0 (eb 00) with R_X86_64_PC8 connect on its rel8 at 0x41; 42: ret.
+        let (mut img, f) = object(&[0xeb, 0x00, 0xc3]);
+        reloc(&mut img, 0x41, 15, 0);
+        let (rec, gaps) = run_on(&img, &f);
+        assert!(rec.call_sites.is_empty());
+        assert_eq!(gaps, ["code: connect: relocation type 15 at 0x41"]);
+        // A type §4.2 handles, on no field: not on a field.
+        let (mut img, f) = object(&[0xeb, 0x00, 0xc3]);
+        reloc(&mut img, 0x41, rtype::PC32, -4);
+        let (_, gaps) = run_on(&img, &f);
+        assert_eq!(
+            gaps,
+            ["code: connect: relocation at 0x41 not on an instruction field"]
         );
     }
 

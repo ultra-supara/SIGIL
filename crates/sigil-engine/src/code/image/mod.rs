@@ -42,6 +42,15 @@ pub(crate) mod rtype {
     pub const PC64: u32 = 24;
     pub const GOTPCRELX: u32 = 41;
     pub const REX_GOTPCRELX: u32 = 42;
+
+    /// Whether §4.2's table gives type `t` a meaning on some code field. `PC64` has one only in
+    /// `.eh_frame`.
+    pub fn on_code(t: u32) -> bool {
+        matches!(
+            t,
+            PC32 | PLT32 | GOTPCREL | GOTPCRELX | REX_GOTPCRELX | R32 | R32S | R64
+        )
+    }
 }
 
 /// A symbol name. An image reads and holds each distinct string once ([`Names`]), however many
