@@ -2378,6 +2378,8 @@ mod tests {
         for (budget, expect) in [
             (13, [Some(text(b"alias_b")), None, Some(text(b"caller"))]),
             (12, [Some(text(b"alias_b")), None, None]),
+            // alias_b does not fit: caller, which would, is not copied after it.
+            (6, [None, None, None]),
         ] {
             let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
             fill_within(&bytes, Kind::Shared, None, budget, &mut rec);
