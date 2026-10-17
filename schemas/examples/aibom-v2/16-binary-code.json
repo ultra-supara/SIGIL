@@ -1,0 +1,76 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "85d344f6bac57d3e297f932a6614157fd1cb511efc7022e78206835604a7d21c",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a",
+      "size": 1248,
+      "format": {
+        "Elf": {
+          "kind": "Rel"
+        }
+      },
+      "paths": [
+        "/home/user/src/suspicious_kernel-gcc-O2.o"
+      ],
+      "slices": [
+        {
+          "id": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    }
+  ]
+}
