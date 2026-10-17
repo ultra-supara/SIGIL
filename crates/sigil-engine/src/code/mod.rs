@@ -12,6 +12,7 @@ pub(crate) mod decode;
 pub(crate) mod fde;
 pub(crate) mod image;
 pub(crate) mod reader;
+pub(crate) mod value;
 
 use reader::{Reader, Refusal, MAX_READ};
 

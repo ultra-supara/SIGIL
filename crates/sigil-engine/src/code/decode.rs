@@ -87,6 +87,9 @@ pub(crate) enum Failure {
     ArtifactInstructions,
     TextReloc(u64),
     NotModeled(u64),
+    /// Its register values did not reach a fixpoint within `VALUE_PASSES` per block (spec §4.7;
+    /// `value::solve`).
+    Unsettled,
 }
 
 // Used outside tests from Task 11 (`analyze`); until then only tests decode.
@@ -106,6 +109,7 @@ impl Failure {
             Failure::NotModeled(a) => {
                 format!("function at {entry:#x}: instruction at {a:#x} not modeled")
             }
+            Failure::Unsettled => format!("function at {entry:#x}: values did not settle"),
         }
     }
 }
