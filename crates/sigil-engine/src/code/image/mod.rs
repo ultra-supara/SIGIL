@@ -10,6 +10,7 @@ mod linked;
 mod relocatable;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::rc::Rc;
 
 use object::elf;
@@ -47,9 +48,6 @@ pub(crate) mod rtype {
     pub const PC64: u32 = 24;
     pub const GOTPCRELX: u32 = 41;
     pub const REX_GOTPCRELX: u32 = 42;
-    /// Not a psABI type: SIGIL's mark on a field two different relocations write (a crafted
-    /// object), whose meaning is unknown ([`super::Image::field`]).
-    pub const CONFLICT: u32 = u32::MAX;
 }
 
 /// A symbol name. An image reads and holds each distinct string once ([`Names`]), however many
@@ -98,6 +96,28 @@ pub(crate) struct FieldReloc {
     pub addend: i64,
 }
 
+/// The relocations on one code field of a relocatable object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reloc {
+    One(FieldReloc),
+    /// Two different relocations write the field (a crafted object): its meaning is unknown
+    /// ([`RelocWhy::Conflict`]). Of a third or later one, only one that names a target is kept,
+    /// in place of the second, and only when neither kept one does: a target among them stays
+    /// visible.
+    Two(FieldReloc, FieldReloc),
+}
+
+impl Reloc {
+    /// The relocations kept: one or two.
+    pub fn each(&self) -> impl Iterator<Item = &FieldReloc> {
+        let (a, b) = match self {
+            Reloc::One(a) => (a, None),
+            Reloc::Two(a, b) => (a, Some(b)),
+        };
+        std::iter::once(a).chain(b)
+    }
+}
+
 /// A relocatable object's symbol as relocations use it: an undefined one by name, a defined one
 /// by its file offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +164,70 @@ pub(crate) enum Meaning {
     /// The memory operand is the callee's GOT entry.
     GotEntry(Callee),
     /// Not modeled. `symbol` is the relocation's undefined symbol, if any.
-    Unknown { symbol: Option<Name>, why: String },
+    Unknown { symbol: Option<Name>, why: RelocWhy },
+}
+
+/// Why a relocated field is not modeled ([`Meaning::Unknown`]). Nothing is formatted until a gap
+/// says it ([`RelocWhy::shown`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelocWhy {
+    /// A branch to the undefined symbol plus this offset (`A + (next_ip − P)`, not 0).
+    BranchBeside(i128),
+    /// A GOT relocation this far off its entry, or on a field other than a memory operand.
+    Got(i128),
+    /// `PC32` data of an undefined symbol, other than an exact `lea`.
+    PcData,
+    /// An absolute relocation of an undefined symbol with an addend.
+    AbsoluteBeside,
+    /// `PLT32` on a field other than a branch displacement.
+    PltOffBranch,
+    /// A type not modeled on this field.
+    Type(u32),
+    /// Two different relocations write the field ([`Reloc::Two`]).
+    Conflict,
+    /// No symbol, or a defined one in no section with file bytes.
+    NoAddress,
+    /// The address passes 2^64 or 0.
+    OutOfRange,
+}
+
+impl RelocWhy {
+    /// The gap text (spec §4.2's where it has one), naming `symbol`, the relocation's, where the
+    /// text needs it: `branch to connect+4`.
+    pub fn shown<'a>(&'a self, symbol: Option<&'a Name>) -> impl fmt::Display + 'a {
+        Shown { why: self, symbol }
+    }
+}
+
+impl fmt::Display for RelocWhy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.shown(None).fmt(f)
+    }
+}
+
+/// [`RelocWhy::shown`].
+struct Shown<'a> {
+    why: &'a RelocWhy,
+    symbol: Option<&'a Name>,
+}
+
+impl fmt::Display for Shown<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.why {
+            RelocWhy::BranchBeside(off) => match self.symbol {
+                Some(name) => write!(f, "branch to {}{off:+}", String::from_utf8_lossy(name)),
+                None => write!(f, "branch to the symbol{off:+}"),
+            },
+            RelocWhy::Got(off) => write!(f, "GOT reference {off:+}"),
+            RelocWhy::PcData => f.write_str("PC32 data of an undefined symbol"),
+            RelocWhy::AbsoluteBeside => f.write_str("an absolute address beside the symbol"),
+            RelocWhy::PltOffBranch => f.write_str("PLT32 off a branch"),
+            RelocWhy::Type(t) => write!(f, "relocation type {t}"),
+            RelocWhy::Conflict => f.write_str("two relocations on the field"),
+            RelocWhy::NoAddress => f.write_str("a symbol without an address"),
+            RelocWhy::OutOfRange => f.write_str("an address out of range"),
+        }
+    }
 }
 
 /// Which FDE holds an address ([`Image::fde_at`]).
@@ -180,7 +263,7 @@ pub(crate) struct Image {
     /// ([`Image::set_textrel`]).
     pub textrel: Vec<(u64, u64)>,
     /// A relocatable object's relocations on code, by field address ([`Image::field`]).
-    pub relocs: BTreeMap<u64, FieldReloc>,
+    pub relocs: BTreeMap<u64, Reloc>,
     /// The symbols `relocs` and `.rela.eh_frame` name, by `.symtab` index.
     pub rel_syms: BTreeMap<u32, RelSym>,
     /// The capability imports this file has (undefined symbols).
@@ -359,6 +442,10 @@ pub(crate) fn name_of<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 pub(crate) struct Names {
     /// `Ok(None)`: longer than [`MAX_IMPORT_NAME`].
     read: BTreeMap<(usize, u32), Result<Option<Name>, String>>,
+    /// The names [`target_names`] found are no capability's, or cannot be read (its gap says so):
+    /// it does not read them again for another symbol. A repeat of a name past the 4096 bytes
+    /// object reads would otherwise charge the parse budget a failed search each time.
+    not_targets: BTreeSet<(usize, u32)>,
 }
 
 impl Names {
@@ -424,6 +511,9 @@ pub(crate) fn target_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endiannes
             continue;
         }
         let key = (symbols.string_section().0, sym.st_name(endian));
+        if names.not_targets.contains(&key) {
+            continue;
+        }
         let read = match names.read.get(&key) {
             Some(found) => found.clone(),
             None => match name_of(e, table, symbols, sym, sig.longest()) {
@@ -442,8 +532,13 @@ pub(crate) fn target_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endiannes
             Ok(Some(name)) if sig.capability(&name).is_some() => {
                 out.insert(name);
             }
-            Ok(_) => {}
-            Err(why) => run.gap(format!("code: an import's name cannot be read: {why}")),
+            Ok(_) => {
+                names.not_targets.insert(key);
+            }
+            Err(why) => {
+                run.gap(format!("code: an import's name cannot be read: {why}"));
+                names.not_targets.insert(key);
+            }
         }
     }
     out
@@ -534,6 +629,53 @@ mod tests {
         assert!(!img.textrel_overlaps(0x38, 0x100));
         assert!(img.textrel_overlaps(0x200, 0x201));
         assert!(!img.textrel_overlaps(0, 0x10));
+    }
+
+    /// Task 6 review: 2,000 undefined symbols naming one 5,000-byte name, past the 4096 bytes
+    /// object reads: each object read of it fails and is charged a full search (4,224 bytes).
+    /// `target_names` reads it once, not once per symbol (8 MB).
+    #[test]
+    fn a_long_name_many_symbols_share_is_read_once() {
+        use crate::binary::read::{Budgeted, ENTRY_OVERHEAD, STRING_LIMIT};
+        use crate::binary::{elf as binelf, BinaryBudgets};
+        use crate::code::{data, synth, CodeBudgets};
+        use object::elf::FileHeader64;
+
+        let mut syms = vec![0u8; 24];
+        for _ in 0..2000 {
+            syms.extend_from_slice(&synth::sym64(1, 0x12, 0, 0, 0));
+        }
+        let strs = [&[0u8][..], &[b'n'; 5000], &[0]].concat();
+        let strs_at = 0x1000 + syms.len() as u64;
+        let mut img = synth::ElfImage::new(3);
+        img.put(0x1000, &syms).put(strs_at, &strs);
+        img.sec_linked(
+            ".dynsym",
+            synth::SHT_DYNSYM,
+            0x1000,
+            0x1000,
+            syms.len() as u64,
+            2,
+            24,
+        )
+        .sec(".dynstr", synth::SHT_STRTAB, strs_at, 0, strs.len() as u64);
+        let file = synth::file(&img.build());
+        let size = file.metadata().unwrap().len();
+        let data = Bounded::new(Budgeted::new(&file, size), size, 64 << 20);
+        let p =
+            binelf::parts::<_, FileHeader64<Endianness>>(&data, BinaryBudgets::default()).unwrap();
+        let table = p.sections.table.as_ref().unwrap();
+        let symbols = p.sections.symbols.as_ref().unwrap();
+        let mut names = Names::default();
+        let mut run = Run::new(CodeBudgets::default());
+        let before = data.used();
+        let sig = data::signatures().unwrap();
+        let targets = target_names(&p.elf, table, symbols, sig, &mut names, &mut run);
+        let used = data.used() - before;
+        assert!(targets.is_empty());
+        assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
+        assert!(!data.refused());
+        assert!(used <= 2 * (STRING_LIMIT + ENTRY_OVERHEAD), "{used} bytes");
     }
 
     #[test]

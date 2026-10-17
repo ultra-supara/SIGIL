@@ -34,6 +34,9 @@ pub struct CodeBudgets {
     /// GOT slots (`JUMP_SLOT`/`GLOB_DAT` addresses) collected (P1-2): past it the run stops, and
     /// the slots not collected are absent from the image.
     pub slots: usize,
+    /// A relocatable object's relocations read, on code and on `.eh_frame` (review C1): past it
+    /// the run stops, and the relocations not read are absent from the image.
+    pub relocations: usize,
     pub instructions: u64,
     pub call_sites: usize,
     pub gaps: usize,
@@ -46,6 +49,7 @@ impl Default for CodeBudgets {
             references: 65_536,
             fdes: 1 << 20,
             slots: 1 << 20,
+            relocations: 1 << 20,
             instructions: 4_000_000,
             call_sites: 65_536,
             gaps: 256,
@@ -301,9 +305,19 @@ mod tests {
                 b.instructions,
                 b.call_sites,
                 b.gaps,
-                b.slots
+                b.slots,
+                b.relocations
             ),
-            (256 << 20, 65_536, 1 << 20, 4_000_000, 65_536, 256, 1 << 20)
+            (
+                256 << 20,
+                65_536,
+                1 << 20,
+                4_000_000,
+                65_536,
+                256,
+                1 << 20,
+                1 << 20
+            )
         );
     }
 
