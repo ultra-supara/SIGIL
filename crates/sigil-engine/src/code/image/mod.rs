@@ -1,12 +1,13 @@
 //! The image of one file for code analysis (PR-5a spec §4.2, §4.4, §4.6): where code and
 //! strings are, the PLT stubs and GOT slots, the FDEs, the relocations that write code, and for
 //! a relocatable object the relocations on code fields. The builders are [`linked`] (an
-//! executable or shared object) and, from Task 7, `relocatable`.
+//! executable or shared object) and [`relocatable`].
 
 // Used outside tests from Task 11 (`analyze`); until then only tests build an image.
 #![allow(dead_code)]
 
 mod linked;
+mod relocatable;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -26,6 +27,9 @@ use crate::binary::read::Bounded;
 // Called outside tests from Task 11 (`analyze`); until then only the test helper calls it.
 #[allow(unused_imports)]
 pub(crate) use linked::linked;
+// Called outside tests from Task 11 (`analyze`); until then only the test helper calls it.
+#[allow(unused_imports)]
+pub(crate) use relocatable::relocatable;
 
 /// The x86-64 page the loader maps.
 pub(crate) const PAGE: u64 = 4096;
@@ -43,6 +47,9 @@ pub(crate) mod rtype {
     pub const PC64: u32 = 24;
     pub const GOTPCRELX: u32 = 41;
     pub const REX_GOTPCRELX: u32 = 42;
+    /// Not a psABI type: SIGIL's mark on a field two different relocations write (a crafted
+    /// object), whose meaning is unknown ([`super::Image::field`]).
+    pub const CONFLICT: u32 = u32::MAX;
 }
 
 /// A symbol name. An image reads and holds each distinct string once ([`Names`]), however many
@@ -95,17 +102,28 @@ pub(crate) struct FieldReloc {
 /// by its file offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelSym {
+    /// An undefined symbol's name; `None` for a defined one, or a name that cannot be read.
     pub name: Option<Name>,
+    /// `S`: a defined symbol's section's `sh_offset` plus its `st_value`. `None` when undefined,
+    /// or in no section with file bytes (`SHN_ABS`, `SHN_COMMON`, `SHT_NOBITS`).
     pub at: Option<u64>,
 }
 
 /// How an instruction uses a field (spec §4.2's table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Use {
+    /// The displacement of a `call`, `jmp`, or `jcc rel32`.
     Branch,
+    /// The displacement of a `[rip+disp32]` memory operand, not a `lea`'s.
     Memory,
+    /// The displacement of a `lea`'s `[rip+disp32]`.
     Lea,
+    /// An immediate.
     Immediate,
+    /// A displacement not relative to RIP (`[disp32]`, `[base+index*scale+disp32]`, a `lea`'s
+    /// included): like an immediate, the field is a value, not `next_ip`-relative (the table's
+    /// "absolute displacement").
+    Absolute,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,7 +163,8 @@ pub(crate) enum FdeAt {
 pub(crate) struct Image {
     pub kind: Kind,
     /// Executable bytes: file-backed `PF_X` ranges minus overlapped pages, or a relocatable
-    /// object's `SHF_EXECINSTR` sections. Sorted and disjoint: [`Image::code_at`] searches it.
+    /// object's `SHF_EXECINSTR` sections (overlapping ones merged). Sorted and disjoint:
+    /// [`Image::code_at`] searches it.
     pub code: Vec<Region>,
     /// Where a constant string may be.
     pub strings: Vec<Region>,
@@ -160,8 +179,9 @@ pub(crate) struct Image {
     /// Bytes inside code that a dynamic relocation writes: sorted and merged
     /// ([`Image::set_textrel`]).
     pub textrel: Vec<(u64, u64)>,
-    /// A relocatable object's relocations on code, by field address.
+    /// A relocatable object's relocations on code, by field address ([`Image::field`]).
     pub relocs: BTreeMap<u64, FieldReloc>,
+    /// The symbols `relocs` and `.rela.eh_frame` name, by `.symtab` index.
     pub rel_syms: BTreeMap<u32, RelSym>,
     /// The capability imports this file has (undefined symbols).
     pub targets: BTreeSet<Name>,

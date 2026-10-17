@@ -234,18 +234,18 @@ pub(crate) mod testing {
         let sig = data::signatures().unwrap();
         let mut run = Run::new(budgets);
         let mut reader = Reader::new(&file, size, budgets.bytes);
-        let relocatable = path.extension().is_some_and(|e| e == "o");
-        // The relocatable builder, `image::relocatable`, comes with Task 7, which routes `.o`
-        // files to it here.
-        assert!(!relocatable, "no relocatable image yet: {}", path.display());
-        let img = image::linked(
-            &mut p.elf,
-            &p.sections,
-            &p.dynamic,
-            sig,
-            &mut reader,
-            &mut run,
-        )
+        let img = if path.extension().is_some_and(|e| e == "o") {
+            image::relocatable(&mut p.elf, &p.sections, sig, &mut reader, &mut run)
+        } else {
+            image::linked(
+                &mut p.elf,
+                &p.sections,
+                &p.dynamic,
+                sig,
+                &mut reader,
+                &mut run,
+            )
+        }
         .unwrap();
         f(&img, &mut run, &mut reader)
     }
