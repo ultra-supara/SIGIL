@@ -346,13 +346,14 @@ pub fn binary_session(
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
     let facts = named::collect(&req.paths, req.budgets).map_err(InspectError::Input)?;
+    let code_request = req.budgets.binary.code;
     // With code, `binary_code_audit` is added: what `evaluate` derives from `request.code`.
     let (audit, required_checks) = policy.scope(&ScopeInput {
         mode: Mode::Static,
         active: false,
         install: false,
         binary: true,
-        code: req.budgets.binary.code.is_some(),
+        code: code_request.is_some(),
     });
     let relations = container::declares(&facts.binaries);
     let mut budgets = BTreeMap::from([
@@ -364,7 +365,6 @@ pub fn binary_session(
         ("binary_imports".to_string(), req.budgets.binary.imports),
     ]);
     // With code (PR-5a): its byte budget. Its aggregate limits are constants, not recorded.
-    let code_request = req.budgets.binary.code;
     if let Some(c) = code_request {
         budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
     }
