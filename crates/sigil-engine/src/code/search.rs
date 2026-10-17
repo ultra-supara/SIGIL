@@ -801,6 +801,70 @@ mod tests {
     }
 
     #[test]
+    fn a_stub_address_called_through_a_register_is_a_call() {
+        // 1000: lea rax, [rip+stub] (48 8d 05 disp32); 1007: call rax (ff d0); 1009: ret.
+        let mut code = vec![0x48, 0x8d, 0x05];
+        code.extend(rel32(0x1007, 0x2000));
+        code.extend([0xff, 0xd0, 0xc3]);
+        let (rec, gaps) = confirmed(&code, Kind::Shared);
+        assert_eq!(gaps, Vec::<String>::new());
+        assert_eq!(rec.call_sites.len(), 1);
+        assert_eq!(rec.call_sites[0].addr, 0x1007);
+        assert_eq!(
+            rec.call_sites[0].target,
+            sigil_model::CallTarget::Import {
+                symbol: sigil_model::UntrustedText::from_bytes(b"connect".to_vec()),
+                via: ImportVia::Plt
+            }
+        );
+    }
+
+    #[test]
+    fn a_stub_address_called_and_passed_on_is_taken() {
+        // 1000: lea rdi, [rip+stub] (48 8d 3d disp32); 1007: call rdi (ff d7); 1009: ret. The
+        // call is recorded, and its arg 0 holds connect's address: taken all the same (§4.7).
+        let mut code = vec![0x48, 0x8d, 0x3d];
+        code.extend(rel32(0x1007, 0x2000));
+        code.extend([0xff, 0xd7, 0xc3]);
+        let (rec, gaps) = confirmed(&code, Kind::Shared);
+        assert_eq!(rec.call_sites.len(), 1);
+        assert_eq!(
+            gaps,
+            ["code: connect: address taken at 0x1003, not traced to a call"]
+        );
+    }
+
+    #[test]
+    fn a_function_not_recorded_for_a_duplicate_explains_its_references() {
+        // 1000: call stub; 1005: 3 nops; 1008: call stub; 100d: call stub; 1012: ret.
+        // FDE A [0x1000, 0x100d) and FDE B [0x1008, 0x1013) share [0x1008, 0x100d). A records
+        // the calls at 0x1000 and 0x1008; B would record 0x1008 again, so B records nothing.
+        let mut code = vec![0xe8];
+        code.extend(rel32(0x1005, 0x2000));
+        code.extend([0x90; 3]);
+        code.push(0xe8);
+        code.extend(rel32(0x100d, 0x2000));
+        code.push(0xe8);
+        code.extend(rel32(0x1012, 0x2000));
+        code.push(0xc3);
+        let (mut img, f) = image(&code, Kind::Shared);
+        img.set_fdes(vec![(0x1000, 0x100d), (0x1008, 0x1013)]);
+        let (rec, gaps) = run_on(&img, &f);
+        assert_eq!(
+            rec.call_sites.iter().map(|c| c.addr).collect::<Vec<_>>(),
+            [0x1000, 0x1008]
+        );
+        assert_eq!(
+            gaps,
+            [
+                "code: call site at 0x1008 is in two functions",
+                "code: connect referenced at 0x1009: FDEs overlap there",
+                "code: connect referenced at 0x100e: function at 0x1008 not recorded",
+            ]
+        );
+    }
+
+    #[test]
     fn a_stopped_run_confirms_nothing_more() {
         let mut code = vec![0xe8];
         code.extend(rel32(0x1005, 0x2000));
