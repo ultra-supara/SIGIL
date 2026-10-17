@@ -26,8 +26,54 @@ pub(crate) struct Cfg {
     pub entry: u64,
     pub end: u64,
     pub insns: BTreeMap<u64, Insn>,
-    /// Block start → (its instructions, its successors inside the function, sorted).
-    pub blocks: BTreeMap<u64, (Vec<u64>, Vec<u64>)>,
+    /// Block start → the block.
+    pub blocks: BTreeMap<u64, Block>,
+}
+
+// Used outside tests from Task 11 (`analyze`); until then only tests decode.
+#[allow(dead_code)]
+impl Cfg {
+    /// The instructions of the block starting at `start`, in order. They are contiguous: no
+    /// decoded instruction lies between two of them, as it would overlap one. A `start` past
+    /// `b.last` (not this block's) gives none, where `range` would panic.
+    pub fn block_insns(&self, start: u64, b: &Block) -> impl Iterator<Item = (u64, &Insn)> {
+        (start <= b.last)
+            .then(|| self.insns.range(start..=b.last))
+            .into_iter()
+            .flatten()
+            .map(|(at, i)| (*at, i))
+    }
+}
+
+/// One basic block: its instructions run from its start (its key in [`Cfg::blocks`]) to `last`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Block {
+    /// The address of its last instruction.
+    pub last: u64,
+    /// At most two successors inside the function, sorted, without repeats.
+    succs: Succs,
+}
+
+// Used outside tests from Task 11 (`analyze`); until then only tests decode.
+#[allow(dead_code)]
+impl Block {
+    /// Its successors inside the function, in increasing order.
+    pub fn succs(&self) -> impl Iterator<Item = u64> + '_ {
+        self.succs.iter().flatten().copied()
+    }
+}
+
+/// At most two successors: sorted, the `Some`s first, no repeats.
+type Succs = [Option<u64>; 2];
+
+/// `a` and `b` as [`Succs`].
+fn succs(a: Option<u64>, b: Option<u64>) -> Succs {
+    match (a, b) {
+        (Some(x), Some(y)) if x == y => [Some(x), None],
+        (Some(x), Some(y)) => [Some(x.min(y)), Some(x.max(y))],
+        (Some(x), None) | (None, Some(x)) => [Some(x), None],
+        (None, None) => [None, None],
+    }
 }
 
 /// Why a function fails.
@@ -89,9 +135,14 @@ fn flow(
         FlowControl::ConditionalBranch => Flow::Branch(branch_target(insn)),
         // `ret`, `iret`, …; `ud0`/`ud1`/`ud2`.
         FlowControl::Return | FlowControl::Exception => Flow::Stop,
-        FlowControl::Call | FlowControl::IndirectCall => Flow::Call {
-            returns: !noreturn(insn),
-        },
+        // Only `call` is a call. iced's `Call` also covers `syscall`, `sysenter`, `vmcall`,
+        // `vmlaunch`, `tdcall`, …: those continue at the next instruction, as far as the CFG goes.
+        FlowControl::Call | FlowControl::IndirectCall if ins.mnemonic() == Mnemonic::Call => {
+            Flow::Call {
+                returns: !noreturn(insn),
+            }
+        }
+        FlowControl::Call | FlowControl::IndirectCall => Flow::Next,
         FlowControl::Interrupt if ins.mnemonic() == Mnemonic::Int3 => Flow::Stop,
         FlowControl::Interrupt => Flow::Next,
         FlowControl::XbeginXabortXend => return Err(Failure::NotModeled(ins.ip())),
@@ -103,7 +154,8 @@ fn flow(
 /// `noreturn`: whether a call never returns.
 ///
 /// Every decode attempt is charged to `run.instructions` before it is made, whether it succeeds
-/// or not; at `run.budgets.instructions` the run stops.
+/// or not; at `run.budgets.instructions` the run stops. The caller must not call it once
+/// `run.stopped()`: `analyze` checks before each function.
 // Used outside tests from Task 11 (`analyze`); until then only tests decode.
 #[allow(dead_code)]
 pub(crate) fn decode(
@@ -124,7 +176,7 @@ pub(crate) fn decode(
     let mut insns: BTreeMap<u64, Insn> = BTreeMap::new();
     // Instruction ending its block → its successors inside the function. Any other instruction
     // falls through.
-    let mut ends: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    let mut ends: BTreeMap<u64, Succs> = BTreeMap::new();
     let mut leaders: BTreeSet<u64> = BTreeSet::from([entry]);
     let mut work = vec![entry];
     let mut count: u64 = 0;
@@ -179,25 +231,18 @@ pub(crate) fn decode(
             let insn = Insn { ins, offs };
             let f = flow(&insn, branch_target, noreturn)?;
             insns.insert(ip, insn);
-            let mut targets = vec![];
-            match f {
+            let fall = Some(next).filter(|n| inside(*n));
+            let targets = match f {
                 Flow::Next => {
                     ip = next;
                     continue;
                 }
-                Flow::Stop => {}
-                Flow::Jump(t) => targets.extend(t.filter(|t| inside(*t))),
-                Flow::Branch(t) => {
-                    targets.extend(t.filter(|t| inside(*t)));
-                    targets.extend(Some(next).filter(|n| inside(*n)));
-                }
-                Flow::Call { returns } => {
-                    targets.extend(Some(next).filter(|n| returns && inside(*n)));
-                }
-            }
-            targets.sort_unstable();
-            targets.dedup();
-            for t in &targets {
+                Flow::Stop => succs(None, None),
+                Flow::Jump(t) => succs(t.filter(|t| inside(*t)), None),
+                Flow::Branch(t) => succs(t.filter(|t| inside(*t)), fall),
+                Flow::Call { returns } => succs(fall.filter(|_| returns), None),
+            };
+            for t in targets.iter().flatten() {
                 if leaders.insert(*t) {
                     work.push(*t);
                 }
@@ -211,27 +256,31 @@ pub(crate) fn decode(
         if !insns.contains_key(&leader) {
             continue;
         }
-        let mut list = vec![];
         let mut ip = leader;
-        let succs = loop {
-            list.push(ip);
-            if let Some(succ) = ends.get(&ip) {
-                break succ.clone();
+        let out = loop {
+            if let Some(out) = ends.get(&ip) {
+                break *out;
             }
             // Falls through: decoded, so `ip + len <= end`.
             let Some(next) = insns.get(&ip).map(|i| i.ins.next_ip()) else {
-                break vec![];
+                break succs(None, None);
             };
             if leaders.contains(&next) {
-                break vec![next];
+                break succs(Some(next), None);
             }
             if !insns.contains_key(&next) {
                 // Ran past the FDE's end: an exit.
-                break vec![];
+                break succs(None, None);
             }
             ip = next;
         };
-        blocks.insert(leader, (list, succs));
+        blocks.insert(
+            leader,
+            Block {
+                last: ip,
+                succs: out,
+            },
+        );
     }
     Ok(Cfg {
         entry,
@@ -268,30 +317,104 @@ mod tests {
         (r, run)
     }
 
+    /// Each block as (start, its instructions, its successors), through the helpers.
+    fn shape(cfg: &Cfg) -> Vec<(u64, Vec<u64>, Vec<u64>)> {
+        cfg.blocks
+            .iter()
+            .map(|(start, b)| {
+                let insns = cfg.block_insns(*start, b).map(|(at, _)| at).collect();
+                (*start, insns, b.succs().collect())
+            })
+            .collect()
+    }
+
+    fn shape_of(bytes: &[u8], noreturn: bool) -> Vec<(u64, Vec<u64>, Vec<u64>)> {
+        let (r, _) = run_decode(
+            bytes,
+            &Image::empty(Kind::Shared),
+            noreturn,
+            CodeBudgets::default(),
+        );
+        shape(&r.unwrap())
+    }
+
     #[test]
     fn blocks_end_at_calls_and_branches() {
         // 1000: xor edi,edi (31 ff); 1002: call 1007 (e8 00 00 00 00); 1007: je 100a (74 01);
         // 1009: nop (90); 100a: ret (c3)
         let bytes = [0x31, 0xff, 0xe8, 0, 0, 0, 0, 0x74, 0x01, 0x90, 0xc3];
-        let (cfg, _) = run_decode(
-            &bytes,
-            &Image::empty(Kind::Shared),
-            false,
-            CodeBudgets::default(),
-        );
-        let cfg = cfg.unwrap();
-        let blocks: Vec<(u64, Vec<u64>, Vec<u64>)> = cfg
-            .blocks
-            .iter()
-            .map(|(b, (i, s))| (*b, i.clone(), s.clone()))
-            .collect();
         assert_eq!(
-            blocks,
+            shape_of(&bytes, false),
             [
                 (0x1000, vec![0x1000, 0x1002], vec![0x1007]),
                 (0x1007, vec![0x1007], vec![0x1009, 0x100a]),
                 (0x1009, vec![0x1009], vec![0x100a]),
                 (0x100a, vec![0x100a], vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_call_ends_a_block() {
+        // 1000: syscall (0f 05); 1002: call 1007 (e8 00 00 00 00); 1007: nop; 1008: ret
+        let bytes = [0x0f, 0x05, 0xe8, 0, 0, 0, 0, 0x90, 0xc3];
+        assert_eq!(
+            shape_of(&bytes, false),
+            [
+                (0x1000, vec![0x1000, 0x1002], vec![0x1007]),
+                (0x1007, vec![0x1007, 0x1008], vec![]),
+            ]
+        );
+        // `noreturn` is asked only of the call: were `syscall` a call, nothing would follow it.
+        assert_eq!(
+            shape_of(&bytes, true),
+            [(0x1000, vec![0x1000, 0x1002], vec![])]
+        );
+        // 1000: xor edi,edi; 1002: syscall; 1004: sysenter (0f 34); 1006: vmcall (0f 01 c1);
+        // 1009: ret: one block
+        let bytes = [0x31, 0xff, 0x0f, 0x05, 0x0f, 0x34, 0x0f, 0x01, 0xc1, 0xc3];
+        assert_eq!(
+            shape_of(&bytes, true),
+            [(0x1000, vec![0x1000, 0x1002, 0x1004, 0x1006, 0x1009], vec![])]
+        );
+    }
+
+    #[test]
+    fn a_direct_jump_inside_the_function_is_an_edge() {
+        // 1000: jmp 1003 (eb 01); 1002: ff (never reached); 1003: ret
+        let (r, _) = run_decode(
+            &[0xeb, 0x01, 0xff, 0xc3],
+            &Image::empty(Kind::Shared),
+            false,
+            CodeBudgets::default(),
+        );
+        let cfg = r.unwrap();
+        assert_eq!(cfg.insns.len(), 2);
+        assert_eq!(
+            shape(&cfg),
+            [
+                (0x1000, vec![0x1000], vec![0x1003]),
+                (0x1003, vec![0x1003], vec![]),
+            ]
+        );
+        let first = cfg.blocks[&0x1000];
+        assert_eq!(first.last, 0x1000);
+        assert_eq!(
+            cfg.block_insns(0x1003, &first).count(),
+            0,
+            "a start past the block's last instruction gives none, without a panic"
+        );
+    }
+
+    #[test]
+    fn a_backward_branch_splits_a_decoded_block() {
+        // 1000: nop; 1001: nop; 1002: jne 1001 (75 fd); 1004: ret
+        assert_eq!(
+            shape_of(&[0x90, 0x90, 0x75, 0xfd, 0xc3], false),
+            [
+                (0x1000, vec![0x1000], vec![0x1001]),
+                (0x1001, vec![0x1001, 0x1002], vec![0x1001, 0x1004]),
+                (0x1004, vec![0x1004], vec![]),
             ]
         );
     }
@@ -395,11 +518,9 @@ mod tests {
         );
         assert_eq!(r.err(), Some(Failure::Decode(0x1001)));
         // 1000: nop; 1001: nop, then the FDE ends: an exit
-        let (r, _) = run_decode(&[0x90, 0x90], &img, false, CodeBudgets::default());
-        let cfg = r.unwrap();
         assert_eq!(
-            cfg.blocks.get(&0x1000),
-            Some(&(vec![0x1000, 0x1001], vec![]))
+            shape_of(&[0x90, 0x90], false),
+            [(0x1000, vec![0x1000, 0x1001], vec![])]
         );
         // An empty FDE has no first instruction.
         let r = decode(
@@ -429,15 +550,9 @@ mod tests {
             "nothing after an unresolved jump is reached"
         );
         // 1000: jmp 2000 (e9 fb 0f 00 00): out of the function, an exit
-        let (r, _) = run_decode(
-            &[0xe9, 0xfb, 0x0f, 0x00, 0x00],
-            &Image::empty(Kind::Shared),
-            false,
-            CodeBudgets::default(),
-        );
         assert_eq!(
-            r.unwrap().blocks.values().next().map(|b| b.1.clone()),
-            Some(vec![])
+            shape_of(&[0xe9, 0xfb, 0x0f, 0x00, 0x00], false),
+            [(0x1000, vec![0x1000], vec![])]
         );
     }
 
