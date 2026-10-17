@@ -2,14 +2,16 @@
 //! fixpoint, per register.
 //!
 //! - A value's parts are shared ([`Rc`]): a state is 16 values of 4 words, and a clone of one
-//!   is 16 counts, however deep its values are. States are kept per block during the fixpoint
-//!   and, after it, only before the instructions [`kept`] names.
+//!   is 16 counts, however deep its values are.
+//! - During the fixpoint one state is kept per chain of blocks ([`Graph`]); after it, only the
+//!   argument registers and a register target before each instruction [`kept`] names
+//!   ([`Kept`]), review I1.
 //! - [`Val::Sym`] (spec rev. 2's `SymbolAddr`) is internal: it never leaves the engine.
 
 // Used outside tests from Tasks 10–11 (`record`, `analyze`); until then only tests solve.
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use iced_x86::{
@@ -284,6 +286,22 @@ pub(crate) fn write(v: Val, size: usize) -> Val {
     }
 }
 
+/// Register `r` as read: its GPR's value, or the low bits of it for a sub-register. `None`: not
+/// a GPR.
+fn read(s: &State, r: Register) -> Option<Val> {
+    if high_byte(r) {
+        return Some(Val::Unknown(Why::NotModeled));
+    }
+    let v = s.get(gpr(r)?)?.clone();
+    Some(match r.size() {
+        8 => v,
+        4 => low(v, 32),
+        2 => low(v, 16),
+        1 => low(v, 8),
+        _ => return None,
+    })
+}
+
 /// The register `dst` after `v` is written to it: whole, zero-extended (a 32-bit write), or in
 /// part. A high-byte register is not modeled.
 fn written(v: Val, dst: Register) -> Val {
@@ -490,20 +508,7 @@ impl<'a> Machine<'a> {
     fn operand(&self, s: &State, insn: &Insn, i: u32) -> Option<Val> {
         let ins = &insn.ins;
         Some(match ins.op_kind(i) {
-            OpKind::Register => {
-                let r = ins.op_register(i);
-                if high_byte(r) {
-                    return Some(Val::Unknown(Why::NotModeled));
-                }
-                let v = s.get(gpr(r)?)?.clone();
-                match r.size() {
-                    8 => v,
-                    4 => low(v, 32),
-                    2 => low(v, 16),
-                    1 => low(v, 8),
-                    _ => return None,
-                }
-            }
+            OpKind::Register => read(s, ins.op_register(i))?,
             OpKind::Memory => {
                 let width = u8::try_from(ins.memory_size().size().checked_mul(8)?).ok()?;
                 if ![8, 16, 32, 64].contains(&width) {
@@ -748,9 +753,39 @@ impl<'a> Machine<'a> {
     }
 }
 
-/// The states before the kept instructions of one function ([`kept`]), by address.
+/// What is kept before a kept instruction ([`kept`]): what its call site needs, not the
+/// whole state (review I1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Kept {
+    /// The argument registers, in [`ARGS`] order: rdi rsi rdx rcx r8 r9.
+    pub args: [Val; 6],
+    /// For a `call`/`jmp` through a register, that register's value.
+    pub target: Option<Val>,
+}
+
+impl Kept {
+    fn of(insn: &Insn, s: &State) -> Kept {
+        let ins = &insn.ins;
+        Kept {
+            args: ARGS.map(|r| s.get(r).cloned().unwrap_or(Val::Unknown(Why::NotModeled))),
+            target: (ins.op_count() >= 1 && ins.op0_kind() == OpKind::Register)
+                .then(|| read(s, ins.op0_register()))
+                .flatten(),
+        }
+    }
+}
+
+/// What is kept before each kept instruction of one function ([`kept`]), sorted by address.
 pub(crate) struct Values {
-    pub before: BTreeMap<u64, State>,
+    pub kept: Vec<(u64, Kept)>,
+}
+
+impl Values {
+    /// What is kept before the instruction at `ip`, by binary search.
+    pub fn at(&self, ip: u64) -> Option<&Kept> {
+        let i = self.kept.binary_search_by_key(&ip, |(at, _)| *at).ok()?;
+        self.kept.get(i).map(|(_, k)| k)
+    }
 }
 
 /// Whether the state before the instruction at `at`, of block `b`, is kept: before a `call`,
@@ -782,28 +817,119 @@ fn entry_state() -> State {
     })
 }
 
-/// Propagates values to a fixpoint (each block at most [`VALUE_PASSES`] times), then records
-/// the state before each kept instruction. `Err(Failure::Unsettled)`: the values did not settle,
-/// and the function fails.
-pub(crate) fn solve(cfg: &Cfg, img: &Image) -> Result<Values, Failure> {
-    solve_within(cfg, img, VALUE_PASSES)
+/// A CFG's blocks by ordinal (address order), as the fixpoint walks them. A block whose only
+/// successor has it as its only predecessor (and is not the entry) runs straight into it: the
+/// two are processed as one, a chain, and only a chain's last block keeps an output state. A
+/// run of calls is one chain, so it costs one state, not one per call (review I1).
+struct Graph<'c> {
+    cfg: &'c Cfg,
+    starts: Vec<u64>,
+    blocks: Vec<&'c Block>,
+    entry: usize,
+    /// The block each one runs straight into; `None` ends a chain.
+    next: Vec<Option<usize>>,
+    /// Whether a block starts a chain: the entry, and every block no other runs into.
+    head: Vec<bool>,
+    /// Block `b`'s predecessors: `preds[pred_at[b]..pred_at[b + 1]]`.
+    pred_at: Vec<usize>,
+    preds: Vec<usize>,
 }
 
-/// [`solve`], each block processed at most `passes` times.
-fn solve_within(cfg: &Cfg, img: &Image, passes: u32) -> Result<Values, Failure> {
-    let mut m = Machine::new(img);
-    let entry = entry_state();
-    let mut preds: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    for (start, b) in &cfg.blocks {
-        for t in b.succs() {
-            preds.entry(t).or_default().push(*start);
+impl<'c> Graph<'c> {
+    fn of(cfg: &'c Cfg) -> Option<Graph<'c>> {
+        let starts: Vec<u64> = cfg.blocks.keys().copied().collect();
+        let blocks: Vec<&Block> = cfg.blocks.values().collect();
+        let n = starts.len();
+        let ord = |a: u64| starts.binary_search(&a).ok();
+        let entry = ord(cfg.entry)?;
+        let succs = |b: &Block| b.succs().filter_map(ord).collect::<Vec<_>>();
+        let mut pred_at = vec![0usize; n + 1];
+        for b in &blocks {
+            for t in succs(b) {
+                if let Some(c) = pred_at.get_mut(t + 1) {
+                    *c += 1;
+                }
+            }
         }
+        for i in 1..=n {
+            let before = pred_at.get(i - 1).copied().unwrap_or(0);
+            if let Some(c) = pred_at.get_mut(i) {
+                *c += before;
+            }
+        }
+        let mut fill = pred_at.clone();
+        let mut preds = vec![0usize; pred_at.get(n).copied().unwrap_or(0)];
+        for (p, b) in blocks.iter().enumerate() {
+            for t in succs(b) {
+                if let Some(slot) = fill.get_mut(t).and_then(|f| {
+                    let at = *f;
+                    *f += 1;
+                    preds.get_mut(at)
+                }) {
+                    *slot = p;
+                }
+            }
+        }
+        let npreds = |t: usize| match (pred_at.get(t), pred_at.get(t + 1)) {
+            (Some(lo), Some(hi)) => hi - lo,
+            _ => 0,
+        };
+        let mut next = vec![None; n];
+        let mut head = vec![true; n];
+        for (b, blk) in blocks.iter().enumerate() {
+            if let [t] = succs(blk)[..] {
+                if t != b && t != entry && npreds(t) == 1 {
+                    if let (Some(x), Some(h)) = (next.get_mut(b), head.get_mut(t)) {
+                        *x = Some(t);
+                        *h = false;
+                    }
+                }
+            }
+        }
+        Some(Graph {
+            cfg,
+            starts,
+            blocks,
+            entry,
+            next,
+            head,
+            pred_at,
+            preds,
+        })
     }
-    // A block's input: the join of what reaches it so far (the entry state at the entry).
-    let input = |start: u64, out: &BTreeMap<u64, State>| -> Option<State> {
-        let mut acc: Option<State> = (start == cfg.entry).then(|| entry.clone());
-        for p in preds.get(&start).into_iter().flatten() {
-            if let Some(o) = out.get(p) {
+
+    fn len(&self) -> usize {
+        self.starts.len()
+    }
+
+    /// The blocks of the chain starting at `h`, in order. A chain's blocks each have one
+    /// predecessor, the one before, so it never meets itself; the bound is for safety.
+    fn chain(&self, h: usize) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(Some(h), |b| self.next.get(*b).copied().flatten()).take(self.len())
+    }
+
+    /// Block `b` and its instructions.
+    fn insns(&self, b: usize) -> Option<(&'c Block, impl Iterator<Item = (u64, &'c Insn)>)> {
+        let (start, blk) = (*self.starts.get(b)?, *self.blocks.get(b)?);
+        Some((blk, self.cfg.block_insns(start, blk)))
+    }
+
+    /// Block `b`'s successors, by ordinal: each starts a chain, as `b` ends one.
+    fn succs(&self, b: usize) -> impl Iterator<Item = usize> + '_ {
+        self.blocks
+            .get(b)
+            .into_iter()
+            .flat_map(|blk| blk.succs())
+            .filter_map(|t| self.starts.binary_search(&t).ok())
+    }
+
+    /// Chain head `h`'s input: the join of what reaches it so far (with the entry state at the
+    /// entry). Each predecessor of a head ends a chain, so its output is kept.
+    fn input(&self, h: usize, entry: &State, out: &[Option<Box<State>>]) -> Option<State> {
+        let mut acc = (h == self.entry).then(|| entry.clone());
+        let (lo, hi) = (*self.pred_at.get(h)?, *self.pred_at.get(h + 1)?);
+        for p in self.preds.get(lo..hi).into_iter().flatten() {
+            if let Some(o) = out.get(*p).and_then(|o| o.as_deref()) {
                 acc = Some(match acc {
                     None => o.clone(),
                     Some(a) => join_states(&a, o),
@@ -811,44 +937,99 @@ fn solve_within(cfg: &Cfg, img: &Image, passes: u32) -> Result<Values, Failure> 
             }
         }
         acc
+    }
+}
+
+/// Propagates values to a fixpoint (each block at most [`VALUE_PASSES`] times), then keeps what
+/// each kept instruction needs ([`Kept`]), sorted by address. `Err(Failure::Unsettled)`: the
+/// values did not settle, and the function fails.
+pub(crate) fn solve(cfg: &Cfg, img: &Image) -> Result<Values, Failure> {
+    let count = cfg
+        .blocks
+        .iter()
+        .map(|(start, b)| {
+            cfg.block_insns(*start, b)
+                .filter(|(at, insn)| kept(*at, insn, b))
+                .count()
+        })
+        .sum();
+    let mut kept = Vec::with_capacity(count);
+    propagate(cfg, img, VALUE_PASSES, |at, insn, s| {
+        kept.push((at, Kept::of(insn, s)))
+    })?;
+    // A chain may run backwards (a `jmp` to an earlier block), so the visits are not in order.
+    kept.sort_unstable_by_key(|(at, _)| *at);
+    Ok(Values { kept })
+}
+
+/// The fixpoint, each chain processed at most `passes` times; then `visit` is called with the
+/// state before each kept instruction ([`kept`]).
+fn propagate(
+    cfg: &Cfg,
+    img: &Image,
+    passes: u32,
+    mut visit: impl FnMut(u64, &Insn, &State),
+) -> Result<(), Failure> {
+    let Some(g) = Graph::of(cfg) else {
+        return Ok(());
     };
-    let mut out: BTreeMap<u64, State> = BTreeMap::new();
-    let mut done: BTreeMap<u64, u32> = BTreeMap::new();
-    let mut work: BTreeSet<u64> = BTreeSet::from([cfg.entry]);
-    while let Some(start) = work.pop_first() {
-        let (Some(b), Some(mut s)) = (cfg.blocks.get(&start), input(start, &out)) else {
+    let mut m = Machine::new(img);
+    let entry = entry_state();
+    // Only a chain's last block's output is kept.
+    let mut out: Vec<Option<Box<State>>> = vec![None; g.len()];
+    let mut done = vec![0u32; g.len()];
+    let mut work: BTreeSet<usize> = BTreeSet::from([g.entry]);
+    while let Some(h) = work.pop_first() {
+        let Some(mut s) = g.input(h, &entry, &out) else {
             continue;
         };
-        let n = done.entry(start).or_insert(0);
+        let Some(n) = done.get_mut(h) else {
+            continue;
+        };
         *n += 1;
         if *n > passes {
             return Err(Failure::Unsettled);
         }
-        for (_, insn) in cfg.block_insns(start, b) {
-            m.step(&mut s, insn);
+        let mut last = h;
+        for b in g.chain(h) {
+            last = b;
+            for (_, insn) in g.insns(b).into_iter().flat_map(|(_, i)| i) {
+                m.step(&mut s, insn);
+            }
         }
-        if out.get(&start) != Some(&s) {
-            out.insert(start, s);
-            work.extend(b.succs());
+        if let Some(o) = out.get_mut(last) {
+            if o.as_deref() != Some(&s) {
+                *o = Some(Box::new(s));
+                work.extend(g.succs(last));
+            }
         }
     }
-    let mut before = BTreeMap::new();
-    for (start, b) in &cfg.blocks {
-        let Some(mut s) = input(*start, &out) else {
+    for h in 0..g.len() {
+        if !g.head.get(h).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(mut s) = g.input(h, &entry, &out) else {
             continue;
         };
-        for (at, insn) in cfg.block_insns(*start, b) {
-            if kept(at, insn, b) {
-                before.insert(at, s.clone());
+        for b in g.chain(h) {
+            let Some((blk, insns)) = g.insns(b) else {
+                break;
+            };
+            for (at, insn) in insns {
+                if kept(at, insn, blk) {
+                    visit(at, insn, &s);
+                }
+                m.step(&mut s, insn);
             }
-            m.step(&mut s, insn);
         }
     }
-    Ok(Values { before })
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::code::decode::decode;
     use crate::code::image::{rtype, FieldReloc, Image, Kind, RelSym, Reloc, Sym};
@@ -929,8 +1110,18 @@ mod tests {
         .unwrap()
     }
 
+    /// The whole state before each kept instruction (the tests look at every register).
+    fn states(cfg: &Cfg, img: &Image) -> BTreeMap<u64, State> {
+        let mut out = BTreeMap::new();
+        propagate(cfg, img, VALUE_PASSES, |at, _, s| {
+            out.insert(at, s.clone());
+        })
+        .unwrap();
+        out
+    }
+
     fn solved(bytes: &[u8], img: &Image) -> BTreeMap<u64, State> {
-        solve(&cfg_of(bytes, img), img).unwrap().before
+        states(&cfg_of(bytes, img), img)
     }
 
     fn states_before_calls(bytes: &[u8]) -> BTreeMap<u64, State> {
@@ -1368,10 +1559,13 @@ mod tests {
         let img = Image::empty(Kind::Shared);
         let cfg = cfg_of(&bytes, &img);
         let v = solve(&cfg, &img).unwrap();
-        assert_eq!(v.before[&at[3]][7], Val::Unknown(Why::FromMemory));
+        assert_eq!(v.at(at[3]).unwrap().args[0], Val::Unknown(Why::FromMemory));
         // The loop's block is processed 6 times: with 5 passes the values do not settle.
-        assert!(solve_within(&cfg, &img, 6).is_ok());
-        assert_eq!(solve_within(&cfg, &img, 5).err(), Some(Failure::Unsettled));
+        assert!(propagate(&cfg, &img, 6, |_, _, _| {}).is_ok());
+        assert_eq!(
+            propagate(&cfg, &img, 5, |_, _, _| {}).err(),
+            Some(Failure::Unsettled)
+        );
         assert_eq!(
             Failure::Unsettled.reason(0x1000),
             "function at 0x1000: values did not settle"
@@ -1481,8 +1675,8 @@ mod tests {
     }
 
     /// One function of 199,999 `call`s (each to the next instruction) and a `ret`: 200,000
-    /// instructions, the per-function limit, so 199,999 blocks and kept states. Run under the
-    /// 1 GiB cap (`limits.sh`).
+    /// instructions, the per-function limit, so 200,000 blocks and 199,999 kept values. Run under
+    /// the 1 GiB cap (`limits.sh`).
     #[test]
     fn a_function_of_calls_at_the_instruction_limit() {
         let calls = crate::code::FUNCTION_INSTRUCTIONS as usize - 1;
@@ -1492,10 +1686,89 @@ mod tests {
         let cfg = cfg_of(&bytes, &img);
         assert_eq!(cfg.blocks.len(), calls + 1);
         let v = solve(&cfg, &img).unwrap();
-        assert_eq!(v.before.len(), calls);
+        assert_eq!(v.kept.len(), calls);
+        assert!(v.kept.windows(2).all(|w| w[0].0 < w[1].0));
         let last = 0x1000 + 5 * (calls as u64 - 1);
-        assert_eq!(v.before[&last][7], Val::Unknown(Why::ClobberedByCall));
-        assert_eq!(v.before[&0x1000][7], Val::Param(0));
+        assert_eq!(
+            v.at(last).unwrap().args[0],
+            Val::Unknown(Why::ClobberedByCall)
+        );
+        assert_eq!(v.at(0x1000).unwrap().args[0], Val::Param(0));
+        assert_eq!(v.at(0x1001), None);
+    }
+
+    #[test]
+    fn kept_values_are_the_arguments_and_a_register_target() {
+        let (bytes, at) = code(&[
+            &[0xb8, 0x07, 0, 0, 0], // mov eax, 7
+            &[0xff, 0xd0],          // call rax
+            &CALL0,
+            &[0xff, 0xe1], // jmp rcx
+        ]);
+        let v = solve(
+            &cfg_of(&bytes, &Image::empty(Kind::Shared)),
+            &Image::empty(Kind::Shared),
+        )
+        .unwrap();
+        assert_eq!(
+            v.kept.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            [at[1], at[2], at[3]]
+        );
+        let params = std::array::from_fn(|k| Val::Param(k as u8));
+        assert_eq!(
+            v.at(at[1]),
+            Some(&Kept {
+                args: params,
+                target: Some(c(7)),
+            })
+        );
+        let clobbered = std::array::from_fn(|_| Val::Unknown(Why::ClobberedByCall));
+        assert_eq!(
+            v.at(at[2]),
+            Some(&Kept {
+                args: clobbered.clone(),
+                target: None,
+            }),
+            "a direct call has no register target"
+        );
+        assert_eq!(
+            v.at(at[3]),
+            Some(&Kept {
+                args: clobbered,
+                target: Some(Val::Unknown(Why::ClobberedByCall)),
+            })
+        );
+        assert_eq!(v.at(at[0]), None);
+    }
+
+    #[test]
+    fn a_loop_through_the_entry_is_joined() {
+        // 1000: call 1005; 1005: jmp 1000 (eb f9). The entry, a chain's successor, starts a
+        // chain of its own: its input joins the entry state.
+        let (bytes, at) = code(&[&CALL0, &[0xeb, 0xf9]]);
+        let s = states_before_calls(&bytes);
+        assert_eq!(s.keys().copied().collect::<Vec<_>>(), [at[0]]);
+        assert_eq!(s[&at[0]][7], Val::Unknown(Why::MergedDisagreeing));
+        assert_eq!(s[&at[0]][3], Val::Unknown(Why::NotModeled));
+    }
+
+    #[test]
+    fn a_chain_running_backwards_keeps_its_values_sorted() {
+        // 1000: jmp 1008 (eb 06); 1002: call 1007; 1007: ret; 1008: call 100d;
+        // 100d: jmp 1002 (eb f3). One chain 1000, 1008, 100d, 1002, 1007: 1008 is visited first.
+        let (bytes, at) = code(&[&[0xeb, 0x06], &CALL0, &RET, &CALL0, &[0xeb, 0xf3]]);
+        assert_eq!((at[1], at[3]), (0x1002, 0x1008));
+        let img = Image::empty(Kind::Shared);
+        let v = solve(&cfg_of(&bytes, &img), &img).unwrap();
+        assert_eq!(
+            v.kept.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            [0x1002, 0x1008]
+        );
+        assert_eq!(v.at(0x1008).unwrap().args[0], Val::Param(0));
+        assert_eq!(
+            v.at(0x1002).unwrap().args[0],
+            Val::Unknown(Why::ClobberedByCall)
+        );
     }
 
     #[test]
