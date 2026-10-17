@@ -42,6 +42,10 @@ pub struct CodeBudgets {
     pub relocations: usize,
     pub instructions: u64,
     pub call_sites: usize,
+    /// The bytes of symbol names copied into the recorded facts (review I2). A function's call
+    /// targets' names count with the call-site limit: past it the run stops, and the function
+    /// records nothing. Function and export names are filled only while they fit.
+    pub name_bytes: u64,
     pub gaps: usize,
 }
 
@@ -55,6 +59,7 @@ impl Default for CodeBudgets {
             relocations: 1 << 20,
             instructions: 4_000_000,
             call_sites: 65_536,
+            name_bytes: 16 << 20,
             gaps: 256,
         }
     }
@@ -309,7 +314,8 @@ mod tests {
                 b.call_sites,
                 b.gaps,
                 b.slots,
-                b.relocations
+                b.relocations,
+                b.name_bytes
             ),
             (
                 256 << 20,
@@ -319,7 +325,8 @@ mod tests {
                 65_536,
                 256,
                 1 << 20,
-                1 << 20
+                1 << 20,
+                16 << 20
             )
         );
     }

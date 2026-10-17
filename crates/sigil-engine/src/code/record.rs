@@ -412,6 +412,44 @@ fn call_kind(insn: &Insn, img: &Image, entry: u64, end: u64) -> Option<CallKind>
     }
 }
 
+/// What one recorded function says of its references, for their confirmation (spec §4.4,
+/// §4.7).
+// Used outside tests from Task 11 (`search`); until then only tests record.
+#[allow(dead_code)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Consumed {
+    /// The instructions whose reference became a call's target: a call or jump's own address
+    /// when its operand names the callee (a branch, a GOT slot or entry), and the sites a
+    /// symbol's address was formed at when it is called through a register.
+    pub called: BTreeSet<u64>,
+    /// The sites of the targets' addresses that a recorded value holds, anywhere in it: each is
+    /// an address taken (spec §4.7), even where the same value is also called.
+    pub escaped: BTreeSet<u64>,
+}
+
+/// The sites of the targets' addresses (undefined capability imports) in `v`, through `Low`s,
+/// `Load` bases, and `Set`s.
+fn escapes(v: &Val, img: &Image, out: &mut BTreeSet<u64>) {
+    match v {
+        Val::Sym { of, site } => {
+            if let SymRef::Named {
+                name,
+                defined: None,
+                ..
+            } = &**of
+            {
+                if img.targets.contains(name) {
+                    out.insert(*site);
+                }
+            }
+        }
+        Val::Load { base, .. } => escapes(base, img, out),
+        Val::Low { value, .. } => escapes(value, img, out),
+        Val::Set(members) => members.iter().for_each(|m| escapes(m, img, out)),
+        _ => {}
+    }
+}
+
 /// The recorded facts of one artifact.
 // Used outside tests from Task 11 (`search`, `analyze`); until then only tests record.
 #[allow(dead_code)]
@@ -419,18 +457,23 @@ fn call_kind(insn: &Insn, img: &Image, entry: u64, end: u64) -> Option<CallKind>
 pub(crate) struct Recorder {
     pub functions: Vec<Function>,
     pub call_sites: Vec<CallSite>,
+    /// The addresses of `call_sites` and the entries of `functions`: no ID is recorded twice
+    /// (review I1).
+    calls: BTreeSet<u64>,
+    entries: BTreeSet<u64>,
+    /// The bytes of the names copied into the facts so far (`CodeBudgets.name_bytes`).
+    name_bytes: u64,
 }
 
 // Used outside tests from Task 11 (`search`, `analyze`); until then only tests record.
 #[allow(dead_code)]
 impl Recorder {
     /// Records one function's calls to the capability imports and their `ReturnOf` closure
-    /// (spec §4.8), with the function, unless the call-site limit would be passed: then nothing
-    /// of it is recorded, and the run stops.
-    ///
-    /// Returns the instructions whose reference became a call's target: a call or jump's own
-    /// address when its operand names the callee (a branch, a GOT slot or entry), and the sites
-    /// a symbol's address was formed at when it is called through a register.
+    /// (spec §4.8), with the function. A function records all of its calls or none:
+    /// - `None`: nothing of it is recorded, and its references are not confirmed. A gap says
+    ///   why: an entry or a call site already recorded (FDEs that overlap; the run goes on), or
+    ///   the call-site or name-byte limit (the run stops).
+    /// - `Some`: what it says of its references; nothing was recorded when it calls no target.
     pub fn function(
         &mut self,
         cfg: &Cfg,
@@ -439,9 +482,9 @@ impl Recorder {
         sig: &Signatures,
         reader: &mut Reader<'_>,
         run: &mut Run,
-    ) -> BTreeSet<u64> {
+    ) -> Option<Consumed> {
         let mut resolved: BTreeMap<u64, (Resolved, CallKind)> = BTreeMap::new();
-        let mut consumed = BTreeSet::new();
+        let mut called = BTreeSet::new();
         for (ip, kept) in &values.kept {
             let Some(insn) = cfg.insns.get(ip) else {
                 continue;
@@ -453,10 +496,10 @@ impl Recorder {
             if matches!(r, Resolved::Symbol { .. } | Resolved::Internal(_)) {
                 if op0_is(insn, OpKind::Register) {
                     if let Some((_, sites)) = kept.target.as_ref().and_then(sym_of) {
-                        consumed.extend(sites);
+                        called.extend(sites);
                     }
                 } else {
-                    consumed.insert(*ip);
+                    called.insert(*ip);
                 }
             }
             // A tail jump is recorded only to a symbol (R-b); it returns no value to the
@@ -466,8 +509,14 @@ impl Recorder {
             }
             resolved.insert(*ip, (r, kind));
         }
+        // An import's arity is its capability's; any other callee, an own export of the same
+        // name included, may read all six (review M2).
         let arity = |r: &Resolved| match r {
-            Resolved::Symbol { name, .. } => sig
+            Resolved::Symbol {
+                name,
+                defined: None,
+                ..
+            } => sig
                 .capability(name)
                 .map_or(ARGS.len(), |c| usize::from(c.arity)),
             _ => ARGS.len(),
@@ -505,69 +554,109 @@ impl Recorder {
             }
         }
         if keep.is_empty() {
-            return consumed;
+            return Some(Consumed {
+                called,
+                escaped: BTreeSet::new(),
+            });
+        }
+        // FDEs that overlap decode the same instructions: an ID recorded twice would make the
+        // facts invalid (review I1).
+        if self.entries.contains(&cfg.entry) {
+            run.gap(format!("code: function at {:#x} is in two FDEs", cfg.entry));
+            return None;
+        }
+        if let Some(ip) = keep.iter().find(|ip| self.calls.contains(ip)) {
+            run.gap(format!("code: call site at {ip:#x} is in two functions"));
+            return None;
         }
         let limit = run.budgets.call_sites;
         if self.call_sites.len().saturating_add(keep.len()) > limit {
             run.limit("call-site", limit as u64);
-            return consumed;
+            return None;
         }
-        let Ok(caller) = FnId::new(format!("fn:{:#x}", cfg.entry)) else {
-            return consumed;
-        };
-        for ip in &keep {
-            let (Some((r, kind)), Some(kept), Some(id)) =
-                (resolved.get(ip), values.at(*ip), call_id(*ip))
-            else {
-                continue;
-            };
-            let target = match r {
-                Resolved::Symbol {
-                    name,
-                    defined: None,
-                    via,
-                } => CallTarget::Import {
-                    symbol: UntrustedText::from_bytes(name.to_vec()),
-                    via: (*via).into(),
-                },
-                Resolved::Symbol {
-                    name,
-                    defined: Some(at),
-                    ..
-                } => CallTarget::OwnExportViaPlt {
-                    symbol: UntrustedText::from_bytes(name.to_vec()),
-                    entry: *at,
-                },
-                Resolved::Internal(at) => CallTarget::Internal {
-                    entry: *at,
-                    export_name: None,
-                },
-                Resolved::Indirect(v, register) => {
-                    let Some(rr) = gpr(*register).and_then(reg) else {
-                        continue;
+        let names = keep
+            .iter()
+            .filter_map(|ip| match resolved.get(ip) {
+                Some((Resolved::Symbol { name, .. }, _)) => Some(name.len() as u64),
+                _ => None,
+            })
+            .fold(0, u64::saturating_add);
+        let name_limit = run.budgets.name_bytes;
+        if self.name_bytes.saturating_add(names) > name_limit {
+            run.limit("name-byte", name_limit);
+            return None;
+        }
+        // Every kept call forms a site: `keep` holds only resolved, recordable calls, each
+        // kept by `values`. Should one not, none is recorded, so no `ReturnOf` dangles (M3).
+        let mut escaped = BTreeSet::new();
+        let caller = FnId::new(format!("fn:{:#x}", cfg.entry)).ok();
+        let formed: Option<Vec<CallSite>> = caller.as_ref().and_then(|caller| {
+            keep.iter()
+                .map(|ip| {
+                    let (r, kind) = resolved.get(ip)?;
+                    let kept = values.at(*ip)?;
+                    let target = match r {
+                        Resolved::Symbol {
+                            name,
+                            defined: None,
+                            via,
+                        } => CallTarget::Import {
+                            symbol: UntrustedText::from_bytes(name.to_vec()),
+                            via: (*via).into(),
+                        },
+                        Resolved::Symbol {
+                            name,
+                            defined: Some(at),
+                            ..
+                        } => CallTarget::OwnExportViaPlt {
+                            symbol: UntrustedText::from_bytes(name.to_vec()),
+                            entry: *at,
+                        },
+                        Resolved::Internal(at) => CallTarget::Internal {
+                            entry: *at,
+                            export_name: None,
+                        },
+                        Resolved::Indirect(v, register) => {
+                            let rr = gpr(*register).and_then(reg)?;
+                            escapes(v, img, &mut escaped);
+                            CallTarget::Indirect {
+                                value: to_arg(v, rr, &keep, img, reader, run),
+                            }
+                        }
+                        Resolved::Memory | Resolved::Unresolved(_) => return None,
                     };
-                    CallTarget::Indirect {
-                        value: to_arg(v, rr, &keep, img, reader, run),
+                    let mut args = Vec::with_capacity(ARGS.len());
+                    for (v, g) in kept.args.iter().zip(ARGS).take(arity(r)) {
+                        escapes(v, img, &mut escaped);
+                        args.push(to_arg(v, reg(g)?, &keep, img, reader, run));
                     }
-                }
-                Resolved::Memory | Resolved::Unresolved(_) => continue,
-            };
-            let args = kept
-                .args
-                .iter()
-                .zip(ARGS)
-                .take(arity(r))
-                .filter_map(|(v, g)| Some(to_arg(v, reg(g)?, &keep, img, reader, run)))
-                .collect();
-            self.call_sites.push(CallSite {
-                id,
-                caller: caller.clone(),
-                addr: *ip,
-                kind: *kind,
-                target,
-                args,
-            });
-        }
+                    Some(CallSite {
+                        id: call_id(*ip)?,
+                        caller: caller.clone(),
+                        addr: *ip,
+                        kind: *kind,
+                        target,
+                        args,
+                    })
+                })
+                .collect()
+        });
+        debug_assert!(
+            formed.is_some(),
+            "function at {:#x}: a kept call forms no call site",
+            cfg.entry
+        );
+        let (Some(caller), Some(formed)) = (caller, formed) else {
+            run.gap(format!(
+                "code: function at {:#x}: call sites not formed",
+                cfg.entry
+            ));
+            return None;
+        };
+        self.name_bytes = self.name_bytes.saturating_add(names);
+        self.calls.extend(keep.iter().copied());
+        self.entries.insert(cfg.entry);
+        self.call_sites.extend(formed);
         self.functions.push(Function {
             id: caller,
             entry: cfg.entry,
@@ -575,49 +664,62 @@ impl Recorder {
             bounds: BoundsSource::EhFrameFde,
             names: vec![],
         });
-        consumed
+        Some(Consumed { called, escaped })
     }
 
-    /// Fills `Function.names` and `Internal.export_name` (spec §4.6, §4.8) in one pass over the
+    /// Fills `Internal.export_name` and `Function.names` (spec §4.6, §4.8) in one pass over the
     /// symbol tables, reading a name only for a recorded function's entry or an internal callee:
-    /// - names: the defined `FUNC`/`IFUNC` symbols of `.dynsym` and `.symtab` at the entry,
-    ///   sorted and unique;
     /// - `export_name`: the smallest of the `GLOBAL`/`WEAK`, `DEFAULT`/`PROTECTED` ones at the
     ///   callee in `.dynsym` (the one the loader binds through, as the image takes it), or in a
-    ///   relocatable object's `.symtab`.
+    ///   relocatable object's `.symtab`;
+    /// - names: the defined `FUNC`/`IFUNC` symbols of `.dynsym` and `.symtab` at the entry,
+    ///   sorted and unique.
     ///
     /// In a relocatable object a symbol's address is its section's file offset plus its value,
     /// as for the relocations ([`symbol_offset`]). A name is read as the image reads one
     /// ([`name_of`]), up to [`MAX_IMPORT_NAME`] bytes; one that cannot be read names nothing.
+    ///
+    /// The names copied count against `name_bytes` with the call targets' (review I2): export
+    /// names first, then each function's whole list, until one does not fit. Names are not
+    /// references, so what does not fit is left out without a gap.
     pub fn fill_names<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         &mut self,
         e: &Elf<'d, R, H>,
         sections: &Sections<'d, R, H>,
         img: &Image,
+        run: &Run,
     ) {
-        let entries: BTreeSet<u64> = self.functions.iter().map(|f| f.entry).collect();
-        let internal: BTreeSet<u64> = self
-            .call_sites
-            .iter()
-            .filter_map(|c| match &c.target {
-                CallTarget::Internal { entry, .. } => Some(*entry),
-                _ => None,
-            })
-            .collect();
-        if entries.is_empty() && internal.is_empty() {
+        let limit = run.budgets.name_bytes;
+        if self.name_bytes >= limit {
+            return;
+        }
+        let mut found = Found {
+            entries: self.functions.iter().map(|f| f.entry).collect(),
+            internal: self
+                .call_sites
+                .iter()
+                .filter_map(|c| match &c.target {
+                    CallTarget::Internal { entry, .. } => Some(*entry),
+                    _ => None,
+                })
+                .collect(),
+            relocatable: img.kind == Kind::Relocatable,
+            names: BTreeMap::new(),
+            exports: BTreeMap::new(),
+        };
+        if found.entries.is_empty() && found.internal.is_empty() {
             return;
         }
         let Some(table) = sections.table.as_ref() else {
             return;
         };
-        let relocatable = img.kind == Kind::Relocatable;
         // A linked file's `.symtab` names, but exports nothing.
-        let symtab = if relocatable {
+        let symtab = if found.relocatable {
             None
         } else {
             table.symbols(e.endian, e.data, elf::SHT_SYMTAB).ok()
         };
-        let exporting = if relocatable {
+        let exporting = if found.relocatable {
             sections.symbols.as_ref()
         } else {
             sections
@@ -625,34 +727,76 @@ impl Recorder {
                 .as_ref()
                 .filter(|_| sections.dynamic_symbols_agree)
         };
-        let mut found = Found::default();
         for (symbols, exports) in [(exporting, true), (symtab.as_ref(), false)] {
             if let Some(symbols) = symbols {
-                found.scan(e, table, symbols, exports, relocatable, &entries, &internal);
+                found.scan(e, table, symbols, exports);
+            }
+        }
+        let mut spend = Spend {
+            used: self.name_bytes,
+            limit,
+            spent: false,
+        };
+        for c in &mut self.call_sites {
+            if let CallTarget::Internal { entry, export_name } = &mut c.target {
+                if let Some(name) = found.exports.get(entry) {
+                    if spend.take(name.len() as u64) {
+                        *export_name = Some(UntrustedText::from_bytes(name.to_vec()));
+                    }
+                }
             }
         }
         for f in &mut self.functions {
             if let Some(n) = found.names.remove(&f.entry) {
-                f.names = n
-                    .into_iter()
-                    .map(|name| UntrustedText::from_bytes(name.to_vec()))
-                    .collect();
+                let len = n
+                    .iter()
+                    .map(|name| name.len() as u64)
+                    .fold(0, u64::saturating_add);
+                if spend.take(len) {
+                    f.names = n
+                        .into_iter()
+                        .map(|name| UntrustedText::from_bytes(name.to_vec()))
+                        .collect();
+                }
             }
         }
-        for c in &mut self.call_sites {
-            if let CallTarget::Internal { entry, export_name } = &mut c.target {
-                *export_name = found
-                    .exports
-                    .get(entry)
-                    .map(|name| UntrustedText::from_bytes(name.to_vec()));
+        self.name_bytes = spend.used;
+    }
+}
+
+/// The name bytes [`Recorder::fill_names`] may still copy: once one name does not fit, none
+/// after it is copied.
+struct Spend {
+    used: u64,
+    limit: u64,
+    spent: bool,
+}
+
+impl Spend {
+    /// Whether `n` more bytes fit; if they do, they are counted.
+    fn take(&mut self, n: u64) -> bool {
+        match self.used.checked_add(n) {
+            Some(total) if !self.spent && total <= self.limit => {
+                self.used = total;
+                true
+            }
+            _ => {
+                self.spent = true;
+                false
             }
         }
     }
 }
 
-/// The names [`Recorder::fill_names`] finds: the parse cache's bytes, not copied.
-#[derive(Default)]
+/// What [`Recorder::fill_names`] looks for, and the names it finds: the parse cache's bytes,
+/// not copied.
 struct Found<'d> {
+    /// The recorded functions' entries: their names are wanted.
+    entries: BTreeSet<u64>,
+    /// The internal callees: their export names are wanted.
+    internal: BTreeSet<u64>,
+    /// A relocatable object's symbols are at their sections' file offsets.
+    relocatable: bool,
     names: BTreeMap<u64, BTreeSet<&'d [u8]>>,
     exports: BTreeMap<u64, &'d [u8]>,
 }
@@ -660,16 +804,12 @@ struct Found<'d> {
 impl<'d> Found<'d> {
     /// One table's defined `FUNC`/`IFUNC` symbols at `entries` (names) or, when the table
     /// `exports`, at `internal` (export names).
-    #[allow(clippy::too_many_arguments)]
     fn scan<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         &mut self,
         e: &Elf<'d, R, H>,
         table: &SectionTable<'d, H, &'d Bounded<R>>,
         symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
         exports: bool,
-        relocatable: bool,
-        entries: &BTreeSet<u64>,
-        internal: &BTreeSet<u64>,
     ) {
         let endian = e.endian;
         for (index, sym) in symbols.enumerate().skip(1) {
@@ -679,7 +819,7 @@ impl<'d> Found<'d> {
             {
                 continue;
             }
-            let at = if relocatable {
+            let at = if self.relocatable {
                 match symbol_offset(table, symbols, endian, sym, index) {
                     Ok(Some(at)) => at,
                     _ => continue,
@@ -692,8 +832,8 @@ impl<'d> Found<'d> {
             let exported = exports
                 && (bind == elf::STB_GLOBAL || bind == elf::STB_WEAK)
                 && (vis == elf::STV_DEFAULT || vis == elf::STV_PROTECTED);
-            let want_name = entries.contains(&at);
-            let want_export = exported && internal.contains(&at);
+            let want_name = self.entries.contains(&at);
+            let want_export = exported && self.internal.contains(&at);
             if !want_name && !want_export {
                 continue;
             }
@@ -1046,13 +1186,16 @@ mod tests {
     const GETPID: u64 = 0x2020;
     const ABORT: u64 = 0x2030;
     const HELPER: u64 = 0x2040;
+    const SOCKET_OWN: u64 = 0x2050;
     const CONNECT_SLOT: u64 = 0x3000;
+    const GETPID_SLOT: u64 = 0x3010;
     const ABORT_SLOT: u64 = 0x3018;
     const HELPER_SLOT: u64 = 0x3020;
 
-    /// A linked image: the stubs of connect (`.plt`), dlsym (`.plt.sec`), getpid, abort, and
-    /// helper (defined at 0x1800), from 0x2000 every 0x10, their slots from 0x3000 every 8, in a
-    /// `.plt` of [0x2000, 0x2060). Its targets: connect and dlsym.
+    /// A linked image: the stubs of connect (`.plt`), dlsym (`.plt.sec`), getpid, abort, helper
+    /// (defined at 0x1800), and socket (an own export at 0x1810), from 0x2000 every 0x10, their
+    /// slots from 0x3000 every 8, in a `.plt` of [0x2000, 0x2060). Its targets: connect and
+    /// dlsym.
     fn linked(kind: Kind) -> Image {
         let mut img = Image::empty(kind);
         let syms = [
@@ -1061,6 +1204,7 @@ mod tests {
             ("getpid", None, ImportVia::Plt),
             ("abort", None, ImportVia::Plt),
             ("helper", Some(0x1800), ImportVia::Plt),
+            ("socket", Some(0x1810), ImportVia::Plt),
         ];
         for (k, (n, defined, via)) in syms.into_iter().enumerate() {
             let k = k as u64;
@@ -1320,30 +1464,36 @@ mod tests {
 
     /// `parts`, each given its address, laid out from 0x1000: the bytes and each one's address.
     fn layout(parts: &[&dyn Fn(u64) -> Vec<u8>]) -> (Vec<u8>, Vec<u64>) {
+        layout_at(0x1000, parts)
+    }
+
+    /// [`layout`] from `base`.
+    fn layout_at(base: u64, parts: &[&dyn Fn(u64) -> Vec<u8>]) -> (Vec<u8>, Vec<u64>) {
         let mut bytes = vec![];
         let mut at = vec![];
         for p in parts {
-            let a = 0x1000 + bytes.len() as u64;
+            let a = base + bytes.len() as u64;
             at.push(a);
             bytes.extend(p(a));
         }
         (bytes, at)
     }
 
-    /// Decodes `bytes` as the function [0x1000, 0x1000 + len), solves its values, and records
-    /// it into `rec`. Strings are read from a file of `file`.
+    /// Decodes `bytes` as the function [entry, entry + len), solves its values, and records it
+    /// into `rec`. Strings are read from a file of `file`.
     fn record_into(
         rec: &mut Recorder,
         bytes: &[u8],
+        entry: u64,
         img: &Image,
         run: &mut Run,
         file: &[u8],
-    ) -> BTreeSet<u64> {
+    ) -> Option<Consumed> {
         let sig = signatures().unwrap();
-        let end = 0x1000 + bytes.len() as u64;
+        let end = entry + bytes.len() as u64;
         let cfg = decode(
             bytes,
-            0x1000,
+            entry,
             end,
             img,
             &|i: &Insn| branch_target(i, img),
@@ -1358,10 +1508,11 @@ mod tests {
         rec.function(&cfg, &values, img, sig, &mut reader, run)
     }
 
-    fn record(bytes: &[u8], img: &Image) -> (Recorder, BTreeSet<u64>) {
+    /// [`record_into`] at 0x1000, into a new recorder: it records, with no gap.
+    fn record(bytes: &[u8], img: &Image) -> (Recorder, Consumed) {
         let mut rec = Recorder::default();
         let mut run = Run::new(CodeBudgets::default());
-        let consumed = record_into(&mut rec, bytes, img, &mut run, &[]);
+        let consumed = record_into(&mut rec, bytes, 0x1000, img, &mut run, &[]).unwrap();
         assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
         for c in &rec.call_sites {
             for a in c.args.iter().chain(match &c.target {
@@ -1421,9 +1572,22 @@ mod tests {
         ]);
         let mut rec = Recorder::default();
         let mut run = Run::new(CodeBudgets::default());
-        let consumed = record_into(&mut rec, &bytes, &img, &mut run, b"/tmp/sock\0junk\0\0");
+        let consumed = record_into(
+            &mut rec,
+            &bytes,
+            0x1000,
+            &img,
+            &mut run,
+            b"/tmp/sock\0junk\0\0",
+        );
         assert!(run.clone_gaps().is_empty(), "{:?}", run.clone_gaps());
-        assert_eq!(consumed, BTreeSet::from([at[4]]));
+        assert_eq!(
+            consumed,
+            Some(Consumed {
+                called: BTreeSet::from([at[4]]),
+                escaped: BTreeSet::new()
+            })
+        );
         assert_eq!(
             rec.call_sites,
             [CallSite {
@@ -1478,7 +1642,7 @@ mod tests {
         ]);
         let mut rec = Recorder::default();
         let mut run = Run::new(CodeBudgets::default());
-        record_into(&mut rec, &bytes, &img, &mut run, b"abcdefgh");
+        record_into(&mut rec, &bytes, 0x1000, &img, &mut run, b"abcdefgh");
         assert_eq!(rec.call_sites.len(), 1);
         assert_eq!(rec.call_sites[0].addr, at[2]);
         assert_eq!(
@@ -1509,7 +1673,10 @@ mod tests {
             &|_| RET.to_vec(),
         ]);
         let (rec, consumed) = record(&bytes, &img);
-        assert_eq!(consumed, BTreeSet::from([at[0], at[2], at[4], at[5]]));
+        assert_eq!(
+            consumed.called,
+            BTreeSet::from([at[0], at[2], at[4], at[5]])
+        );
         let ret = |reg, site| ArgValue::ReturnOf {
             reg,
             call: cs(site),
@@ -1560,7 +1727,11 @@ mod tests {
             &|_| RET.to_vec(),
         ]);
         let (rec, consumed) = record(&bytes, &img);
-        assert_eq!(consumed, BTreeSet::from([at[0], at[3]]), "not the call rax");
+        assert_eq!(
+            consumed.called,
+            BTreeSet::from([at[0], at[3]]),
+            "not the call rax"
+        );
         let sites: Vec<(u64, &CallTarget)> =
             rec.call_sites.iter().map(|c| (c.addr, &c.target)).collect();
         assert_eq!(
@@ -1597,7 +1768,7 @@ mod tests {
             &|a| jmp(a, CONNECT),
         ]);
         let (rec, consumed) = record(&bytes, &img);
-        assert_eq!(consumed, BTreeSet::from([at[1]]));
+        assert_eq!(consumed.called, BTreeSet::from([at[1]]));
         assert_eq!(
             rec.call_sites,
             [CallSite {
@@ -1653,7 +1824,7 @@ mod tests {
         let (rec, consumed) = record(&bytes, &img);
         assert!(rec.call_sites.is_empty(), "{:?}", rec.call_sites);
         assert!(rec.functions.is_empty(), "nothing recorded: no function");
-        assert_eq!(consumed, BTreeSet::from([at[1], at[3], at[5]]));
+        assert_eq!(consumed.called, BTreeSet::from([at[1], at[3], at[5]]));
     }
 
     #[test]
@@ -1667,7 +1838,14 @@ mod tests {
             &|_| RET.to_vec(),
         ]);
         let (rec, consumed) = record(&bytes, &img);
-        assert_eq!(consumed, BTreeSet::from([at[0]]), "the load, not the calls");
+        assert_eq!(
+            consumed,
+            Consumed {
+                called: BTreeSet::from([at[0]]),
+                escaped: BTreeSet::new()
+            },
+            "the load, not the calls"
+        );
         use Reg::*;
         let sites: Vec<_> = rec
             .call_sites
@@ -1691,7 +1869,7 @@ mod tests {
             &|_| RET.to_vec(),
         ]);
         let (rec, consumed) = record(&bytes, &exe);
-        assert_eq!(consumed, BTreeSet::from([at[0]]));
+        assert_eq!(consumed.called, BTreeSet::from([at[0]]));
         assert_eq!(rec.call_sites.len(), 1);
         assert_eq!(rec.call_sites[0].target, import("connect", ImportVia::Plt));
     }
@@ -1709,7 +1887,7 @@ mod tests {
         reloc(&mut img, at[0] + 3, rtype::REX_GOTPCRELX, 2, -4);
         reloc(&mut img, at[3] + 1, rtype::PLT32, 1, -4);
         let (rec, consumed) = record(&bytes, &img);
-        assert_eq!(consumed, BTreeSet::from([at[0], at[3]]));
+        assert_eq!(consumed.called, BTreeSet::from([at[0], at[3]]));
         let sites: Vec<_> = rec.call_sites.iter().map(|c| (c.addr, &c.target)).collect();
         assert_eq!(
             sites,
@@ -1727,31 +1905,287 @@ mod tests {
         assert_eq!(rec.call_sites[0].args, params(0));
     }
 
+    /// Two calls of connect, as the function at `base`.
+    fn two_connects(base: u64) -> Vec<u8> {
+        layout_at(
+            base,
+            &[
+                &|a| call_mem(a, CONNECT_SLOT),
+                &|a| call(a, CONNECT),
+                &|_| RET.to_vec(),
+            ],
+        )
+        .0
+    }
+
     /// The limit counts the call sites already recorded: a function that would pass it records
-    /// nothing, not even part of its calls.
+    /// nothing, not even part of its calls, and its references are not consumed (`None`).
     #[test]
     fn the_call_site_limit_drops_the_whole_function() {
         let img = linked(Kind::Shared);
-        let (bytes, _) = layout(&[
-            &|a| call_mem(a, CONNECT_SLOT),
-            &|a| call(a, CONNECT),
-            &|_| RET.to_vec(),
-        ]);
         let mut rec = Recorder::default();
         let mut run = Run::new(CodeBudgets {
             call_sites: 4,
             ..CodeBudgets::default()
         });
-        record_into(&mut rec, &bytes, &img, &mut run, &[]);
+        let at = |base: u64| two_connects(base);
+        assert!(record_into(&mut rec, &at(0x1000), 0x1000, &img, &mut run, &[]).is_some());
         // 2 + 2 = 4: at the limit, not past it.
-        record_into(&mut rec, &bytes, &img, &mut run, &[]);
+        assert!(record_into(&mut rec, &at(0x1100), 0x1100, &img, &mut run, &[]).is_some());
         assert_eq!((rec.call_sites.len(), rec.functions.len()), (4, 2));
         assert!(!run.stopped());
         // 4 + 2 > 4.
-        record_into(&mut rec, &bytes, &img, &mut run, &[]);
+        assert_eq!(
+            record_into(&mut rec, &at(0x1200), 0x1200, &img, &mut run, &[]),
+            None
+        );
         assert_eq!((rec.call_sites.len(), rec.functions.len()), (4, 2));
         assert!(run.stopped());
         assert_eq!(run.into_gaps(), ["code: call-site limit 4 reached"]);
+    }
+
+    /// I1: FDEs at 0x1000 and 0x1005 both decode the call at 0x1005. One `cs:0x1005` only: the
+    /// second function is not recorded, with a gap, and the run goes on.
+    #[test]
+    fn a_call_site_in_two_functions_drops_the_second() {
+        let img = linked(Kind::Shared);
+        let (bytes, at) = layout(&[&|_| vec![0x90; 5], &|a| call(a, CONNECT), &|_| RET.to_vec()]);
+        assert_eq!(at[1], 0x1005);
+        let mut rec = Recorder::default();
+        let mut run = Run::new(CodeBudgets::default());
+        assert!(record_into(&mut rec, &bytes, 0x1000, &img, &mut run, &[]).is_some());
+        assert_eq!(
+            record_into(&mut rec, &bytes[5..], 0x1005, &img, &mut run, &[]),
+            None
+        );
+        assert!(!run.stopped());
+        assert_eq!(
+            run.clone_gaps(),
+            ["code: call site at 0x1005 is in two functions"]
+        );
+        let ids: Vec<_> = rec
+            .call_sites
+            .iter()
+            .map(|c| (c.id.clone(), c.caller.clone()))
+            .collect();
+        assert_eq!(ids, [(cs(0x1005), fn_1000())]);
+        assert_eq!(rec.functions.len(), 1);
+        // The same entry twice (two FDEs from one address): one `fn:0x1000`.
+        assert_eq!(
+            record_into(&mut rec, &bytes[..6 + 4], 0x1000, &img, &mut run, &[]),
+            None
+        );
+        assert_eq!(rec.functions.len(), 1);
+        assert!(run
+            .clone_gaps()
+            .contains(&"code: function at 0x1000 is in two FDEs".to_string()));
+        assert!(!run.stopped());
+    }
+
+    /// I2: the names copied into call sites are counted with the call-site limit.
+    #[test]
+    fn the_name_byte_limit_drops_the_whole_function() {
+        let long = vec![b'l'; 100];
+        let mut img = linked(Kind::Shared);
+        img.slots.insert(
+            0x3100,
+            Sym {
+                name: Name::from(long.as_slice()),
+                defined: None,
+            },
+        );
+        img.stubs.insert(0x2100, (0x3100, ImportVia::Plt));
+        // Three calls of the 100-byte import, their values connect's arguments: 307 bytes.
+        let function = |base: u64| {
+            layout_at(
+                base,
+                &[
+                    &|a| call(a, 0x2100),
+                    &|_| vec![0x48, 0x89, 0xc3], // mov rbx, rax
+                    &|a| call(a, 0x2100),
+                    &|_| vec![0x48, 0x89, 0xc5], // mov rbp, rax
+                    &|a| call(a, 0x2100),
+                    &|_| vec![0x48, 0x89, 0xc2], // mov rdx, rax
+                    &|_| vec![0x48, 0x89, 0xdf], // mov rdi, rbx
+                    &|_| vec![0x48, 0x89, 0xee], // mov rsi, rbp
+                    &|a| call(a, CONNECT),
+                    &|_| RET.to_vec(),
+                ],
+            )
+            .0
+        };
+        for (limit, second) in [(614, true), (613, false)] {
+            let mut rec = Recorder::default();
+            let mut run = Run::new(CodeBudgets {
+                name_bytes: limit,
+                ..CodeBudgets::default()
+            });
+            let first = record_into(&mut rec, &function(0x1000), 0x1000, &img, &mut run, &[]);
+            assert!(first.is_some());
+            assert_eq!(rec.call_sites.len(), 4);
+            let next = record_into(&mut rec, &function(0x1100), 0x1100, &img, &mut run, &[]);
+            assert_eq!(next.is_some(), second, "{limit}");
+            if second {
+                assert_eq!(rec.call_sites.len(), 8);
+                assert!(!run.stopped());
+            } else {
+                assert_eq!((rec.call_sites.len(), rec.functions.len()), (4, 1));
+                assert!(run.stopped());
+                assert_eq!(run.into_gaps(), ["code: name-byte limit 613 reached"]);
+            }
+        }
+    }
+
+    /// §4.7: a target's address in a recorded value is taken, even where the same load is also
+    /// called.
+    #[test]
+    fn a_called_symbol_also_in_an_argument_escapes() {
+        let img = linked(Kind::Shared);
+        let (bytes, at) = layout(&[
+            &|a| mov_rbx_mem(a, CONNECT_SLOT),
+            &|_| vec![0x48, 0x89, 0xdf], // mov rdi, rbx
+            &|_| vec![0xff, 0xd3],       // call rbx
+            &|_| RET.to_vec(),
+        ]);
+        let (rec, consumed) = record(&bytes, &img);
+        assert_eq!(
+            consumed,
+            Consumed {
+                called: BTreeSet::from([at[0]]),
+                escaped: BTreeSet::from([at[0]])
+            }
+        );
+        assert_eq!(
+            rec.call_sites[0].args[0],
+            unknown(Reg::Rdi, ValueUnknown::NotModeled)
+        );
+        // Inside a Low and a Load base too, each its own load; the called load does not
+        // escape when no argument holds it; a symbol that is no target never escapes.
+        let load = |op: [u8; 3], slot: u64| move |a: u64| [&op[..], &rel32(a + 7, slot)].concat();
+        let (bytes, at) = layout(&[
+            &|a| mov_rbx_mem(a, CONNECT_SLOT),
+            &load([0x48, 0x8b, 0x05], CONNECT_SLOT), // mov rax, [connect]
+            &|_| vec![0x89, 0xc7],                   // mov edi, eax
+            &load([0x48, 0x8b, 0x15], CONNECT_SLOT), // mov rdx, [connect]
+            &|_| vec![0x48, 0x8b, 0x72, 0x08],       // mov rsi, [rdx+8]
+            &load([0x48, 0x8b, 0x15], GETPID_SLOT),  // mov rdx, [getpid]
+            &|_| vec![0xff, 0xd3],                   // call rbx
+            &|_| RET.to_vec(),
+        ]);
+        let (_, consumed) = record(&bytes, &img);
+        assert_eq!(
+            consumed,
+            Consumed {
+                called: BTreeSet::from([at[0]]),
+                escaped: BTreeSet::from([at[1], at[3]])
+            }
+        );
+        let mut out = BTreeSet::new();
+        escapes(
+            &set([
+                named("connect", None, Via::Got, 1),
+                named("dlsym", None, Via::Got, 2),
+                named("getpid", None, Via::Got, 3),
+                named("helper", Some(0x1800), Via::Got, 4),
+            ]),
+            &img,
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            BTreeSet::from([1, 2]),
+            "in a Set; only undefined targets"
+        );
+    }
+
+    /// M2, M4: an own export is `OwnExportViaPlt` with all six arguments, whatever its name.
+    #[test]
+    fn an_own_export_is_recorded_with_six_arguments() {
+        let img = linked(Kind::Shared);
+        let (bytes, at) = layout(&[
+            &|a| call(a, SOCKET_OWN),
+            &|_| MOV_RDI_RAX.to_vec(),
+            &|a| call(a, CONNECT),
+            &|_| RET.to_vec(),
+        ]);
+        let (rec, _) = record(&bytes, &img);
+        assert_eq!(rec.call_sites.len(), 2);
+        assert_eq!(rec.call_sites[0].addr, at[0]);
+        assert_eq!(
+            rec.call_sites[0].target,
+            CallTarget::OwnExportViaPlt {
+                symbol: text(b"socket"),
+                entry: 0x1810
+            }
+        );
+        assert_eq!(rec.call_sites[0].args, params(0), "not socket's arity 3");
+    }
+
+    /// M4: a relocatable object's tail jump to an import.
+    #[test]
+    fn a_tail_jump_in_a_relocatable_object_is_recorded() {
+        let mut img = object();
+        let (bytes, at) = layout(&[
+            &|_| vec![0xbf, 0x01, 0, 0, 0], // mov edi, 1
+            &|_| vec![0xe9, 0, 0, 0, 0],    // jmp connect@PLT
+        ]);
+        reloc(&mut img, at[1] + 1, rtype::PLT32, 1, -4);
+        let (rec, consumed) = record(&bytes, &img);
+        assert_eq!(consumed.called, BTreeSet::from([at[1]]));
+        let sites: Vec<_> = rec
+            .call_sites
+            .iter()
+            .map(|c| (c.addr, c.kind, &c.target))
+            .collect();
+        assert_eq!(
+            sites,
+            [(
+                at[1],
+                CallKind::TailJump,
+                &import("connect", ImportVia::Reloc)
+            )]
+        );
+    }
+
+    /// M4: a tail jump's arguments feed the closure.
+    #[test]
+    fn a_tail_jumps_arguments_feed_the_closure() {
+        let img = linked(Kind::Shared);
+        let (bytes, at) = layout(&[&|a| call(a, GETPID), &|_| MOV_RDI_RAX.to_vec(), &|a| {
+            jmp(a, CONNECT)
+        }]);
+        let (rec, _) = record(&bytes, &img);
+        let sites: Vec<_> = rec.call_sites.iter().map(|c| (c.addr, c.kind)).collect();
+        assert_eq!(
+            sites,
+            [(at[0], CallKind::Call), (at[2], CallKind::TailJump)]
+        );
+        assert_eq!(
+            rec.call_sites[1].args[0],
+            ArgValue::ReturnOf {
+                reg: Reg::Rdi,
+                call: cs(at[0])
+            }
+        );
+    }
+
+    /// M4: a memory call is not recorded, so its value is not modeled.
+    #[test]
+    fn a_memory_calls_value_is_not_modeled() {
+        let img = linked(Kind::Shared);
+        let (bytes, at) = layout(&[
+            &|_| vec![0xff, 0x50, 0x08], // call [rax+8]
+            &|_| MOV_RDI_RAX.to_vec(),
+            &|a| call(a, CONNECT),
+            &|_| RET.to_vec(),
+        ]);
+        let (rec, consumed) = record(&bytes, &img);
+        assert_eq!(consumed.called, BTreeSet::from([at[2]]));
+        assert_eq!(rec.call_sites.len(), 1);
+        assert_eq!(
+            rec.call_sites[0].args[0],
+            unknown(Reg::Rdi, ValueUnknown::NotModeled)
+        );
     }
 
     /// The strings of `names`, NUL-terminated after a leading NUL, and each one's offset.
@@ -1784,6 +2218,17 @@ mod tests {
     /// `agree`: whether `.dynsym` is the table the loader binds through, as the parse found it
     /// (`None`) or as given.
     fn fill(bytes: &[u8], kind: Kind, agree: Option<bool>, rec: &mut Recorder) {
+        fill_within(bytes, kind, agree, CodeBudgets::default().name_bytes, rec);
+    }
+
+    /// [`fill`], with `name_bytes` the name budget.
+    fn fill_within(
+        bytes: &[u8],
+        kind: Kind,
+        agree: Option<bool>,
+        name_bytes: u64,
+        rec: &mut Recorder,
+    ) {
         use crate::binary::read::{Bounded, Budgeted};
         use crate::binary::{elf as binelf, BinaryBudgets};
         use object::elf::FileHeader64;
@@ -1798,7 +2243,11 @@ mod tests {
         if let Some(agree) = agree {
             p.sections.dynamic_symbols_agree = agree;
         }
-        rec.fill_names(&p.elf, &p.sections, &Image::empty(kind));
+        let run = Run::new(CodeBudgets {
+            name_bytes,
+            ..CodeBudgets::default()
+        });
+        rec.fill_names(&p.elf, &p.sections, &Image::empty(kind), &run);
         assert!(!data.refused());
     }
 
@@ -1924,6 +2373,21 @@ mod tests {
                 (0x1000, Some(text(b"caller"))),
             ]
         );
+        // I2: within the name budget, export names first, then whole name lists: alias_b (7)
+        // and caller (6) take 13 bytes, and the 0x1000 list (5,023) does not fit.
+        for (budget, expect) in [
+            (13, [Some(text(b"alias_b")), None, Some(text(b"caller"))]),
+            (12, [Some(text(b"alias_b")), None, None]),
+        ] {
+            let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
+            fill_within(&bytes, Kind::Shared, None, budget, &mut rec);
+            assert_eq!(names_of(&rec), [(0x1000, vec![])], "{budget}");
+            let exports: Vec<_> = exports_of(&rec).into_iter().map(|(_, n)| n).collect();
+            assert_eq!(exports, expect, "{budget}");
+        }
+        let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
+        fill_within(&bytes, Kind::Shared, None, 13 + 5023, &mut rec);
+        assert_eq!(names_of(&rec)[0].1.len(), 4, "all of them, exactly");
         // A .dynsym the loader does not bind through is not read, as the image does not.
         let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
         fill(&bytes, Kind::Shared, Some(false), &mut rec);
