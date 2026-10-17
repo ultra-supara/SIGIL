@@ -1034,17 +1034,25 @@ mod tests {
 
     #[test]
     fn a_syscall_is_not_a_call() {
-        // syscall, sysenter, int 0x80: rax, rcx, r11 become NotModeled, never a ReturnOf, and
-        // no state is kept before them.
+        // syscall, sysenter, int 0x80: rax, rcx, r11 become NotModeled (each known before),
+        // never a ReturnOf, and no state is kept before them.
         for entry in [&[0x0f, 0x05][..], &[0x0f, 0x34][..], &[0xcd, 0x80][..]] {
-            let (bytes, at) = code(&[entry, &[0x48, 0x89, 0xc7], &CALL0, &RET]); // mov rdi, rax
+            let (bytes, at) = code(&[
+                &[0xb8, 0x29, 0, 0, 0],       // mov eax, 41
+                &[0xb9, 0x01, 0, 0, 0],       // mov ecx, 1
+                &[0x41, 0xbb, 0x02, 0, 0, 0], // mov r11d, 2
+                entry,
+                &[0x48, 0x89, 0xc7], // mov rdi, rax
+                &CALL0,
+                &RET,
+            ]);
             let s = states_before_calls(&bytes);
             assert_eq!(
                 s.keys().copied().collect::<Vec<_>>(),
-                [at[2]],
+                [at[5]],
                 "{entry:02x?}"
             );
-            let s = &s[&at[2]];
+            let s = &s[&at[5]];
             assert_eq!(s[7], Val::Unknown(Why::NotModeled), "{entry:02x?}");
             assert_eq!(s[1], Val::Unknown(Why::NotModeled), "{entry:02x?}");
             assert_eq!(s[11], Val::Unknown(Why::NotModeled), "{entry:02x?}");
