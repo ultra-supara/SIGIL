@@ -2390,6 +2390,13 @@ mod tests {
         let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
         fill_within(&bytes, Kind::Shared, None, 13 + 5023, &mut rec);
         assert_eq!(names_of(&rec)[0].1.len(), 4, "all of them, exactly");
+        let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
+        fill_within(&bytes, Kind::Shared, None, 13 + 5022, &mut rec);
+        assert_eq!(
+            names_of(&rec),
+            [(0x1000, vec![])],
+            "one byte short: the whole list counts"
+        );
         // A .dynsym the loader does not bind through is not read, as the image does not.
         let mut rec = recorded(&[0x1000], &[0x1800, 0x1900, 0x1000]);
         fill(&bytes, Kind::Shared, Some(false), &mut rec);
