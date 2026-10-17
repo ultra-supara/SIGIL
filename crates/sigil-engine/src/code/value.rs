@@ -1926,4 +1926,23 @@ mod tests {
         assert!(solve(&cfg, &img, &mut run).is_ok());
         assert!(run.value_steps > 48 * 6, "{}", run.value_steps);
     }
+
+    #[test]
+    fn value_step_limit_in_the_fixpoint_keeps_nothing() {
+        // call; ret under a budget of 1 step: the fixpoint's second step is refused, so the
+        // function fails there, before the recording pass keeps the call's values.
+        let (bytes, _) = code(&[&CALL0, &RET]);
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&bytes, &img);
+        let mut run = Run::new(CodeBudgets {
+            value_steps: 1,
+            ..CodeBudgets::default()
+        });
+        let mut visited = 0;
+        let r = propagate(&cfg, &img, VALUE_PASSES, &mut run, |_, _, _| visited += 1);
+        assert_eq!(r.err(), Some(Failure::ArtifactValueSteps));
+        assert_eq!(visited, 0, "nothing kept");
+        assert_eq!(run.value_steps, 1);
+        assert_eq!(run.into_gaps(), ["code: value-step limit 1 reached"]);
+    }
 }
