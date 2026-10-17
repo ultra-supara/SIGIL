@@ -1122,4 +1122,26 @@ mod tests {
         assert_eq!(rec.call_sites.len(), 1);
         assert_eq!(rec.call_sites[0].addr, 0x47);
     }
+
+    #[test]
+    fn an_absolute_displacement_is_confirmed_as_absolute() {
+        use crate::code::image::rtype;
+        // 40: lea rax, [connect] (48 8d 04 25 disp32: no base, no RIP; R_X86_64_32S connect on
+        // the disp32 at 0x44); 48: call rax; 4a: ret. The field is an absolute displacement
+        // (§4.2's table): the address of connect, called. Read as a RIP-relative one, `32S` has
+        // no meaning there, and the reference would be a gap.
+        let (mut img, f) = object(&[0x48, 0x8d, 0x04, 0x25, 0, 0, 0, 0, 0xff, 0xd0, 0xc3]);
+        reloc(&mut img, 0x44, rtype::R32S, 0);
+        let (rec, gaps) = run_on(&img, &f);
+        assert_eq!(gaps, Vec::<String>::new());
+        assert_eq!(rec.call_sites.len(), 1);
+        assert_eq!(rec.call_sites[0].addr, 0x48);
+        assert_eq!(
+            rec.call_sites[0].target,
+            sigil_model::CallTarget::Import {
+                symbol: sigil_model::UntrustedText::from_bytes(b"connect".to_vec()),
+                via: ImportVia::Reloc
+            }
+        );
+    }
 }
