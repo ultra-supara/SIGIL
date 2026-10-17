@@ -31,6 +31,7 @@ pub(crate) use linked::linked;
 // Called outside tests from Task 11 (`analyze`); until then only the test helper calls it.
 #[allow(unused_imports)]
 pub(crate) use relocatable::relocatable;
+pub(crate) use relocatable::symbol_offset;
 
 /// The x86-64 page the loader maps.
 pub(crate) const PAGE: u64 = 4096;

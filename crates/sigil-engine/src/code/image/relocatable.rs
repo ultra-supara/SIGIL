@@ -396,13 +396,8 @@ fn symbols<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 at: None,
             }
         } else {
-            let value: u64 = sym.st_value(endian).into();
-            let at = match symtab.symbol_section(endian, sym, si) {
-                Ok(Some(section)) => {
-                    file_offset(table, section, endian).and_then(|base| base.checked_add(value))
-                }
-                // `SHN_ABS`, `SHN_COMMON`: no file offset.
-                Ok(None) => None,
+            let at = match symbol_offset(table, symtab, endian, sym, si) {
+                Ok(at) => at,
                 Err(why) => {
                     run.gap(format!("code: relocation symbol {index}: {why}"));
                     None
@@ -413,6 +408,24 @@ fn symbols<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         out.insert(index, entry);
     }
     out
+}
+
+/// `S` of the defined symbol `sym` (symbol `index` of `symtab`) of a relocatable object: its
+/// section's file offset plus its `st_value`. `Ok(None)`: in no section with file bytes
+/// (`SHN_ABS`, `SHN_COMMON`, `SHT_NOBITS`), or past 2^64. The relocations' symbols and the names
+/// of the recorded functions (`record::Recorder::fill_names`) are placed by it alike.
+pub(crate) fn symbol_offset<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    table: &SectionTable<'d, H, &'d Bounded<R>>,
+    symtab: &SymbolTable<'d, H, &'d Bounded<R>>,
+    endian: Endianness,
+    sym: &H::Sym,
+    index: SymbolIndex,
+) -> object::read::Result<Option<u64>> {
+    let value: u64 = sym.st_value(endian).into();
+    Ok(symtab
+        .symbol_section(endian, sym, index)?
+        .and_then(|section| file_offset(table, section, endian))
+        .and_then(|base| base.checked_add(value)))
 }
 
 /// The file offset of section `index`, where its symbols are: none for a section without file
