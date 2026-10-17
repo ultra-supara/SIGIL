@@ -7,11 +7,12 @@ use std::path::PathBuf;
 use sigil_model::{
     ActiveFeature, ApiProbe, Artifact, CheckId, CodeFacts, Completeness, Coverage, CoverageState,
     Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
-    SchemaVersion, Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText,
-    Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES,
-    BINARY_CODE_BYTES, INSTALL_ROOT,
+    SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
+    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
+    BINARY_BYTES, BINARY_CODE_BYTES, INSTALL_ROOT,
 };
 
+use crate::analyze::binary::CodeCoverageError;
 use crate::analyze::{binary, container, exposure, hints, model_store, release, runtime_api};
 use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
@@ -365,28 +366,6 @@ pub fn binary_session(
         budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
     }
     let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
-    // The facts of each analyzed slice that has a call site; one content named twice is one
-    // slice, so one entry.
-    let code = facts
-        .code
-        .iter()
-        .filter_map(|(slice, o)| match o {
-            CodeOutcome::Analyzed {
-                functions,
-                call_sites,
-                ..
-            } if !call_sites.is_empty() => Some(CodeFacts {
-                slice: slice.clone(),
-                functions: functions.clone(),
-                call_sites: call_sites.clone(),
-                predicate_checks: vec![],
-                close_checks: vec![],
-                guard_regions: vec![],
-                param_mappings: vec![],
-            }),
-            _ => None,
-        })
-        .collect();
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -415,7 +394,8 @@ pub fn binary_session(
         reference_matches: vec![],
         binaries: facts.binaries,
         hints,
-        code,
+        // Moved out of the outcomes once their coverage is computed, below.
+        code: vec![],
         relations,
         rule_support: vec![],
         bindings: vec![],
@@ -438,15 +418,42 @@ pub fn binary_session(
     // The container's entries first: an input over `binary_bytes` copies its state to
     // `binary.code`.
     session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
-    let code_coverage =
-        binary::code_coverage(&session, &facts.code).map_err(InspectError::BadId)?;
+    let code_coverage = binary::code_coverage(&session, &facts.code).map_err(|e| match e {
+        CodeCoverageError::BadId(e) => InspectError::BadId(e),
+        CodeCoverageError::Undecided(e) => InspectError::Internal(e),
+    })?;
     session.coverage.extend(code_coverage);
+    session.code = code_facts(facts.code);
     evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
     session.canonicalize();
     session.validate().map_err(|errors| {
         InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
     })?;
     Ok(session)
+}
+
+/// The code facts of each analyzed slice that has a call site, moved out of `outcomes`. One
+/// content named twice is one slice, so one entry.
+fn code_facts(outcomes: Vec<(SliceId, CodeOutcome)>) -> Vec<CodeFacts> {
+    outcomes
+        .into_iter()
+        .filter_map(|(slice, outcome)| match outcome {
+            CodeOutcome::Analyzed {
+                functions,
+                call_sites,
+                ..
+            } if !call_sites.is_empty() => Some(CodeFacts {
+                slice,
+                functions,
+                call_sites,
+                predicate_checks: vec![],
+                close_checks: vec![],
+                guard_regions: vec![],
+                param_mappings: vec![],
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The facts of a model store whose root could not be opened: inventory coverage only.

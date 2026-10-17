@@ -46,8 +46,10 @@ pub struct NamedFacts {
     pub instances: Vec<FileInstance>,
     pub artifacts: Vec<Artifact>,
     pub binaries: Vec<BinaryFacts>,
-    /// The code outcome of each slice of `binaries`' contents, when `NamedBudgets.binary.code`
-    /// asked for code (PR-5a), sorted by slice.
+    /// When `NamedBudgets.binary.code` asked for code (PR-5a): the code outcome of every slice
+    /// of each content parsed by a read that saw no change, sorted by slice. A slice without
+    /// container facts (a Mach-O slice not parsed) has one too: `Unsupported`, as every Mach-O
+    /// slice's is.
     pub code: Vec<(SliceId, CodeOutcome)>,
     /// For each input over `binary_bytes`: the bytes hashed before it (its `used`).
     pub over: BTreeMap<InstanceId, u64>,

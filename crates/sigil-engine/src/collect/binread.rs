@@ -81,9 +81,10 @@ pub(crate) fn read(
     read
 }
 
-/// One `BinaryFacts` per parsed content, for its slice, and the code outcome of each slice that
-/// has one (PR-5a), each sorted by slice. `parsed` holds only the contents of reads that saw no
-/// change ([`read`]), so neither part comes from a read that saw one.
+/// One `BinaryFacts` per parsed slice with container facts, and the code outcome of each slice
+/// that has one (PR-5a; with or without container facts), each sorted by slice. `parsed` holds
+/// only the contents of reads that saw no change ([`read`]), so neither part comes from a read
+/// that saw one.
 pub(crate) fn binaries(
     parsed: BTreeMap<ArtifactId, ParsedArtifact>,
     artifacts: &[Artifact],

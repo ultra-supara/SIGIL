@@ -41,23 +41,33 @@ pub fn analyze(s: &Session, over: &BTreeMap<InstanceId, u64>) -> Result<Vec<Cove
         .collect()
 }
 
+/// Why `binary.code` could not be computed: a bug either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeCoverageError {
+    /// `binary.code` failed the model's rules for a check ID.
+    BadId(String),
+    /// The model cannot judge an input of the session (`expected_binary_code`'s error).
+    Undecided(String),
+}
+
 /// The `binary.code` entry of every input of `s`, when `s.request.code`; none otherwise. `code`:
-/// each analyzed slice's outcome. It runs after the `binary.container` entries are in
-/// `s.coverage`: an input over `binary_bytes` copies its container entry's state, `used`
-/// included.
+/// each analyzed slice's outcome, of which only the variant, the gaps, and the budget use are
+/// read. It runs after the `binary.container` entries are in `s.coverage`: an input over
+/// `binary_bytes` copies its container entry's state, `used` included.
 pub fn code_coverage(
     s: &Session,
     code: &[(SliceId, CodeOutcome)],
-) -> Result<Vec<Coverage>, String> {
+) -> Result<Vec<Coverage>, CodeCoverageError> {
     if !s.request.code {
         return Ok(vec![]);
     }
-    let check = CheckId::new(BINARY_CODE).map_err(|e| e.to_string())?;
+    let check = CheckId::new(BINARY_CODE).map_err(|e| CodeCoverageError::BadId(e.to_string()))?;
     s.instances
         .iter()
         .filter(|i| is_binary_root(&i.root))
         .map(|i| {
-            let (state, budget) = match expected_binary_code(s, i)? {
+            let expected = expected_binary_code(s, i).map_err(CodeCoverageError::Undecided)?;
+            let (state, budget) = match expected {
                 ExpectedCode::Exactly(state) => (state, None),
                 ExpectedCode::Analyzable { limit, parsed } => analyzed(s, i, code, limit, parsed),
             };
@@ -72,8 +82,9 @@ pub fn code_coverage(
 }
 
 /// `binary.code` of an input the model says is analyzable (an x86-64 ELF, whose one slice is
-/// the artifact's first): its slice's outcome. `Complete` only without gaps and when every slice
-/// was `parsed`; a slice without an outcome is `Partial`, having read nothing for code.
+/// the artifact's first): its slice's outcome. A slice without an outcome, or not `parsed`, is
+/// `Partial`, having read nothing for code. (An ELF slice has an outcome exactly when its read
+/// saw no change, and then container facts too, so it is `parsed`.)
 fn analyzed(
     s: &Session,
     i: &FileInstance,
@@ -81,38 +92,8 @@ fn analyzed(
     limit: u64,
     parsed: bool,
 ) -> (CoverageState, Option<BudgetUse>) {
-    let slice = match &i.content {
-        InstanceContent::Read { artifact } => s
-            .artifacts
-            .iter()
-            .find(|a| a.id == *artifact)
-            .and_then(|a| a.slices.first()),
-        InstanceContent::NotRead { .. } => None,
-    };
-    let outcome = slice.and_then(|x| code.iter().find(|(id, _)| *id == x.id).map(|(_, o)| o));
-    match outcome {
-        Some(CodeOutcome::Analyzed { gaps, budget, .. }) => {
-            let mut missing = gaps.clone();
-            if !parsed {
-                missing.push(BINARY_NOT_PARSED.to_string());
-                missing.sort();
-                missing.dedup();
-            }
-            let state = if missing.is_empty() {
-                CoverageState::Complete
-            } else {
-                CoverageState::Partial { missing }
-            };
-            (state, Some(budget.clone()))
-        }
-        // An x32 or big-endian file: `x86_64` in the model (plan R-c).
-        Some(CodeOutcome::Unsupported) => (
-            CoverageState::Unsupported {
-                what: CODE_UNSUPPORTED.to_string(),
-            },
-            None,
-        ),
-        None => (
+    let not_parsed = || {
+        (
             CoverageState::Partial {
                 missing: vec![BINARY_NOT_PARSED.to_string()],
             },
@@ -121,6 +102,37 @@ fn analyzed(
                 used: 0,
                 limit,
             }),
+        )
+    };
+    let slice = match &i.content {
+        InstanceContent::Read { artifact } => s
+            .artifacts
+            .iter()
+            .find(|a| a.id == *artifact)
+            .and_then(|a| a.slices.first()),
+        InstanceContent::NotRead { .. } => None,
+    };
+    let Some(slice) = slice.filter(|_| parsed) else {
+        return not_parsed();
+    };
+    match code.iter().find(|(id, _)| *id == slice.id).map(|(_, o)| o) {
+        Some(CodeOutcome::Analyzed { gaps, budget, .. }) => (
+            if gaps.is_empty() {
+                CoverageState::Complete
+            } else {
+                CoverageState::Partial {
+                    missing: gaps.clone(),
+                }
+            },
+            Some(budget.clone()),
         ),
+        // An x32 or big-endian file: `x86_64` in the model (plan R-c).
+        Some(CodeOutcome::Unsupported) => (
+            CoverageState::Unsupported {
+                what: CODE_UNSUPPORTED.to_string(),
+            },
+            None,
+        ),
+        None => not_parsed(),
     }
 }

@@ -15,7 +15,7 @@ use sigil_engine::inspect::{
 };
 use sigil_engine::policy::Policy;
 use sigil_model::{
-    Coverage, CoverageState, Format, Ref, Session, BINARY_CODE, BINARY_CODE_BYTES,
+    Arch, Coverage, CoverageState, ElfType, Format, Ref, Session, BINARY_CODE, BINARY_CODE_BYTES,
     BINARY_CONTAINER, CODE_UNSUPPORTED,
 };
 use tempfile::TempDir;
@@ -259,6 +259,72 @@ fn unreadable_dynamic_symbols_make_both_checks_partial() {
     );
     assert!(s.code.is_empty());
     s.validate().unwrap();
+}
+
+/// A header-only `ET_REL` ELF for `EM_X86_64` (no sections, no program headers) of class `class`
+/// (1: ELF32, 2: ELF64) and byte order `data` (1: little, 2: big).
+fn header_only_x86_64_rel(class: u8, data: u8) -> Vec<u8> {
+    let size: u16 = if class == 1 { 52 } else { 64 };
+    let half = |v: u16| {
+        if data == 1 {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
+    };
+    let word = |v: u32| {
+        if data == 1 {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
+    };
+    let mut h = vec![0u8; usize::from(size)];
+    h[..4].copy_from_slice(b"\x7fELF");
+    h[4] = class;
+    h[5] = data;
+    h[6] = 1; // EI_VERSION
+    h[16..18].copy_from_slice(&half(1)); // ET_REL
+    h[18..20].copy_from_slice(&half(62)); // EM_X86_64
+    h[20..24].copy_from_slice(&word(1)); // e_version
+    let ehsize = if class == 1 { 40 } else { 52 };
+    h[ehsize..ehsize + 2].copy_from_slice(&half(size));
+    h
+}
+
+#[test]
+fn x32_and_big_endian_inputs_are_unsupported() {
+    // R-c: the model records no ELF class or byte order, so both are `x86_64` ELF slices there
+    // (`Analyzable`); the code analysis reads neither, and the model admits its `Unsupported`.
+    let dir = TempDir::new().unwrap();
+    for (name, class, data) in [("be64.o", 2, 2), ("x32.o", 1, 1)] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, header_only_x86_64_rel(class, data)).unwrap();
+        let s = with_code(&[path]);
+        let a = &s.artifacts[0];
+        assert_eq!(a.format, Format::Elf { kind: ElfType::Rel }, "{name}");
+        assert_eq!(a.slices.len(), 1, "{name}");
+        assert_eq!(a.slices[0].arch, Arch::X86_64, "{name}");
+        assert_eq!(s.binaries.len(), 1, "{name}");
+        assert!(
+            matches!(
+                entry(&s, BINARY_CONTAINER, 0).state,
+                CoverageState::Complete | CoverageState::Partial { .. }
+            ),
+            "{name}: {:?}",
+            entry(&s, BINARY_CONTAINER, 0).state
+        );
+        assert_eq!(
+            code_state(&s, 0).state,
+            CoverageState::Unsupported {
+                what: CODE_UNSUPPORTED.to_string()
+            },
+            "{name}"
+        );
+        assert_eq!(code_state(&s, 0).budget, None, "{name}");
+        assert!(s.code.is_empty(), "{name}");
+        s.validate().unwrap();
+    }
 }
 
 #[test]

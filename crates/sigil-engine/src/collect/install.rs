@@ -99,7 +99,11 @@ fn collect_with(
         exceeded: vec![],
         found: 0,
         during_read,
-        binary: budgets.binary,
+        // An install scan never analyzes code, whatever a library caller passes (PR-5a).
+        binary: BinaryBudgets {
+            code: None,
+            ..budgets.binary
+        },
         parsed: BTreeMap::new(),
     };
     let state = match opened {
@@ -117,7 +121,7 @@ fn collect_with(
             c.state()
         }
     };
-    // An install scan never asks for code (`BinaryBudgets.code` is `None`): no outcomes.
+    // No code was asked for (`binary.code` is forced to `None` above): no outcomes.
     let (binaries, _) = super::binread::binaries(c.parsed, &c.artifacts);
     Ok(InstallFacts {
         root_path,
