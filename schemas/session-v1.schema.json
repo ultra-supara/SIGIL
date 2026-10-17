@@ -394,7 +394,7 @@
           "items": {"$ref": "#/$defs/ActiveFeature"}
         },
         "code": {
-          "description": "Whether code was analyzed (binary inspect --code; PR-5a): the direct call sites of the capability imports. Optional on read (missing means false), always written by SIGIL.",
+          "description": "Whether code was analyzed (code analysis, PR-5a; the CLI flag comes with PR-5a-2): the direct call sites of the capability imports. Optional on read (missing means false), always written by SIGIL.",
           "type": "boolean"
         }
       }

@@ -69,18 +69,20 @@ an installation do not make every binary inspection incomplete.
 
 **With code analysis** (`request.code`), `binary_code_audit` is added after `binary_audit`, without
 repeats: `["binary_code"]`, whose check is `binary.code`, one entry per input. Without code
-analysis, `binary_code_audit` is ignored. The engine's binary request asks for code analysis; the
-CLI flag comes with PR-5a-2. Evaluation reads `request.code` from the session, so it adds the same
-scope.
+analysis, `binary_code_audit` is ignored. Code analysis is requested through the engine's
+`BinaryRequest`; the CLI flag comes with PR-5a-2. Evaluation reads `request.code` from the session,
+so it adds the same scope.
 
 `binary_audit` is optional, but unlike the other lists, a policy file that omits it gets
 `["binary"]`: a policy written before it existed still requires every input to be inspected in
-full. Only an explicit `binary_audit = []` requires nothing, and the result is then `COMPLETE`
-whatever the inputs' statuses (the summary says so).
+full. Without code analysis, only an explicit `binary_audit = []` requires nothing, and the result
+is then `COMPLETE` whatever the inputs' statuses (the summary says so).
 
 `binary_code_audit` fails closed the same way. A policy file that omits it gets `["binary_code"]`,
 so a policy written before it existed still requires every input's code to be analyzed in full.
-Only an explicit `binary_code_audit = []` requires nothing of code.
+Only an explicit `binary_code_audit = []` requires nothing of code. With code analysis, a binary
+inspection requires nothing only when both lists are `[]`: with `binary_audit = []` alone, the
+default `binary_code_audit` still requires `binary.code`.
 
 Under the default policy with code analysis, an input whose `binary.code` does not close makes the
 session `INCOMPLETE`. That is `Partial`, `BudgetExceeded`, `Error`, or `Unsupported`:

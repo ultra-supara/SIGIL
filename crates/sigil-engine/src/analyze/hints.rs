@@ -1,5 +1,6 @@
 //! Level B capability hints (PR-5a spec §4.9): one per capability import of an ELF slice. They
-//! say the import exists, never that it is called; `binary inspect --code` adds the call sites.
+//! say the import exists, never that it is called; code analysis (PR-5a; the CLI flag comes with
+//! PR-5a-2) adds the call sites.
 
 use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal};
 

@@ -88,7 +88,8 @@ pub struct Policy {
     /// Scopes of a binary inspection (`sigil binary inspect`); `["binary"]` when the policy file
     /// omits the list. The lists above and `extra_required` apply to `inspect ollama` only.
     pub binary_audit: Vec<AuditScope>,
-    /// Scopes a binary inspection with code adds (`binary inspect --code`; PR-5a);
+    /// Scopes a binary inspection with code adds (code analysis, PR-5a; the CLI flag comes with
+    /// PR-5a-2);
     /// `["binary_code"]` when the policy file omits the list.
     pub binary_code_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.

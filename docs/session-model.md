@@ -167,9 +167,10 @@ The rule then yields an open question at most.
   - C3: each entry is in the state its input implies (`expected_binary_code`, listed below);
   - C4: a binary inspection's code facts are about slices whose input's `binary.code` is
     `Complete` or `Partial`;
-  - C5: in every value (call arguments, predicate atoms, guard comparisons), a `Load` reads 8,
-    16, 32, or 64 bits, a `Low` keeps 8, 16, or 32 bits of a value that is not a `Low`, and a
-    `Set` has 2 to 4 members, none a `Set` or `Unknown`;
+  - C5: in every value, a `Load` reads 8, 16, 32, or 64 bits, a `Low` keeps 8, 16, or 32 bits of
+    a value that is not a `Low`, and a `Set` has 2 to 4 members, none a `Set` or `Unknown`. The
+    values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,
+    with the values nested in each;
   - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF facts.
 
   C1 and C4 are about a binary inspection. Outside one, code facts are the M1 analyzer's (plan
@@ -453,7 +454,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
 | Binary facts | `BinaryFacts`, `ContainerFacts`, `ElfFacts`, `ElfImport`, `DataSymbol`, `DataValue`, `GoBuildInfo`, `GoModule`, `GoSetting` | What a binary's own bytes say: interpreter, names, NEEDED in order, search paths, notes, symbol counts and imports, known embedded values, Go build info, and the gaps |
 | Reference matches | `ReferenceMatch`, `MemberResult`, `MemberKind`, `EntryKind` | One placement of the install root, or one member absent from it, compared with one release of a reference set. A placement that was not read says why (`NotReadReason`, which gained `Directory` and `NotFollowed`, a symlink of the install, in PR-4a) |
-| B: presence | `FeatureHint`, `Signal` | A feature signal exists: one per capability import of a slice |
+| B: presence | `FeatureHint`, `Signal` | A feature signal exists. Today, one `Import` hint per capability import of a slice |
 | C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice. A binary inspection's code analysis records functions and call sites only |
 | Relations | `Relation` (`Declares`, `Candidate`, `SymbolCandidate`, `ProfileMatch`, `SearchPath`, `Spawns`), `ObligationResult`, `BindingPremise` | Dependencies, profile obligations, search paths, topology, binding |
 | D: behavior | `RuleSupport`, `Support`, `LoadFacts`, `LoadFact`, `Tri`, `ProcessValue`, `ValueOrigin` | Per-rule support (recorded once) and per-file facts, with premises and value provenance |
@@ -488,17 +489,17 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 - **Instances.** Each root has one instance: ID `inst:binary-<n>/<file name>`, at the root's path,
   discovered by `Argument` (named on the command line).
 - **Coverage.** Each input has one `binary.container` entry, scope `Instance`: its status
-  (B9 above). Under the default policy, the request's audit is `binary`, and its one required
-  check is `binary.container`. With code analysis, each input also has one `binary.code` entry
-  (below).
+  (B9 above). Under the default policy, the request's audit is `binary`. Without code analysis,
+  its one required check is `binary.container`. With code analysis, each input also has one
+  `binary.code` entry (below).
 - **Facts.** An ELF or Mach-O input's facts are `BinaryFacts` records and their `Declares`
   relations, as for an installation. A fat Mach-O has one record per valid architecture slice.
 
 ## Code analysis (PR-5a)
 
 A binary inspection can also analyze code. For each input, it records where the capability
-imports are called directly. The engine's binary request asks for it (`BinaryRequest` with code
-budgets). The CLI flag comes with PR-5a-2.
+imports are called directly. Code analysis is requested through the engine's `BinaryRequest`,
+with code budgets. The CLI flag comes with PR-5a-2.
 
 **The request.**
 - `request.code` is `true`. Only a binary inspection may set it (C1).
@@ -573,7 +574,9 @@ slice. Code analysis records functions and call sites only. `predicate_checks`, 
 **Argument values.** Each argument is the register's value at the call, propagated forward over
 the function's control flow:
 - `ConstInt`, or `ConstStr` for an address that an instruction forms and that holds a
-  NUL-terminated string of at most 4 KiB in read-only data. An immediate is always a `ConstInt`;
+  NUL-terminated string of at most 4 KiB in read-only data. An unrelocated immediate is never a
+  `ConstStr`. In a relocatable object, an immediate under an absolute relocation (`R_X86_64_32`,
+  `32S`, or `64`) of a defined symbol is an address, and a `ConstStr` when it points at a string;
 - `Param { index }`: the function's own argument;
 - `ReturnOf { call }`: the return value of a recorded call;
 - `Load { base, offset, width, site }`: the bits loaded from `[base+offset]`, zero-extended.
@@ -587,21 +590,28 @@ the function's control flow:
   stack address (a `lea` from an unknown base) is `NotModeled`.
 
 **Budgets and limits.**
-- Every byte that code analysis reads is charged to `binary_code_bytes` before the read. A read
-  over it is refused, and the analysis stops with the gap `binary_code_bytes: <limit> exceeded`.
-  So `binary.code` is `Partial`, not `BudgetExceeded`.
-- A `binary_parse_bytes` refusal during code analysis is the code gap
-  `code: binary_parse_bytes exceeded`. It never changes `binary.container`.
+- Every byte of code, `.eh_frame`, PLT sections, and string data is charged to
+  `binary_code_bytes` before it is read. A read over it is refused, and the analysis stops with
+  the gap `binary_code_bytes: <limit> exceeded`. So `binary.code` is `Partial`, not
+  `BudgetExceeded`.
+- Section headers, symbol and relocation tables, and names are read through the container's parse
+  cache, under `binary_parse_bytes`. A refusal there during code analysis is the code gap
+  `code: binary_parse_bytes exceeded`, except while the names are filled (`Function.names` and
+  an internal callee's `export_name`): a name left out is not a gap. Either way,
+  `binary.container` never changes.
 - The other limits are constants, not recorded in the request. Legitimate files stay far below
   them.
 
 Each aggregate limit below counts per artifact. Reaching one records its gap and stops the
 analysis. What was confirmed is kept, and each reference not yet confirmed is a gap
-(`not confirmed: a limit was reached`).
+(`not confirmed: a limit was reached`). The function being decoded when the decoded-instruction
+limit is reached gets `not decoded: a limit was reached` instead. A limit reached while the image
+is built stops the analysis before the search, so no reference has a gap then. That is the GOT
+slots, the relocations, the FDEs, the references (by text relocations), or `binary_code_bytes`.
 
 | Limit | Default | Counts | Gap |
 |---|---|---|---|
-| references | 65,536 | candidates and relocation references, before confirmation | `code: references limit 65536 reached` |
+| references | 65,536 | candidates, relocation references, and text relocations in code, before confirmation | `code: references limit 65536 reached` |
 | FDEs | 1,048,576 | FDEs read from `.eh_frame` | `code: FDE limit 1048576 reached` |
 | GOT slots | 1,048,576 | `JUMP_SLOT` and `GLOB_DAT` slots collected | `code: GOT-slot limit 1048576 reached` |
 | relocations | 1,048,576 | a relocatable object's relocations, on code and on `.eh_frame` | `code: relocation limit 1048576 reached` |
@@ -610,8 +620,9 @@ analysis. What was confirmed is kept, and each reference not yet confirmed is a 
 | name bytes | 16 MiB | bytes of names copied into recorded call sites | `code: name-byte limit 16777216 reached` |
 
 The other limits do not stop the analysis:
-- **listed gaps**, 256 distinct ones: later gaps are counted, not listed, in one last entry
-  `code: <n> more gaps not listed`;
+- **listed gaps**, 256 distinct ones: later gaps are counted, not listed. One entry
+  `code: <n> more gaps not listed` is sorted in with the others, where `<n>` counts every gap
+  past the cap, repeats included;
 - **one read**, 64 MiB (`MAX_READ`): a larger read is refused before it is charged, with the gap
   `code: <what>: a read of <n> bytes over the 64 MiB read limit`;
 - **one function**: a function whose FDE is over 16 MiB is not decoded (`code: <symbol>
