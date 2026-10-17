@@ -831,6 +831,32 @@ mod tests {
     }
 
     #[test]
+    fn references_limit_stops_the_search_of_an_object() {
+        use crate::code::image::rtype;
+        // 40, 45, 4a: call rel32, each with PLT32 connect-4 on its rel32; 4f: ret.
+        let (mut img, f) = object(&[0xe8, 0, 0, 0, 0, 0xe8, 0, 0, 0, 0, 0xe8, 0, 0, 0, 0, 0xc3]);
+        for field in [0x41, 0x46, 0x4b] {
+            reloc(&mut img, field, rtype::PLT32, -4);
+        }
+        let len = f.as_file().metadata().unwrap().len();
+        let mut run = Run::new(CodeBudgets::default());
+        let mut reader = Reader::new(f.as_file(), len, 1 << 20);
+        assert_eq!(references(&img, &mut reader, &mut run).len(), 3);
+        assert!(!run.stopped());
+        let mut run = Run::new(CodeBudgets {
+            references: 2,
+            ..CodeBudgets::default()
+        });
+        let found: Vec<u64> = references(&img, &mut reader, &mut run)
+            .iter()
+            .map(|r| r.at)
+            .collect();
+        assert_eq!(found, [0x41, 0x46]);
+        assert!(run.stopped());
+        assert_eq!(run.into_gaps(), ["code: references limit 2 reached"]);
+    }
+
+    #[test]
     fn a_stub_address_called_through_a_register_is_a_call() {
         // 1000: lea rax, [rip+stub] (48 8d 05 disp32); 1007: call rax (ff d0); 1009: ret.
         let mut code = vec![0x48, 0x8d, 0x05];
