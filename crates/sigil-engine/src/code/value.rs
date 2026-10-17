@@ -175,13 +175,29 @@ fn depth(v: &Val) -> usize {
 }
 
 /// One value standing for `members`: the member itself when one remains, else a `Set`.
-/// An `Unknown` among them, or more than [`MAX_SET`], gives `Unknown(MergedDisagreeing)`.
+/// An `Unknown` among them, or more than [`MAX_SET`], gives `Unknown(MergedDisagreeing)`. Two
+/// constants of one number are one, an address only if both are (review M4).
 fn set_of(mut members: Vec<Val>) -> Val {
     if members.iter().any(|m| matches!(m, Val::Unknown(_))) {
         return Val::Unknown(Why::MergedDisagreeing);
     }
     members.sort();
-    members.dedup();
+    members.dedup_by(|later, kept| match (&*later, &mut *kept) {
+        (
+            Val::Const {
+                value: v,
+                address: a,
+            },
+            Val::Const {
+                value: k,
+                address: b,
+            },
+        ) if v == k => {
+            *b = *b && *a;
+            true
+        }
+        (later, kept) => later == kept,
+    });
     if members.len() > MAX_SET {
         return Val::Unknown(Why::MergedDisagreeing);
     }
@@ -324,12 +340,48 @@ fn imm_field(insn: &Insn) -> Option<u64> {
     })
 }
 
-/// Whether the instruction enters the kernel: it writes `rax`, `rcx`, `r11`, and is no call.
-fn kernel_entry(m: Mnemonic) -> bool {
+/// Whether `ins`, not a `call`, leaves for code the values cannot follow and come back: what
+/// iced classes as a call or an interrupt (`vmcall`, `int n`, …) and the enclave calls. Every
+/// GPR is then unknown (review M3). `syscall`/`sysenter` are not: the kernel writes only `rax`,
+/// `rcx`, and `r11` ([`Machine::step`]).
+fn transition(ins: &Instruction) -> bool {
     matches!(
-        m,
-        Mnemonic::Syscall | Mnemonic::Sysenter | Mnemonic::Int | Mnemonic::Int1 | Mnemonic::Into
+        ins.mnemonic(),
+        Mnemonic::Encls | Mnemonic::Enclu | Mnemonic::Enclv
+    ) || matches!(
+        ins.flow_control(),
+        FlowControl::Call | FlowControl::IndirectCall | FlowControl::Interrupt
     )
+}
+
+/// Whether a relocation's value `a` is what the CPU reads from an immediate of kind `k`,
+/// extended as the instruction extends it (review M1). A 32-bit immediate a 32-bit write
+/// zero-extends must be a `u32`; one sign-extended to 64 bits must sign-extend to `a`.
+fn immediate_holds(a: u64, k: OpKind) -> bool {
+    match k {
+        OpKind::Immediate64 => true,
+        OpKind::Immediate32 => a <= u64::from(u32::MAX),
+        OpKind::Immediate16 => a <= u64::from(u16::MAX),
+        OpKind::Immediate8 => a <= u64::from(u8::MAX),
+        OpKind::Immediate32to64 => a == a as u32 as i32 as i64 as u64,
+        OpKind::Immediate8to64 => a == a as u8 as i8 as i64 as u64,
+        OpKind::Immediate8to32 => a == u64::from(a as u8 as i8 as i32 as u32),
+        OpKind::Immediate8to16 => a == u64::from(a as u8 as i8 as i16 as u16),
+        _ => false,
+    }
+}
+
+/// Whether a relocation's value `a` is the address an absolute (`[disp]`, no base) operand of
+/// `insn` forms (review M1): a disp32 is sign-extended with 64-bit addressing and zero-extended
+/// with 32-bit addressing; a 64-bit `moffs` holds any.
+fn displacement_holds(a: u64, insn: &Insn) -> bool {
+    let addr64 = insn.ins.memory_displ_size() == 8;
+    match insn.offs.displacement_size() {
+        8 => true,
+        4 if addr64 => a == a as u32 as i32 as i64 as u64,
+        4 => a <= u64::from(u32::MAX),
+        _ => false,
+    }
 }
 
 /// The transfer function, with its scratch state.
@@ -349,22 +401,29 @@ impl<'a> Machine<'a> {
     /// `s` after `insn`. `rsp` is never known: every stack address is unknown.
     pub fn step(&mut self, s: &mut State, insn: &Insn) {
         let ins = &insn.ins;
-        if ins.mnemonic() == Mnemonic::Call {
-            for r in CALLER_SAVED {
-                s[r] = Val::Unknown(Why::ClobberedByCall);
+        match ins.mnemonic() {
+            Mnemonic::Call => {
+                for r in CALLER_SAVED {
+                    s[r] = Val::Unknown(Why::ClobberedByCall);
+                }
+                s[RAX] = Val::Ret(ins.ip());
             }
-            s[RAX] = Val::Ret(ins.ip());
-        } else {
-            match self.modeled(s, insn) {
-                Some((d, v)) => set(s, d, v),
-                None => self.unmodeled(s, ins),
-            }
-            if kernel_entry(ins.mnemonic()) {
+            Mnemonic::Syscall | Mnemonic::Sysenter => {
+                self.unmodeled(s, ins);
                 // What the kernel writes. Never a `Ret`: no call site is made for it.
                 for r in [RAX, RCX, R11] {
                     s[r] = Val::Unknown(Why::NotModeled);
                 }
             }
+            _ if transition(ins) => {
+                for v in s.iter_mut() {
+                    *v = Val::Unknown(Why::NotModeled);
+                }
+            }
+            _ => match self.modeled(s, insn) {
+                Some((d, v)) => set(s, d, v),
+                None => self.unmodeled(s, ins),
+            },
         }
         s[RSP] = Val::Unknown(Why::NotModeled);
     }
@@ -452,7 +511,7 @@ impl<'a> Machine<'a> {
                 }
                 self.load(s, insn, width)
             }
-            k if is_immediate(k) => self.immediate(insn, ins.immediate(i)),
+            k if is_immediate(k) => self.immediate(insn, k, ins.immediate(i)),
             _ => return None,
         })
     }
@@ -476,7 +535,7 @@ impl<'a> Machine<'a> {
     /// An immediate `value`: a number, except where a relocation gives its meaning (a
     /// relocatable object), or at a stub's address in an executable (the address of an import a
     /// non-PIE file takes).
-    fn immediate(&self, insn: &Insn, value: u64) -> Val {
+    fn immediate(&self, insn: &Insn, kind: OpKind, value: u64) -> Val {
         let site = insn.ins.ip();
         let number = Val::Const {
             value,
@@ -484,7 +543,7 @@ impl<'a> Machine<'a> {
         };
         match self.img.kind {
             Kind::Relocatable => match self.relocated(imm_field(insn), insn, Use::Immediate) {
-                Some(Meaning::Address(a)) => Val::Const {
+                Some(Meaning::Address(a)) if immediate_holds(a, kind) => Val::Const {
                     value: a,
                     address: true,
                 },
@@ -540,7 +599,7 @@ impl<'a> Machine<'a> {
                         of: Rc::new(callee_ref(c)),
                         site,
                     },
-                    Some(Meaning::Address(a)) => at(a),
+                    Some(Meaning::Address(a)) if rip || displacement_holds(a, insn) => at(a),
                     Some(_) => Val::Unknown(Why::NotModeled),
                     // The same section, not relocated.
                     None if rip => at(ins.ip_rel_memory_address()),
@@ -563,6 +622,16 @@ impl<'a> Machine<'a> {
                             defined: sym.defined,
                             via: Via::Got,
                         }),
+                        site,
+                    },
+                    // A shared object's absolute address is no image address (review M2).
+                    _ if !rip && kind != Kind::Executable => Val::Load {
+                        base: Rc::new(Val::Const {
+                            value: a,
+                            address: false,
+                        }),
+                        offset: 0,
+                        width,
                         site,
                     },
                     _ => at(a),
@@ -615,7 +684,7 @@ impl<'a> Machine<'a> {
             (Kind::Relocatable, Register::RIP | Register::None) => {
                 let use_ = if rip { Use::Lea } else { Use::Absolute };
                 match self.relocated(disp_field(insn), insn, use_) {
-                    Some(Meaning::Address(a)) => address(a),
+                    Some(Meaning::Address(a)) if rip || displacement_holds(a, insn) => address(a),
                     Some(Meaning::SymbolAddr(name)) => Val::Sym {
                         of: Rc::new(SymRef::Named {
                             name,
@@ -646,6 +715,12 @@ impl<'a> Machine<'a> {
                     Some(of) => Val::Sym {
                         of: Rc::new(of),
                         site,
+                    },
+                    // A shared object's (or PIE's) absolute value is no image address (review
+                    // M2).
+                    None if !rip && kind != Kind::Executable => Val::Const {
+                        value: a,
+                        address: false,
                     },
                     None => address(a),
                 }
@@ -1034,9 +1109,9 @@ mod tests {
 
     #[test]
     fn a_syscall_is_not_a_call() {
-        // syscall, sysenter, int 0x80: rax, rcx, r11 become NotModeled (each known before),
+        // syscall, sysenter: rax, rcx, r11 become NotModeled (each known before),
         // never a ReturnOf, and no state is kept before them.
-        for entry in [&[0x0f, 0x05][..], &[0x0f, 0x34][..], &[0xcd, 0x80][..]] {
+        for entry in [&[0x0f, 0x05][..], &[0x0f, 0x34][..]] {
             let (bytes, at) = code(&[
                 &[0xb8, 0x29, 0, 0, 0],       // mov eax, 41
                 &[0xb9, 0x01, 0, 0, 0],       // mov ecx, 1
@@ -1301,6 +1376,126 @@ mod tests {
             Failure::Unsettled.reason(0x1000),
             "function at 0x1000: values did not settle"
         );
+    }
+
+    #[test]
+    fn a_relocated_value_must_survive_its_field() {
+        // Review M1: what the CPU reads from the field, extended, must be the relocation's value.
+        let (bytes, at) = code(&[
+            &[0xbf, 0, 0, 0, 0],                   // mov edi, imm32: zero-extended
+            &[0x48, 0xc7, 0xc6, 0, 0, 0, 0],       // mov rsi, imm32: sign-extended
+            &[0x48, 0xc7, 0xc2, 0, 0, 0, 0],       // mov rdx, imm32: sign-extended
+            &[0xb9, 0, 0, 0, 0],                   // mov ecx, imm32
+            &[0x4c, 0x8b, 0x04, 0x25, 0, 0, 0, 0], // mov r8, [abs32]: sign-extended
+            &[0x4c, 0x8d, 0x0c, 0x25, 0, 0, 0, 0], // lea r9, [abs32]
+            &CALL0,
+            &RET,
+        ]);
+        let mut img = Image::empty(Kind::Relocatable);
+        let at_ = |a: u64| RelSym {
+            name: None,
+            at: Some(a),
+        };
+        img.rel_syms.insert(1, at_(0x1_0000_0000));
+        img.rel_syms.insert(2, at_(0x7000_0000));
+        let mut rel = |field: u64, r_type: u32, sym: u32, addend: i64| {
+            img.relocs.insert(
+                field,
+                Reloc::One(FieldReloc {
+                    r_type,
+                    sym,
+                    addend,
+                }),
+            );
+        };
+        rel(at[0] + 1, rtype::R32, 1, 8); // 0x1_0000_0008: not a u32
+        rel(at[1] + 3, rtype::R32, 2, 0x1000_0000); // 0x8000_0000: sign-extends to another
+        rel(at[2] + 3, rtype::R32S, 2, 0x500); // 0x7000_0500: fits
+        rel(at[3] + 1, rtype::R32, 2, 0x1000_0000); // 0x8000_0000: a u32
+        rel(at[4] + 4, rtype::R32S, 2, 0x1000_0000); // 0x8000_0000 as a disp32
+        rel(at[5] + 4, rtype::R32S, 2, 8); // 0x7000_0008
+        let s = &solved(&bytes, &img)[&at[6]];
+        assert_eq!(s[7], Val::Unknown(Why::NotModeled), "past a u32");
+        assert_eq!(
+            s[6],
+            Val::Unknown(Why::NotModeled),
+            "sign extension changes it"
+        );
+        assert_eq!(s[2], addr(0x7000_0500));
+        assert_eq!(s[1], addr(0x8000_0000));
+        assert_eq!(s[8], Val::Unknown(Why::NotModeled), "a disp32 sign-extends");
+        assert_eq!(s[9], addr(0x7000_0008));
+    }
+
+    #[test]
+    fn an_absolute_lea_is_an_address_only_in_an_executable() {
+        // Review M2. lea rdi, [0x2000] (48 8d 3c 25 00 20 00 00); mov rsi, [0x2000]
+        let (bytes, at) = code(&[
+            &[0x48, 0x8d, 0x3c, 0x25, 0x00, 0x20, 0, 0],
+            &[0x48, 0x8b, 0x34, 0x25, 0x00, 0x20, 0, 0],
+            &CALL0,
+            &RET,
+        ]);
+        let s = &solved(&bytes, &Image::empty(Kind::Executable))[&at[2]];
+        assert_eq!(s[7], addr(0x2000));
+        assert_eq!(s[6], load(addr(0x2000), 0, 64, at[1]));
+        let s = &solved(&bytes, &Image::empty(Kind::Shared))[&at[2]];
+        assert_eq!(s[7], c(0x2000), "not an image address");
+        assert_eq!(s[6], load(c(0x2000), 0, 64, at[1]));
+    }
+
+    #[test]
+    fn other_transitions_make_every_register_unknown() {
+        // Review M3: vmcall, int 0x80, int1, into-like transfers, and enclave calls.
+        for t in [
+            &[0x0f, 0x01, 0xc1][..], // vmcall
+            &[0xcd, 0x80][..],       // int 0x80
+            &[0xf1][..],             // int1
+            &[0x0f, 0x01, 0xd7][..], // enclu
+        ] {
+            let (bytes, at) = code(&[
+                &[0xbb, 0x01, 0, 0, 0], // mov ebx, 1
+                t,
+                &CALL0,
+                &RET,
+            ]);
+            let s = states_before_calls(&bytes);
+            assert_eq!(s.keys().copied().collect::<Vec<_>>(), [at[2]], "{t:02x?}");
+            for (r, v) in s[&at[2]].iter().enumerate() {
+                assert_eq!(*v, Val::Unknown(Why::NotModeled), "{t:02x?}: register {r}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_same_number_joins_to_one_value() {
+        // Review M4: an address and an immediate of the same value are one value, not an address.
+        assert_eq!(join(&addr(5), &c(5)), c(5));
+        assert_eq!(join(&addr(5), &addr(5)), addr(5));
+        assert_eq!(join(&set([addr(5), c(6)]), &c(5)), set([c(5), c(6)]));
+        assert_eq!(
+            join(&set([addr(5), c(6), c(7), c(8)]), &c(5)),
+            set([c(5), c(6), c(7), c(8)]),
+            "not past the limit"
+        );
+    }
+
+    /// One function of 199,999 `call`s (each to the next instruction) and a `ret`: 200,000
+    /// instructions, the per-function limit, so 199,999 blocks and kept states. Run under the
+    /// 1 GiB cap (`limits.sh`).
+    #[test]
+    fn a_function_of_calls_at_the_instruction_limit() {
+        let calls = crate::code::FUNCTION_INSTRUCTIONS as usize - 1;
+        let mut bytes = CALL0.repeat(calls);
+        bytes.push(0xc3);
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&bytes, &img);
+        assert_eq!(cfg.blocks.len(), calls + 1);
+        let v = solve(&cfg, &img).unwrap();
+        assert_eq!(v.before.len(), calls);
+        let last = 0x1000 + 5 * (calls as u64 - 1);
+        assert_eq!(v.before[&last][7], Val::Unknown(Why::ClobberedByCall));
+        assert_eq!(v.before[&0x1000][7], Val::Param(0));
     }
 
     #[test]
