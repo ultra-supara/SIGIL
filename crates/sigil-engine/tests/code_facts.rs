@@ -721,20 +721,14 @@ fn value_step_limit_stops_the_analysis() {
         },
     );
     assert!(calls.is_empty() && functions.is_empty());
-    assert!(
-        gaps.contains(&"code: value-step limit 1 reached".to_string()),
-        "{gaps:#?}"
-    );
-    assert!(
-        gaps.iter()
-            .any(|g| g.ends_with(": not solved: a limit was reached")),
-        "{gaps:#?}"
-    );
-    assert!(
-        gaps.iter().all(|g| g == "code: value-step limit 1 reached"
-            || g.ends_with(": not solved: a limit was reached")
-            || g.ends_with(": not confirmed: a limit was reached")),
-        "{gaps:#?}"
+    // `kernel` (0x1110) is the function being solved; `looped` (0x1130) is not tried.
+    assert_eq!(
+        gaps,
+        [
+            "code: connect referenced at 0x1119: not solved: a limit was reached",
+            "code: connect referenced at 0x114a: not confirmed: a limit was reached",
+            "code: value-step limit 1 reached",
+        ]
     );
     // With the default budget, the same file records its calls.
     let (calls, _, _) = outcome("net-plt-gcc.so");
