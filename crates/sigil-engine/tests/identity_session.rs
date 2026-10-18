@@ -103,7 +103,9 @@ fn f_i1_a_name_and_a_soname_that_disagree_conflict() {
 }
 
 /// F-I3: a stripped copy of a library with its `LLAMA_*` values, named as libllama-common, is
-/// name-only from its name and embedded values, never unidentified; so is the unstripped copy.
+/// name-only, never unidentified; so is the unstripped copy. Here the file name alone already
+/// gives `NameOnly`; that embedded values alone never give `Unidentified` is shown by the unit
+/// test `the_status_follows_the_table` (`analyze/identity.rs`).
 #[test]
 fn f_i3_a_stripped_library_with_embedded_values_is_name_only() {
     let stripped_dir = TempDir::new().unwrap();

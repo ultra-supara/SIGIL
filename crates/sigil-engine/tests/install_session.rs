@@ -1,6 +1,7 @@
 //! The assembled session with `--install-dir` (PR-4a): it validates and verifies against the
 //! embedded set, a policy that requires the install's checks without one is incomplete, and the
-//! verifier rejects what `validate` cannot re-derive. Synthetic trees only: no test reads a real
+//! verifier rejects what `validate` cannot re-derive. Its ELF files carry component claims whose
+//! known hashes are their reference rows (PR-4c-1). Synthetic trees only: no test reads a real
 //! installation.
 
 use std::os::unix::fs::symlink;
@@ -465,7 +466,9 @@ fn each_elf_of_the_install_gets_a_claim_with_its_rows() {
 }
 
 /// PR-4c-1: against a set that lists the tree's bytes, both ELF files are reference-matched for
-/// both releases.
+/// both releases. This calls `derive` directly on the collected facts and the set's rows: an
+/// assembled install session checks against the embedded official set only, so `ReferenceMatched`
+/// through a real install session is checked by the manual R-1 run on the local install.
 #[test]
 fn a_matching_reference_set_makes_the_claims_reference_matched() {
     let tree = install();
