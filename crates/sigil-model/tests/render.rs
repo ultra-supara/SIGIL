@@ -5,7 +5,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sigil_model::render::markdown::render_session;
+use sigil_model::render::code::{NONE_FOUND, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
+use sigil_model::render::markdown::{
+    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT,
+};
 use sigil_model::*;
 
 mod common;
@@ -494,4 +497,308 @@ fn hostile_container_facts_are_escaped() {
     for line in facts.lines().take_while(|l| l.starts_with('|')) {
         assert_eq!(bare(line), 3, "{line}");
     }
+}
+
+// --- binary inspect --code (PR-5a-2) -----------------------------------------------------------
+
+const KERNEL_PATH: &str = "/home/user/src/suspicious_kernel-gcc-O2.o";
+
+/// Example 16 as a run without `--code`: the same input, facts, and hint, and no code facts or
+/// `binary.code` entry.
+fn binary_no_code() -> Session {
+    let mut s = binary_code();
+    s.request.code = false;
+    s.request.audit.retain(|a| a.as_str() == "binary");
+    s.request
+        .required_checks
+        .retain(|c| c.as_str() == BINARY_CONTAINER);
+    s.request.budgets.remove(BINARY_CODE_BYTES);
+    s.code.clear();
+    s.coverage.retain(|c| c.check.as_str() == BINARY_CONTAINER);
+    s
+}
+
+/// The Binaries section of a report.
+fn binaries_section(md: &str) -> &str {
+    md.split("\n## ")
+        .find(|s| s.starts_with("Binaries\n"))
+        .unwrap_or_else(|| panic!("no Binaries section:\n{md}"))
+}
+
+/// The table row of `section` whose first cell is `first`.
+fn row_of<'m>(section: &'m str, first: &str) -> &'m str {
+    let start = format!("| {} |", md_esc(first));
+    section
+        .lines()
+        .find(|l| l.starts_with(&start))
+        .unwrap_or_else(|| panic!("no row {start}:\n{section}"))
+}
+
+#[test]
+fn a_code_inspection_shows_its_code_column_and_call_site() {
+    let s = binary_code();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Code |"),
+        "{section}"
+    );
+    let input = row_of(section, KERNEL_PATH);
+    assert!(
+        input.ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc("complete")
+        )),
+        "{input}"
+    );
+    let heading = format!(
+        "{} {}{}",
+        md_esc("Capabilities of"),
+        md_esc(KERNEL_PATH),
+        md_esc(":")
+    );
+    assert!(section.contains(&heading), "{section}");
+    assert!(
+        section.contains("| Capability | Import | Direct call sites |"),
+        "{section}"
+    );
+    assert_eq!(
+        row_of(section, "posix.network"),
+        format!(
+            "| {} | {} | {} |",
+            md_esc("posix.network"),
+            md_esc("connect"),
+            md_esc("1: kernel @ 0x4d: connect(rdi=0, rsi=0, rdx=0)")
+        )
+    );
+    assert!(
+        section.contains(&md_esc(
+            "binary.code: complete; 78 of 268435456 code bytes read."
+        )),
+        "{section}"
+    );
+    // After the content's imports, before the caveats.
+    let imports = section
+        .find(&md_esc("Undefined symbols (link time) of"))
+        .unwrap();
+    let capabilities = section.find(&heading).unwrap();
+    let caveat = section.find(&md_esc(BINARY_CAVEAT_CODE)).unwrap();
+    assert!(imports < capabilities && capabilities < caveat, "{section}");
+}
+
+#[test]
+fn the_code_column_shows_binary_code_not_the_container() {
+    let mut s = binary_code();
+    let partial = CoverageState::Partial {
+        missing: vec![
+            "code: connect referenced at 0x4e: not on an instruction decoded from 0x40".to_string(),
+        ],
+    };
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap()
+        .state = partial.clone();
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    let shown = sigil_model::render::coverage_state(&partial).markdown();
+    assert!(
+        row_of(section, KERNEL_PATH).ends_with(&format!("| {} | {shown} |", md_esc("complete"))),
+        "{section}"
+    );
+    assert!(
+        section.contains(&md_esc(
+            "binary.code: partial (1 gap); 78 of 268435456 code bytes read. \
+             Each gap is listed under Coverage."
+        )),
+        "{section}"
+    );
+    // No entry: said so, in the column and in the line.
+    s.coverage.retain(|c| c.check.as_str() != BINARY_CODE);
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        row_of(section, KERNEL_PATH).ends_with(&format!("| {} |", md_esc("no coverage entry"))),
+        "{section}"
+    );
+    assert!(
+        section.contains(&md_esc("binary.code: no coverage entry.")),
+        "{section}"
+    );
+}
+
+#[test]
+fn the_caveats_follow_request_code() {
+    let md = render_session(&binary_code());
+    let caveat = md.find(&md_esc(BINARY_CAVEAT_CODE));
+    let code = md.find(&md_esc(CODE_CAVEAT));
+    assert!(
+        matches!((caveat, code), (Some(a), Some(b)) if a < b),
+        "{md}"
+    );
+    assert!(!md.contains(&md_esc(BINARY_CAVEAT)), "{md}");
+    let md = render_session(&binary_no_code());
+    assert!(md.contains(&md_esc(BINARY_CAVEAT)), "{md}");
+    assert!(!md.contains(&md_esc(BINARY_CAVEAT_CODE)), "{md}");
+    assert!(!md.contains(&md_esc(CODE_CAVEAT)), "{md}");
+}
+
+#[test]
+fn without_code_a_capability_is_not_analyzed() {
+    let s = binary_no_code();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        section.contains("| Path | SHA\\-256 | Size | Type | Container facts |\n"),
+        "{section}"
+    );
+    assert_eq!(
+        row_of(section, "posix.network"),
+        format!(
+            "| {} | {} | {} |",
+            md_esc("posix.network"),
+            md_esc("connect"),
+            md_esc(NOT_ANALYZED)
+        )
+    );
+    assert!(!section.contains(&md_esc("binary.code: ")), "{section}");
+}
+
+#[test]
+fn no_direct_call_site_is_none_found() {
+    let mut s = binary_code();
+    s.code.clear();
+    let md = render_session(&s);
+    assert_eq!(
+        row_of(binaries_section(&md), "posix.network"),
+        format!(
+            "| {} | {} | {} |",
+            md_esc("posix.network"),
+            md_esc("connect"),
+            md_esc(NONE_FOUND)
+        )
+    );
+}
+
+#[test]
+fn a_content_without_capability_imports_says_so() {
+    let mut s = binary_code();
+    s.hints.clear();
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        section.contains(&format!("\n{}\n", md_esc(NO_CAPABILITY_IMPORTS))),
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc("Capabilities of")), "{section}");
+    // The binary.code line still gives the scope.
+    assert!(
+        section.contains(&md_esc("binary.code: complete; ")),
+        "{section}"
+    );
+    let mut s = binary_no_code();
+    s.hints.clear();
+    let md = render_session(&s);
+    assert!(md.contains(&md_esc(NO_CAPABILITY_IMPORTS)), "{md}");
+}
+
+#[test]
+fn a_macho_content_gets_no_capabilities() {
+    let mut s = binary_code();
+    s.artifacts[0].format = Format::MachO;
+    s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        is_64: true,
+        cpu_type: 0x0100_0007,
+        cpu_subtype: 3,
+        fat_cpu_type: None,
+        fat_cpu_subtype: None,
+        fat_alignment: None,
+        file_type: 6,
+        flags: 0,
+        uuid: None,
+        id_dylib: None,
+        load_dylibs: vec![],
+        rpaths: vec![],
+        dylinker: None,
+    });
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(section.contains(&md_esc("Mach-O 64-bit")), "{section}");
+    assert!(!section.contains(&md_esc("Capabilities of")), "{section}");
+    assert!(
+        !section.contains(&md_esc(NO_CAPABILITY_IMPORTS)),
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc("binary.code: ")), "{section}");
+}
+
+#[test]
+fn capability_rows_are_import_hints_in_feature_and_import_order() {
+    let mut s = binary_code();
+    let slice = s.binaries[0].slice.clone();
+    let hint = |feature: &str, signal: Signal, value: &str| FeatureHint {
+        subject: slice.clone(),
+        feature: id(feature),
+        signal,
+        value: t(value),
+        at: Loc::Symbol(t(value)),
+    };
+    s.hints = vec![
+        hint("posix.network", Signal::Import, "socket"),
+        hint("posix.dynamic_loading", Signal::Import, "dlsym"),
+        hint("posix.process_spawn", Signal::Export, "exported_fn"),
+        hint("posix.network", Signal::Import, "connect"),
+    ];
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    let imports: Vec<&str> = section
+        .lines()
+        .skip_while(|l| !l.starts_with("| Capability |"))
+        .skip(2)
+        .take_while(|l| l.starts_with('|'))
+        .map(|l| l.split(" | ").nth(1).unwrap())
+        .collect();
+    assert_eq!(imports, ["dlsym", "connect", "socket"], "{section}");
+    assert!(!section.contains(&md_esc("exported_fn")), "{section}");
+}
+
+#[test]
+fn hostile_capabilities_are_escaped() {
+    let mut s = binary_code();
+    s.hints[0].value = t(HOSTILE);
+    s.code[0].functions[0].names = vec![t(HOSTILE)];
+    let site = &mut s.code[0].call_sites[0];
+    site.target = CallTarget::Import {
+        symbol: t(HOSTILE),
+        via: ImportVia::Reloc,
+    };
+    site.args[0] = ArgValue::ConstStr {
+        reg: Reg::Rdi,
+        addr: 0x2000,
+        value: t(HOSTILE),
+    };
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(!section.contains("<script>"), "{section}");
+    assert!(!md.lines().any(|l| l.starts_with("# heading")), "{md}");
+    assert!(!section.contains('\u{202E}'));
+    let bare = |line: &str| {
+        let b = line.as_bytes();
+        (0..b.len())
+            .filter(|&i| b[i] == b'|' && (i == 0 || b[i - 1] != b'\\'))
+            .count()
+    };
+    let table = &section[section
+        .find("| Capability | Import | Direct call sites |")
+        .unwrap()..];
+    let rows: Vec<&str> = table.lines().take_while(|l| l.starts_with('|')).collect();
+    assert_eq!(rows.len(), 3, "{table}");
+    for line in rows {
+        assert_eq!(bare(line), 4, "{line}");
+    }
+    // The call site is still counted: the import and the call target agree.
+    assert!(table.contains(&md_esc("1: ")), "{table}");
 }

@@ -103,6 +103,8 @@ pub struct BinaryInput<'s> {
     pub artifact: Option<&'s crate::artifact::Artifact>,
     /// Its `binary.container` entry.
     pub coverage: Option<&'s crate::coverage::Coverage>,
+    /// Its `binary.code` entry, in an inspection with `request.code` (PR-5a-2).
+    pub code: Option<&'s crate::coverage::Coverage>,
 }
 
 /// The inputs of a binary inspection, in argument order: `binary-<n>` by number, not in the
@@ -111,7 +113,7 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
     use std::collections::BTreeMap;
 
     use crate::artifact::InstanceContent;
-    use crate::binary_input::{binary_root_index, BINARY_CONTAINER};
+    use crate::binary_input::{binary_root_index, BINARY_CODE, BINARY_CONTAINER};
     let mut roots: Vec<(u32, &crate::session::ScanRoot)> = s
         .request
         .roots
@@ -126,9 +128,19 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
     }
     let artifacts: BTreeMap<_, _> = s.artifacts.iter().map(|a| (&a.id, a)).collect();
     let mut coverage = BTreeMap::new();
+    let mut code = BTreeMap::new();
     for c in &s.coverage {
-        if let (true, Ref::Instance(at)) = (c.check.as_str() == BINARY_CONTAINER, &c.scope) {
-            coverage.entry(at).or_insert(c);
+        let Ref::Instance(at) = &c.scope else {
+            continue;
+        };
+        match c.check.as_str() {
+            BINARY_CONTAINER => {
+                coverage.entry(at).or_insert(c);
+            }
+            BINARY_CODE => {
+                code.entry(at).or_insert(c);
+            }
+            _ => {}
         }
     }
     roots
@@ -140,11 +152,13 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
                 InstanceContent::NotRead { .. } => None,
             });
             let coverage = instance.and_then(|i| coverage.get(&i.id).copied());
+            let code = instance.and_then(|i| code.get(&i.id).copied());
             BinaryInput {
                 root,
                 instance,
                 artifact,
                 coverage,
+                code,
             }
         })
         .collect()
