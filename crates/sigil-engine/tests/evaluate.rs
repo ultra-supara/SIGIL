@@ -530,6 +530,7 @@ fn denied_components_become_policy_violations() {
     s.components[0]
         .assertions
         .retain(|a| matches!(a, IdentityAssertion::Signature { .. }));
+    s.components[0].versions.clear();
     s.components[0].status = IdentityStatus::Unidentified;
     run(&mut s, deny);
     assert!(s.policy_violations.is_empty());

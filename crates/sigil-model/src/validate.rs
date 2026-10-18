@@ -45,15 +45,15 @@ use crate::finding::{
 };
 use crate::id::{
     ArtifactId, AssumptionId, CheckId, ComponentKey, CondId, FindingId, InstanceId, ListenerId,
-    ModelId, ObligationId, OpenQuestionId, PremiseId, ProbeId, ProcessRole, ProfileRef, RootId,
-    SliceId,
+    ModelId, ObligationId, OpenQuestionId, PremiseId, ProbeId, ProcessRole, ProfileRef, RefSetId,
+    RootId, SliceId,
 };
-use crate::identity::{IdentityAssertion, IdentityStatus, ReleaseBasis};
+use crate::identity::{ComponentClaim, IdentityAssertion, IdentityStatus, ReleaseBasis};
 use crate::load::ValueOrigin;
 use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
 use crate::reference::{
-    EntryKind, MemberResult, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
+    EntryKind, MemberResult, ReferenceMatch, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
 };
 use crate::relation::{
     BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
@@ -409,6 +409,33 @@ impl Session {
 struct CodeIndex<'a> {
     functions: BTreeSet<&'a str>,
     calls: BTreeSet<&'a str>,
+}
+
+/// What I1 looks up, built once per validation: the reference rows by reference, release, and
+/// member (in session order), and each placement whose content was read, with its artifact.
+struct RowIndex<'a> {
+    rows: BTreeMap<(&'a RefSetId, &'a str, &'a str), Vec<&'a ReferenceMatch>>,
+    held: BTreeSet<(&'a InstanceId, &'a ArtifactId)>,
+}
+
+impl<'a> RowIndex<'a> {
+    fn new(s: &'a Session) -> Self {
+        let mut rows: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for r in &s.reference_matches {
+            rows.entry((&r.reference, r.release.as_str(), r.member.as_str()))
+                .or_default()
+                .push(r);
+        }
+        let held = s
+            .instances
+            .iter()
+            .filter_map(|i| match &i.content {
+                InstanceContent::Read { artifact } => Some((&i.id, artifact)),
+                InstanceContent::NotRead { .. } => None,
+            })
+            .collect();
+        Self { rows, held }
+    }
 }
 
 struct Validator<'a> {
@@ -1263,6 +1290,7 @@ impl<'a> Validator<'a> {
     /// counts it.
     fn components(&mut self) {
         let s = self.s;
+        let index = RowIndex::new(s);
         for claim in &s.components {
             let at = format!("components[{} on {}]", claim.component, claim.subject);
             self.slice(&claim.subject, &at);
@@ -1308,7 +1336,7 @@ impl<'a> Validator<'a> {
                     } => {
                         evidence += 1;
                         self.refset(reference.as_str(), &at);
-                        self.known_hash(claim, reference, release, member, *matched);
+                        self.known_hash(&index, claim, reference, release, member, *matched);
                         hash_match |= *matched;
                     }
                     IdentityAssertion::Signature { .. } => {}
@@ -1340,29 +1368,24 @@ impl<'a> Validator<'a> {
     /// member, of a placement of the claim's artifact, and `matched` is that row's result.
     fn known_hash(
         &mut self,
-        claim: &crate::identity::ComponentClaim,
-        reference: &crate::id::RefSetId,
+        index: &RowIndex<'_>,
+        claim: &ComponentClaim,
+        reference: &RefSetId,
         release: &str,
         member: &str,
         matched: bool,
     ) {
-        let s = self.s;
         let artifact = claim.subject.artifact();
-        let holds = |id: &InstanceId| {
-            s.instances.iter().any(|i| {
-                i.id == *id
-                    && i.content
-                        == (InstanceContent::Read {
-                            artifact: artifact.clone(),
-                        })
-            })
-        };
-        let row = s.reference_matches.iter().find(|r| {
-            r.reference == *reference
-                && r.release == release
-                && r.member == member
-                && r.instance.as_ref().is_some_and(&holds)
-        });
+        // The first row with that key, in session order, whose placement holds the artifact.
+        let row = index
+            .rows
+            .get(&(reference, release, member))
+            .and_then(|rows| {
+                rows.iter().find(|r| {
+                    let placement = r.instance.as_ref();
+                    placement.is_some_and(|i| index.held.contains(&(i, &artifact)))
+                })
+            });
         let why = match row {
             None => Some("no reference row of a placement of the claim's artifact"),
             Some(r) if r.result.matches() != matched => {

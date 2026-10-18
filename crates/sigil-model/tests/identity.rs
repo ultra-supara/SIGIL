@@ -188,6 +188,34 @@ fn conflicting_needs_two_sources_and_a_signature_is_none() {
         },
     });
     assert_valid(&s);
+    // Every identity assertion is a source: a self-name and a `Required` name, or a code check,
+    // are two.
+    let base = profile_mismatch();
+    let g = placed(&base, "inst:lib/ollama/libggml.so");
+    for other in [
+        IdentityAssertion::Required {
+            by: g.slice.clone(),
+            needed: t("libggml.so"),
+        },
+        passing_check("entry.name_sequence"),
+    ] {
+        let mut s = base.clone();
+        s.components[0].assertions.push(other);
+        s.components[0].status = IdentityStatus::Conflicting;
+        assert_valid(&s);
+    }
+    // So are a self-name and an unmatched KnownHash, with no version.
+    let mut s = complete_pass();
+    s.reference_matches[0].result = MemberResult::File {
+        expected: id(&hex(0x12)),
+        observed: id(&hex(0x11)),
+    };
+    if let IdentityAssertion::KnownHash { matched, .. } = known(&mut s) {
+        *matched = false;
+    }
+    s.components[0].versions.clear();
+    s.components[0].status = IdentityStatus::Conflicting;
+    assert_valid(&s);
 }
 
 /// Spec §5: without `Conflicting`, exactly one status fits each mix of evidence, and it is the
@@ -274,6 +302,19 @@ fn a_known_hash_needs_the_row_of_a_placement_of_its_artifact() {
         *release = "v0.30.7".to_string();
     }
     assert_rejected(&s, known_hash(NO_ROW), "a KnownHash of another release");
+    // Another manifest, known to the session, that has no row at that release and member.
+    let mut s = complete_pass();
+    add_knowledge(
+        &mut s,
+        KnowledgeKind::ReferenceManifest,
+        "elsewhere",
+        "2026-10-07",
+        0xa3,
+    );
+    if let IdentityAssertion::KnownHash { reference, .. } = known(&mut s) {
+        *reference = id("elsewhere");
+    }
+    assert_rejected(&s, known_hash(NO_ROW), "a KnownHash of another reference");
     let mut s = complete_pass();
     if let IdentityAssertion::KnownHash { member, .. } = known(&mut s) {
         *member = "lib/ollama/libggml.so".to_string();
@@ -312,4 +353,48 @@ fn a_known_hash_says_what_its_row_says() {
         observed: id(&hex(0x11)),
     };
     assert_rejected(&s, known_hash(DISAGREES), "matched on a differing row");
+}
+
+/// A symlink placement is not followed, so it holds no content (PR-4c-1 spec §4 note): its row is
+/// not a row of the claim's artifact, even when the link names the claim's file. The engine
+/// takes `KnownHash`es from the rows of the placements that hold the content only.
+#[test]
+fn a_known_hash_never_rests_on_a_symlink_row() {
+    let mut s = complete_pass();
+    let g = placed(&s, GGML);
+    let link: InstanceId = id("inst:lib/ollama/libggml.so.0");
+    let mut placement = instance(
+        &link,
+        "install",
+        "/usr/local/lib/ollama/libggml.so.0",
+        &g.artifact,
+        1003,
+    );
+    placement.link_chain = vec![LinkHop {
+        path: t("/usr/local/lib/ollama/libggml.so.0"),
+        target: t("libggml.so.0.13.1"),
+        uid: 0,
+        mode: 0o120777,
+    }];
+    placement.resolved = Some(t("libggml.so.0.13.1"));
+    placement.content = InstanceContent::NotRead {
+        why: NotReadReason::NotFollowed,
+    };
+    s.instances.push(placement);
+    s.reference_matches.push(ReferenceMatch {
+        reference: id("ollama-official"),
+        release: "v0.30.6".to_string(),
+        member: "lib/ollama/libggml.so.0".to_string(),
+        instance: Some(link),
+        result: MemberResult::Symlink {
+            expected: t("libggml.so.0.13.1"),
+            observed: t("libggml.so.0.13.1"),
+        },
+    });
+    // The link and its matching row are valid on their own.
+    assert_valid(&s);
+    if let IdentityAssertion::KnownHash { member, .. } = known(&mut s) {
+        *member = "lib/ollama/libggml.so.0".to_string();
+    }
+    assert_rejected(&s, known_hash(NO_ROW), "a KnownHash on a symlink's row");
 }
