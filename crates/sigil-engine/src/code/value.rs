@@ -290,11 +290,19 @@ fn set_of(mut members: Vec<Val>) -> Val {
     Val::Set(members.into())
 }
 
-/// Two values merged at a join (spec §4.7): equal values stay; others become a flat `Set`.
+/// Two values merged at a join (spec §4.7): equal values stay; others become a flat `Set`
+/// ([`join_different`]). The fixpoint joins in place ([`join_into`]); the tests use this.
+#[cfg(test)]
 pub(crate) fn join(a: &Val, b: &Val) -> Val {
     if a == b {
         return a.clone();
     }
+    join_different(a, b)
+}
+
+/// Two different values merged at a join (spec §4.7): a flat `Set` of both, or
+/// `Unknown(MergedDisagreeing)`.
+fn join_different(a: &Val, b: &Val) -> Val {
     // An `Unknown` beside a different value: what `set_of` gives, without building the members.
     if matches!(a, Val::Unknown(_)) || matches!(b, Val::Unknown(_)) {
         return Val::Unknown(Why::MergedDisagreeing);
@@ -309,16 +317,98 @@ pub(crate) fn join(a: &Val, b: &Val) -> Val {
     set_of(members)
 }
 
-/// `b` joined into `acc`, in place: only the registers that differ are joined, each charged
-/// [`REGISTER_JOIN_COST`] steps first, and nothing else is cloned.
+/// `b` joined into `acc`, in place: only the registers that differ are joined, and nothing else
+/// is cloned. A compare that walks values is charged both [`size`]s first ([`equal_at_once`]
+/// says when it does not), and a join its [`join_cost`].
 fn join_into(acc: &mut State, b: &State, run: &mut Run) -> Result<(), Failure> {
     for (x, y) in acc.iter_mut().zip(b) {
-        if x != y {
-            charge(run, REGISTER_JOIN_COST)?;
-            *x = join(x, y);
+        let equal = match equal_at_once(x, y) {
+            Some(equal) => equal,
+            None => {
+                charge(run, size(x) + size(y))?;
+                x == y
+            }
+        };
+        if !equal {
+            charge(run, join_cost(x, y))?;
+            *x = join_different(x, y);
         }
     }
     Ok(())
+}
+
+/// Whether `x` and `y` are equal, when that is known without walking them: two scalars, two
+/// compound values whose fields differ or whose parts are one allocation, or values of two
+/// kinds. `None`: compound values of one kind whose parts are separate allocations, which `==`
+/// walks (Task 15's final review: a loop head re-forms its sets each pass, so its predecessors
+/// can hold equal values that share nothing).
+fn equal_at_once(x: &Val, y: &Val) -> Option<bool> {
+    let shared = |same_fields: bool, one_allocation: bool| match (same_fields, one_allocation) {
+        (false, _) => Some(false),
+        (true, true) => Some(true),
+        (true, false) => None,
+    };
+    match (x, y) {
+        (
+            Val::Load {
+                base: a,
+                offset: o1,
+                width: w1,
+                site: s1,
+            },
+            Val::Load {
+                base: b,
+                offset: o2,
+                width: w2,
+                site: s2,
+            },
+        ) => shared((o1, w1, s1) == (o2, w2, s2), Rc::ptr_eq(a, b)),
+        (Val::Low { value: a, bits: n1 }, Val::Low { value: b, bits: n2 }) => {
+            shared(n1 == n2, Rc::ptr_eq(a, b))
+        }
+        (Val::Set(a), Val::Set(b)) => shared(a.len() == b.len(), Rc::ptr_eq(a, b)),
+        (Val::Sym { of: a, site: s1 }, Val::Sym { of: b, site: s2 }) => {
+            shared(s1 == s2, Rc::ptr_eq(a, b))
+        }
+        (Val::Load { .. } | Val::Low { .. } | Val::Set(_) | Val::Sym { .. }, _)
+        | (_, Val::Load { .. } | Val::Low { .. } | Val::Set(_) | Val::Sym { .. }) => Some(false),
+        _ => Some(x == y),
+    }
+}
+
+/// How many values `v` stands for: a set's members, else 1.
+fn width(v: &Val) -> u64 {
+    match v {
+        Val::Set(members) => members.len() as u64,
+        _ => 1,
+    }
+}
+
+/// How many loads nest in `v`, at most [`MAX_LOAD_DEPTH`]: each level is found by a walk that
+/// stops at the first path reaching it ([`nests`]).
+fn load_depth(v: &Val) -> u64 {
+    (1..=MAX_LOAD_DEPTH).take_while(|n| nests(v, *n)).count() as u64
+}
+
+/// What rebuilding `v` costs, in value steps (Task 15's final review): its members, times the
+/// levels of loads under them. A join or a narrower copy of a set clones, sorts, and compares
+/// the members; parts they share compare at once (`Ord for Val`), and a part not shared is
+/// walked a level at a time.
+fn size(v: &Val) -> u64 {
+    width(v) * (1 + load_depth(v))
+}
+
+/// What joining two different values costs, in value steps: both [`size`]s. An Unknown beside
+/// another value is the fast path of [`join_different`], 1, and no size is computed for it.
+/// Measured in release (Task 15's final review), against about 20 ns for a step of 1: two
+/// constants 39 ns for 2, sets of constants 57 to 77 ns for 5 to 8, sets of 3-deep loads 72 to
+/// 115 ns for 20 to 28, or 1.15 us for 28 when they share no part (41 ns per step, the dearest
+/// kind).
+pub(crate) fn join_cost(a: &Val, b: &Val) -> u64 {
+    if matches!(a, Val::Unknown(_)) || matches!(b, Val::Unknown(_)) {
+        return 1;
+    }
+    size(a) + size(b)
 }
 
 /// The low `bits` of `v`, as a sub-register read or a 32-bit write gives them. A known
@@ -499,6 +589,25 @@ impl<'a> Machine<'a> {
     }
 
     /// `s` after `insn`. `rsp` is never known: every stack address is unknown.
+    /// What [`Machine::step`] of `insn` on `s` costs, in value steps: 1, and the [`size`] of a
+    /// `Set` that a `mov`/`movzx` copies through part of a register, which a 32-, 16-, or 8-bit
+    /// read or write rebuilds member by member (Task 15's final review). Other steps rebuild no
+    /// set.
+    pub fn cost(&self, s: &State, insn: &Insn) -> u64 {
+        let ins = &insn.ins;
+        let copy = matches!(ins.mnemonic(), Mnemonic::Mov | Mnemonic::Movzx)
+            && ins.op_count() == 2
+            && ins.op0_kind() == OpKind::Register
+            && ins.op1_kind() == OpKind::Register;
+        if !copy || (ins.op0_register().size() == 8 && ins.op1_register().size() == 8) {
+            return 1;
+        }
+        match gpr(ins.op1_register()).and_then(|r| s.get(r)) {
+            Some(v @ Val::Set(_)) => 1 + size(v),
+            _ => 1,
+        }
+    }
+
     pub fn step(&mut self, s: &mut State, insn: &Insn) {
         let ins = &insn.ins;
         match ins.mnemonic() {
@@ -1062,15 +1171,11 @@ pub(crate) fn solve(cfg: &Cfg, img: &Image, run: &mut Run) -> Result<Values, Fai
 /// one step 20 to 30 ns.
 pub(crate) const JOIN_COST: u64 = 4;
 
-/// What each register that differs pays on top of [`JOIN_COST`], in value steps: its [`join`].
-/// In release, a join of constants or sets of them takes 36 to 85 ns, an Unknown's 2 ns.
-pub(crate) const REGISTER_JOIN_COST: u64 = 4;
-
 /// Charges `cost` value steps to the artifact's budget, before the work is done (review of Task
 /// 15: 256 passes over up to 200,000 instructions per function need an aggregate bound, as
-/// decoding has). A [`Machine::step`] costs 1, a predecessor examined [`JOIN_COST`], and each
-/// register joined [`REGISTER_JOIN_COST`]. Past `budgets.value_steps` the run stops, and the
-/// function fails.
+/// decoding has). A [`Machine::step`] costs [`Machine::cost`], a predecessor examined
+/// [`JOIN_COST`], and each register joined its [`join_cost`]. Past `budgets.value_steps` the run
+/// stops, and the function fails.
 fn charge(run: &mut Run, cost: u64) -> Result<(), Failure> {
     match run.value_steps.checked_add(cost) {
         Some(total) if total <= run.budgets.value_steps => {
@@ -1118,7 +1223,7 @@ fn propagate(
         for b in g.chain(h) {
             last = b;
             for (_, insn) in g.insns(b).into_iter().flat_map(|(_, i)| i) {
-                charge(run, 1)?;
+                charge(run, m.cost(&s, insn))?;
                 m.step(&mut s, insn);
             }
         }
@@ -1144,7 +1249,7 @@ fn propagate(
                 if kept(at, insn, blk) {
                     visit(at, insn, &s);
                 }
-                charge(run, 1)?;
+                charge(run, m.cost(&s, insn))?;
                 m.step(&mut s, insn);
             }
         }
@@ -2069,8 +2174,8 @@ mod tests {
         // joins_at_a_merge_point's function: the two blocks after the `je` examine one
         // predecessor each and the call's block two, in the fixpoint and again in the recording
         // pass, 8 predecessors at JOIN_COST each. At the call's block, rsi (1 or 2) and rcx
-        // (Param or not) differ: 4 register joins at REGISTER_JOIN_COST each. Its 8 instructions
-        // take 16 steps.
+        // (Param or Unknown) differ, in each pass: join costs 2 and 1. Its 8 instructions take 16
+        // steps.
         let (bytes, _) = code(&[
             &[0x85, 0xff],
             &[0x74, 0x07],
@@ -2085,7 +2190,9 @@ mod tests {
         let cfg = cfg_of(&bytes, &img);
         let mut run = fresh();
         assert!(solve(&cfg, &img, &mut run).is_ok());
-        assert_eq!(run.value_steps, 16 + 8 * JOIN_COST + 4 * REGISTER_JOIN_COST);
+        assert_eq!(join_cost(&c(1), &c(2)), 2);
+        assert_eq!(join_cost(&Val::Param(3), &Val::Unknown(Why::NotModeled)), 1);
+        assert_eq!(run.value_steps, 16 + 8 * JOIN_COST + 2 * (2 + 1));
     }
 
     /// `n` blocks of one `jne h` (rel32) each, then `h`: `call; ret`. `h` has `n` predecessors.
@@ -2189,5 +2296,108 @@ mod tests {
             std::cmp::Ordering::Equal,
             "an equal copy"
         );
+    }
+
+    /// A set of 4 loads, each based on a set of 4 loads, each based on a set of 4 loads of
+    /// Param(0): 3 levels of loads, the most `MAX_LOAD_DEPTH` allows.
+    fn deep(site: u64) -> Val {
+        let level = |base: &Val, at: u64| -> Val {
+            let members: Vec<Val> = (0..4)
+                .map(|k| load(base.clone(), k, 64, at + k as u64))
+                .collect();
+            Val::Set(Rc::from(members))
+        };
+        let one = level(&Val::Param(0), site);
+        let two = level(&one, site + 0x10);
+        level(&two, site + 0x20)
+    }
+
+    #[test]
+    fn a_join_costs_the_size_of_its_values() {
+        // size = members × (1 + levels of loads); a join costs both sizes, an Unknown's 1.
+        let d = deep(0x100);
+        let Val::Set(members) = &d else {
+            panic!("{d:?}")
+        };
+        let three = Val::Set(Rc::from(members[..3].to_vec()));
+        assert_eq!(join_cost(&c(1), &c(2)), 1 + 1);
+        assert_eq!(
+            join_cost(&set([c(1), c(2), c(3), c(4)]), &set([c(1), c(2), c(3)])),
+            4 + 3
+        );
+        assert_eq!(
+            join_cost(
+                &load(Val::Param(0), 0, 64, 1),
+                &load(load(Val::Param(1), 0, 64, 2), 0, 32, 3)
+            ),
+            2 + 3
+        );
+        assert_eq!(join_cost(&d, &three), 4 * 4 + 3 * 4);
+        assert_eq!(join_cost(&d, &members[1]), 4 * 4 + 4);
+        assert_eq!(join_cost(&Val::Unknown(Why::FromMemory), &d), 1);
+        assert_eq!(join_cost(&d, &Val::Unknown(Why::MergedDisagreeing)), 1);
+    }
+
+    #[test]
+    fn a_set_copied_through_part_of_a_register_costs_its_size() {
+        // A narrower read or write rebuilds a set member by member: 1 + its size. A whole copy,
+        // or a value that is no set, is 1.
+        let img = Image::empty(Kind::Shared);
+        let m = Machine::new(&img);
+        let with_rbx = |v: Val| -> State {
+            let mut s = entry_state();
+            s[3] = v;
+            s
+        };
+        let cost = |bytes: &[u8], s: &State| {
+            let mut b = bytes.to_vec();
+            b.push(0xc3);
+            let cfg = cfg_of(&b, &img);
+            m.cost(s, &cfg.insns[&0x1000])
+        };
+        let (mov_eax_ebx, mov_rax_rbx, mov_ax_bx, movzx_eax_bl) = (
+            &[0x89u8, 0xd8][..],
+            &[0x48u8, 0x89, 0xd8][..],
+            &[0x66u8, 0x89, 0xd8][..],
+            &[0x0fu8, 0xb6, 0xc3][..],
+        );
+        let two = with_rbx(set([c(1), c(2)]));
+        assert_eq!(cost(mov_eax_ebx, &two), 1 + 2);
+        assert_eq!(cost(mov_ax_bx, &two), 1 + 2);
+        assert_eq!(cost(movzx_eax_bl, &two), 1 + 2);
+        assert_eq!(cost(mov_rax_rbx, &two), 1);
+        assert_eq!(cost(mov_eax_ebx, &with_rbx(Val::Param(0))), 1);
+        assert_eq!(cost(mov_eax_ebx, &with_rbx(deep(0x100))), 1 + 4 * 4);
+        // Not a register copy: 1.
+        assert_eq!(
+            cost(&[0x8b, 0x03], &with_rbx(deep(0x100))),
+            1,
+            "mov eax, [rbx]"
+        );
+    }
+
+    #[test]
+    fn a_compare_that_walks_is_charged() {
+        // One predecessor's state joined into the input, register by register:
+        // - rax: one allocation: equal at once, free;
+        // - rcx: two constants: different at once, joined: 2;
+        // - rdx: equal loads, separately built: the compare walks, 2 + 2, and finds them equal;
+        // - rbx: loads that differ, separately built: compared, 2 + 2, then joined, 2 + 2;
+        // - rbp: an Unknown beside a set: different at once, the fast path: 1.
+        let shared = load(Val::Param(0), 0, 64, 1);
+        let mut acc = entry_state();
+        let mut other = entry_state();
+        acc[0] = shared.clone();
+        other[0] = shared;
+        (acc[1], other[1]) = (c(1), c(2));
+        (acc[2], other[2]) = (load(Val::Param(0), 8, 64, 2), load(Val::Param(0), 8, 64, 2));
+        (acc[3], other[3]) = (load(Val::Param(0), 8, 64, 3), load(Val::Param(1), 8, 64, 3));
+        (acc[5], other[5]) = (Val::Unknown(Why::FromMemory), set([c(1), c(2)]));
+        let mut run = fresh();
+        join_into(&mut acc, &other, &mut run).unwrap();
+        assert_eq!(run.value_steps, 2 + (2 + 2) + (2 + 2 + 2 + 2) + 1);
+        assert_eq!(acc[2], load(Val::Param(0), 8, 64, 2));
+        assert_eq!(acc[1], set([c(1), c(2)]));
+        assert_eq!(acc[5], Val::Unknown(Why::MergedDisagreeing));
     }
 }
