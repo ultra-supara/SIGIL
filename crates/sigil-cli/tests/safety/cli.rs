@@ -258,7 +258,7 @@ fn binary_inspection_reads_only_its_inputs() {
     assert!(std::fs::read_to_string(&md)
         .unwrap()
         .contains("## Binaries"));
-    assert_read_under(&r, &fx.target);
+    assert_read_under(&r, &so);
     // Plan review P2: only the input is opened under target/; nothing under private/.
     assert_never_opened_under(&r, &fx.target.join("private"));
     assert_opened_only(&r, &fx.target, &[&so]);
@@ -310,7 +310,7 @@ fn binary_code_inspection_reads_only_its_inputs() {
             report.contains(r"binary\.code\: complete\; "),
             "{name}: {report}"
         );
-        assert_read_under(&r, &fx.target);
+        assert_read_under(&r, &input);
         assert_never_opened_under(&r, &fx.target.join("private"));
         assert_opened_only(&r, &fx.target, &[&input]);
         assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
