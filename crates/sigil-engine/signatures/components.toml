@@ -1,0 +1,71 @@
+# Component identification by name (PR-4c-1; plan §4.4.3). One entry per component, keyed as the
+# plan names upstream libraries. A name is a file name or an ELF SONAME. Each pattern is one of:
+#
+#   { exact = "<name>" }                 the name itself
+#   { library = "<base>" }               <base>, or <base>.<version> (dot-separated decimal numbers)
+#   { prefix = "<p>", suffix = "<s>" }   <p><variant><s>, the variant one or more ASCII letters,
+#                                        digits, or underscores
+#
+# There are no regular expressions. A name that two entries match names no component. Every
+# regular member of the embedded reference manifests is matched by exactly one entry
+# (tests/components.rs). NVIDIA libraries are identified by name and hash only (ADR-010).
+
+[[component]]
+key = "ollama"
+names = [{ exact = "ollama" }]
+
+[[component]]
+key = "ggml"
+names = [{ library = "libggml.so" }]
+
+[[component]]
+key = "ggml-base"
+names = [{ library = "libggml-base.so" }]
+
+[[component]]
+key = "ggml-backend/cpu"
+names = [{ prefix = "libggml-cpu-", suffix = ".so" }]
+
+[[component]]
+key = "ggml-backend/cuda"
+names = [{ exact = "libggml-cuda.so" }]
+
+[[component]]
+key = "ggml-backend/vulkan"
+names = [{ exact = "libggml-vulkan.so" }]
+
+[[component]]
+key = "llama.cpp"
+names = [{ library = "libllama.so" }]
+
+[[component]]
+key = "llama.cpp/common"
+names = [{ library = "libllama-common.so" }]
+
+[[component]]
+key = "llama.cpp/mtmd"
+names = [{ library = "libmtmd.so" }]
+
+[[component]]
+key = "llama.cpp/server"
+names = [{ exact = "libllama-server-impl.so" }, { exact = "llama-server" }]
+
+[[component]]
+key = "llama.cpp/quantize"
+names = [{ exact = "libllama-quantize-impl.so" }, { exact = "llama-quantize" }]
+
+[[component]]
+key = "gcc/libgomp"
+names = [{ library = "libgomp.so" }]
+
+[[component]]
+key = "cuda-runtime"
+names = [{ library = "libcudart.so" }]
+
+[[component]]
+key = "cuda/cublas"
+names = [{ library = "libcublas.so" }]
+
+[[component]]
+key = "cuda/cublasLt"
+names = [{ library = "libcublasLt.so" }]
