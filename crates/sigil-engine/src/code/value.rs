@@ -216,6 +216,10 @@ pub(crate) fn join(a: &Val, b: &Val) -> Val {
     if a == b {
         return a.clone();
     }
+    // An `Unknown` beside a different value: what `set_of` gives, without building the members.
+    if matches!(a, Val::Unknown(_)) || matches!(b, Val::Unknown(_)) {
+        return Val::Unknown(Why::MergedDisagreeing);
+    }
     let mut members = Vec::with_capacity(2 * MAX_SET);
     for v in [a, b] {
         match v {
@@ -226,14 +230,14 @@ pub(crate) fn join(a: &Val, b: &Val) -> Val {
     set_of(members)
 }
 
-fn join_states(a: &State, b: &State) -> State {
-    let mut out = a.clone();
-    for (x, y) in out.iter_mut().zip(b) {
+/// `b` joined into `acc`, in place: only the registers that differ are joined, and nothing else
+/// is cloned.
+fn join_into(acc: &mut State, b: &State) {
+    for (x, y) in acc.iter_mut().zip(b) {
         if x != y {
             *x = join(x, y);
         }
     }
-    out
 }
 
 /// The low `bits` of `v`, as a sub-register read or a 32-bit write gives them. A known
@@ -927,10 +931,10 @@ impl<'c> Graph<'c> {
         let (lo, hi) = (*self.pred_at.get(h)?, *self.pred_at.get(h + 1)?);
         for p in self.preds.get(lo..hi).into_iter().flatten() {
             if let Some(o) = out.get(*p).and_then(|o| o.as_deref()) {
-                acc = Some(match acc {
-                    None => o.clone(),
-                    Some(a) => join_states(&a, o),
-                });
+                match acc.as_mut() {
+                    None => acc = Some(o.clone()),
+                    Some(a) => join_into(a, o),
+                }
             }
         }
         acc
@@ -1171,6 +1175,11 @@ mod tests {
             join(&c(1), &Val::Unknown(Why::ClobberedByCall)),
             Val::Unknown(Why::MergedDisagreeing),
             "never an Unknown member"
+        );
+        assert_eq!(
+            join(&Val::Unknown(Why::FromMemory), &set([c(1), c(2)])),
+            Val::Unknown(Why::MergedDisagreeing),
+            "nor a Set with one"
         );
         assert_eq!(
             join(
