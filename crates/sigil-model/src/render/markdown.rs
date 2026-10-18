@@ -470,9 +470,10 @@ fn binary_facts(
 }
 
 /// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
-/// slice, in (feature, import) order, then, with code analysis, the line of its input's
-/// `binary.code` entry (`code`). That entry also decides each row's call-site cell (plan P-p):
-/// its direct call sites, or `none found`, only when the input's code was searched (complete or
+/// slice, in (feature, import) order, or the line `No capability imports.` when it has none;
+/// then, with code analysis, the line of its input's `binary.code` entry (`code`). That entry
+/// also decides each row's call-site cell (plan P-p): its direct call sites, or
+/// `none found (see binary.code)`, only when the input's code was searched (complete or
 /// partial); `not analyzed (see binary.code)` otherwise; and `not analyzed (use --code)` without
 /// code analysis. A Mach-O gets nothing: 5a maps no Mach-O import.
 fn capabilities(
@@ -485,11 +486,7 @@ fn capabilities(
     if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
         return;
     }
-    let mut hints: Vec<&FeatureHint> = s
-        .hints
-        .iter()
-        .filter(|h| h.subject == b.slice && h.signal == Signal::Import)
-        .collect();
+    let mut hints: Vec<&FeatureHint> = import_hints(s, &b.slice).collect();
     hints.sort_by(|x, y| hint_key(x).cmp(&hint_key(y)));
     if hints.is_empty() {
         out.push_str(&esc(NO_CAPABILITY_IMPORTS));
@@ -518,6 +515,17 @@ fn capabilities(
         out.push_str(&coverage_line(code).markdown());
         out.push_str("\n\n");
     }
+}
+
+/// A slice's import hints (plan P-a): the capability rows of the binary report and the keys of
+/// the install's Capabilities (imports) column.
+fn import_hints<'a>(
+    s: &'a Session,
+    slice: &'a crate::id::SliceId,
+) -> impl Iterator<Item = &'a FeatureHint> {
+    s.hints
+        .iter()
+        .filter(move |h| h.subject == *slice && h.signal == Signal::Import)
 }
 
 /// The order of a content's capability rows: the feature key, then the import's name.
@@ -754,10 +762,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 }
             };
             // The capability keys of the slice's import hints (PR-5a-2 spec §3.2).
-            let mut capabilities: Vec<&str> = s
-                .hints
-                .iter()
-                .filter(|h| h.signal == Signal::Import && h.subject == b.slice)
+            let mut capabilities: Vec<&str> = import_hints(s, &b.slice)
                 .map(|h| h.feature.as_str())
                 .collect();
             capabilities.sort_unstable();

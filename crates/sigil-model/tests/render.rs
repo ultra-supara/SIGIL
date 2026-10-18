@@ -968,10 +968,17 @@ fn install_binaries_show_their_capability_keys() {
         value: t(value),
         at: Loc::Symbol(t(value)),
     };
-    // Out of key order, two of one key, and a hint that is not an import.
+    // An import hint of a slice that has no row: its key is not this binary's.
+    let other = SliceId::from_parts(&id(&format!("sha256:{}", "cc".repeat(32))), Arch::X86_64, 0);
+    let elsewhere = FeatureHint {
+        subject: other,
+        ..hint("posix.other_slice", Signal::Import, "other_slice_import")
+    };
+    // Out of key order, two of one key, a hint that is not an import, and another slice's.
     s.hints = vec![
         hint("posix.network", Signal::Import, "socket"),
         hint("posix.dynamic_loading", Signal::Import, "dlsym"),
+        elsewhere,
         hint("posix.network", Signal::Import, "connect"),
         hint("posix.process_spawn", Signal::Export, "spawn_helper"),
     ];
@@ -998,7 +1005,9 @@ fn install_binaries_show_their_capability_keys() {
             .unwrap()
             .to_string()
     };
-    assert_eq!(cell(&s), md_esc("posix.dynamic_loading, posix.network"));
+    let shown = cell(&s);
+    assert!(!shown.contains(&md_esc("posix.other_slice")), "{shown}");
+    assert_eq!(shown, md_esc("posix.dynamic_loading, posix.network"));
     s.hints.clear();
     assert_eq!(cell(&s), md_esc("-"));
 }
