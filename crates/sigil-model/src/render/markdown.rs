@@ -624,8 +624,8 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
     binaries(out, s, &root.id, &prefix);
 }
 
-/// The container facts of the install's binaries (PR-4b-1): one row per record. Gaps are in the
-/// Coverage section.
+/// The container facts of the install's binaries (PR-4b-1): one row per record, with its
+/// capability keys (PR-5a-2). Gaps are in the Coverage section.
 fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u8]) {
     if s.binaries.is_empty() {
         return;
@@ -753,12 +753,27 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                     (soname, needed, "-".to_string(), notes)
                 }
             };
+            // The capability keys of the slice's import hints (PR-5a-2 spec §3.2).
+            let mut capabilities: Vec<&str> = s
+                .hints
+                .iter()
+                .filter(|h| h.signal == Signal::Import && h.subject == b.slice)
+                .map(|h| h.feature.as_str())
+                .collect();
+            capabilities.sort_unstable();
+            capabilities.dedup();
+            let capabilities = if capabilities.is_empty() {
+                "-".to_string()
+            } else {
+                capabilities.join(", ")
+            };
             vec![
                 path.markdown_inline(),
                 esc(&format!("{kind} {arch}")),
                 esc(&soname),
                 esc(&needed),
                 esc(&symbol_counts),
+                esc(&capabilities),
                 esc(&notes.join("; ")),
             ]
         })
@@ -771,6 +786,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
             "Dylib ID / SONAME",
             "Loaded dylibs / NEEDED",
             "Exports / imports",
+            "Capabilities (imports)",
             "Notes",
         ],
         rows,

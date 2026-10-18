@@ -931,3 +931,74 @@ fn hostile_capabilities_are_escaped() {
     // The call site is still counted: the import and the call target agree.
     assert!(table.contains(&md_esc("1: ")), "{table}");
 }
+
+#[test]
+fn install_binaries_show_their_capability_keys() {
+    let mut s = conflicting_identity();
+    let slice = s.artifacts[0].slices[0].id.clone();
+    s.binaries.push(BinaryFacts {
+        slice: slice.clone(),
+        container: ContainerFacts::Elf(ElfFacts {
+            interp: None,
+            soname: Some(t("libggml.so.0")),
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![],
+            stripped: Some(true),
+            exports: 120,
+            imports: ["socket", "dlsym", "connect"]
+                .iter()
+                .map(|n| ElfImport {
+                    name: t(n),
+                    version: None,
+                    weak: false,
+                })
+                .collect(),
+            data: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    let hint = |feature: &str, signal: Signal, value: &str| FeatureHint {
+        subject: slice.clone(),
+        feature: id(feature),
+        signal,
+        value: t(value),
+        at: Loc::Symbol(t(value)),
+    };
+    // Out of key order, two of one key, and a hint that is not an import.
+    s.hints = vec![
+        hint("posix.network", Signal::Import, "socket"),
+        hint("posix.dynamic_loading", Signal::Import, "dlsym"),
+        hint("posix.network", Signal::Import, "connect"),
+        hint("posix.process_spawn", Signal::Export, "spawn_helper"),
+    ];
+    let cell = |s: &Session| -> String {
+        let md = render_session(s);
+        let section = md
+            .split("\n## ")
+            .find(|x| x.starts_with("Runtime artifacts"))
+            .unwrap()
+            .to_string();
+        let table = &section[section.find(&md_esc("Binaries:")).unwrap()..];
+        assert!(
+            table.contains(r"| Exports \/ imports | Capabilities \(imports\) | Notes |"),
+            "{table}"
+        );
+        let row = table
+            .lines()
+            .find(|l| l.starts_with('|') && l.contains(&md_esc("libggml.so.0")))
+            .unwrap_or_else(|| panic!("{table}"));
+        row.trim_matches('|')
+            .split(" | ")
+            .map(str::trim)
+            .nth(5)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(cell(&s), md_esc("posix.dynamic_loading, posix.network"));
+    s.hints.clear();
+    assert_eq!(cell(&s), md_esc("-"));
+}
