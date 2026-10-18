@@ -1148,7 +1148,7 @@ fn fact_row(label: &str, value: &str) -> String {
 
 #[test]
 fn a_content_s_facts_end_with_its_component_identity_and_versions() {
-    // Example 15's claim: ggml-base, NameOnly, the SONAME's version.
+    // Example 15's claim: ggml-base, NameOnly (shown as words), the SONAME's version.
     let md = render_session(&binary_inspect());
     let section = binaries_section(&md);
     assert_eq!(
@@ -1157,7 +1157,7 @@ fn a_content_s_facts_end_with_its_component_identity_and_versions() {
     );
     assert_eq!(
         row_of(section, "Identity"),
-        fact_row("Identity", "NameOnly")
+        fact_row("Identity", "name only")
     );
     assert_eq!(
         row_of(section, "Versions"),
@@ -1205,6 +1205,22 @@ fn each_version_is_shown_with_its_source_and_escaped() {
             "0.13.1 (file name), 0 (SONAME), 1 (LLAMA_BUILD_NUMBER)"
         )
     );
+    // The two self-name kinds that 4c-1 does not derive yet (Mach-O, string scans).
+    for (kind, label) in [
+        (NameKind::InstallName, "install name"),
+        (NameKind::VersionString, "version string"),
+    ] {
+        s.components[0].versions = vec![VersionAssertion {
+            value: t("2.1"),
+            source: VersionSource::SelfName { kind },
+            at: at.clone(),
+        }];
+        let md = render_session(&s);
+        assert_eq!(
+            row_of(binaries_section(&md), "Versions"),
+            fact_row("Versions", &format!("2.1 ({label})"))
+        );
+    }
     s.components[0].versions = vec![VersionAssertion {
         value: t(HOSTILE),
         source: VersionSource::SelfName {
@@ -1244,7 +1260,9 @@ fn a_macho_content_has_the_identity_rows_too() {
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(section.contains(&md_esc("Mach-O 64-bit")), "{section}");
-    assert_eq!(row_of(section, "Component"), fact_row("Component", "-"));
+    for label in ["Component", "Identity", "Versions"] {
+        assert_eq!(row_of(section, label), fact_row(label, "-"));
+    }
 }
 
 #[test]
@@ -1309,7 +1327,112 @@ fn install_binaries_show_their_component() {
     };
     assert_eq!(
         cell("lib/ollama/libggml.so.0.13.1"),
-        md_esc("ggml (Conflicting)")
+        md_esc("ggml (conflicting)")
     );
     assert_eq!(cell("lib/ollama/libggml-cpu-x64.so"), md_esc("-"));
+}
+
+/// Two claims on one slice (valid, though 4c-1 derives at most one): the labels are joined with
+/// `, `, and each version is prefixed with its claim's key.
+fn two_claims_on_one_slice(s: &mut Session, slice: &SliceId) {
+    let mut second = s
+        .components
+        .iter()
+        .find(|c| c.subject == *slice)
+        .unwrap()
+        .clone();
+    second.component = id("llama.cpp/llama");
+    second.status = IdentityStatus::NameOnly;
+    second.versions = vec![VersionAssertion {
+        value: t("1"),
+        source: VersionSource::SelfName {
+            kind: NameKind::Filename,
+        },
+        at: second.versions[0].at.clone(),
+    }];
+    s.components.push(second);
+}
+
+#[test]
+fn several_claims_on_one_slice_are_joined_and_their_versions_keyed() {
+    // The facts table of a binary inspection.
+    let mut s = binary_inspect();
+    let slice = s.components[0].subject.clone();
+    two_claims_on_one_slice(&mut s, &slice);
+    s.components[0].status = IdentityStatus::Conflicting;
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Component"),
+        fact_row("Component", "ggml-base, llama.cpp/llama")
+    );
+    assert_eq!(
+        row_of(section, "Identity"),
+        fact_row("Identity", "conflicting, name only")
+    );
+    assert_eq!(
+        row_of(section, "Versions"),
+        fact_row(
+            "Versions",
+            "ggml-base: 0 (SONAME), llama.cpp/llama: 1 (file name)"
+        )
+    );
+    // The install Binaries table.
+    let mut s = conflicting_identity();
+    let slice = s.artifacts[0].slices[0].id.clone();
+    s.binaries.push(BinaryFacts {
+        slice: slice.clone(),
+        container: ContainerFacts::Elf(ElfFacts {
+            interp: None,
+            soname: None,
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![],
+            stripped: Some(true),
+            exports: 0,
+            imports: vec![],
+            data: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    two_claims_on_one_slice(&mut s, &slice);
+    let md = render_session(&s);
+    let section = md
+        .split("\n## ")
+        .find(|x| x.starts_with("Runtime artifacts"))
+        .unwrap();
+    let table = &section[section.find(&md_esc("Binaries:")).unwrap()..];
+    let row = table
+        .lines()
+        .find(|l| l.starts_with(&format!("| {} |", md_esc("lib/ollama/libggml.so.0.13.1"))))
+        .unwrap_or_else(|| panic!("{table}"));
+    assert_eq!(
+        row.trim_matches('|').split(" | ").map(str::trim).nth(2),
+        Some(md_esc("ggml (conflicting), llama.cpp/llama (name only)").as_str()),
+        "{row}"
+    );
+}
+
+#[test]
+fn each_identity_status_is_shown_in_words() {
+    // The reports show words; the session and AI-BOM JSON keep the enum names.
+    for (status, words) in [
+        (IdentityStatus::Conflicting, "conflicting"),
+        (IdentityStatus::ReferenceMatched, "reference matched"),
+        (IdentityStatus::Corroborated, "corroborated"),
+        (IdentityStatus::NameOnly, "name only"),
+        (IdentityStatus::Unidentified, "unidentified"),
+    ] {
+        assert_eq!(sigil_model::render::identity_status(status), words);
+        let mut s = binary_inspect();
+        s.components[0].status = status;
+        let md = render_session(&s);
+        assert_eq!(
+            row_of(binaries_section(&md), "Identity"),
+            fact_row("Identity", words)
+        );
+    }
 }

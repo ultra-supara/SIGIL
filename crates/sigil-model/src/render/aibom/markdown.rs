@@ -8,7 +8,7 @@ use crate::artifact::ElfType;
 use crate::artifact::Format;
 
 use super::super::md::{self, esc, joined, section, table};
-use super::super::{action, kind, mode, subject};
+use super::super::{action, identity_status, kind, mode, subject};
 use super::{AiBom, BomBlob, BomModel, ReleaseBasisKind};
 
 /// The report of `bom`. The same AI-BOM gives the same bytes.
@@ -188,10 +188,10 @@ fn artifacts(out: &mut String, bom: &AiBom) {
                 .flat_map(|s| {
                     s.components.iter().map(move |c| {
                         let mut shown = esc(&format!(
-                            "{} on {} ({:?}",
+                            "{} on {} ({}",
                             c.component,
                             s.arch.name(),
-                            c.status
+                            identity_status(c.status)
                         ));
                         for v in &c.versions {
                             shown.push_str(&esc(", "));

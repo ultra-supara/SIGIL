@@ -2440,14 +2440,14 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
     assert!(
-        line.ends_with("  complete  component: llama.cpp/common (NameOnly)"),
+        line.ends_with("  complete  component: llama.cpp/common (name only)"),
         "{line}"
     );
     let r = binary(&[&path, &"--format", &"md"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     for (label, value) in [
         ("Component", "llama.cpp/common"),
-        ("Identity", "NameOnly"),
+        ("Identity", "name only"),
         ("Versions", "0.0.1 (file name), 1 (LLAMA_BUILD_NUMBER)"),
     ] {
         let row = format!("| {} | {} |", esc_md(label), esc_md(value));
@@ -2504,7 +2504,7 @@ fn the_install_report_shows_each_binary_s_component() {
         "| {} | {} | {} |",
         esc_md("bin/ollama"),
         esc_md("Dyn x86_64"),
-        esc_md("ollama (NameOnly)")
+        esc_md("ollama (name only)")
     );
     assert!(row.starts_with(&start), "{row}");
 }

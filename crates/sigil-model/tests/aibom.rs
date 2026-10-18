@@ -450,8 +450,9 @@ fn every_section_lists_what_the_aibom_holds() {
     let s = conflicting_identity();
     let md = markdown(&project(&s, sha(&s)));
     assert!(md.contains("\n## Releases\n"), "{md}");
+    // The status in words, as in the session report (PR-4c-1); the JSON keeps the enum name.
     assert!(
-        md.contains(&shown("ReferenceMatched")) || md.contains(&shown("Conflicting")),
+        md.contains(&shown("ggml on x86_64 (conflicting, 0.12.0, 0.13.1)")),
         "{md}"
     );
 }

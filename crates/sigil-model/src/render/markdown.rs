@@ -476,20 +476,27 @@ fn binary_facts(
 }
 
 /// The rows Component, Identity, and Versions of a content's facts table (PR-4c-1 spec §6): the
-/// slice's claims, or `-` without one. Each version is `<value> (<source>)`.
+/// slice's claims, or `-` without one. Each version is `<value> (<source>)`, prefixed with
+/// `<component>: ` when the slice has more than one claim.
 fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
     let claims = super::claims_of(s, slice);
     let keys: Vec<String> = claims.iter().map(|c| esc(c.component.as_str())).collect();
     let statuses: Vec<String> = claims
         .iter()
-        .map(|c| esc(&format!("{:?}", c.status)))
+        .map(|c| esc(super::identity_status(c.status)))
         .collect();
+    let keyed = claims.len() > 1;
     let versions: Vec<String> = claims
         .iter()
-        .flat_map(|c| c.versions.iter())
-        .map(|v| {
+        .flat_map(|c| c.versions.iter().map(move |v| (c, v)))
+        .map(|(c, v)| {
+            let key = if keyed {
+                format!("{}: ", c.component)
+            } else {
+                String::new()
+            };
             let source = format!(" ({})", super::version_source(&v.source));
-            format!("{}{}", v.value.markdown_inline(), esc(&source))
+            format!("{}{}{}", esc(&key), v.value.markdown_inline(), esc(&source))
         })
         .collect();
     let cell = |parts: Vec<String>| {
@@ -830,13 +837,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 capabilities.push_str(IMPORTS_CUT_SHORT_NOTE);
             }
             // The slice's component claims (PR-4c-1 spec §6).
-            let claims = super::claims_of(s, &b.slice);
-            let component = if claims.is_empty() {
-                "-".to_string()
-            } else {
-                let labels: Vec<String> = claims.into_iter().map(super::component_label).collect();
-                labels.join(", ")
-            };
+            let component = super::component_labels(s, &b.slice).unwrap_or_else(|| "-".to_string());
             vec![
                 path.markdown_inline(),
                 esc(&format!("{kind} {arch}")),

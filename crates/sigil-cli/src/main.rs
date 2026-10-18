@@ -43,7 +43,7 @@ use sigil_engine::reference;
 use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
-    action, artifact_type, binary_inputs, claims_of, completeness, component_label, coverage_state,
+    action, artifact_type, binary_inputs, completeness, component_labels, coverage_state,
     mode as mode_name, probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
@@ -999,14 +999,13 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
         } else {
             String::new()
         };
-        // The input's component claims (PR-4c-1).
+        // The input's component claims (PR-4c-1), slice by slice.
         let labels: Vec<String> = b
             .artifact
             .map(|a| {
                 a.slices
                     .iter()
-                    .flat_map(|slice| claims_of(s, &slice.id))
-                    .map(component_label)
+                    .filter_map(|slice| component_labels(s, &slice.id))
                     .collect()
             })
             .unwrap_or_default();
