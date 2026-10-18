@@ -38,6 +38,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 | License | The license layer, its SPDX id where detected, and an excerpt |
 | Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
 | Runtime API (`--active api-probe`) | Whether `GET /api/version` answered at one literal address, and the version it reported |
+| Binaries (`binary inspect`) | Each file's SHA-256, format, and container facts (ELF, Mach-O); an ELF file's capability imports (for example `connect` → `posix.network`), as imports, not calls; with `--code`, the direct call sites of those imports in x86-64 ELF code, with their arguments |
 | Outcome | Verdict (`PASS` / `WARN` / `FAIL`) and completeness (`COMPLETE` / `INCOMPLETE`), side by side |
 
 ## Why local-first, LLM-free
