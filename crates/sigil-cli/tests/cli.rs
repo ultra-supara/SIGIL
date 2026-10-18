@@ -2002,7 +2002,8 @@ fn binary_code_session_is_byte_identical_but_for_the_observation() {
     assert_eq!(code_entry(&a, 0).state, CoverageState::Complete);
     assert_eq!(a.to_canonical_json().unwrap(), first.stdout);
     // Only the run's own times (one-second resolution) may differ.
-    b.observation = a.observation.clone();
+    b.observation.started_at = a.observation.started_at.clone();
+    b.observation.finished_at = a.observation.finished_at.clone();
     assert_eq!(b.to_canonical_json().unwrap(), first.stdout);
 }
 
@@ -2012,6 +2013,7 @@ fn binary_code_help_documents_the_flag_and_its_budget() {
     assert_eq!(r.code, 0);
     for text in [
         "--code",
+        "With --code, the direct call sites of capability imports are recorded too",
         "direct call sites of capability imports",
         "x86-64 ELF only",
         "never run",
@@ -2047,6 +2049,17 @@ fn binary_code_bytes_needs_code() {
         inspect(models.path(), &[&"--budget", &"binary_code_bytes=4096"]).code,
         2
     );
+}
+
+/// The rule is checked once every argument is parsed: the budget may come before `--code`.
+#[test]
+fn binary_code_bytes_before_code_is_accepted() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let r = binary(&[&"--budget", &"binary_code_bytes=4096", &"--code", &kernel]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.request.code);
+    assert_eq!(s.request.budgets["binary_code_bytes"], 4096);
 }
 
 #[test]

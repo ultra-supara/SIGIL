@@ -101,7 +101,8 @@ enum InspectTarget {
 enum BinaryCommand {
     /// Inspect one or more files into one session. An ELF executable, shared object, or
     /// relocatable object gets its container facts; any other regular file is recorded as
-    /// unsupported; a path that is not a readable regular file is an error.
+    /// unsupported; a path that is not a readable regular file is an error. With --code, the
+    /// direct call sites of capability imports are recorded too.
     Inspect(BinaryArgs),
 }
 
