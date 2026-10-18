@@ -182,21 +182,24 @@ pub fn coverage_line(c: Option<&Coverage>) -> Shown {
         )),
         (CoverageState::Partial { missing }, Some(b)) => Shown::own(format!(
             "binary.code: partial ({}); {} of {} code bytes read. Each gap is listed under Coverage.",
-            gaps(missing.len()),
+            partial_gaps(missing.len()),
             b.used,
             b.limit
         )),
         (CoverageState::Unsupported { what }, _) => {
             Shown::own(format!("binary.code: unsupported ({what})."))
         }
+        // Complete or Partial without a budget is never reached by a valid session: C3 requires
+        // the budget, and the viewer validates a session before rendering it.
         (state, _) => Shown::own("binary.code: ")
             .and_shown(coverage_state(state))
             .and("."),
     }
 }
 
+/// The gaps of a partial state, as the `binary.code` line and the terminal summary count them:
 /// `1 gap`, `<n> gaps`.
-fn gaps(n: usize) -> String {
+pub fn partial_gaps(n: usize) -> String {
     if n == 1 {
         "1 gap".to_string()
     } else {
@@ -228,22 +231,20 @@ fn signed_hex(off: i64) -> String {
 /// that is not UTF-8 is cut in its shown form, `hex:<digits>`.
 fn string(text: &UntrustedText) -> Shown {
     let (head, cut) = match text.as_str() {
-        Some(s) => (
-            Shown::input(&UntrustedText::new(
-                s.chars().take(STRING_SHOWN).collect::<String>(),
-            )),
-            s.chars().count() > STRING_SHOWN,
-        ),
+        Some(s) => match s.char_indices().nth(STRING_SHOWN) {
+            // `i` is where a character starts, so the slice ends on a boundary.
+            Some((i, _)) => (UntrustedText::new(&s[..i]), true),
+            None => (text.clone(), false),
+        },
         None => {
-            let digits: String = text.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-            let shown_hex = format!("hex:{digits}");
-            (
-                Shown::own(shown_hex.chars().take(STRING_SHOWN).collect::<String>()),
-                shown_hex.chars().count() > STRING_SHOWN,
-            )
+            // `hex:` and two digits per byte: only the bytes shown are formatted.
+            let n = (STRING_SHOWN - "hex:".len()) / 2;
+            let bytes = text.as_bytes();
+            let digits: String = bytes.iter().take(n).map(|b| format!("{b:02x}")).collect();
+            (UntrustedText::new(format!("hex:{digits}")), bytes.len() > n)
         }
     };
-    let quoted = Shown::own("\"").and_shown(head);
+    let quoted = Shown::own("\"").and_input(&head);
     if cut {
         quoted.and("…\"")
     } else {
@@ -588,6 +589,15 @@ mod tests {
             },
             vec![],
         ));
+        // An own export of the same name, through the PLT, is not the import.
+        sites.push(call(
+            0x12,
+            CallTarget::OwnExportViaPlt {
+                symbol: t("connect"),
+                entry: 0x40,
+            },
+            vec![],
+        ));
         let f = facts(sites);
         assert_eq!(
             call_sites_cell(Some(&f), &t("connect")).terminal(),
@@ -601,10 +611,12 @@ mod tests {
     #[test]
     fn five_call_sites_have_no_more() {
         let f = facts(connects(&[0x20, 0x30, 0x40, 0x50, 0x60]));
-        let cell = call_sites_cell(Some(&f), &t("connect")).terminal();
-        assert!(cell.starts_with("5: kernel @ 0x20: "), "{cell}");
-        assert!(cell.ends_with("kernel @ 0x60: connect(rdi=0)"), "{cell}");
-        assert!(!cell.contains("more"), "{cell}");
+        assert_eq!(
+            call_sites_cell(Some(&f), &t("connect")).terminal(),
+            "5: kernel @ 0x20: connect(rdi=0); kernel @ 0x30: connect(rdi=0); \
+             kernel @ 0x40: connect(rdi=0); kernel @ 0x50: connect(rdi=0); \
+             kernel @ 0x60: connect(rdi=0)"
+        );
     }
 
     #[test]
