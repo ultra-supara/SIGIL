@@ -299,6 +299,7 @@ fn b9_an_elf_without_facts_is_not_parsed() {
     let without_facts = |state: CoverageState| {
         let mut s = valid();
         s.binaries.clear();
+        s.hints.clear();
         s.relations.clear();
         *state_of(&mut s, ELF_INPUT) = state;
         s
@@ -318,6 +319,7 @@ fn b9_a_read_that_saw_a_change_or_a_removal_is_an_error() {
     let read = |stability: Stability, message: &str| {
         let mut s = valid();
         s.binaries.clear();
+        s.hints.clear();
         s.relations.clear();
         s.instances
             .iter_mut()

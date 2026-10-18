@@ -1500,7 +1500,8 @@ pub const ELF_INPUT: &str = "inst:binary-1/libggml-base.so";
 pub const TEXT_INPUT: &str = "inst:binary-2/NOTES.txt";
 
 /// Example 15: `sigil binary inspect` of two files (PR-4b-2a). The first is a shared object with
-/// complete container facts; the second is a text file SIGIL does not parse. PASS + INCOMPLETE.
+/// complete container facts and the hints of its capability imports (`dlopen`, `getenv`); the
+/// second is a text file SIGIL does not parse. PASS + INCOMPLETE.
 pub fn binary_inspect() -> Session {
     let mut s = base(&[BINARY_CONTAINER]);
     s.request.audit = ids(&["binary"]);
@@ -1573,11 +1574,23 @@ pub fn binary_inspect() -> Session {
         });
     }
     s.binaries.push(BinaryFacts {
-        slice,
+        slice: slice.clone(),
         container: ContainerFacts::Elf(facts),
         go: None,
         gaps: vec![],
     });
+    for (feature, name) in [
+        ("posix.dynamic_loading", "dlopen"),
+        ("posix.environment_access", "getenv"),
+    ] {
+        s.hints.push(FeatureHint {
+            subject: slice.clone(),
+            feature: id(feature),
+            signal: Signal::Import,
+            value: t(name),
+            at: Loc::Symbol(t(name)),
+        });
+    }
     // The text file.
     let text: ArtifactId = id(&format!("sha256:{}", hex(0xb2)));
     s.artifacts.push(Artifact {
@@ -1612,7 +1625,8 @@ pub fn binary_inspect() -> Session {
 }
 
 /// Example 15 with only the input of `root`: its root, instance, artifact, facts, `Declares`
-/// relations, and `binary.container` entry.
+/// relations, and `binary.container` entry. It has no hints: the tests built on it change the
+/// facts, and add the hints they check (C6).
 fn binary_inspect_only(root: &str) -> Session {
     let mut s = binary_inspect();
     s.request.roots.retain(|r| r.id.as_str() == root);
@@ -1632,6 +1646,7 @@ fn binary_inspect_only(root: &str) -> Session {
         .flat_map(|a| a.slices.iter().map(|x| x.id.clone()))
         .collect();
     s.binaries.retain(|b| slices.contains(&b.slice));
+    s.hints.clear();
     s.relations
         .retain(|r| !matches!(r, Relation::Declares { from, .. } if !slices.contains(from)));
     let instances: Vec<InstanceId> = s.instances.iter().map(|i| i.id.clone()).collect();
