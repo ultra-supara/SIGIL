@@ -20,9 +20,9 @@ fn every_session_example_carries_the_hints_the_engine_derives() {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let key = |h: &sigil_model::FeatureHint| serde_json::to_string(h).unwrap();
         let mut derived = sigil_engine::analyze::hints::derive(&session.binaries).unwrap();
-        derived.sort_by_key(key);
+        derived.sort_by_cached_key(key);
         let mut recorded = session.hints.clone();
-        recorded.sort_by_key(key);
+        recorded.sort_by_cached_key(key);
         assert_eq!(recorded, derived, "{}", path.display());
     }
 }

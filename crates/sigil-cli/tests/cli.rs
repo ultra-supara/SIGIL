@@ -2250,9 +2250,15 @@ fn capability_hints_survive_stripping() {
         .arg(&original)
         .status()
         .unwrap_or_else(|e| panic!("strip (binutils) is required by this test: {e}"));
-    assert!(status.success(), "strip failed");
+    assert!(status.success(), "strip failed: {status}");
     // The copy is stripped, and the original is not: the test is not vacuous.
-    assert_eq!(stripped(&session_of(&binary(&[&original]))), Some(false));
+    let r = binary(&[&original]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        stripped(&session_of(&r)),
+        Some(false),
+        "the fixture must keep .symtab, and strip -o must leave it untouched"
+    );
     let r = binary(&[&copy]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let s = session_of(&r);
@@ -2275,7 +2281,9 @@ fn capability_hints_survive_stripping() {
 fn capability_hints_of_dynamic_loading() {
     // dl.so imports dlsym (not dlopen: plan P-h).
     let dl = code_fixture("dl.so");
-    let s = session_of(&binary(&[&dl]));
+    let r = binary(&[&dl]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
     assert_eq!(
         hint_pairs(&s),
         [("posix.dynamic_loading".to_string(), "dlsym".to_string())]
@@ -2320,7 +2328,8 @@ fn capability_hints_none_is_an_empty_non_failing_report() {
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(
-        r.stdout.contains(&esc_md(NO_CAPABILITY_IMPORTS)),
+        r.stdout
+            .contains(&format!("\n{}\n", esc_md(NO_CAPABILITY_IMPORTS))),
         "{}",
         r.stdout
     );
