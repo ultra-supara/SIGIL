@@ -476,11 +476,14 @@ fn binary_facts(
 /// slice, in (feature, import) order, or the line `No capability imports.` when it has none.
 /// Hints come only from the imports kept within `binary_imports` (plan P-r): when the list was
 /// cut short, the line counts the imports kept instead, and a table is followed by a line that
-/// says so. Then, with code analysis, the line of its input's `binary.code` entry (`code`). That entry
-/// also decides each row's call-site cell (plan P-p): its direct call sites, or
-/// `none found (see binary.code)`, only when the input's code was searched (complete or
-/// partial); `not analyzed (see binary.code)` otherwise; and `not analyzed (use --code)` without
-/// code analysis. A Mach-O gets nothing: 5a maps no Mach-O import.
+/// says so. Then, with code analysis, the line of its input's `binary.code` entry (`code`).
+///
+/// That entry also decides each row's call-site cell ([`capability_cell`]): its direct call
+/// sites, or, without one, `none found (see binary.code)` when the input's code was searched in
+/// full (complete) and `none found in the code searched; binary.code is partial (see Coverage)`
+/// when partial (plans P-p, P-q); `not analyzed (see binary.code)` when it was not searched; and
+/// `not analyzed (use --code)` without code analysis. A Mach-O gets nothing: 5a maps no Mach-O
+/// import.
 fn capabilities(
     out: &mut String,
     s: &Session,

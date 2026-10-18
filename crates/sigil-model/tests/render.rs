@@ -680,14 +680,20 @@ fn no_direct_call_site_is_none_found() {
     let mut s = binary_code();
     s.code.clear();
     let md = render_session(&s);
-    let row = format!(
-        "| {} | {} | {} |",
-        md_esc("posix.network"),
-        md_esc("connect"),
-        md_esc(NONE_FOUND)
+    let row = |cell: &str| {
+        format!(
+            "| {} | {} | {} |",
+            md_esc("posix.network"),
+            md_esc("connect"),
+            md_esc(cell)
+        )
+    };
+    assert_eq!(NONE_FOUND, "none found (see binary.code)");
+    assert_eq!(
+        row_of(binaries_section(&md), "posix.network"),
+        row(NONE_FOUND)
     );
-    assert_eq!(row_of(binaries_section(&md), "posix.network"), row);
-    // A partial search is a search too (plan P-p).
+    // A partial search is a search too (plan P-p), and says it is partial (plan P-q).
     s.coverage
         .iter_mut()
         .find(|c| c.check.as_str() == BINARY_CODE)
@@ -696,7 +702,10 @@ fn no_direct_call_site_is_none_found() {
         missing: vec!["code: a gap".to_string()],
     };
     let md = render_session(&s);
-    assert_eq!(row_of(binaries_section(&md), "posix.network"), row);
+    assert_eq!(
+        row_of(binaries_section(&md), "posix.network"),
+        row("none found in the code searched; binary.code is partial (see Coverage)")
+    );
 }
 
 /// Plan P-p: an input whose code was not searched (an aarch64 object: `Unsupported`) gets

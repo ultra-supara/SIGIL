@@ -20,9 +20,14 @@ pub const STRING_SHOWN: usize = 64;
 /// A Capabilities cell of an inspection without code analysis.
 pub const NOT_ANALYZED: &str = "not analyzed (use --code)";
 
-/// A Capabilities cell with code analysis, the input's code searched, and no direct call site of
-/// the import.
+/// A Capabilities cell with code analysis, the input's code searched in full (`binary.code` is
+/// complete), and no direct call site of the import.
 pub const NONE_FOUND: &str = "none found (see binary.code)";
+
+/// [`NONE_FOUND`] where the input's `binary.code` is partial (plan P-q): what was not searched or
+/// not confirmed, a small `binary_code_bytes` for one, is listed under Coverage.
+pub const NONE_FOUND_PARTIAL: &str =
+    "none found in the code searched; binary.code is partial (see Coverage)";
 
 /// A Capabilities cell of an inspection with code analysis whose input's code was not searched:
 /// its `binary.code` entry is neither complete nor partial (unsupported, over a budget, …), or
@@ -51,7 +56,9 @@ pub const IMPORTS_CUT_SHORT_NOTE: &str = " (imports cut short)";
 
 /// A Capabilities cell: [`NOT_ANALYZED`] when the inspection did not analyze code;
 /// [`NOT_SEARCHED`] when it did, but the input's `binary.code` entry (`code`) does not say its
-/// code was searched; else [`call_sites_cell`].
+/// code was searched, being neither complete nor partial (plan P-p); else [`call_sites_cell`],
+/// or, without a call site, [`NONE_FOUND`] for complete and [`NONE_FOUND_PARTIAL`] for partial
+/// (plan P-q).
 pub fn capability_cell(
     analyzed: bool,
     code: Option<&Coverage>,
@@ -61,20 +68,12 @@ pub fn capability_cell(
     if !analyzed {
         return Shown::own(NOT_ANALYZED);
     }
-    if !searched(code) {
-        return Shown::own(NOT_SEARCHED);
-    }
-    call_sites_cell(facts, import)
-}
-
-/// Whether an input's `binary.code` entry says its code was searched: complete or partial.
-fn searched(code: Option<&Coverage>) -> bool {
-    code.is_some_and(|c| {
-        matches!(
-            c.state,
-            CoverageState::Complete | CoverageState::Partial { .. }
-        )
-    })
+    let none = match code.map(|c| &c.state) {
+        Some(CoverageState::Complete) => NONE_FOUND,
+        Some(CoverageState::Partial { .. }) => NONE_FOUND_PARTIAL,
+        _ => return Shown::own(NOT_SEARCHED),
+    };
+    call_sites_cell(facts, import).unwrap_or_else(|| Shown::own(none))
 }
 
 /// The direct call sites of `import` in a slice's `facts`: those whose target is that import, in
@@ -90,14 +89,12 @@ pub fn calls_of<'f>(facts: Option<&'f CodeFacts>, import: &UntrustedText) -> Vec
     calls
 }
 
-/// A Capabilities cell of searched code: [`NONE_FOUND`], or the number of direct call sites,
-/// then the first [`CALL_SITES_SHOWN`] of them joined by `; `, then how many more the session
-/// JSON holds.
-pub fn call_sites_cell(facts: Option<&CodeFacts>, import: &UntrustedText) -> Shown {
+/// A Capabilities cell of searched code with a direct call site of `import`: the number of
+/// them, then the first [`CALL_SITES_SHOWN`] joined by `; `, then how many more the session JSON
+/// holds. `None` without one: [`capability_cell`] then says what was searched.
+pub fn call_sites_cell(facts: Option<&CodeFacts>, import: &UntrustedText) -> Option<Shown> {
     let calls = calls_of(facts, import);
-    let Some(f) = facts.filter(|_| !calls.is_empty()) else {
-        return Shown::own(NONE_FOUND);
-    };
+    let f = facts.filter(|_| !calls.is_empty())?;
     let mut shown = Shown::own(format!("{}: ", calls.len()));
     for (k, c) in calls.iter().take(CALL_SITES_SHOWN).enumerate() {
         if k > 0 {
@@ -111,7 +108,7 @@ pub fn call_sites_cell(facts: Option<&CodeFacts>, import: &UntrustedText) -> Sho
             calls.len() - CALL_SITES_SHOWN
         ));
     }
-    shown
+    Some(shown)
 }
 
 /// One call site: `<function> @ 0x<addr>: <callee>(<reg>=<value>, …)`, and ` (tail jump)` after
@@ -642,7 +639,7 @@ mod tests {
         ));
         let f = facts(sites);
         assert_eq!(
-            call_sites_cell(Some(&f), &t("connect")).terminal(),
+            call_sites_cell(Some(&f), &t("connect")).unwrap().terminal(),
             "7: kernel @ 0x20: connect(rdi=0); kernel @ 0x30: connect(rdi=0); \
              kernel @ 0x48: connect(rdi=0); kernel @ 0x60: connect(rdi=0); \
              kernel @ 0x70: connect(rdi=0); … and 2 more (session JSON)"
@@ -654,7 +651,7 @@ mod tests {
     fn five_call_sites_have_no_more() {
         let f = facts(connects(&[0x20, 0x30, 0x40, 0x50, 0x60]));
         assert_eq!(
-            call_sites_cell(Some(&f), &t("connect")).terminal(),
+            call_sites_cell(Some(&f), &t("connect")).unwrap().terminal(),
             "5: kernel @ 0x20: connect(rdi=0); kernel @ 0x30: connect(rdi=0); \
              kernel @ 0x40: connect(rdi=0); kernel @ 0x50: connect(rdi=0); \
              kernel @ 0x60: connect(rdi=0)"
@@ -669,18 +666,30 @@ mod tests {
         let first = call(0x20, import("connect"), vec![]);
         let f = facts(vec![second, first]);
         assert_eq!(
-            call_sites_cell(Some(&f), &t("connect")).terminal(),
+            call_sites_cell(Some(&f), &t("connect")).unwrap().terminal(),
             "2: kernel @ 0x20: connect(); kernel @ 0x20: connect() (tail jump)"
         );
     }
 
     #[test]
     fn no_direct_call_site_is_none_found() {
-        assert_eq!(call_sites_cell(None, &t("connect")).terminal(), NONE_FOUND);
+        assert_eq!(call_sites_cell(None, &t("connect")), None);
         let f = facts(vec![call(0x20, import("getenv"), vec![])]);
+        assert_eq!(call_sites_cell(Some(&f), &t("connect")), None);
+        // What the cell then says depends on the search (plans P-p, P-q).
+        let other = |state| {
+            let c = entry(state, Some((78, 1 << 28)));
+            capability_cell(true, Some(&c), Some(&f), &t("connect")).terminal()
+        };
         assert_eq!(
-            call_sites_cell(Some(&f), &t("connect")).terminal(),
-            NONE_FOUND
+            other(CoverageState::Complete),
+            "none found (see binary.code)"
+        );
+        assert_eq!(
+            other(CoverageState::Partial {
+                missing: vec!["code: a gap".to_string()],
+            }),
+            "none found in the code searched; binary.code is partial (see Coverage)"
         );
     }
 
@@ -699,19 +708,23 @@ mod tests {
     }
 
     /// Plan P-p: "none found" only where the input's code was searched (its `binary.code` entry
-    /// is complete or partial); otherwise the cell says the code was not analyzed.
+    /// is complete or partial); otherwise the cell says the code was not analyzed. Plan P-q: a
+    /// partial search says so.
     #[test]
     fn a_cell_of_code_not_searched_is_not_analyzed() {
         let other = facts(vec![call(0x20, import("getenv"), vec![])]);
         let partial = CoverageState::Partial {
             missing: vec!["code: a gap".to_string()],
         };
-        for state in [CoverageState::Complete, partial] {
+        for (state, none) in [
+            (CoverageState::Complete, NONE_FOUND),
+            (partial, NONE_FOUND_PARTIAL),
+        ] {
             let c = entry(state, Some((78, 1 << 28)));
             for f in [Some(&other), None] {
                 assert_eq!(
                     capability_cell(true, Some(&c), f, &t("connect")).terminal(),
-                    NONE_FOUND,
+                    none,
                     "{c:?}"
                 );
             }
@@ -815,7 +828,7 @@ mod tests {
         let hostile = "a|b`c*d\ne";
         let mut f = facts(vec![call(0x4d, import(hostile), vec![c_str(t(hostile))])]);
         f.functions[0].names = vec![t(hostile)];
-        let md = call_sites_cell(Some(&f), &t(hostile)).markdown();
+        let md = call_sites_cell(Some(&f), &t(hostile)).unwrap().markdown();
         let plain = format!("1: {hostile} @ 0x4d: {hostile}(rdi=\"{hostile}\")");
         assert_eq!(md, t(&plain).markdown_inline());
         assert!(!md.contains('\n'), "{md}");
