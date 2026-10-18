@@ -2418,3 +2418,93 @@ fn capability_hints_in_an_install_report() {
         "{row}"
     );
 }
+
+// --- Component identification (PR-4c-1) -------------------------------------------------------
+
+/// `libdata.so` (SONAME `libdata.so.1`, the four `LLAMA_*` values) copied as libllama-common.
+fn llama_common() -> (TempDir, PathBuf) {
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("libllama-common.so.0.0.1");
+    fs::copy(elf_fixture("libdata.so"), &path).unwrap();
+    (d, path)
+}
+
+#[test]
+fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
+    let (_d, path) = llama_common();
+    let r = binary(&[&path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("binary: "))
+        .unwrap_or_else(|| panic!("{}", r.stderr));
+    assert!(
+        line.ends_with("  complete  component: llama.cpp/common (NameOnly)"),
+        "{line}"
+    );
+    let r = binary(&[&path, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for (label, value) in [
+        ("Component", "llama.cpp/common"),
+        ("Identity", "NameOnly"),
+        ("Versions", "0.0.1 (file name), 1 (LLAMA_BUILD_NUMBER)"),
+    ] {
+        let row = format!("| {} | {} |", esc_md(label), esc_md(value));
+        assert!(r.stdout.contains(&row), "{row}\n{}", r.stdout);
+    }
+    // The AI-BOM of the saved session projects the claim.
+    let saved = path.with_file_name("session.json");
+    let r = binary(&[&path, &"--out", &saved]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let r = run(&[&"session", &"render", &saved, &"--format", &"aibom"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let bom: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    let component = &bom["artifacts"][0]["slices"][0]["components"][0];
+    assert_eq!(component["component"], "llama.cpp/common", "{bom}");
+    assert_eq!(component["status"], "NameOnly", "{bom}");
+    assert_eq!(
+        component["versions"],
+        serde_json::json!(["0.0.1", "1"]),
+        "{bom}"
+    );
+    // A name the database does not know: no claim, and the line ends at its status.
+    let d = inputs();
+    let r = binary(&[&d.path().join("libdata.so")]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("binary: "))
+        .unwrap_or_else(|| panic!("{}", r.stderr));
+    assert!(line.ends_with("  complete"), "{line}");
+}
+
+#[test]
+fn the_install_report_shows_each_binary_s_component() {
+    let models = store(true);
+    let tree = TempDir::new().unwrap();
+    fs::create_dir_all(tree.path().join("bin")).unwrap();
+    fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
+    fs::copy(elf_fixture("libdata.so"), tree.path().join("bin/ollama")).unwrap();
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &tree.path(), &"--format", &"md"],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let at = r
+        .stdout
+        .find(&esc_md("Binaries:"))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    let row = r.stdout[at..]
+        .lines()
+        .find(|l| l.starts_with(&format!("| {} |", esc_md("bin/ollama"))))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    let start = format!(
+        "| {} | {} | {} |",
+        esc_md("bin/ollama"),
+        esc_md("Dyn x86_64"),
+        esc_md("ollama (NameOnly)")
+    );
+    assert!(row.starts_with(&start), "{row}");
+}

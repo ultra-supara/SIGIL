@@ -1110,10 +1110,11 @@ fn install_binaries_show_their_capability_keys() {
             .lines()
             .find(|l| l.starts_with('|') && l.contains(&md_esc("libggml.so.0")))
             .unwrap_or_else(|| panic!("{table}"));
+        // Path, Type, Component (PR-4c-1), SONAME, NEEDED, counts, then the capabilities.
         row.trim_matches('|')
             .split(" | ")
             .map(str::trim)
-            .nth(5)
+            .nth(6)
             .unwrap()
             .to_string()
     };
@@ -1136,4 +1137,179 @@ fn install_binaries_show_their_capability_keys() {
         cell(&s),
         md_esc("posix.dynamic_loading, posix.network (imports cut short)")
     );
+}
+
+// --- Component identification (PR-4c-1) -------------------------------------------------------
+
+/// The row `| <label> | <value> |`, escaped.
+fn fact_row(label: &str, value: &str) -> String {
+    format!("| {} | {} |", md_esc(label), md_esc(value))
+}
+
+#[test]
+fn a_content_s_facts_end_with_its_component_identity_and_versions() {
+    // Example 15's claim: ggml-base, NameOnly, the SONAME's version.
+    let md = render_session(&binary_inspect());
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Component"),
+        fact_row("Component", "ggml-base")
+    );
+    assert_eq!(
+        row_of(section, "Identity"),
+        fact_row("Identity", "NameOnly")
+    );
+    assert_eq!(
+        row_of(section, "Versions"),
+        fact_row("Versions", "0 (SONAME)")
+    );
+    let at = |label: &str| section.find(&format!("| {} |", md_esc(label))).unwrap();
+    assert!(at("Data symbols") < at("Component"), "{section}");
+    // Without a claim, each row says `-`.
+    let mut s = binary_inspect();
+    s.components.clear();
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    for label in ["Component", "Identity", "Versions"] {
+        assert_eq!(row_of(section, label), fact_row(label, "-"));
+    }
+}
+
+#[test]
+fn each_version_is_shown_with_its_source_and_escaped() {
+    let mut s = binary_inspect();
+    let at = s.components[0].versions[0].at.clone();
+    let claim = &mut s.components[0];
+    claim.versions.insert(
+        0,
+        VersionAssertion {
+            value: t("0.13.1"),
+            source: VersionSource::SelfName {
+                kind: NameKind::Filename,
+            },
+            at: at.clone(),
+        },
+    );
+    claim.versions.push(VersionAssertion {
+        value: t("1"),
+        source: VersionSource::Embedded {
+            field: "LLAMA_BUILD_NUMBER".to_string(),
+        },
+        at: at.clone(),
+    });
+    let md = render_session(&s);
+    assert_eq!(
+        row_of(binaries_section(&md), "Versions"),
+        fact_row(
+            "Versions",
+            "0.13.1 (file name), 0 (SONAME), 1 (LLAMA_BUILD_NUMBER)"
+        )
+    );
+    s.components[0].versions = vec![VersionAssertion {
+        value: t(HOSTILE),
+        source: VersionSource::SelfName {
+            kind: NameKind::Soname,
+        },
+        at,
+    }];
+    let md = render_session(&s);
+    assert!(!md.contains("<script>"), "{md}");
+    let row = row_of(binaries_section(&md), "Versions");
+    let bare = row
+        .char_indices()
+        .filter(|&(i, c)| c == '|' && (i == 0 || row.as_bytes()[i - 1] != b'\\'))
+        .count();
+    assert_eq!(bare, 3, "{row}");
+}
+
+#[test]
+fn a_macho_content_has_the_identity_rows_too() {
+    let mut s = binary_code();
+    s.artifacts[0].format = Format::MachO;
+    s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        is_64: true,
+        cpu_type: 0x0100_0007,
+        cpu_subtype: 3,
+        fat_cpu_type: None,
+        fat_cpu_subtype: None,
+        fat_alignment: None,
+        file_type: 6,
+        flags: 0,
+        uuid: None,
+        id_dylib: None,
+        load_dylibs: vec![],
+        rpaths: vec![],
+        dylinker: None,
+    });
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(section.contains(&md_esc("Mach-O 64-bit")), "{section}");
+    assert_eq!(row_of(section, "Component"), fact_row("Component", "-"));
+}
+
+#[test]
+fn install_binaries_show_their_component() {
+    let mut s = conflicting_identity();
+    let facts = |slice: SliceId| BinaryFacts {
+        slice,
+        container: ContainerFacts::Elf(ElfFacts {
+            interp: None,
+            soname: None,
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![],
+            stripped: Some(true),
+            exports: 0,
+            imports: vec![],
+            data: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    };
+    let ggml = s.artifacts[0].slices[0].id.clone();
+    s.binaries.push(facts(ggml));
+    // A second binary, with no claim.
+    let cpu = add_binary(
+        &mut s,
+        &hex(0x44),
+        "lib/ollama/libggml-cpu-x64.so",
+        Arch::X86_64,
+        1003,
+    );
+    s.binaries.push(facts(cpu.slice));
+    let md = render_session(&s);
+    let section = md
+        .split("\n## ")
+        .find(|x| x.starts_with("Runtime artifacts"))
+        .unwrap();
+    let table = &section[section.find(&md_esc("Binaries:")).unwrap()..];
+    assert!(
+        table.contains(&format!(
+            "| {} | {} | {} | {} |",
+            md_esc("Path"),
+            md_esc("Type"),
+            md_esc("Component"),
+            md_esc("Dylib ID / SONAME")
+        )),
+        "{table}"
+    );
+    let cell = |path: &str| -> String {
+        let row = table
+            .lines()
+            .find(|l| l.starts_with(&format!("| {} |", md_esc(path))))
+            .unwrap_or_else(|| panic!("{table}"));
+        row.trim_matches('|')
+            .split(" | ")
+            .map(str::trim)
+            .nth(2)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        cell("lib/ollama/libggml.so.0.13.1"),
+        md_esc("ggml (Conflicting)")
+    );
+    assert_eq!(cell("lib/ollama/libggml-cpu-x64.so"), md_esc("-"));
 }

@@ -164,6 +164,38 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
         .collect()
 }
 
+/// The component claims of a slice, in session order (PR-4c-1).
+pub fn claims_of<'s>(
+    s: &'s crate::session::Session,
+    slice: &crate::id::SliceId,
+) -> Vec<&'s crate::identity::ComponentClaim> {
+    s.components
+        .iter()
+        .filter(|c| c.subject == *slice)
+        .collect()
+}
+
+/// A claim as reports name it: `<component> (<status>)`, e.g. `llama.cpp/common (NameOnly)`.
+pub fn component_label(c: &crate::identity::ComponentClaim) -> String {
+    format!("{} ({:?})", c.component, c.status)
+}
+
+/// Where a version value came from: `file name`, `SONAME`, `install name`, `version string`, or
+/// the embedded field, e.g. `LLAMA_BUILD_NUMBER`.
+pub fn version_source(source: &crate::identity::VersionSource) -> String {
+    use crate::identity::{NameKind, VersionSource};
+    match source {
+        VersionSource::SelfName { kind } => match kind {
+            NameKind::Filename => "file name",
+            NameKind::Soname => "SONAME",
+            NameKind::InstallName => "install name",
+            NameKind::VersionString => "version string",
+        }
+        .to_string(),
+        VersionSource::Embedded { field } => field.clone(),
+    }
+}
+
 /// An artifact's type: `ELF Rel x86_64`, `Mach-O`, `other`, or `not read`.
 pub fn artifact_type(a: Option<&crate::artifact::Artifact>) -> String {
     use crate::artifact::Format;

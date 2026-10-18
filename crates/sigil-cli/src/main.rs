@@ -43,8 +43,8 @@ use sigil_engine::reference;
 use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
-    action, artifact_type, binary_inputs, completeness, coverage_state, mode as mode_name,
-    probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
+    action, artifact_type, binary_inputs, claims_of, completeness, component_label, coverage_state,
+    mode as mode_name, probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
@@ -999,8 +999,24 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
         } else {
             String::new()
         };
+        // The input's component claims (PR-4c-1).
+        let labels: Vec<String> = b
+            .artifact
+            .map(|a| {
+                a.slices
+                    .iter()
+                    .flat_map(|slice| claims_of(s, &slice.id))
+                    .map(component_label)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let component = if labels.is_empty() {
+            String::new()
+        } else {
+            format!("  component: {}", shown(&labels.join(", ")))
+        };
         lines.push(format!(
-            "binary: {}  {}  {sha}  {state}{code}",
+            "binary: {}  {}  {sha}  {state}{code}{component}",
             path.terminal_line(),
             artifact_type(b.artifact)
         ));

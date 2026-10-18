@@ -251,7 +251,7 @@ fn binary_inspection(out: &mut String, s: &Session) {
         let path = path_of(b);
         for slice in &a.slices {
             if let Some(facts) = s.binaries.iter().find(|f| f.slice == slice.id) {
-                binary_facts(out, &path, a, facts);
+                binary_facts(out, s, &path, a, facts);
                 capabilities(out, s, &path, facts, b.code);
             }
         }
@@ -267,9 +267,10 @@ fn binary_inspection(out: &mut String, s: &Session) {
     }
 }
 
-/// One record's facts: a table, then its imports.
+/// One record's facts: a table that ends with the slice's identity rows, then its imports.
 fn binary_facts(
     out: &mut String,
+    s: &Session,
     path: &UntrustedText,
     a: &crate::artifact::Artifact,
     b: &crate::binary::BinaryFacts,
@@ -334,6 +335,7 @@ fn binary_facts(
         if let Some(alignment) = macho.fat_alignment {
             rows.push(vec![esc("Fat alignment"), esc(&alignment.to_string())]);
         }
+        rows.extend(identity_rows(s, &b.slice));
         table(out, &["Fact", "Value"], rows);
         return;
     }
@@ -444,6 +446,7 @@ fn binary_facts(
             },
         ]);
     }
+    rows.extend(identity_rows(s, &b.slice));
     table(out, &["Fact", "Value"], rows);
     if !elf.imports.is_empty() {
         out.push_str(&format!(
@@ -470,6 +473,37 @@ fn binary_facts(
         out.push_str(&names.join(", "));
         out.push_str("\n\n");
     }
+}
+
+/// The rows Component, Identity, and Versions of a content's facts table (PR-4c-1 spec §6): the
+/// slice's claims, or `-` without one. Each version is `<value> (<source>)`.
+fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
+    let claims = super::claims_of(s, slice);
+    let keys: Vec<String> = claims.iter().map(|c| esc(c.component.as_str())).collect();
+    let statuses: Vec<String> = claims
+        .iter()
+        .map(|c| esc(&format!("{:?}", c.status)))
+        .collect();
+    let versions: Vec<String> = claims
+        .iter()
+        .flat_map(|c| c.versions.iter())
+        .map(|v| {
+            let source = format!(" ({})", super::version_source(&v.source));
+            format!("{}{}", v.value.markdown_inline(), esc(&source))
+        })
+        .collect();
+    let cell = |parts: Vec<String>| {
+        if parts.is_empty() {
+            esc("-")
+        } else {
+            parts.join(&esc(", "))
+        }
+    };
+    vec![
+        vec![esc("Component"), cell(keys)],
+        vec![esc("Identity"), cell(statuses)],
+        vec![esc("Versions"), cell(versions)],
+    ]
 }
 
 /// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
@@ -652,7 +686,7 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
 }
 
 /// The container facts of the install's binaries (PR-4b-1): one row per record, with its
-/// capability keys (PR-5a-2). Gaps are in the Coverage section.
+/// component (PR-4c-1) and capability keys (PR-5a-2). Gaps are in the Coverage section.
 fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u8]) {
     if s.binaries.is_empty() {
         return;
@@ -795,9 +829,18 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
             if b.imports_cut_short() {
                 capabilities.push_str(IMPORTS_CUT_SHORT_NOTE);
             }
+            // The slice's component claims (PR-4c-1 spec §6).
+            let claims = super::claims_of(s, &b.slice);
+            let component = if claims.is_empty() {
+                "-".to_string()
+            } else {
+                let labels: Vec<String> = claims.into_iter().map(super::component_label).collect();
+                labels.join(", ")
+            };
             vec![
                 path.markdown_inline(),
                 esc(&format!("{kind} {arch}")),
+                esc(&component),
                 esc(&soname),
                 esc(&needed),
                 esc(&symbol_counts),
@@ -811,6 +854,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
         &[
             "Path",
             "Type",
+            "Component",
             "Dylib ID / SONAME",
             "Loaded dylibs / NEEDED",
             "Exports / imports",
