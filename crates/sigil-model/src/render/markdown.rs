@@ -5,13 +5,19 @@
 //! code span, or HTML in the report. Tables are GFM, and a cell never contains a line break.
 
 use crate::artifact::{FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs};
+use crate::coverage::Coverage;
 use crate::evidence::Observability;
+use crate::hint::{FeatureHint, Signal};
 use crate::model::{BlobLookup, Model};
 use crate::reference::{MemberResult, ARTIFACTS_RELEASE, INSTALL_ROOT};
 use crate::session::Session;
 use crate::text::UntrustedText;
 use crate::ReleaseBasis;
 
+use super::code::{
+    capability_cell, coverage_line, no_capability_imports_kept, IMPORTS_CUT_SHORT,
+    IMPORTS_CUT_SHORT_NOTE, NO_CAPABILITY_IMPORTS,
+};
 use super::md::{self, esc, joined, section, table};
 use super::{
     action, active_feature, coverage_state, kind, mode, not_observable, subject, treatment,
@@ -169,17 +175,27 @@ fn coverage(out: &mut String, s: &Session) {
     table(out, &["Check", "Scope", "State"], rows);
 }
 
-/// What a binary inspection's report says it is not (spec §6.1).
+/// What a binary inspection's report says it is not, without code analysis (spec §6.1).
 pub const BINARY_CAVEAT: &str = "Container facts only. For an executable or a shared object, imports are the names it asks its loader for; for a relocatable object (.o), they are the symbols left for the linker. Neither shows that the code calls them, and no code was analyzed.";
 
+/// [`BINARY_CAVEAT`] of an inspection with code analysis (PR-5a-2 spec §3.1, plan P-f): it names
+/// the direct call sites, which the report shows before its caveats, and says that an import
+/// alone does not show a call.
+pub const BINARY_CAVEAT_CODE: &str = "Container facts and direct call sites. For an executable or a shared object, imports are the names it asks its loader for; for a relocatable object (.o), they are the symbols left for the linker. An import alone does not show that the code calls it; the call sites above are the direct calls found in the code.";
+
+/// The scope of code analysis (PR-5a spec §6.1), after [`BINARY_CAVEAT_CODE`].
+pub const CODE_CAVEAT: &str = "Direct call sites only. A call through a function pointer, a function linked statically into the file, and a raw system call are not found, and references from data are not followed. Only executable sections and the ranges of FDEs in .eh_frame are searched, and only code with an FDE is analyzed. In a relocatable object (.o), addresses are file offsets.";
+
 /// The inputs of a binary inspection (PR-4b-2a spec §6.1): an overview in argument order, then
-/// each content's container facts once, in the order of its first input.
+/// each content's container facts and capabilities once, in the order of its first input. With
+/// code analysis (PR-5a-2), the overview has a Code column, and the caveats name the call sites.
 fn binary_inspection(out: &mut String, s: &Session) {
     use super::{artifact_type, binary_inputs};
     let inputs = binary_inputs(s);
     if inputs.is_empty() {
         return;
     }
+    let code = s.request.code;
     section(out, "Binaries");
     let path_of = |b: &super::BinaryInput<'_>| {
         b.instance
@@ -201,7 +217,7 @@ fn binary_inspection(out: &mut String, s: &Session) {
                 .map(|a| a.size)
                 .or(b.instance.map(|i| i.stat.size))
                 .map_or_else(|| "-".to_string(), |n| n.to_string());
-            vec![
+            let mut row = vec![
                 path_of(b).markdown_inline(),
                 sha,
                 esc(&size),
@@ -210,14 +226,21 @@ fn binary_inspection(out: &mut String, s: &Session) {
                     || esc("no coverage entry"),
                     |c| coverage_state(&c.state).markdown(),
                 ),
-            ]
+            ];
+            if code {
+                row.push(b.code.map_or_else(
+                    || esc("no coverage entry"),
+                    |c| coverage_state(&c.state).markdown(),
+                ));
+            }
+            row
         })
         .collect();
-    table(
-        out,
-        &["Path", "SHA-256", "Size", "Type", "Container facts"],
-        rows,
-    );
+    let mut header = vec!["Path", "SHA-256", "Size", "Type", "Container facts"];
+    if code {
+        header.push("Code");
+    }
+    table(out, &header, rows);
     let mut shown: Vec<&crate::id::ArtifactId> = vec![];
     for b in &inputs {
         let Some(a) = b.artifact else { continue };
@@ -225,14 +248,23 @@ fn binary_inspection(out: &mut String, s: &Session) {
             continue;
         }
         shown.push(&a.id);
+        let path = path_of(b);
         for slice in &a.slices {
             if let Some(facts) = s.binaries.iter().find(|f| f.slice == slice.id) {
-                binary_facts(out, &path_of(b), a, facts);
+                binary_facts(out, &path, a, facts);
+                capabilities(out, s, &path, facts, b.code);
             }
         }
     }
-    out.push_str(&esc(BINARY_CAVEAT));
-    out.push_str("\n\n");
+    let caveats: &[&str] = if code {
+        &[BINARY_CAVEAT_CODE, CODE_CAVEAT]
+    } else {
+        &[BINARY_CAVEAT]
+    };
+    for caveat in caveats {
+        out.push_str(&esc(caveat));
+        out.push_str("\n\n");
+    }
 }
 
 /// One record's facts: a table, then its imports.
@@ -440,6 +472,86 @@ fn binary_facts(
     }
 }
 
+/// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
+/// slice, in (feature, import) order, or the line `No capability imports.` when it has none.
+/// Hints come only from the imports kept within `binary_imports` (plan P-r): when the list was
+/// cut short, the line counts the imports kept instead, and a table is followed by a line that
+/// says so. Then, with code analysis, the line of its input's `binary.code` entry (`code`).
+///
+/// That entry also decides each row's call-site cell ([`capability_cell`]): its direct call
+/// sites, or, without one, `none found (see binary.code)` when the input's code was searched in
+/// full (complete) and `none found in the code searched; binary.code is partial (see Coverage)`
+/// when partial (plans P-p, P-q); `not analyzed (see binary.code)` when it was not searched; and
+/// `not analyzed (use --code)` without code analysis. A Mach-O gets nothing: 5a maps no Mach-O
+/// import.
+fn capabilities(
+    out: &mut String,
+    s: &Session,
+    path: &UntrustedText,
+    b: &crate::binary::BinaryFacts,
+    code: Option<&Coverage>,
+) {
+    if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
+        return;
+    }
+    let mut hints: Vec<&FeatureHint> = import_hints(s, &b.slice).collect();
+    hints.sort_by(|x, y| hint_key(x).cmp(&hint_key(y)));
+    let cut_short = b.imports_cut_short();
+    if hints.is_empty() {
+        let line = match &b.container {
+            crate::binary::ContainerFacts::Elf(elf) if cut_short => {
+                no_capability_imports_kept(elf.imports.len())
+            }
+            _ => NO_CAPABILITY_IMPORTS.to_string(),
+        };
+        out.push_str(&esc(&line));
+        out.push_str("\n\n");
+    } else {
+        out.push_str(&format!(
+            "{} {}{}\n\n",
+            esc("Capabilities of"),
+            path.markdown_inline(),
+            esc(":")
+        ));
+        let facts = s.code.iter().find(|c| c.slice == b.slice);
+        let rows = hints
+            .iter()
+            .map(|h| {
+                vec![
+                    esc(h.feature.as_str()),
+                    h.value.markdown_inline(),
+                    capability_cell(s.request.code, code, facts, &h.value).markdown(),
+                ]
+            })
+            .collect();
+        table(out, &["Capability", "Import", "Direct call sites"], rows);
+        if cut_short {
+            out.push_str(&esc(IMPORTS_CUT_SHORT));
+            out.push_str("\n\n");
+        }
+    }
+    if s.request.code {
+        out.push_str(&coverage_line(code).markdown());
+        out.push_str("\n\n");
+    }
+}
+
+/// A slice's import hints (plan P-a): the capability rows of the binary report and the keys of
+/// the install's Capabilities (imports) column.
+fn import_hints<'a>(
+    s: &'a Session,
+    slice: &'a crate::id::SliceId,
+) -> impl Iterator<Item = &'a FeatureHint> {
+    s.hints
+        .iter()
+        .filter(move |h| h.subject == *slice && h.signal == Signal::Import)
+}
+
+/// The order of a content's capability rows: the feature key, then the import's name.
+fn hint_key(h: &FeatureHint) -> (&str, &[u8]) {
+    (h.feature.as_str(), h.value.as_bytes())
+}
+
 fn models(out: &mut String, s: &Session) {
     // A binary inspection has no model store (B10).
     if crate::binary_input::is_binary_inspection(&s.request) {
@@ -539,8 +651,8 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
     binaries(out, s, &root.id, &prefix);
 }
 
-/// The container facts of the install's binaries (PR-4b-1): one row per record. Gaps are in the
-/// Coverage section.
+/// The container facts of the install's binaries (PR-4b-1): one row per record, with its
+/// capability keys (PR-5a-2). Gaps are in the Coverage section.
 fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u8]) {
     if s.binaries.is_empty() {
         return;
@@ -668,12 +780,28 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                     (soname, needed, "-".to_string(), notes)
                 }
             };
+            // The capability keys of the slice's import hints (PR-5a-2 spec §3.2).
+            let mut capabilities: Vec<&str> = import_hints(s, &b.slice)
+                .map(|h| h.feature.as_str())
+                .collect();
+            capabilities.sort_unstable();
+            capabilities.dedup();
+            let mut capabilities = if capabilities.is_empty() {
+                "-".to_string()
+            } else {
+                capabilities.join(", ")
+            };
+            // Keys come only from the imports kept within `binary_imports` (plan P-r).
+            if b.imports_cut_short() {
+                capabilities.push_str(IMPORTS_CUT_SHORT_NOTE);
+            }
             vec![
                 path.markdown_inline(),
                 esc(&format!("{kind} {arch}")),
                 esc(&soname),
                 esc(&needed),
                 esc(&symbol_counts),
+                esc(&capabilities),
                 esc(&notes.join("; ")),
             ]
         })
@@ -686,6 +814,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
             "Dylib ID / SONAME",
             "Loaded dylibs / NEEDED",
             "Exports / imports",
+            "Capabilities (imports)",
             "Notes",
         ],
         rows,

@@ -15,7 +15,8 @@ use object::read::elf::{
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
 use sigil_model::{
-    BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText, BINARY_CODE_BYTES,
+    imports_over_gap, BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText,
+    BINARY_CODE_BYTES,
 };
 
 use super::read::Bounded;
@@ -1004,7 +1005,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             }
         }
         if over {
-            self.gap(format!("imports: over binary_imports {}", budgets.imports));
+            self.gap(imports_over_gap(budgets.imports));
         }
         facts.imports = imports.into_iter().collect();
         Sections {

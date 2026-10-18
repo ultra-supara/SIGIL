@@ -22,6 +22,15 @@ pub const FAT_CPU_MISMATCH_GAP: &str = "fat slice: CPU type or subtype disagrees
 /// refuses to build such a file, and dyld loads only one of the two.
 pub const FAT_DUPLICATE_ARCH_GAP: &str = "fat header: an architecture is listed twice";
 
+/// The gap of an ELF slice with more imports than `binary_imports`, before its limit
+/// ([`imports_over_gap`]): only the first `binary_imports` imports, in sorted order, are kept.
+pub const IMPORTS_OVER_GAP: &str = "imports: over binary_imports";
+
+/// [`IMPORTS_OVER_GAP`] as the parser records it: `imports: over binary_imports <limit>`.
+pub fn imports_over_gap(limit: u64) -> String {
+    format!("{IMPORTS_OVER_GAP} {limit}")
+}
+
 /// The capability bits of a Mach-O CPU subtype (`CPU_SUBTYPE_MASK`).
 const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
 
@@ -43,6 +52,18 @@ pub struct BinaryFacts {
     /// What could not be read, one entry per gap (`"<what>: <why>"`). Empty: every fact is read
     /// in full or confirmed absent.
     pub gaps: Vec<String>,
+}
+
+impl BinaryFacts {
+    /// Whether its import list was cut short at `binary_imports`: a gap is [`imports_over_gap`]
+    /// of some limit. Then the imports past the cut, and their capability hints, are not known.
+    pub fn imports_cut_short(&self) -> bool {
+        self.gaps.iter().any(|gap| {
+            gap.strip_prefix(IMPORTS_OVER_GAP)
+                .and_then(|rest| rest.strip_prefix(' '))
+                .is_some_and(|limit| !limit.is_empty() && limit.bytes().all(|b| b.is_ascii_digit()))
+        })
+    }
 }
 
 /// The container format's facts.

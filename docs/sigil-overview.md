@@ -51,7 +51,7 @@ Verdict and completeness are independent: a run can be `PASS` and `INCOMPLETE`. 
 |---|---|---|
 | M0 | Safety contracts and their syscall tests, the session model, the engine (model store, observe), CLI v2, the active API probe, AI-BOM v2, the viewer | Done |
 | M0 | Identification of the runtime's own files and of its release, and `sigil binary inspect` ([#44](https://github.com/ultra-supara/SIGIL/issues/44)) | In progress: release attribution and ELF/Mach-O container inspection are done; component identification is next |
-| M1 | Call-site evidence in the runtime's binaries (`binary inspect --code`; for example `connect` → network), semantic profiles, and how the runtime loads its backends | Planned |
+| M1 | Call-site evidence in the runtime's binaries (`binary inspect --code`; for example `connect` → network), semantic profiles, and how the runtime loads its backends | In progress: direct call sites of capability imports (`binary inspect --code`, x86-64 ELF) are done; branch conditions and guard checks, cross-module edges, semantic profiles, and backend loading are next |
 | M2 | The GGUF parsing path, and advisories matched to what was identified | Planned |
 | M3 | aarch64 and Mach-O binaries | Planned |
 | M4 | A decision record for an active lab (dynamic tracing, kept in a separate tool) | Planned |

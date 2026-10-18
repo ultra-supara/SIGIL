@@ -138,7 +138,22 @@
       "gaps": []
     }
   ],
-  "hints": [],
+  "hints": [
+    {
+      "subject": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+      "feature": "posix.dynamic_loading",
+      "signal": "Import",
+      "value": "dlopen",
+      "at": {"Symbol": "dlopen"}
+    },
+    {
+      "subject": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+      "feature": "posix.environment_access",
+      "signal": "Import",
+      "value": "getenv",
+      "at": {"Symbol": "getenv"}
+    }
+  ],
   "code": [],
   "relations": [
     {

@@ -69,9 +69,9 @@ an installation do not make every binary inspection incomplete.
 
 **With code analysis** (`request.code`), `binary_code_audit` is added after `binary_audit`, without
 repeats: `["binary_code"]`, whose check is `binary.code`, one entry per input. Without code
-analysis, `binary_code_audit` is ignored. Code analysis is requested through the engine's
-`BinaryRequest`; the CLI flag comes with PR-5a-2. Evaluation reads `request.code` from the session,
-so it adds the same scope.
+analysis, `binary_code_audit` is ignored. Code analysis is requested with
+`sigil binary inspect --code` (the engine's `BinaryRequest`). Evaluation reads `request.code` from
+the session, so it adds the same scope.
 
 `binary_audit` is optional, but unlike the other lists, a policy file that omits it gets
 `["binary"]`: a policy written before it existed still requires every input to be inspected in

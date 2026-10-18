@@ -1,0 +1,175 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [{"id": "binary-1", "path": "/home/user/src/suspicious_kernel-gcc-O2.o"}],
+    "audit": ["binary", "binary_code"],
+    "required_checks": ["binary.code", "binary.container"],
+    "budgets": {
+      "binary_bytes": 68719476736,
+      "binary_code_bytes": 268435456,
+      "binary_imports": 4096,
+      "binary_parse_bytes": 67108864
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": true
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a",
+      "size": 1248,
+      "format": {"Elf": {"kind": "Rel"}},
+      "slices": [
+        {
+          "id": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1248,
+          "sha256": "aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a"
+        }
+      ]
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:binary-1/suspicious_kernel-gcc-O2.o",
+      "root": "binary-1",
+      "path": "/home/user/src/suspicious_kernel-gcc-O2.o",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 21,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1248,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Argument"]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "binaries": [
+    {
+      "slice": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+      "container": {
+        "Elf": {
+          "interp": null,
+          "soname": null,
+          "needed": [],
+          "rpath": [],
+          "runpath": [],
+          "build_id": null,
+          "comment": ["GCC: (Debian 15.3.0-1) 15.3.0"],
+          "stripped": false,
+          "exports": 1,
+          "imports": [{"name": "connect", "version": null, "weak": false}],
+          "data": []
+        }
+      },
+      "go": null,
+      "gaps": []
+    }
+  ],
+  "hints": [
+    {
+      "subject": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+      "feature": "posix.network",
+      "signal": "Import",
+      "value": "connect",
+      "at": {"Symbol": "connect"}
+    }
+  ],
+  "code": [
+    {
+      "slice": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+      "functions": [
+        {"id": "fn:0x40", "entry": 64, "end": 86, "bounds": "EhFrameFde", "names": ["kernel"]}
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0x4d",
+          "caller": "fn:0x40",
+          "addr": 77,
+          "kind": "Call",
+          "target": {"Import": {"symbol": "connect", "via": "Reloc"}},
+          "args": [
+            {"ConstInt": {"reg": "rdi", "value": 0}},
+            {"ConstInt": {"reg": "rsi", "value": 0}},
+            {"ConstInt": {"reg": "rdx", "value": 0}}
+          ]
+        }
+      ],
+      "predicate_checks": [],
+      "close_checks": [],
+      "guard_regions": [],
+      "param_mappings": []
+    }
+  ],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "scope": {"Instance": "inst:binary-1/suspicious_kernel-gcc-O2.o"},
+      "state": "Complete",
+      "budget": {"budget": "binary_code_bytes", "used": 78, "limit": 268435456}
+    },
+    {
+      "check": "binary.container",
+      "scope": {"Instance": "inst:binary-1/suspicious_kernel-gcc-O2.o"},
+      "state": "Complete",
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}

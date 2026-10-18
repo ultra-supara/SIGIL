@@ -127,8 +127,8 @@ pub const SCOPES: &[ScopeInfo] = &[
         id: "binary",
         checks: &["binary.container"],
     },
-    // Code analysis (PR-5a; the CLI flag comes with PR-5a-2): the direct call sites of the
-    // capability imports.
+    // Code analysis (`binary inspect --code`, PR-5a): the direct call sites of the capability
+    // imports.
     ScopeInfo {
         id: "binary_code",
         checks: &["binary.code"],

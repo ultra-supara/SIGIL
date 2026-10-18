@@ -258,13 +258,63 @@ fn binary_inspection_reads_only_its_inputs() {
     assert!(std::fs::read_to_string(&md)
         .unwrap()
         .contains("## Binaries"));
-    assert_read_under(&r, &fx.target);
+    assert_read_under(&r, &so);
     // Plan review P2: only the input is opened under target/; nothing under private/.
     assert_never_opened_under(&r, &fx.target.join("private"));
     assert_opened_only(&r, &fx.target, &[&so]);
     // No exec, no dlopen, no mmap of the target, no socket; writes only --out (and its
     // temporary siblings).
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+}
+
+/// PR-5a-2 (#46): `binary inspect --code` on a relocatable object and on a linked shared object.
+/// Code is read from the input's own fd: only the input is opened under target/, nothing under
+/// private/, and there is no exec, dlopen, mmap of the input, or socket. It writes only --out.
+#[test]
+fn binary_code_inspection_reads_only_its_inputs() {
+    let case = "binary_code_inspection_reads_only_its_inputs";
+    if !require_tracer(case) {
+        return;
+    }
+    let code = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sigil-engine/tests/fixtures/code");
+    for (name, file, call_site) in [
+        (
+            "kernel",
+            "suspicious_kernel-gcc-O2.o",
+            r"1\: kernel \@ 0x4d\: connect\(rdi\=0\, rsi\=0\, rdx\=0\)",
+        ),
+        ("plt", "net-plt-gcc.so", r"2\: kernel \@ 0x1118\: connect\("),
+    ] {
+        let fx = fixture();
+        let input = fx.target.join(file);
+        std::fs::copy(code.join(file), &input).unwrap();
+        std::fs::create_dir(fx.target.join("private")).unwrap();
+        std::fs::write(fx.target.join("private/secret.txt"), b"secret").unwrap();
+        let md = fx.out.join("report.md");
+        let args = os(&[
+            &"binary",
+            &"inspect",
+            &"--code",
+            &input,
+            &"--format",
+            &"md",
+            &"--out",
+            &md,
+        ]);
+        let r = run(&format!("binary-inspect-code-{name}"), &fx, &refs(&args));
+        assert!(r.status.unwrap().success(), "{name}: {}", r.stderr);
+        // The code path ran: the call site and the complete binary.code line are in the report.
+        let report = std::fs::read_to_string(&md).unwrap();
+        assert!(report.contains(call_site), "{name}: {report}");
+        assert!(
+            report.contains(r"binary\.code\: complete\; "),
+            "{name}: {report}"
+        );
+        assert_read_under(&r, &input);
+        assert_never_opened_under(&r, &fx.target.join("private"));
+        assert_opened_only(&r, &fx.target, &[&input]);
+        assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+    }
 }
 
 /// Every file the run opened under `root` is one of `files`; `root` itself (a directory fd) is

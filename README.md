@@ -38,6 +38,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 | License | The license layer, its SPDX id where detected, and an excerpt |
 | Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
 | Runtime API (`--active api-probe`) | Whether `GET /api/version` answered at one literal address, and the version it reported |
+| Binaries (`binary inspect`) | Each file's SHA-256, format, and container facts (ELF, Mach-O); an ELF file's capability imports (for example `connect` → `posix.network`), as imports, not calls; with `--code`, the direct call sites of those imports in x86-64 ELF code, with their arguments |
 | Outcome | Verdict (`PASS` / `WARN` / `FAIL`) and completeness (`COMPLETE` / `INCOMPLETE`), side by side |
 
 ## Why local-first, LLM-free
@@ -88,11 +89,14 @@ cargo run -p sigil-cli -- session render out/session.json
 # The detection rules
 cargo run -p sigil-cli -- rules
 
-# Files directly (no model store or installation): digest, format, container facts
+# Files directly (no model store or installation): digest, format, container facts, capability imports
 cargo run -p sigil-cli -- binary inspect ./libggml-base.so --format md --out out/binary.md
+
+# With --code: the direct call sites of capability imports (connect, dlopen, …); x86-64 ELF only
+cargo run -p sigil-cli -- binary inspect --code ./suspicious_kernel.o --format md --out out/code.md
 ```
 
-`binary inspect` reads files directly and writes one session for all of them; its options, budgets, and statuses are in [docs/binary-inspect.md](docs/binary-inspect.md).
+`binary inspect` reads files directly and writes one session for all of them; its options (`--code` included), budgets, and statuses are in [docs/binary-inspect.md](docs/binary-inspect.md).
 
 Every option of `inspect ollama`, the exit codes, and a CI recipe are in the [Ollama guide](docs/ollama-inspection.md). Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached (`--fail-on`), `4` incomplete (`--fail-on-incomplete`).
 

@@ -9,9 +9,11 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
-use sigil_model::render::markdown::render_session;
+use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
+use sigil_model::render::markdown::{render_session, CODE_CAVEAT};
 use sigil_model::{
-    Completeness, CoverageState, Mode, ProbeResult, Session, UntrustedText, Verdict,
+    CallTarget, Completeness, ContainerFacts, CoverageState, Mode, ProbeResult, Session,
+    UntrustedText, Verdict, BINARY_UNSUPPORTED,
 };
 use tempfile::TempDir;
 
@@ -1940,4 +1942,479 @@ fn a_fatal_message_keeps_its_reason_after_a_long_path() {
     let r = binary(&[&long]);
     assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(r.stderr.contains("not found"), "{}", r.stderr);
+}
+
+// --- binary inspect --code (PR-5a-2; #46) ------------------------------------------------------
+
+fn code_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code")
+        .join(name)
+}
+
+/// `text` as the Markdown report shows it.
+fn esc_md(text: &str) -> String {
+    UntrustedText::new(text).markdown_inline()
+}
+
+/// The `binary.code` entry of input `n` (0-based, in argument order).
+fn code_entry(s: &Session, n: usize) -> &sigil_model::Coverage {
+    sigil_model::render::binary_inputs(s)[n]
+        .code
+        .unwrap_or_else(|| panic!("input {n} has no binary.code entry"))
+}
+
+#[test]
+fn binary_code_md_shows_the_kernels_connect_call_site() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let r = binary(&[&"--code", &kernel, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let row = format!(
+        "| {} | {} | {} |",
+        esc_md("posix.network"),
+        esc_md("connect"),
+        esc_md("1: kernel @ 0x4d: connect(rdi=0, rsi=0, rdx=0)")
+    );
+    assert!(r.stdout.contains(&row), "{row}\n{}", r.stdout);
+    assert!(
+        r.stdout.contains(&esc_md("binary.code: complete; ")),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains(&esc_md(CODE_CAVEAT)), "{}", r.stdout);
+}
+
+#[test]
+fn binary_code_session_is_byte_identical_but_for_the_observation() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let args: [&dyn AsRef<std::ffi::OsStr>; 4] = [
+        &"--code",
+        &kernel,
+        &"--policy-time",
+        &"2026-10-18T00:00:00Z",
+    ];
+    let (first, second) = (binary(&args), binary(&args));
+    assert_eq!((first.code, second.code), (0, 0), "{}", first.stderr);
+    let a = session_of(&first);
+    let mut b = session_of(&second);
+    assert!(a.request.code);
+    assert_eq!(a.request.budgets["binary_code_bytes"], 256 << 20);
+    assert_eq!(a.code.len(), 1);
+    assert_eq!(code_entry(&a, 0).state, CoverageState::Complete);
+    assert_eq!(a.to_canonical_json().unwrap(), first.stdout);
+    // Only the run's own times (one-second resolution) may differ.
+    b.observation.started_at = a.observation.started_at.clone();
+    b.observation.finished_at = a.observation.finished_at.clone();
+    assert_eq!(b.to_canonical_json().unwrap(), first.stdout);
+}
+
+#[test]
+fn binary_code_help_documents_the_flag_and_its_budget() {
+    let r = binary(&[&"--help"]);
+    assert_eq!(r.code, 0);
+    for text in [
+        "--code",
+        "With --code, the direct call sites of capability imports are recorded too",
+        "direct call sites of capability imports",
+        "x86-64 ELF only",
+        "never run",
+        "binary_code_bytes, which needs --code",
+        "binary_code_audit with --code",
+    ] {
+        assert!(r.stdout.contains(text), "{text}: {}", r.stdout);
+    }
+    // inspect ollama has no --code (parent spec §10).
+    let models = store(true);
+    assert_eq!(inspect(models.path(), &[&"--code"]).code, 2);
+}
+
+#[test]
+fn binary_code_bytes_needs_code() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let r = binary(&[&kernel, &"--budget", &"binary_code_bytes=4096"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("--budget binary_code_bytes=4096: needs --code"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    // With --code it is recorded.
+    let r = binary(&[&"--code", &kernel, &"--budget", &"binary_code_bytes=4096"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(session_of(&r).request.budgets["binary_code_bytes"], 4096);
+    // inspect ollama knows no code budget.
+    let models = store(true);
+    assert_eq!(
+        inspect(models.path(), &[&"--budget", &"binary_code_bytes=4096"]).code,
+        2
+    );
+}
+
+/// The rule is checked once every argument is parsed: the budget may come before `--code`.
+#[test]
+fn binary_code_bytes_before_code_is_accepted() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let r = binary(&[&"--budget", &"binary_code_bytes=4096", &"--code", &kernel]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.request.code);
+    assert_eq!(s.request.budgets["binary_code_bytes"], 4096);
+}
+
+#[test]
+fn binary_code_a_small_budget_is_partial_and_fails_on_incomplete() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let r = binary(&[&"--code", &kernel, &"--budget", &"binary_code_bytes=1"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.budgets["binary_code_bytes"], 1);
+    let c = code_entry(&s, 0);
+    assert!(
+        matches!(&c.state, CoverageState::Partial { missing }
+            if missing.iter().any(|m| m == "binary_code_bytes: 1 exceeded")),
+        "{:?}",
+        c.state
+    );
+    assert!(matches!(
+        s.outcome.completeness,
+        Completeness::Incomplete { .. }
+    ));
+    let r = binary(&[
+        &"--code",
+        &kernel,
+        &"--budget",
+        &"binary_code_bytes=1",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+}
+
+#[test]
+fn binary_code_an_unsupported_input_exits_0() {
+    let d = inputs();
+    let notes = d.path().join("NOTES.txt");
+    let r = binary(&[&"--code", &notes]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(
+        code_entry(&s, 0).state,
+        CoverageState::Unsupported {
+            what: BINARY_UNSUPPORTED.to_string()
+        }
+    );
+    assert_eq!(
+        binary(&[&"--code", &notes, &"--fail-on-incomplete"]).code,
+        4
+    );
+}
+
+#[test]
+fn binary_code_audit_empty_completes_and_the_note_names_both_lists() {
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let d = inputs();
+    let notes = d.path().join("NOTES.txt");
+    let o = TempDir::new().unwrap();
+    let policy = |name: &str, scope: &str| {
+        write(
+            o.path(),
+            &format!("{name}.toml"),
+            &format!("schema = \"sigil-policy/1\"\nname = \"{name}\"\n[scope]\n{scope}"),
+        )
+    };
+    let code_none = policy("code-none", "binary_code_audit = []\n");
+    let both = policy("both", "binary_audit = []\nbinary_code_audit = []\n");
+    let container_none = policy("container-none", "binary_audit = []\n");
+    // binary.code is Partial but not required: COMPLETE, and no note (binary.container is).
+    let r = binary(&[
+        &"--code",
+        &kernel,
+        &"--budget",
+        &"binary_code_bytes=1",
+        &"--policy",
+        &code_none,
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert!(matches!(
+        code_entry(&s, 0).state,
+        CoverageState::Partial { .. }
+    ));
+    assert!(!r.stderr.contains("requires no check"), "{}", r.stderr);
+    // Both lists empty: the note names both.
+    let r = binary(&[&"--code", &notes, &"--policy", &both]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(session_of(&r).outcome.completeness, Completeness::Complete);
+    assert!(
+        r.stderr.contains(
+            "note: the policy requires no check of a binary inspection \
+             (binary_audit = [] and binary_code_audit = []): the result is COMPLETE whatever \
+             the inputs"
+        ),
+        "{}",
+        r.stderr
+    );
+    // binary_audit = [] alone, with --code: binary.code is still required, and no note.
+    let r = binary(&[&"--code", &notes, &"--policy", &container_none]);
+    assert!(matches!(
+        session_of(&r).outcome.completeness,
+        Completeness::Incomplete { .. }
+    ));
+    assert!(!r.stderr.contains("requires no check"), "{}", r.stderr);
+    // Without --code, the note names binary_audit alone.
+    let r = binary(&[&notes, &"--policy", &container_none]);
+    assert!(
+        r.stderr
+            .contains("(binary_audit = []): the result is COMPLETE"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn binary_code_summary_lines_show_the_code_state() {
+    let d = inputs();
+    let kernel = code_fixture("suspicious_kernel-gcc-O2.o");
+    let cfg = code_fixture("cfg.so");
+    let notes = d.path().join("NOTES.txt");
+    let r = binary(&[&"--code", &kernel, &cfg, &notes]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = |needle: &str| {
+        r.stderr
+            .lines()
+            .find(|l| l.starts_with("binary: ") && l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {}", r.stderr))
+            .to_string()
+    };
+    assert!(
+        line("suspicious_kernel-gcc-O2.o").ends_with("  complete  code: complete"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        line("cfg.so").ends_with("  code: partial (3 gaps)"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        line("NOTES.txt").ends_with(&format!("  code: unsupported: {BINARY_UNSUPPORTED}")),
+        "{}",
+        r.stderr
+    );
+    // Without --code, no code state.
+    let r = binary(&[&kernel]);
+    assert!(!r.stderr.contains("code: "), "{}", r.stderr);
+}
+
+// --- capability hints without --code (#47) ------------------------------------------------------
+
+/// The session's hints as (feature, value).
+fn hint_pairs(s: &Session) -> Vec<(String, String)> {
+    s.hints
+        .iter()
+        .map(|h| (h.feature.to_string(), h.value.as_str().unwrap().to_string()))
+        .collect()
+}
+
+/// A row of a Capabilities table, as the Markdown shows it.
+fn capability_row(feature: &str, import: &str, cell: &str) -> String {
+    format!(
+        "| {} | {} | {} |",
+        esc_md(feature),
+        esc_md(import),
+        esc_md(cell)
+    )
+}
+
+/// Whether the one input's ELF facts say it is stripped.
+fn stripped(s: &Session) -> Option<bool> {
+    match &s.binaries[0].container {
+        ContainerFacts::Elf(e) => e.stripped,
+        ContainerFacts::MachO(_) => None,
+    }
+}
+
+/// #47: a stripped copy of a linked file that imports `connect`. `strip` (binutils) makes the
+/// copy; the test fails, rather than skips, without it.
+#[test]
+fn capability_hints_survive_stripping() {
+    let d = TempDir::new().unwrap();
+    let original = code_fixture("net-plt-gcc.so");
+    let copy = d.path().join("net-stripped.so");
+    let status = std::process::Command::new("strip")
+        .arg("--strip-all")
+        .arg("-o")
+        .arg(&copy)
+        .arg(&original)
+        .status()
+        .unwrap_or_else(|e| panic!("strip (binutils) is required by this test: {e}"));
+    assert!(status.success(), "strip failed: {status}");
+    // The copy is stripped, and the original is not: the test is not vacuous.
+    let r = binary(&[&original]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        stripped(&session_of(&r)),
+        Some(false),
+        "the fixture must keep .symtab, and strip -o must leave it untouched"
+    );
+    let r = binary(&[&copy]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(stripped(&s), Some(true));
+    assert_eq!(
+        hint_pairs(&s),
+        [("posix.network".to_string(), "connect".to_string())]
+    );
+    let r = binary(&[&copy, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&capability_row("posix.network", "connect", NOT_ANALYZED)),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn capability_hints_of_dynamic_loading() {
+    // dl.so imports dlsym (not dlopen: plan P-h).
+    let dl = code_fixture("dl.so");
+    let r = binary(&[&dl]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(
+        hint_pairs(&s),
+        [("posix.dynamic_loading".to_string(), "dlsym".to_string())]
+    );
+    let r = binary(&[&dl, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains(&capability_row(
+            "posix.dynamic_loading",
+            "dlsym",
+            NOT_ANALYZED
+        )),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn capability_hints_none_is_an_empty_non_failing_report() {
+    // No undefined symbol at all.
+    let clean = code_fixture("clean_kernel-gcc-O2.o");
+    let r = binary(&[&clean]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.hints.is_empty(), "{:?}", s.hints);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    let r = binary(&[&clean, &"--format", &"md", &"--fail-on-incomplete"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&format!("\n{}\n", esc_md(NO_CAPABILITY_IMPORTS))),
+        "{}",
+        r.stdout
+    );
+    // With --code too: no call site, and binary.code is complete.
+    let r = binary(&[
+        &"--code",
+        &clean,
+        &"--format",
+        &"md",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&format!("\n{}\n", esc_md(NO_CAPABILITY_IMPORTS))),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(&esc_md("binary.code: complete; ")),
+        "{}",
+        r.stdout
+    );
+}
+
+/// Plan P-r: an import list cut short at `binary_imports` keeps no hint past the cut, so "no
+/// hint" is not "No capability imports.". `net-plt-gcc.so` calls `connect`, and
+/// `binary_imports=0` keeps none of its imports; its code is still searched in full.
+#[test]
+fn capability_hints_of_a_cut_short_import_list() {
+    let net = code_fixture("net-plt-gcc.so");
+    let r = binary(&[&"--code", &"--budget", &"binary_imports=0", &net]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.hints.is_empty(), "{:?}", s.hints);
+    assert!(
+        s.binaries[0].imports_cut_short(),
+        "{:?}",
+        s.binaries[0].gaps
+    );
+    assert_eq!(code_entry(&s, 0).state, CoverageState::Complete);
+    assert!(
+        s.code.iter().flat_map(|c| &c.call_sites).any(|c| matches!(
+            &c.target,
+            CallTarget::Import { symbol, .. } if symbol.as_str() == Some("connect")
+        )),
+        "{:?}",
+        s.code
+    );
+    let r = binary(&[
+        &"--code",
+        &"--budget",
+        &"binary_imports=0",
+        &net,
+        &"--format",
+        &"md",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&format!("\n{}\n", esc_md(&no_capability_imports_kept(0)))),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        !r.stdout
+            .contains(&format!("\n{}\n", esc_md(NO_CAPABILITY_IMPORTS))),
+        "{}",
+        r.stdout
+    );
+}
+
+/// PR-5a-2 spec §5 Install: an installation whose binary imports `connect` shows the column.
+#[test]
+fn capability_hints_in_an_install_report() {
+    let models = store(true);
+    let tree = TempDir::new().unwrap();
+    fs::create_dir_all(tree.path().join("bin")).unwrap();
+    fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
+    fs::copy(elf_fixture("libdata.so"), tree.path().join("bin/ollama")).unwrap();
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &tree.path(), &"--format", &"md"],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let at = r
+        .stdout
+        .find(&esc_md("Binaries:"))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    let binaries = &r.stdout[at..];
+    assert!(
+        binaries.contains(&format!("| {} |", esc_md("Capabilities (imports)"))),
+        "{binaries}"
+    );
+    let row = binaries
+        .lines()
+        .find(|l| l.starts_with(&format!("| {} |", esc_md("bin/ollama"))))
+        .unwrap_or_else(|| panic!("{binaries}"));
+    assert!(
+        row.contains(&format!("| {} |", esc_md("posix.network"))),
+        "{row}"
+    );
 }
