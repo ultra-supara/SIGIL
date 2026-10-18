@@ -5,7 +5,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sigil_model::render::code::{NONE_FOUND, NOT_ANALYZED, NOT_SEARCHED, NO_CAPABILITY_IMPORTS};
+use sigil_model::render::code::{
+    no_capability_imports_kept, IMPORTS_CUT_SHORT, IMPORTS_CUT_SHORT_NOTE, NONE_FOUND,
+    NOT_ANALYZED, NOT_SEARCHED, NO_CAPABILITY_IMPORTS,
+};
 use sigil_model::render::markdown::{
     render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT,
 };
@@ -773,6 +776,106 @@ fn a_content_without_capability_imports_says_so() {
     assert!(md.contains(&md_esc(NO_CAPABILITY_IMPORTS)), "{md}");
 }
 
+/// Example 16 whose import list was cut short at `binary_imports = kept` (plan P-r): its `kept`
+/// imports map to no capability, so it has no hint.
+fn cut_short_without_hints(kept: usize) -> Session {
+    let mut s = binary_code();
+    s.hints.clear();
+    let ContainerFacts::Elf(elf) = &mut s.binaries[0].container else {
+        panic!("example 16 is an ELF")
+    };
+    elf.imports = (0..kept)
+        .map(|k| ElfImport {
+            name: t(&format!("helper_{k}")),
+            version: None,
+            weak: false,
+        })
+        .collect();
+    s.binaries[0].gaps.push(imports_over_gap(kept as u64));
+    s
+}
+
+#[test]
+fn a_cut_short_import_list_without_capability_imports_says_so() {
+    for (kept, line) in [
+        (
+            0,
+            "No capability imports among the 0 imports kept (binary_imports; see Coverage).",
+        ),
+        (
+            1,
+            "No capability imports among the 1 import kept (binary_imports; see Coverage).",
+        ),
+        (
+            2,
+            "No capability imports among the 2 imports kept (binary_imports; see Coverage).",
+        ),
+    ] {
+        assert_eq!(no_capability_imports_kept(kept), line);
+        let md = render_session(&cut_short_without_hints(kept));
+        let section = binaries_section(&md);
+        assert!(
+            section.contains(&format!("\n{}\n", md_esc(line))),
+            "{section}"
+        );
+        // Never "No capability imports." alone, and no table.
+        assert!(
+            !section.contains(&format!("\n{}\n", md_esc(NO_CAPABILITY_IMPORTS))),
+            "{section}"
+        );
+        assert!(!section.contains(&md_esc("Capabilities of")), "{section}");
+        // The binary.code line follows it.
+        let at = section.find(&md_esc(line));
+        let code = section.find(&md_esc("binary.code: complete; "));
+        assert!(
+            matches!((at, code), (Some(a), Some(b)) if a < b),
+            "{section}"
+        );
+    }
+    // Without --code too.
+    let mut s = binary_no_code();
+    s.hints.clear();
+    s.binaries[0].gaps.push(imports_over_gap(1));
+    let md = render_session(&s);
+    assert!(
+        md.contains(&format!("\n{}\n", md_esc(&no_capability_imports_kept(1)))),
+        "{md}"
+    );
+}
+
+#[test]
+fn a_cut_short_import_list_with_capability_imports_says_so() {
+    assert_eq!(
+        IMPORTS_CUT_SHORT,
+        "The import list was cut short at binary_imports; capability imports past it are not shown."
+    );
+    let mut s = binary_code();
+    assert!(!render_session(&s).contains(&md_esc(IMPORTS_CUT_SHORT)));
+    s.binaries[0].gaps.push(imports_over_gap(1));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    // After the table, before the binary.code line.
+    let row = section.find(row_of(section, "posix.network")).unwrap();
+    let cut = section.find(&format!("\n{}\n", md_esc(IMPORTS_CUT_SHORT)));
+    let code = section.find(&md_esc("binary.code: complete; "));
+    assert!(
+        matches!((cut, code), (Some(a), Some(b)) if row < a && a < b),
+        "{section}"
+    );
+    // Without --code too: after the table, before the caveat.
+    let mut s = binary_no_code();
+    s.binaries[0].gaps.push(imports_over_gap(1));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    let row = section.find(row_of(section, "posix.network")).unwrap();
+    let cut = section.find(&format!("\n{}\n", md_esc(IMPORTS_CUT_SHORT)));
+    let caveat = section.find(&md_esc(BINARY_CAVEAT));
+    assert!(
+        matches!((cut, caveat), (Some(a), Some(b)) if row < a && a < b),
+        "{section}"
+    );
+}
+
 #[test]
 fn a_macho_content_gets_no_capabilities() {
     let mut s = binary_code();
@@ -1008,6 +1111,20 @@ fn install_binaries_show_their_capability_keys() {
     let shown = cell(&s);
     assert!(!shown.contains(&md_esc("posix.other_slice")), "{shown}");
     assert_eq!(shown, md_esc("posix.dynamic_loading, posix.network"));
-    s.hints.clear();
+    let hints = std::mem::take(&mut s.hints);
     assert_eq!(cell(&s), md_esc("-"));
+    // Cut short at binary_imports (plan P-r): the keys, or `-`, say so.
+    assert_eq!(IMPORTS_CUT_SHORT_NOTE, " (imports cut short)");
+    s.binaries
+        .iter_mut()
+        .find(|b| b.slice == slice)
+        .unwrap()
+        .gaps
+        .push(imports_over_gap(3));
+    assert_eq!(cell(&s), md_esc("- (imports cut short)"));
+    s.hints = hints;
+    assert_eq!(
+        cell(&s),
+        md_esc("posix.dynamic_loading, posix.network (imports cut short)")
+    );
 }

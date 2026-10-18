@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
-use sigil_model::render::code::{NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
+use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT};
 use sigil_model::{
-    Completeness, ContainerFacts, CoverageState, Mode, ProbeResult, Session, UntrustedText,
-    Verdict, BINARY_UNSUPPORTED,
+    CallTarget, Completeness, ContainerFacts, CoverageState, Mode, ProbeResult, Session,
+    UntrustedText, Verdict, BINARY_UNSUPPORTED,
 };
 use tempfile::TempDir;
 
@@ -2335,6 +2335,53 @@ fn capability_hints_none_is_an_empty_non_failing_report() {
     );
     assert!(
         r.stdout.contains(&esc_md("binary.code: complete; ")),
+        "{}",
+        r.stdout
+    );
+}
+
+/// Plan P-r: an import list cut short at `binary_imports` keeps no hint past the cut, so "no
+/// hint" is not "No capability imports.". `net-plt-gcc.so` calls `connect`, and
+/// `binary_imports=0` keeps none of its imports; its code is still searched in full.
+#[test]
+fn capability_hints_of_a_cut_short_import_list() {
+    let net = code_fixture("net-plt-gcc.so");
+    let r = binary(&[&"--code", &"--budget", &"binary_imports=0", &net]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.hints.is_empty(), "{:?}", s.hints);
+    assert!(
+        s.binaries[0].imports_cut_short(),
+        "{:?}",
+        s.binaries[0].gaps
+    );
+    assert_eq!(code_entry(&s, 0).state, CoverageState::Complete);
+    assert!(
+        s.code.iter().flat_map(|c| &c.call_sites).any(|c| matches!(
+            &c.target,
+            CallTarget::Import { symbol, .. } if symbol.as_str() == Some("connect")
+        )),
+        "{:?}",
+        s.code
+    );
+    let r = binary(&[
+        &"--code",
+        &"--budget",
+        &"binary_imports=0",
+        &net,
+        &"--format",
+        &"md",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&format!("\n{}\n", esc_md(&no_capability_imports_kept(0)))),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        !r.stdout
+            .contains(&format!("\n{}\n", esc_md(NO_CAPABILITY_IMPORTS))),
         "{}",
         r.stdout
     );

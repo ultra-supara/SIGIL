@@ -3,8 +3,8 @@
 mod common;
 
 use sigil_model::{
-    BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport, GoBuildInfo, GoModule,
-    GoSetting, Loc, SliceId, UntrustedText,
+    imports_over_gap, BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport,
+    GoBuildInfo, GoModule, GoSetting, Loc, SliceId, UntrustedText, IMPORTS_OVER_GAP,
 };
 
 fn t(s: &str) -> UntrustedText {
@@ -40,6 +40,33 @@ pub fn elf_facts() -> ElfFacts {
             at: vec![Loc::Symbol(t("LLAMA_COMMIT")), Loc::VAddr(0x2000)],
         }],
     }
+}
+
+/// Plan P-r: an import list cut short at `binary_imports` is known by its gap, the one the engine
+/// records: `imports: over binary_imports <limit>`.
+#[test]
+fn a_cut_short_import_list_is_known_by_its_gap() {
+    assert_eq!(IMPORTS_OVER_GAP, "imports: over binary_imports");
+    assert_eq!(imports_over_gap(4096), "imports: over binary_imports 4096");
+    let mut facts = BinaryFacts {
+        slice: SliceId::new(format!("sha256:{}#x86_64@0", "a".repeat(64))).unwrap(),
+        container: ContainerFacts::Elf(elf_facts()),
+        go: None,
+        gaps: vec![],
+    };
+    assert!(!facts.imports_cut_short());
+    // Other gaps of the imports are not the cut.
+    facts.gaps = vec![
+        "imports: a name over 4096 bytes".to_string(),
+        IMPORTS_OVER_GAP.to_string(),
+        format!("{IMPORTS_OVER_GAP} "),
+        format!("{IMPORTS_OVER_GAP} many"),
+        format!("{IMPORTS_OVER_GAP}0"),
+        format!("lib.so [x86_64]: {}", imports_over_gap(2)),
+    ];
+    assert!(!facts.imports_cut_short(), "{:?}", facts.gaps);
+    facts.gaps.push(imports_over_gap(0));
+    assert!(facts.imports_cut_short());
 }
 
 #[test]

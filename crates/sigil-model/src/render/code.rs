@@ -32,6 +32,23 @@ pub const NOT_SEARCHED: &str = "not analyzed (see binary.code)";
 /// What an ELF content without a capability import gets instead of its Capabilities table.
 pub const NO_CAPABILITY_IMPORTS: &str = "No capability imports.";
 
+/// What an ELF content gets instead of [`NO_CAPABILITY_IMPORTS`] when its import list was cut
+/// short at `binary_imports` (plan P-r): none of the `kept` imports is a capability import, and
+/// those past the cut are not known.
+pub fn no_capability_imports_kept(kept: usize) -> String {
+    let imports = if kept == 1 { "import" } else { "imports" };
+    format!("No capability imports among the {kept} {imports} kept (binary_imports; see Coverage).")
+}
+
+/// The line under a Capabilities table whose content's import list was cut short at
+/// `binary_imports` (plan P-r).
+pub const IMPORTS_CUT_SHORT: &str =
+    "The import list was cut short at binary_imports; capability imports past it are not shown.";
+
+/// What the install's Capabilities (imports) cell adds, after its keys or `-`, when the import
+/// list was cut short at `binary_imports` (plan P-r).
+pub const IMPORTS_CUT_SHORT_NOTE: &str = " (imports cut short)";
+
 /// A Capabilities cell: [`NOT_ANALYZED`] when the inspection did not analyze code;
 /// [`NOT_SEARCHED`] when it did, but the input's `binary.code` entry (`code`) does not say its
 /// code was searched; else [`call_sites_cell`].

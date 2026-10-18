@@ -14,7 +14,10 @@ use crate::session::Session;
 use crate::text::UntrustedText;
 use crate::ReleaseBasis;
 
-use super::code::{capability_cell, coverage_line, NO_CAPABILITY_IMPORTS};
+use super::code::{
+    capability_cell, coverage_line, no_capability_imports_kept, IMPORTS_CUT_SHORT,
+    IMPORTS_CUT_SHORT_NOTE, NO_CAPABILITY_IMPORTS,
+};
 use super::md::{self, esc, joined, section, table};
 use super::{
     action, active_feature, coverage_state, kind, mode, not_observable, subject, treatment,
@@ -470,8 +473,10 @@ fn binary_facts(
 }
 
 /// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
-/// slice, in (feature, import) order, or the line `No capability imports.` when it has none;
-/// then, with code analysis, the line of its input's `binary.code` entry (`code`). That entry
+/// slice, in (feature, import) order, or the line `No capability imports.` when it has none.
+/// Hints come only from the imports kept within `binary_imports` (plan P-r): when the list was
+/// cut short, the line counts the imports kept instead, and a table is followed by a line that
+/// says so. Then, with code analysis, the line of its input's `binary.code` entry (`code`). That entry
 /// also decides each row's call-site cell (plan P-p): its direct call sites, or
 /// `none found (see binary.code)`, only when the input's code was searched (complete or
 /// partial); `not analyzed (see binary.code)` otherwise; and `not analyzed (use --code)` without
@@ -488,8 +493,15 @@ fn capabilities(
     }
     let mut hints: Vec<&FeatureHint> = import_hints(s, &b.slice).collect();
     hints.sort_by(|x, y| hint_key(x).cmp(&hint_key(y)));
+    let cut_short = b.imports_cut_short();
     if hints.is_empty() {
-        out.push_str(&esc(NO_CAPABILITY_IMPORTS));
+        let line = match &b.container {
+            crate::binary::ContainerFacts::Elf(elf) if cut_short => {
+                no_capability_imports_kept(elf.imports.len())
+            }
+            _ => NO_CAPABILITY_IMPORTS.to_string(),
+        };
+        out.push_str(&esc(&line));
         out.push_str("\n\n");
     } else {
         out.push_str(&format!(
@@ -510,6 +522,10 @@ fn capabilities(
             })
             .collect();
         table(out, &["Capability", "Import", "Direct call sites"], rows);
+        if cut_short {
+            out.push_str(&esc(IMPORTS_CUT_SHORT));
+            out.push_str("\n\n");
+        }
     }
     if s.request.code {
         out.push_str(&coverage_line(code).markdown());
@@ -767,11 +783,15 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 .collect();
             capabilities.sort_unstable();
             capabilities.dedup();
-            let capabilities = if capabilities.is_empty() {
+            let mut capabilities = if capabilities.is_empty() {
                 "-".to_string()
             } else {
                 capabilities.join(", ")
             };
+            // Keys come only from the imports kept within `binary_imports` (plan P-r).
+            if b.imports_cut_short() {
+                capabilities.push_str(IMPORTS_CUT_SHORT_NOTE);
+            }
             vec![
                 path.markdown_inline(),
                 esc(&format!("{kind} {arch}")),
