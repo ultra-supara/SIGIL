@@ -38,7 +38,7 @@ fn samples() -> Vec<String> {
 #[test]
 fn every_sample_is_a_golden_example_and_renders() {
     let names = samples();
-    assert_eq!(names.len(), 4, "{names:?}");
+    assert_eq!(names.len(), 5, "{names:?}");
     for name in names {
         let sample = fs::read(root().join("site/viewer/samples").join(&name)).unwrap();
         let golden = fs::read(source(&name)).unwrap();
