@@ -92,7 +92,8 @@ not imports.
 | `posix.anti_debug` | `ptrace` |
 
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
-imports kept within `binary_imports` give hints. Mach-O imports are not mapped yet.
+imports kept within `binary_imports` give hints: when a file has more, the report says that the
+capability imports past the cut are not known (below). Mach-O imports are not mapped yet.
 
 **`--code`** also finds where each capability import is called directly, and records each call
 site:
@@ -122,15 +123,24 @@ once rendered:
 | posix.network | connect | 1: kernel @ 0x4d: connect(rdi=0, rsi=0, rdx=0) |
 ```
 
-- `none found (see binary.code)`: the input's code was searched (`binary.code` is complete or
-  partial), and no direct call site of the import was found in it. A partial `binary.code`
-  lists, under Coverage, what was not searched or not confirmed.
+- `none found (see binary.code)`: the input's code was searched in full (`binary.code` is
+  complete), and no direct call site of the import was found in it.
+- `none found in the code searched; binary.code is partial (see Coverage)`: no direct call site
+  was found, but `binary.code` is partial. Coverage lists what was not searched or not confirmed
+  (with a small `binary_code_bytes`, most of the code), and a call site may be there.
 - `not analyzed (use --code)`: the run had no `--code`.
 - `not analyzed (see binary.code)`: the run had `--code`, but the input's code was not searched
   (its `binary.code` is neither complete nor partial, e.g. unsupported for an AArch64 ELF). It is
   never `none found`.
 - `No capability imports.` replaces the table for an ELF file without capability imports.
-- With `--code`, a line under the table (or under `No capability imports.`) gives the input's
+- When the file's import list was cut short at `binary_imports`, the imports past the cut, and
+  their capabilities, are not known (the `binary.container` gap
+  `imports: over binary_imports <limit>` under Coverage):
+  - without a capability import among those kept, the line is instead
+    `No capability imports among the <n> imports kept (binary_imports; see Coverage).`;
+  - with some, the table is followed by
+    `The import list was cut short at binary_imports; capability imports past it are not shown.`
+- With `--code`, a line under the table (or under the line that replaces it) gives the input's
   `binary.code` status and, when its code was searched, the code bytes read:
   `binary.code: complete; 78 of 268435456 code bytes read.`
 - A Mach-O gets neither the table nor the line.
