@@ -470,9 +470,11 @@ fn binary_facts(
 }
 
 /// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
-/// slice, in (feature, import) order, with its direct call sites when code was analyzed; and
-/// then, with code analysis, the line of its input's `binary.code` entry (`code`). A Mach-O gets
-/// nothing: 5a maps no Mach-O import.
+/// slice, in (feature, import) order, then, with code analysis, the line of its input's
+/// `binary.code` entry (`code`). That entry also decides each row's call-site cell (plan P-p):
+/// its direct call sites, or `none found`, only when the input's code was searched (complete or
+/// partial); `not analyzed (see binary.code)` otherwise; and `not analyzed (use --code)` without
+/// code analysis. A Mach-O gets nothing: 5a maps no Mach-O import.
 fn capabilities(
     out: &mut String,
     s: &Session,
