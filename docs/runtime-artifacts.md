@@ -256,6 +256,12 @@ slice in the session, read from the file's own bytes. They are observations, not
   searched, or cut short is a gap.
 - **NEEDED** and Mach-O loaded dylibs are also recorded as `Declares` relations, one per distinct
   name. The order stays in the record, for the loader's lookup order.
+- **Capability hints.** Each ELF slice also gets one feature hint per capability import:
+  `posix.network` for `connect`, `posix.dynamic_loading` for `dlopen` or `dlsym`, and so on (the
+  28 names are listed in [binary inspection](binary-inspect.md#capabilities-and-code---code)). A
+  hint says that the file imports the function, never that its code calls it, and
+  `inspect ollama` analyzes no code. The report's **Binaries** table shows them in the column
+  **Capabilities (imports)**: the slice's distinct capability keys, in key order, or `-`.
 
 ## Not yet
 

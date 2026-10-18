@@ -498,8 +498,8 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 ## Code analysis (PR-5a)
 
 A binary inspection can also analyze code. For each input, it records where the capability
-imports are called directly. Code analysis is requested through the engine's `BinaryRequest`,
-with code budgets. The CLI flag comes with PR-5a-2.
+imports are called directly. Code analysis is requested with `sigil binary inspect --code` (the
+engine's `BinaryRequest`, with code budgets).
 
 **The request.**
 - `request.code` is `true`. Only a binary inspection may set it (C1).
