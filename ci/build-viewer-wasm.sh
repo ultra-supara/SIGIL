@@ -10,8 +10,8 @@
 #   wasm32-unknown-unknown`);
 # - wasm-pack 0.15.0, and wasm-bindgen through Cargo.lock (wasm-pack fetches the matching CLI);
 # - paths: dependency sources live under CARGO_HOME, which differs per machine and would be
-#   embedded in panic locations, so it is remapped to /cargo. Workspace crates are built with
-#   relative paths.
+#   embedded in panic locations, so it is remapped to /cargo. A local rust-src copy is remapped
+#   to /rustc/<commit>, as std is built. Workspace crates are built with relative paths.
 set -eu
 cd "$(dirname "$0")/.."
 out="${1:-site/viewer/pkg}"
@@ -29,7 +29,11 @@ if [ "$(wasm-pack --version)" != "wasm-pack 0.15.0" ]; then
 fi
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 cargo_home=$(cd "$cargo_home" && pwd -P)
-RUSTFLAGS="--remap-path-prefix=$cargo_home=/cargo"
+# With the rust-src component installed, rustc replaces std's /rustc/<commit> paths with the local
+# copy's, and they end up in panic locations; map them back.
+sysroot=$(rustc --print sysroot)
+commit=$(rustc -vV | sed -n 's/^commit-hash: //p')
+RUSTFLAGS="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$sysroot/lib/rustlib/src/rust=/rustc/$commit"
 export RUSTFLAGS
 mkdir -p "$out"
 out=$(cd "$out" && pwd -P)

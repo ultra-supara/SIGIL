@@ -138,6 +138,11 @@ pub struct RunRequest {
     /// `sigil-session/1` in PR-3b-2: optional on read (empty when missing), always written.
     #[serde(default)]
     pub active: Vec<ActiveFeature>,
+    /// Whether code was analyzed (code analysis, PR-5a; the CLI flag comes with PR-5a-2): the
+    /// direct call sites of the capability imports. Optional on read (false when missing), always
+    /// written.
+    #[serde(default)]
+    pub code: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

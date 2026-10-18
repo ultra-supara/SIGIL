@@ -12,12 +12,13 @@ use std::path::{Path, PathBuf};
 
 use sigil_model::{
     binary_root, Artifact, BinaryFacts, DiscoverySource, FileInstance, InstanceContent, InstanceId,
-    NotReadReason, ScanRoot, UntrustedText,
+    NotReadReason, ScanRoot, SliceId, UntrustedText,
 };
 
 use super::binread;
 use super::fs::{recorded, FsBudgets, ReadOutcome, RelPath, RootError, SafeFs};
 use crate::binary::BinaryBudgets;
+use crate::code::CodeOutcome;
 
 /// The budgets of a binary inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,11 @@ pub struct NamedFacts {
     pub instances: Vec<FileInstance>,
     pub artifacts: Vec<Artifact>,
     pub binaries: Vec<BinaryFacts>,
+    /// When `NamedBudgets.binary.code` asked for code (PR-5a): the code outcome of every slice
+    /// of each content parsed by a read that saw no change, sorted by slice. A slice without
+    /// container facts (a Mach-O slice not parsed) has one too: `Unsupported`, as every Mach-O
+    /// slice's is.
+    pub code: Vec<(SliceId, CodeOutcome)>,
     /// For each input over `binary_bytes`: the bytes hashed before it (its `used`).
     pub over: BTreeMap<InstanceId, u64>,
     pub bytes_read: u64,
@@ -204,7 +210,7 @@ fn collect_with(
         });
         facts.instances.push(instance);
     }
-    facts.binaries = binread::binaries(parsed, &facts.artifacts);
+    (facts.binaries, facts.code) = binread::binaries(parsed, &facts.artifacts);
     Ok(facts)
 }
 
@@ -406,5 +412,47 @@ mod tests {
         .unwrap();
         assert_eq!(f.instances[0].stability, Stability::Vanished);
         assert!(f.binaries.is_empty());
+    }
+
+    /// PR-5a: a code outcome is kept, as the container facts are, only from a read that saw no
+    /// change.
+    #[test]
+    fn a_code_outcome_is_kept_only_from_a_read_that_saw_no_change() {
+        use std::io::Write;
+        let budgets = NamedBudgets {
+            binary: crate::binary::BinaryBudgets {
+                code: Some(crate::code::CodeBudgets::default()),
+                ..crate::binary::BinaryBudgets::default()
+            },
+            ..NamedBudgets::default()
+        };
+        let (_d, p) = dir();
+        std::fs::write(p.join("stable.so"), libdata()).unwrap();
+        let f = collect_with(&[p.join("stable.so")], budgets, &|_| {}, &|_| {}).unwrap();
+        assert_eq!(f.instances[0].stability, Stability::NoChangeDetected);
+        assert_eq!(f.code.len(), 1);
+        assert_eq!(f.code[0].0, f.binaries[0].slice);
+        std::fs::write(p.join("grows.so"), libdata()).unwrap();
+        let grow = |rel: &crate::collect::fs::RelPath| {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(p.join(rel.display()))
+                .unwrap();
+            f.write_all(b"more").unwrap();
+        };
+        let f = collect_with(&[p.join("grows.so")], budgets, &|_| {}, &grow).unwrap();
+        assert_eq!(f.instances[0].stability, Stability::ChangedDuringRead);
+        assert!(f.binaries.is_empty());
+        assert!(f.code.is_empty());
+        // Without a code request, no outcome.
+        let f = collect_with(
+            &[p.join("stable.so")],
+            NamedBudgets::default(),
+            &|_| {},
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(f.binaries.len(), 1);
+        assert!(f.code.is_empty());
     }
 }

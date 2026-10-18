@@ -22,7 +22,8 @@ audit          = ["model_store"]   # audited in every inspect ollama run
 observe_audit  = ["exposure"]      # added in observe mode
 active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
 install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
-binary_audit   = ["binary"]        # a binary inspection (binary inspect) audits only these
+binary_audit   = ["binary"]        # audited in a binary inspection (binary inspect)
+binary_code_audit = ["binary_code"]  # added after binary_audit when code is analyzed
 extra_required = []                # checks required beyond those of the scopes (inspect ollama)
 
 [open_questions]
@@ -62,14 +63,37 @@ gets both its checks `Skipped { Flag("--install-dir") }` on a run without `--ins
 result is INCOMPLETE.
 
 **A binary inspection** (`sigil binary inspect`, a session whose roots are `binary-<n>`) audits
-`binary_audit` and nothing else: `["binary"]`, whose check is `binary.container`, one entry per
-input. The other lists and `extra_required` apply to `inspect ollama` only, so an organization's
-extra checks for an installation do not make every binary inspection incomplete.
+`binary_audit`: `["binary"]`, whose check is `binary.container`, one entry per input. The other
+lists and `extra_required` apply to `inspect ollama` only, so an organization's extra checks for
+an installation do not make every binary inspection incomplete.
+
+**With code analysis** (`request.code`), `binary_code_audit` is added after `binary_audit`, without
+repeats: `["binary_code"]`, whose check is `binary.code`, one entry per input. Without code
+analysis, `binary_code_audit` is ignored. Code analysis is requested through the engine's
+`BinaryRequest`; the CLI flag comes with PR-5a-2. Evaluation reads `request.code` from the session,
+so it adds the same scope.
 
 `binary_audit` is optional, but unlike the other lists, a policy file that omits it gets
 `["binary"]`: a policy written before it existed still requires every input to be inspected in
-full. Only an explicit `binary_audit = []` requires nothing, and the result is then `COMPLETE`
-whatever the inputs' statuses (the summary says so).
+full. Without code analysis, only an explicit `binary_audit = []` requires nothing, and the result
+is then `COMPLETE` whatever the inputs' statuses (the summary says so).
+
+`binary_code_audit` fails closed the same way. A policy file that omits it gets `["binary_code"]`,
+so a policy written before it existed still requires every input's code to be analyzed in full.
+Only an explicit `binary_code_audit = []` requires nothing of code. With code analysis, a binary
+inspection requires nothing only when both lists are `[]`: with `binary_audit = []` alone, the
+default `binary_code_audit` still requires `binary.code`.
+
+Under the default policy with code analysis, an input whose `binary.code` does not close makes the
+session `INCOMPLETE`. That is `Partial`, `BudgetExceeded`, `Error`, or `Unsupported`:
+- `Partial`: some code was not analyzed, for example a reference that could not be confirmed, a
+  refused read, or a limit reached. Its gaps say why;
+- `BudgetExceeded` and `Error`: the input's container state, copied;
+- `Unsupported`: a Mach-O or fat file, an ELF of another machine, an x32 or big-endian ELF, or a
+  file that is not a container. Only x86-64 ELF64 little-endian code is analyzed.
+
+Code facts are facts, not findings. No rule applies to a call site, so code analysis never changes
+the verdict. What `binary.code` records: [`docs/session-model.md`](session-model.md#code-analysis-pr-5a).
 
 ## Catalogs
 
@@ -87,6 +111,7 @@ so requesting it gives an honest `INCOMPLETE`.
 | `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container` | PR-4a, PR-4b-1 (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
 | `binary` | `binary.container` | PR-4b-2a and PR-4b-2b (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
+| `binary_code` | `binary.code` | PR-5a (a binary inspection with code analysis) |
 
 **Rules** (kind, default severity):
 
@@ -196,6 +221,7 @@ A typo never silently weakens a policy.
 - audits `model_store`, plus `exposure` in observe mode, plus `runtime_api` when the API probe is
   requested (`--active api-probe`), plus `runtime_artifacts` when an installation is inspected
   (`--install-dir`);
+- in a binary inspection, audits `binary`, plus `binary_code` when code is analyzed;
 - counts open questions as gaps;
 - accepts no assumption;
 - has no overrides.

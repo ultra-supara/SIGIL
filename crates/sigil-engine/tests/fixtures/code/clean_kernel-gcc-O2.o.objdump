@@ -1,0 +1,10 @@
+
+clean_kernel-gcc-O2.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <kernel>:
+   0:	0f af fe             	imul   %esi,%edi
+   3:	8d 04 17             	lea    (%rdi,%rdx,1),%eax
+   6:	c3                   	ret

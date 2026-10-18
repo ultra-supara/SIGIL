@@ -1,0 +1,10 @@
+# Calls that never return (PR-5a spec §4.3; plan §4.6.5), applied to calls resolved to a symbol.
+# A version suffix (exit@GLIBC_2.2.5) matches its base name.
+prefixes = [
+  "_ZSt16__throw_", "_ZSt17__throw_", "_ZSt18__throw_", "_ZSt19__throw_", "_ZSt20__throw_",
+  "_ZSt21__throw_", "_ZSt24__throw_", "_ZSt25__throw_", "__cxa_bad_",
+]
+names = [
+  "__stack_chk_fail", "abort", "_Unwind_Resume", "__cxa_throw", "__cxa_rethrow",
+  "_ZSt9terminatev", "__assert_fail", "exit", "_exit", "__fortify_fail",
+]

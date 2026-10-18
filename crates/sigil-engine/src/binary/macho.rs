@@ -11,6 +11,7 @@ use sigil_model::{
 
 use super::read::{Bounded, Budgeted};
 use super::{BinaryBudgets, Parsed, ParsedArtifact, ParsedSlice};
+use crate::code::CodeOutcome;
 
 const MAX_SLICES: usize = 64;
 const MAX_LOAD_COMMANDS: u32 = 65_536;
@@ -535,6 +536,7 @@ fn parse_thin<R: object::read::ReadCacheOps>(
             container: ContainerFacts::MachO(facts),
             go: None,
             gaps,
+            code: None,
         },
     ))
 }
@@ -764,6 +766,7 @@ fn parsed_slice(
         container: Some(parsed.container),
         go: parsed.go,
         gaps,
+        code: None,
     }
 }
 
@@ -794,6 +797,7 @@ fn unparsed_slice(offset: u64, size: u64, arch: Arch, sha256: Sha256Hex) -> Pars
         container: None,
         go: None,
         gaps: vec![],
+        code: None,
     }
 }
 
@@ -880,6 +884,10 @@ pub(super) fn parse_artifact(
                 slice.gaps.dedup();
             }
         }
+    }
+    // Code is analyzed only in x86-64 ELF (PR-5a spec §4.1).
+    for slice in &mut slices {
+        slice.code = budgets.code.map(|_| CodeOutcome::Unsupported);
     }
     Some(ParsedArtifact { format, slices })
 }

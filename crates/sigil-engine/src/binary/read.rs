@@ -85,7 +85,8 @@ pub struct Bounded<R: ReadCacheOps> {
     len: u64,
     budget: u64,
     used: Cell<u64>,
-    refused: Cell<bool>,
+    /// Requests refused for the budget so far.
+    refusals: Cell<u64>,
     seen: RefCell<HashSet<Key>>,
 }
 
@@ -96,7 +97,7 @@ impl<R: ReadCacheOps> Bounded<R> {
             len,
             budget,
             used: Cell::new(0),
-            refused: Cell::new(false),
+            refusals: Cell::new(0),
             seen: RefCell::new(HashSet::new()),
         }
     }
@@ -112,14 +113,20 @@ impl<R: ReadCacheOps> Bounded<R> {
 
     /// Whether a request was refused for the budget.
     pub fn refused(&self) -> bool {
-        self.refused.get()
+        self.refusals.get() > 0
+    }
+
+    /// How many requests were refused for the budget: a later step (the code step) tells its own
+    /// refusals from the earlier ones by the count.
+    pub fn refusals(&self) -> u64 {
+        self.refusals.get()
     }
 
     fn room(&self, n: u64) -> Result<(), ()> {
         match self.used.get().checked_add(n) {
             Some(total) if total <= self.budget => Ok(()),
             _ => {
-                self.refused.set(true);
+                self.refusals.set(self.refusals.get().saturating_add(1));
                 Err(())
             }
         }

@@ -8,8 +8,5 @@ v2 plan §6.2 PR-5, ADR-006):
 | `suspicious_kernel.c` | `connect` |
 | `clean_kernel.c` | none |
 
-No test builds them yet. v0.1 compiled them at test time and never committed the objects:
-
-    clang -target x86_64-unknown-linux-gnu -O0 -c <src> -o <obj>
-
-PR-5 decides how fixtures are built and checked.
+`../code/build.sh` builds them, by hand, into `../code/` (PR-5a); the tests read the committed
+objects.

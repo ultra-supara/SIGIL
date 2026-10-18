@@ -1,0 +1,60 @@
+
+many-noeh.so:     file format elf64-x86-64
+
+
+Disassembly of section .plt:
+
+0000000000001000 <connect@plt-0x10>:
+    1000:	ff 35 ea 6f 05 00    	push   0x56fea(%rip)        # 57ff0 <_GLOBAL_OFFSET_TABLE_+0x8>
+    1006:	ff 25 ec 6f 05 00    	jmp    *0x56fec(%rip)        # 57ff8 <_GLOBAL_OFFSET_TABLE_+0x10>
+    100c:	0f 1f 40 00          	nopl   0x0(%rax)
+
+0000000000001010 <connect@plt>:
+    1010:	ff 25 ea 6f 05 00    	jmp    *0x56fea(%rip)        # 58000 <connect@GLIBC_2.2.5>
+    1016:	68 00 00 00 00       	push   $0x0
+    101b:	e9 e0 ff ff ff       	jmp    1000 <connect@plt-0x10>
+
+Disassembly of section .text:
+
+0000000000001020 <many>:
+    1020:	e8 eb ff ff ff       	call   1010 <connect@plt>
+    1025:	e8 e6 ff ff ff       	call   1010 <connect@plt>
+    102a:	e8 e1 ff ff ff       	call   1010 <connect@plt>
+    102f:	e8 dc ff ff ff       	call   1010 <connect@plt>
+    1034:	e8 d7 ff ff ff       	call   1010 <connect@plt>
+    1039:	e8 d2 ff ff ff       	call   1010 <connect@plt>
+    103e:	e8 cd ff ff ff       	call   1010 <connect@plt>
+    1043:	e8 c8 ff ff ff       	call   1010 <connect@plt>
+    1048:	e8 c3 ff ff ff       	call   1010 <connect@plt>
+    104d:	e8 be ff ff ff       	call   1010 <connect@plt>
+    1052:	e8 b9 ff ff ff       	call   1010 <connect@plt>
+    1057:	e8 b4 ff ff ff       	call   1010 <connect@plt>
+    105c:	e8 af ff ff ff       	call   1010 <connect@plt>
+    1061:	e8 aa ff ff ff       	call   1010 <connect@plt>
+    1066:	e8 a5 ff ff ff       	call   1010 <connect@plt>
+    106b:	e8 a0 ff ff ff       	call   1010 <connect@plt>
+    1070:	e8 9b ff ff ff       	call   1010 <connect@plt>
+    1075:	e8 96 ff ff ff       	call   1010 <connect@plt>
+    107a:	e8 91 ff ff ff       	call   1010 <connect@plt>
+    107f:	e8 8c ff ff ff       	call   1010 <connect@plt>
+    1084:	e8 87 ff ff ff       	call   1010 <connect@plt>
+    1089:	e8 82 ff ff ff       	call   1010 <connect@plt>
+    108e:	e8 7d ff ff ff       	call   1010 <connect@plt>
+    1093:	e8 78 ff ff ff       	call   1010 <connect@plt>
+    1098:	e8 73 ff ff ff       	call   1010 <connect@plt>
+    109d:	e8 6e ff ff ff       	call   1010 <connect@plt>
+    10a2:	e8 69 ff ff ff       	call   1010 <connect@plt>
+    10a7:	e8 64 ff ff ff       	call   1010 <connect@plt>
+    10ac:	e8 5f ff ff ff       	call   1010 <connect@plt>
+    10b1:	e8 5a ff ff ff       	call   1010 <connect@plt>
+    10b6:	e8 55 ff ff ff       	call   1010 <connect@plt>
+    10bb:	e8 50 ff ff ff       	call   1010 <connect@plt>
+    10c0:	e8 4b ff ff ff       	call   1010 <connect@plt>
+    10c5:	e8 46 ff ff ff       	call   1010 <connect@plt>
+    10ca:	e8 41 ff ff ff       	call   1010 <connect@plt>
+    10cf:	e8 3c ff ff ff       	call   1010 <connect@plt>
+    10d4:	e8 37 ff ff ff       	call   1010 <connect@plt>
+    10d9:	e8 32 ff ff ff       	call   1010 <connect@plt>
+    10de:	e8 2d ff ff ff       	call   1010 <connect@plt>
+    10e3:	e8 28 ff ff ff       	call   1010 <connect@plt>
+    10e8:	e8 23 ff ff ff       	call   1010 <connect@plt>

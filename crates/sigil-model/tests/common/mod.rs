@@ -111,6 +111,7 @@ pub fn base(required: &[&str]) -> Session {
             observe_env: false,
             model_filter: None,
             active: vec![],
+            code: false,
         },
         observation: ObservationMeta {
             started_at: ts("2026-10-07T07:00:00Z"),
@@ -466,7 +467,7 @@ pub fn add_loader_code(s: &mut Session, g: &Placed) {
                         reg: Reg::Rax,
                         base: Box::new(ret(Reg::Rax, "cs:0xd303")),
                         offset: 0x28,
-                        width: 1,
+                        width: 8,
                         site: 0xd31a,
                     },
                 },
@@ -1332,6 +1333,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("13-loader-slice-spec-example", loader_slice_spec_example()),
         ("14-store-and-runtime", store_and_runtime()),
         ("15-binary-inspect", binary_inspect()),
+        ("16-binary-code", binary_code()),
     ]
 }
 
@@ -1606,5 +1608,180 @@ pub fn binary_inspect() -> Session {
         missing_required: ids(&[BINARY_CONTAINER]),
         gaps: vec![],
     };
+    s
+}
+
+/// Example 15 with only the input of `root`: its root, instance, artifact, facts, `Declares`
+/// relations, and `binary.container` entry.
+fn binary_inspect_only(root: &str) -> Session {
+    let mut s = binary_inspect();
+    s.request.roots.retain(|r| r.id.as_str() == root);
+    s.instances.retain(|i| i.root.as_str() == root);
+    let artifacts: Vec<ArtifactId> = s
+        .instances
+        .iter()
+        .filter_map(|i| match &i.content {
+            InstanceContent::Read { artifact } => Some(artifact.clone()),
+            InstanceContent::NotRead { .. } => None,
+        })
+        .collect();
+    s.artifacts.retain(|a| artifacts.contains(&a.id));
+    let slices: Vec<SliceId> = s
+        .artifacts
+        .iter()
+        .flat_map(|a| a.slices.iter().map(|x| x.id.clone()))
+        .collect();
+    s.binaries.retain(|b| slices.contains(&b.slice));
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { from, .. } if !slices.contains(from)));
+    let instances: Vec<InstanceId> = s.instances.iter().map(|i| i.id.clone()).collect();
+    s.coverage
+        .retain(|c| !matches!(&c.scope, Ref::Instance(i) if !instances.contains(i)));
+    s
+}
+
+/// A binary inspection of one x86-64 ELF input with `binary.container` `Complete`: example 15's
+/// shared object alone, which also imports `connect`. PASS + COMPLETE, without code.
+pub fn binary_session_one_elf() -> Session {
+    let mut s = binary_inspect_only("binary-1");
+    let ContainerFacts::Elf(elf) = &mut s.binaries[0].container else {
+        panic!("example 15's first input is an ELF");
+    };
+    elf.imports.insert(
+        0,
+        ElfImport {
+            name: t("connect"),
+            version: Some(t("GLIBC_2.2.5")),
+            weak: false,
+        },
+    );
+    s.outcome.completeness = Completeness::Complete;
+    s
+}
+
+/// A binary inspection of one input with `binary.container` `Unsupported`: example 15's text
+/// file alone. PASS + INCOMPLETE, without code.
+pub fn binary_session_one_unsupported() -> Session {
+    binary_inspect_only("binary-2")
+}
+
+// --- Binary inspection with code (PR-5a) -------------------------------------------------------
+
+pub const KERNEL_INPUT: &str = "inst:binary-1/suspicious_kernel-gcc-O2.o";
+/// The SHA-256 of the engine's fixture `suspicious_kernel-gcc-O2.o`
+/// (`crates/sigil-engine/tests/fixtures/code/`).
+pub const KERNEL_HEX: &str = "aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a";
+
+/// Example 16: `sigil binary inspect` of one relocatable object, with code analysis (PR-5a spec
+/// §5.3). The hash, container facts, hint, code facts, and `binary_code_bytes` use are what the
+/// engine records for the fixture `suspicious_kernel-gcc-O2.o`; the path and the stat are
+/// synthetic. Its one function, `kernel`, calls `connect(0, 0, 0)`. In a relocatable object an
+/// address is a file offset: `.text` starts at 0x40. PASS + COMPLETE.
+pub fn binary_code() -> Session {
+    let mut s = base(&[BINARY_CODE, BINARY_CONTAINER]);
+    s.request.audit = ids(&["binary", "binary_code"]);
+    s.request.code = true;
+    s.request.budgets = BTreeMap::from([
+        (BINARY_BYTES.to_string(), 64 << 30),
+        (BINARY_CODE_BYTES.to_string(), 256 << 20),
+        ("binary_imports".to_string(), 4096),
+        ("binary_parse_bytes".to_string(), 64 << 20),
+    ]);
+    let path = "/home/user/src/suspicious_kernel-gcc-O2.o";
+    s.request.roots = vec![ScanRoot {
+        id: binary_root(1).unwrap(),
+        path: t(path),
+    }];
+    let artifact: ArtifactId = id(&format!("sha256:{KERNEL_HEX}"));
+    let slice = SliceId::from_parts(&artifact, Arch::X86_64, 0);
+    s.artifacts.push(Artifact {
+        id: artifact.clone(),
+        size: 1248,
+        format: Format::Elf { kind: ElfType::Rel },
+        slices: vec![Slice {
+            id: slice.clone(),
+            arch: Arch::X86_64,
+            offset: 0,
+            size: 1248,
+            sha256: id(KERNEL_HEX),
+        }],
+    });
+    let mut input = instance(&id(KERNEL_INPUT), "binary-1", path, &artifact, 21);
+    input.stat.size = 1248;
+    input.discovered_by = vec![DiscoverySource::Argument];
+    s.instances.push(input);
+    s.binaries.push(BinaryFacts {
+        slice: slice.clone(),
+        container: ContainerFacts::Elf(ElfFacts {
+            interp: None,
+            soname: None,
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![t("GCC: (Debian 15.3.0-1) 15.3.0")],
+            stripped: Some(false),
+            exports: 1,
+            imports: vec![ElfImport {
+                name: t("connect"),
+                version: None,
+                weak: false,
+            }],
+            data: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    s.hints.push(FeatureHint {
+        subject: slice.clone(),
+        feature: id("posix.network"),
+        signal: Signal::Import,
+        value: t("connect"),
+        at: Loc::Symbol(t("connect")),
+    });
+    s.code.push(CodeFacts {
+        slice,
+        functions: vec![Function {
+            id: id("fn:0x40"),
+            entry: 0x40,
+            end: 0x56,
+            bounds: BoundsSource::EhFrameFde,
+            names: vec![t("kernel")],
+        }],
+        call_sites: vec![call(
+            "cs:0x4d",
+            "fn:0x40",
+            0x4d,
+            CallTarget::Import {
+                symbol: t("connect"),
+                via: ImportVia::Reloc,
+            },
+            [Reg::Rdi, Reg::Rsi, Reg::Rdx]
+                .into_iter()
+                .map(|reg| ArgValue::ConstInt { reg, value: 0 })
+                .collect(),
+        )],
+        predicate_checks: vec![],
+        close_checks: vec![],
+        guard_regions: vec![],
+        param_mappings: vec![],
+    });
+    s.coverage.extend([
+        coverage(
+            BINARY_CONTAINER,
+            Ref::Instance(id(KERNEL_INPUT)),
+            CoverageState::Complete,
+        ),
+        Coverage {
+            check: id(BINARY_CODE),
+            scope: Ref::Instance(id(KERNEL_INPUT)),
+            state: CoverageState::Complete,
+            budget: Some(BudgetUse {
+                budget: BINARY_CODE_BYTES.to_string(),
+                used: 78,
+                limit: 256 << 20,
+            }),
+        },
+    ]);
     s
 }

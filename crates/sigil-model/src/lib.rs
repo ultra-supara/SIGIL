@@ -60,9 +60,10 @@ pub use binary::{
     FAT_DUPLICATE_ARCH_GAP,
 };
 pub use binary_input::{
-    binary_root, binary_root_index, expected_binary_container, is_binary_inspection,
-    is_binary_root, ExpectedContainer, BINARY_BYTES, BINARY_CHANGED, BINARY_CONTAINER,
-    BINARY_NOT_PARSED, BINARY_ROOT_PREFIX, BINARY_UNSUPPORTED, BINARY_VANISHED,
+    binary_root, binary_root_index, expected_binary_code, expected_binary_container,
+    is_binary_inspection, is_binary_root, ExpectedCode, ExpectedContainer, BINARY_BYTES,
+    BINARY_CHANGED, BINARY_CODE, BINARY_CODE_BYTES, BINARY_CONTAINER, BINARY_NOT_PARSED,
+    BINARY_ROOT_PREFIX, BINARY_UNSUPPORTED, BINARY_VANISHED, CODE_UNSUPPORTED,
 };
 pub use code::{
     ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,

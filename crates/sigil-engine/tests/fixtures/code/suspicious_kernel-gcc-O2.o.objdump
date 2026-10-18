@@ -1,0 +1,18 @@
+
+suspicious_kernel-gcc-O2.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <kernel>:
+   0:	0f af fe             	imul   %esi,%edi
+   3:	53                   	push   %rbx
+   4:	31 f6                	xor    %esi,%esi
+   6:	8d 1c 17             	lea    (%rdi,%rdx,1),%ebx
+   9:	31 d2                	xor    %edx,%edx
+   b:	31 ff                	xor    %edi,%edi
+   d:	e8 00 00 00 00       	call   12 <kernel+0x12>
+			e: R_X86_64_PLT32	connect-0x4
+  12:	89 d8                	mov    %ebx,%eax
+  14:	5b                   	pop    %rbx
+  15:	c3                   	ret

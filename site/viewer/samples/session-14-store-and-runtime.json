@@ -20,7 +20,8 @@
     "budgets": {"files": 4096},
     "observe_env": false,
     "model_filter": null,
-    "active": [{"ApiProbe": {"address": "127.0.0.1", "port": 11434, "allow_remote": false}}]
+    "active": [{"ApiProbe": {"address": "127.0.0.1", "port": 11434, "allow_remote": false}}],
+    "code": false
   },
   "observation": {
     "started_at": "2026-10-07T07:00:00Z",

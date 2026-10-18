@@ -159,6 +159,22 @@ The rule then yields an open question at most.
     active feature, no model filter, no process environment read, no model, and one instance per
     root, at the root's path, discovered by `Argument`. `Argument` appears on no other instance,
     and the root ID prefix `binary-` is reserved for `binary-<n>`.
+- **Code facts agree with the request and the inputs (PR-5a, [below](#code-analysis-pr-5a)):**
+  - C1: `request.code` is only for a binary inspection, with a `binary_code_bytes` budget. A
+    binary inspection has code facts only with `request.code`;
+  - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
+    instance. Without it, there is none;
+  - C3: each entry is in the state its input implies (`expected_binary_code`, listed below);
+  - C4: a binary inspection's code facts are about slices whose input's `binary.code` is
+    `Complete` or `Partial`;
+  - C5: in every value, a `Load` reads 8, 16, 32, or 64 bits, a `Low` keeps 8, 16, or 32 bits of
+    a value that is not a `Low`, and a `Set` has 2 to 4 members, none a `Set` or `Unknown`. The
+    values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,
+    with the values nested in each;
+  - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF facts.
+
+  C1 and C4 are about a binary inspection. Outside one, code facts are the M1 analyzer's (plan
+  §4.6.5), which the golden install examples carry.
 - **Records that repeat a result agree with it:**
   - a predicate check or an identity code check agrees with the obligation result it decides;
   - a `ProfileMismatch` is scoped to a slice and names obligations that failed there;
@@ -438,8 +454,8 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | A: identity | `ComponentClaim`, `IdentityAssertion`, `IdentityStatus`, `VersionAssertion`, `ReleaseClaim` | Every identity source kept. Releases are sets |
 | Binary facts | `BinaryFacts`, `ContainerFacts`, `ElfFacts`, `ElfImport`, `DataSymbol`, `DataValue`, `GoBuildInfo`, `GoModule`, `GoSetting` | What a binary's own bytes say: interpreter, names, NEEDED in order, search paths, notes, symbol counts and imports, known embedded values, Go build info, and the gaps |
 | Reference matches | `ReferenceMatch`, `MemberResult`, `MemberKind`, `EntryKind` | One placement of the install root, or one member absent from it, compared with one release of a reference set. A placement that was not read says why (`NotReadReason`, which gained `Directory` and `NotFollowed`, a symlink of the install, in PR-4a) |
-| B: presence | `FeatureHint`, `Signal` | A feature signal exists |
-| C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice |
+| B: presence | `FeatureHint`, `Signal` | A feature signal exists. Today, one `Import` hint per capability import of a slice |
+| C: code | `CodeFacts`, `Function`, `CallSite`, `ArgValue`, `PredicateCheck`, `CloseCheck`, `GuardRegion`, `ParamMapping` | Reconstructed calls, values, and checks of one slice. A binary inspection's code analysis records functions and call sites only |
 | Relations | `Relation` (`Declares`, `Candidate`, `SymbolCandidate`, `ProfileMatch`, `SearchPath`, `Spawns`), `ObligationResult`, `BindingPremise` | Dependencies, profile obligations, search paths, topology, binding |
 | D: behavior | `RuleSupport`, `Support`, `LoadFacts`, `LoadFact`, `Tri`, `ProcessValue`, `ValueOrigin` | Per-rule support (recorded once) and per-file facts, with premises and value provenance |
 | Access | `WriteAccess`, `NodeAccess`, `CapabilityAccess`, `AccessConclusion` | Who can write where, from observed metadata |
@@ -473,10 +489,231 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 - **Instances.** Each root has one instance: ID `inst:binary-<n>/<file name>`, at the root's path,
   discovered by `Argument` (named on the command line).
 - **Coverage.** Each input has one `binary.container` entry, scope `Instance`: its status
-  (B9 above). Under the default policy, the request's audit is `binary`, and its one required
-  check is `binary.container`.
+  (B9 above). Under the default policy, the request's audit is `binary`. Without code analysis,
+  its one required check is `binary.container`. With code analysis, each input also has one
+  `binary.code` entry (below).
 - **Facts.** An ELF or Mach-O input's facts are `BinaryFacts` records and their `Declares`
   relations, as for an installation. A fat Mach-O has one record per valid architecture slice.
+
+## Code analysis (PR-5a)
+
+A binary inspection can also analyze code. For each input, it records where the capability
+imports are called directly. Code analysis is requested through the engine's `BinaryRequest`,
+with code budgets. The CLI flag comes with PR-5a-2.
+
+**The request.**
+- `request.code` is `true`. Only a binary inspection may set it (C1).
+- `request.budgets` gains `binary_code_bytes` (default 256 MiB). It is the only code budget
+  recorded. The other limits are constants (below).
+- Under the default policy, the audit gains `binary_code`, and the required checks gain
+  `binary.code` ([`docs/policy.md`](policy.md)).
+
+**`binary.code`.** Each input has exactly one entry, scope `Instance` (C2). Its state is the one
+the input implies (C3, `expected_binary_code`):
+- **the container's state, copied, with no budget**, when the input has no container to analyze:
+  `BudgetExceeded` over `binary_bytes` (with the container's `used`), `Error` for a read that saw
+  a change or a removal, or `Unsupported` with `not a supported ELF or Mach-O container`;
+- **`Unsupported` with `code analysis: x86-64 ELF64 little-endian only` (`CODE_UNSUPPORTED`),
+  with no budget**, for a container whose code is not analyzed: a Mach-O or fat file, an ELF of
+  another machine, and an x32 or big-endian ELF. The model records no ELF class or byte order, so
+  an x32 or big-endian ELF has the arch `x86_64`, and this state is admitted for it too;
+- **`Complete` or `Partial`, with the budget `binary_code_bytes`**: its `used` (the bytes read for
+  code) and its `limit` (the request's). `Partial { missing }` lists the gaps. A container with
+  gaps of its own is still analyzed. An input whose slice was not parsed is `Partial` with
+  `not parsed` and `used` 0.
+
+`Complete` means that every reference to a capability import in the scanned code was confirmed as
+a direct call, or turned out to be part of another instruction. A reference that is not confirmed
+is a gap, never dropped.
+
+- An analyzed input without a call site has no `code` entry. Without a gap, it is `Complete`.
+- Absence is "no direct call site in the scanned code", never "not called". A call through a
+  function pointer, a function linked statically into the file, and a raw system call are not
+  found.
+- One content named at two paths is two inputs of one artifact. It has one `CodeFacts`, for its
+  slice, and two identical `binary.code` entries, one per input.
+
+**Hints (B).** Every session with binary facts records one `FeatureHint` per slice and capability
+import. This holds with or without code analysis, and for `inspect ollama --install-dir` too.
+- `feature`: the capability's key (table below);
+- `signal`: `Import`;
+- `value`: the import's name. The match is exact, and the import's version is not part of it;
+- `at`: `Symbol(<name>)`.
+
+A hint says that the file imports the function. It never says that the function is called: that
+is a call site (C). When `binary_imports` cut the import list short, the hints are as short as the
+list. A Mach-O slice has no hints yet.
+
+| Key | Imports |
+|---|---|
+| `posix.network` | `connect`, `getaddrinfo`, `send`, `sendto`, `recv`, `recvfrom`, `socket` |
+| `posix.file_read` | `open`, `openat`, `fopen`, `read`, `pread` |
+| `posix.file_write` | `write`, `pwrite`, `fwrite`, `creat`, `rename`, `unlink` |
+| `posix.process_spawn` | `execve`, `fork`, `posix_spawn`, `system` |
+| `posix.dynamic_loading` | `dlopen`, `dlsym` |
+| `posix.environment_access` | `getenv`, `setenv`, `putenv` |
+| `posix.anti_debug` | `ptrace` |
+
+**Code facts (C).** An analyzed input with at least one call site has one `CodeFacts`, for its
+slice. Code analysis records functions and call sites only. `predicate_checks`, `close_checks`,
+`guard_regions`, and `param_mappings` stay empty.
+- **Call sites.** A call site is either:
+  - a direct call or tail jump of a capability import: `target` is `Import { symbol, via }`,
+    where `via` is `Plt`, `PltSec`, `Got`, or `Reloc` (a relocation of a relocatable object);
+  - a call whose return value a recorded value takes (`ReturnOf`), transitively.
+
+  Its `id` is `cs:0x<addr>`, and `caller` is its function. A call of a capability import has as
+  many arguments as the import reads (`connect` 3, `dlopen` 2, …), in SysV order. Any other
+  recorded call has all six.
+- **Functions.** One `Function` per function with a recorded call site. Its bounds are an FDE of
+  `.eh_frame` (`bounds: EhFrameFde`), and its `id` is `fn:0x<entry>`. `names` are the defined
+  function symbols at `entry`, sorted. Only code with an FDE is analyzed.
+- **Addresses.** In a linked file, an address is a virtual address. In a relocatable object
+  (`.o`), it is a file offset.
+
+**Argument values.** Each argument is the register's value at the call, propagated forward over
+the function's control flow:
+- `ConstInt`, or `ConstStr` for an address that an instruction forms and that holds a
+  NUL-terminated string of at most 4 KiB in read-only data. An unrelocated immediate is never a
+  `ConstStr`. In a relocatable object, an immediate under an absolute relocation (`R_X86_64_32`,
+  `32S`, or `64`) of a defined symbol is an address, and a `ConstStr` when it points at a string;
+- `Param { index }`: the function's own argument;
+- `ReturnOf { call }`: the return value of a recorded call;
+- `Load { base, offset, width, site }`: the bits loaded from `[base+offset]`, zero-extended.
+  `width` is in bits: 8, 16, 32, or 64. A sign-extending load (`movsx`, `movsxd`) is
+  `Unknown(NotModeled)`;
+- `Low { value, bits }`: only the low `bits` are the value's. `Low { bits: 32 }` is a 32-bit
+  register copy: `mov edi, edi` on `Param(0)` gives `Low(Param(0), 32)`, never `Param(0)`. 8 and
+  16 are partial writes. A `Low` of a `Low` keeps the smaller width;
+- `Set { members }`: 2 to 4 values that disagree at a join;
+- `Unknown { reason }`: `ClobberedByCall`, `MergedDisagreeing`, `FromMemory`, or `NotModeled`. A
+  stack address (a `lea` from an unknown base) is `NotModeled`.
+
+**Budgets and limits.**
+- Every byte of code, `.eh_frame`, PLT sections, and string data is charged to
+  `binary_code_bytes` before it is read. A read over it is refused, and the analysis stops with
+  the gap `binary_code_bytes: <limit> exceeded`. So `binary.code` is `Partial`, not
+  `BudgetExceeded`.
+- Section headers, symbol and relocation tables, and names are read through the container's parse
+  cache, under `binary_parse_bytes`. A refusal there during code analysis is the code gap
+  `code: binary_parse_bytes exceeded`, except while the names are filled (`Function.names` and
+  an internal callee's `export_name`): a name left out is not a gap. Either way,
+  `binary.container` never changes.
+- The other limits are constants, not recorded in the request. Legitimate files stay far below
+  them.
+
+Each aggregate limit below counts per artifact. Reaching one records its gap and stops the
+analysis. What was confirmed is kept, and each reference not yet confirmed is a gap
+(`not confirmed: a limit was reached`). The function being decoded when the decoded-instruction
+limit is reached gets `not decoded: a limit was reached` instead, and the one being solved when
+the value-step limit is reached gets `not solved: a limit was reached`. A limit reached while the
+image is built stops the analysis before the search, so no reference has a gap then. That is the
+GOT slots, the relocations, the FDEs, the references (by text relocations), or
+`binary_code_bytes`.
+
+| Limit | Default | Counts | Gap |
+|---|---|---|---|
+| references | 65,536 | candidates, relocation references, and text relocations in code, before confirmation | `code: references limit 65536 reached` |
+| FDEs | 1,048,576 | FDEs read from `.eh_frame` | `code: FDE limit 1048576 reached` |
+| GOT slots | 1,048,576 | `JUMP_SLOT` and `GLOB_DAT` slots collected | `code: GOT-slot limit 1048576 reached` |
+| relocations | 1,048,576 | a relocatable object's relocations, on code and on `.eh_frame` | `code: relocation limit 1048576 reached` |
+| decoded instructions | 4,000,000 | instructions of all functions together | `code: decoded-instruction limit 4000000 reached` |
+| value steps | 134,217,728 (2^27) | register-value work of all functions together, in every pass of each function's fixpoint and in the pass that keeps its calls' values. An instruction's transfer is 1 step, plus the size of a set it copies through part of a register. At a join, each predecessor examined is 4, and each register joined costs both sizes, or 1 beside an unknown value. A compare that must walk two values (their parts separate allocations), at a join or in the check that a block's output settled, costs both sizes. A value's size is its members times one more than its levels of loads | `code: value-step limit 134217728 reached` |
+| call sites | 65,536 | recorded call sites, the `ReturnOf` closure included | `code: call-site limit 65536 reached` |
+| name bytes | 16 MiB | bytes of names copied into recorded call sites | `code: name-byte limit 16777216 reached` |
+
+The other limits do not stop the analysis:
+- **listed gaps**, 256 distinct ones: later gaps are counted, not listed. One entry
+  `code: <n> more gaps not listed` is sorted in with the others, where `<n>` counts every gap
+  past the cap, repeats included;
+- **one read**, 64 MiB (`MAX_READ`): a larger read is refused before it is charged, with the gap
+  `code: <what>: a read of <n> bytes over the 64 MiB read limit`;
+- **one function**: a function whose FDE is over 16 MiB is not decoded (`code: <symbol>
+  referenced at <p>: function at <entry>: <n> bytes`), and one that passes 200,000 decoded
+  instructions fails (`… function at <entry>: more than 200000 instructions`). So does one whose
+  register values have not settled after 256 passes over one of its blocks (`… function at
+  <entry>: values did not settle`). Such a function records no call site, and its references are
+  gaps.
+
+**Order.** `Session::canonicalize` sorts `code`, and each entry's `functions` and `call_sites`, by
+their JSON text. The order is deterministic, but it is not numeric address order: `fn:0x1000`
+sorts before `fn:0x40`. Call arguments keep their register order.
+
+**Example.** This excerpt of `schemas/examples/session-v1/16-binary-code.json` is a specification
+example. Its facts are the engine's results for the test fixture `suspicious_kernel-gcc-O2.o`, a
+relocatable object whose function `kernel` calls `connect(0, 0, 0)`. Its path and stat are
+synthetic. It shows:
+- a request with code analysis, and its two required checks;
+- the hint: the file imports `connect`;
+- the call site: `kernel` (`.text` at file offset 0x40) calls `connect` at 0x4d through a
+  relocation, with three constant arguments;
+- `binary.code` `Complete`, with the 78 bytes read for code.
+
+`crates/sigil-model/tests/docs.rs` checks it as it checks the example above.
+
+```json
+{
+  "request": {
+    "mode": "Static",
+    "roots": [{"id": "binary-1", "path": "/home/user/src/suspicious_kernel-gcc-O2.o"}],
+    "audit": ["binary", "binary_code"],
+    "required_checks": ["binary.code", "binary.container"],
+    "budgets": {
+      "binary_bytes": 68719476736,
+      "binary_code_bytes": 268435456,
+      "binary_imports": 4096,
+      "binary_parse_bytes": 67108864
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": true
+  },
+  "hints": [
+    {
+      "subject": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+      "feature": "posix.network",
+      "signal": "Import",
+      "value": "connect",
+      "at": {"Symbol": "connect"}
+    }
+  ],
+  "code": [
+    {
+      "slice": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+      "functions": [
+        {"id": "fn:0x40", "entry": 64, "end": 86, "bounds": "EhFrameFde", "names": ["kernel"]}
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0x4d",
+          "caller": "fn:0x40",
+          "addr": 77,
+          "kind": "Call",
+          "target": {"Import": {"symbol": "connect", "via": "Reloc"}},
+          "args": [
+            {"ConstInt": {"reg": "rdi", "value": 0}},
+            {"ConstInt": {"reg": "rsi", "value": 0}},
+            {"ConstInt": {"reg": "rdx", "value": 0}}
+          ]
+        }
+      ],
+      "predicate_checks": [],
+      "close_checks": [],
+      "guard_regions": [],
+      "param_mappings": []
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "scope": {"Instance": "inst:binary-1/suspicious_kernel-gcc-O2.o"},
+      "state": "Complete",
+      "budget": {"budget": "binary_code_bytes", "used": 78, "limit": 268435456}
+    }
+  ]
+}
+```
 
 ## Fields added to `sigil-session/1`
 
@@ -488,6 +725,7 @@ A field added after sessions without it were written is optional on read, so tho
 | `probes` | PR-3b-2 | `[]` (no probe) |
 | `reference_matches` | PR-4a | `[]` (no installation compared) |
 | `binaries` | PR-4b-1 | `[]` (no binary parsed) |
+| `request.code` | PR-5a | `false` (no code analyzed) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
@@ -497,7 +735,7 @@ still reads it.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, and one from before PR-4b-2a a binary inspection (`discovered_by: Argument`).
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), and one from before PR-5a a session with `request.code`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet

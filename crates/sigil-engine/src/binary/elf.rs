@@ -3,19 +3,25 @@
 //! through the budgeted checkpoint ([`Bounded`]).
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::mem::size_of;
+use std::ops::ControlFlow;
 
 use object::elf;
+use object::endian::{U32, U64};
 use object::read::elf::{
-    Dyn, FileHeader, ProgramHeader, Rel, Rela, SectionHeader, SectionTable, Sym, SymbolTable,
+    Dyn, FileHeader, ProgramHeader, Rel, Rela as _, SectionHeader, SectionTable, Sym, SymbolTable,
 };
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
-use sigil_model::{ContainerFacts, ElfFacts, ElfImport, UntrustedText};
+use sigil_model::{
+    BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText, BINARY_CODE_BYTES,
+};
 
 use super::read::Bounded;
 use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
+use crate::code::{self, CodeOutcome};
 
 /// Output limits (spec §4.9).
 pub const MAX_DYNAMIC: u64 = 65_536;
@@ -57,6 +63,9 @@ pub(crate) struct Dynamic {
     /// `(vaddr, size)`. Read only for their symbol indices (spec §3.2).
     pub rel: Option<(u64, u64)>,
     pub jmprel_rel: Option<(u64, u64)>,
+    /// `DT_RELR`/`DT_RELRSZ`: `(vaddr, size)`. glibc and musl both apply it; no data value is
+    /// read through it (spec §3.4), and the code step reads the words it writes.
+    pub relr: Option<(u64, u64)>,
     /// `DT_REL`, `DT_RELR`, or a REL `DT_JMPREL` exists: SIGIL does not apply them, so no
     /// data value is read (spec §3.4).
     pub rel_or_relr: bool,
@@ -68,12 +77,107 @@ pub(crate) struct Dynamic {
 /// A relocation the loader applies: `(r_offset, type, addend)`.
 pub(crate) type Reloc = (u64, u32, i64);
 
+/// One RELA entry the loader applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Rela {
+    pub at: u64,
+    pub r_type: u32,
+    pub sym: u32,
+    pub addend: i64,
+    /// Bytes written from `at` ([`Elf::write_extent`]); `None` when unbounded.
+    pub extent: Option<u64>,
+}
+
+/// One `DT_RELR` entry: the words it relocates (gABI; glibc's `ELF_DYNAMIC_DO_RELR`, musl's
+/// `do_relr_relocs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Relr {
+    /// An even entry: the word at this address. The next bitmap starts one word after it.
+    Word(u64),
+    /// An odd entry, shifted right once: bit `k` relocates the word at `base + k * word`, for the
+    /// `8 * word - 1` bits. The next bitmap starts that many words after `base`.
+    Bitmap { base: u64, bits: u64 },
+}
+
+impl Relr {
+    /// `[start, end)` the entry may write: its word, or its bitmap's words, set or not.
+    pub fn span(&self, word: u64) -> (u64, u64) {
+        match *self {
+            Relr::Word(at) => (at, at.saturating_add(word)),
+            Relr::Bitmap { base, .. } => (
+                base,
+                base.saturating_add((8 * word - 1).saturating_mul(word)),
+            ),
+        }
+    }
+
+    /// The words the entry writes, `[start, end)` each, in order.
+    pub fn words(&self, word: u64) -> impl Iterator<Item = (u64, u64)> {
+        let (base, bits, count) = match *self {
+            Relr::Word(at) => (at, 1, 1),
+            Relr::Bitmap { base, bits } => (base, bits, 8 * word - 1),
+        };
+        (0..count)
+            .filter(move |k| bits >> k & 1 == 1)
+            .map(move |k| {
+                let at = base.saturating_add(k.saturating_mul(word));
+                (at, at.saturating_add(word))
+            })
+    }
+}
+
+/// Decodes `DT_RELR` entries of `word` bytes, giving each to `f` in order until it breaks. `Err`:
+/// a bitmap before any address (glibc writes from address 0, musl through an unset pointer), or
+/// one past 2^64; the entries before it were given.
+pub(crate) fn relr_decode(
+    entries: impl IntoIterator<Item = u64>,
+    word: u64,
+    mut f: impl FnMut(Relr) -> ControlFlow<()>,
+) -> Result<(), String> {
+    let bits = 8 * word - 1;
+    // Where the next bitmap starts.
+    let mut next: Result<u64, &str> = Err("a bitmap before any address");
+    for entry in entries {
+        let r = if entry & 1 == 0 {
+            next = entry.checked_add(word).ok_or("a bitmap past 2^64");
+            Relr::Word(entry)
+        } else {
+            let base = next.map_err(str::to_string)?;
+            next = base
+                .checked_add(bits.saturating_mul(word))
+                .ok_or("a bitmap past 2^64");
+            Relr::Bitmap {
+                base,
+                bits: entry >> 1,
+            }
+        };
+        if f(r).is_break() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// The sections' results the other steps need.
 pub(crate) struct Sections<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
+    /// The section header table; `None` when there is none, or it cannot be read.
+    pub table: Option<SectionTable<'d, H, &'d Bounded<R>>>,
     /// The symbols the data step reads: `.dynsym`, or a relocatable object's `.symtab`.
     pub symbols: Option<SymbolTable<'d, H, &'d Bounded<R>>>,
+    /// Whether `symbols` is the `.dynsym` the loader binds through: a linked file's, with no
+    /// `symbols:` gap from [`Elf::loader_agrees`]. `false` without symbols, and for a relocatable
+    /// object, where it is not used (plan review P1-1).
+    pub dynamic_symbols_agree: bool,
     /// `.go.buildinfo`: `(sh_addr, sh_size)`, read where Go reads it (spec §3.6).
     pub go_section: Option<(u64, u64)>,
+}
+
+/// What the container steps leave for the later ones (data symbols, Go, code).
+pub(crate) struct Parts<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
+    pub elf: Elf<'d, R, H>,
+    pub facts: ElfFacts,
+    pub dynamic: Dynamic,
+    pub sections: Sections<'d, R, H>,
 }
 
 /// The parse of one ELF, generic over class and byte order.
@@ -102,26 +206,46 @@ fn empty() -> ElfFacts {
     }
 }
 
-/// The facts of the ELF in `data`. Never fails: what cannot be read is a gap.
-pub fn parse<R: ReadCacheOps>(data: &Bounded<R>, budgets: BinaryBudgets) -> Parsed {
+/// The facts of the ELF in `data`, and with `budgets.code` and `file` (the fd `data` reads, and
+/// its `fstat` size) its code analysis (PR-5a spec §4.1). Never fails: what cannot be read is a
+/// gap.
+pub fn parse<R: ReadCacheOps>(
+    data: &Bounded<R>,
+    budgets: BinaryBudgets,
+    file: Option<(&File, u64)>,
+) -> Parsed {
     let parsed = match FileKind::parse(data) {
-        Ok(FileKind::Elf32) => parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets),
-        Ok(FileKind::Elf64) => parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets),
+        Ok(FileKind::Elf32) => parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file),
+        Ok(FileKind::Elf64) => parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file),
         _ => None,
     };
-    let mut parsed = parsed.unwrap_or_else(|| Parsed {
-        container: ContainerFacts::Elf(empty()),
-        go: None,
-        gaps: vec![
+    let mut parsed = parsed.unwrap_or_else(|| {
+        let mut gaps = vec![
             "malformed: header: not a complete ELF header".to_string(),
             "sections: no readable ELF header".to_string(),
-        ],
+        ];
+        if data.refused() {
+            gaps.push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+        }
+        Parsed {
+            container: ContainerFacts::Elf(empty()),
+            go: None,
+            gaps,
+            code: budgets
+                .code
+                .filter(|_| file.is_some())
+                .map(|c| CodeOutcome::Analyzed {
+                    functions: vec![],
+                    call_sites: vec![],
+                    gaps: vec!["code: no readable ELF header".to_string()],
+                    budget: BudgetUse {
+                        budget: BINARY_CODE_BYTES.to_string(),
+                        used: 0,
+                        limit: c.bytes,
+                    },
+                }),
+        }
     });
-    if data.refused() {
-        parsed
-            .gaps
-            .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
-    }
     parsed.gaps.sort();
     parsed.gaps.dedup();
     parsed
@@ -130,7 +254,41 @@ pub fn parse<R: ReadCacheOps>(data: &Bounded<R>, budgets: BinaryBudgets) -> Pars
 fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
+    file: Option<(&File, u64)>,
 ) -> Option<Parsed> {
+    let Parts {
+        elf: mut e,
+        mut facts,
+        dynamic,
+        sections,
+    } = parts::<R, H>(data, budgets)?;
+    if let Some(symbols) = &sections.symbols {
+        facts.data = data::read(&mut e, symbols, &dynamic);
+    }
+    let go = goinfo::find(&mut e, sections.go_section);
+    // R-h: the container's parse-budget gap is decided here, before the code step reads through
+    // the same cache: a refusal during the code step is the code's gap, never the container's.
+    if data.refused() {
+        e.gaps
+            .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+    }
+    let code = match (budgets.code, file) {
+        (Some(c), Some((f, size))) => Some(code::analyze(&mut e, &sections, &dynamic, f, size, c)),
+        _ => None,
+    };
+    Some(Parsed {
+        container: ContainerFacts::Elf(facts),
+        go,
+        gaps: e.gaps,
+        code,
+    })
+}
+
+/// The header, program headers, `PT_DYNAMIC`, build-id, and sections of the ELF in `data`.
+pub(crate) fn parts<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    data: &'d Bounded<R>,
+    budgets: BinaryBudgets,
+) -> Option<Parts<'d, R, H>> {
     let header = H::parse(data).ok()?;
     let endian = header.endian().ok()?;
     let mut gaps = vec![];
@@ -171,14 +329,11 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let dynamic = e.dynamic(&mut facts);
     facts.build_id = e.build_id();
     let sections = e.sections(&mut facts, &dynamic, budgets);
-    if let Some(symbols) = &sections.symbols {
-        facts.data = data::read(&mut e, symbols, &dynamic);
-    }
-    let go = goinfo::find(&mut e, sections.go_section);
-    Some(Parsed {
-        container: ContainerFacts::Elf(facts),
-        go,
-        gaps: e.gaps,
+    Some(Parts {
+        elf: e,
+        facts,
+        dynamic,
+        sections,
     })
 }
 
@@ -308,6 +463,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         if let (Some(a), Some(n)) = (rel, relsz) {
             out.rel = Some((a, n));
+        }
+        if let (Some(a), Some(n)) = (relr, relrsz) {
+            out.relr = Some((a, n));
         }
         if let (Some(a), Some(n)) = (jmprel, pltrelsz) {
             if pltrel == Some(elf::DT_RELA.0 as u64) {
@@ -576,11 +734,20 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     /// The first section named `name`, after the null section. A section whose name cannot be
     /// read could be it: a gap, never "absent" (review of #89). The gap does not start with
     /// `sections: `, which B8 keeps for a table that cannot be read.
-    fn section_named(
+    pub(crate) fn section_named(
         &mut self,
         table: &SectionTable<'d, H, &'d Bounded<R>>,
         name: &[u8],
     ) -> Option<&'d H::SectionHeader> {
+        self.section_index_named(table, name).map(|(_, s)| s)
+    }
+
+    /// The section named `name`, with its index ([`Self::section_named`]).
+    pub(crate) fn section_index_named(
+        &mut self,
+        table: &SectionTable<'d, H, &'d Bounded<R>>,
+        name: &[u8],
+    ) -> Option<(usize, &'d H::SectionHeader)> {
         let endian = self.endian;
         // The string table `sections()` names them from (`e_shstrndx`).
         let strings = self
@@ -589,13 +756,13 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             .ok()
             .and_then(|i| table.section(SectionIndex(i as usize)).ok())
             .and_then(|s| s.file_range(endian));
-        for s in table.iter().skip(1) {
+        for (i, s) in table.iter().enumerate().skip(1) {
             let read = match strings {
                 Some(strings) => self.name(strings, s.sh_name(endian), name.len()),
                 None => Err("no section-name table in the file".to_string()),
             };
             match read {
-                Ok(Some(n)) if n == name => return Some(s),
+                Ok(Some(n)) if n == name => return Some((i, s)),
                 Ok(_) => {}
                 Err(e) => self.gap(format!("malformed: section names: {e}")),
             }
@@ -657,7 +824,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let endian = self.endian;
         let data = self.data;
         let none = Sections {
+            table: None,
             symbols: None,
+            dynamic_symbols_agree: false,
             go_section: None,
         };
         let table = match self.header.sections(endian, data) {
@@ -724,7 +893,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Err(e) => {
                 self.gap(format!("malformed: symbols: {e}"));
                 return Sections {
+                    table: Some(table),
                     symbols: None,
+                    dynamic_symbols_agree: false,
                     go_section,
                 };
             }
@@ -736,7 +907,9 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 self.gap("symbols: no SHT_DYNSYM");
             }
             return Sections {
+                table: Some(table),
                 symbols: None,
+                dynamic_symbols_agree: false,
                 go_section,
             };
         }
@@ -759,9 +932,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if versym_entries.is_some_and(|n| n < symbols.len() as u64) {
             self.gap("versions: .gnu.version is shorter than .dynsym");
         }
-        if !relocatable {
-            self.loader_agrees(&table, &symbols, dynamic);
-        }
+        let dynamic_symbols_agree = !relocatable && self.loader_agrees(&table, &symbols, dynamic);
         // The symbols' string table, for the names object cannot read (spec §3.7).
         let strings = table
             .section(symbols.string_section())
@@ -837,74 +1008,105 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         }
         facts.imports = imports.into_iter().collect();
         Sections {
+            table: Some(table),
             symbols: Some(symbols),
+            dynamic_symbols_agree,
             go_section,
         }
     }
 
     /// What the loader uses agrees with the sections SIGIL reads (spec §3.1, §3.2): each
-    /// disagreement is a gap. Not for a relocatable object, which no loader reads.
+    /// disagreement is a gap. Not for a relocatable object, which no loader reads. `false` when
+    /// it recorded a `symbols:` gap: `.dynsym` is then not known to be the table the loader binds
+    /// through (plan review P1-1). The `versions:` gaps do not change it.
     fn loader_agrees(
         &mut self,
         table: &SectionTable<'d, H, &'d Bounded<R>>,
         symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
         dynamic: &Dynamic,
-    ) {
+    ) -> bool {
         let endian = self.endian;
         let count = symbols.len() as u64;
+        let mut agree = true;
         // Where the loader reads the symbols and their names: nowhere without DT_SYMTAB.
         if dynamic.read && dynamic.symtab.is_none() {
+            agree = false;
             self.gap("symbols: .dynsym without DT_SYMTAB");
         }
         if let Some(symtab) = dynamic.symtab {
             // Without a hash table, a lookup finds none of the symbols.
             if dynamic.hash.is_none() && dynamic.gnu_hash.is_none() {
+                agree = false;
                 self.gap("symbols: DT_SYMTAB without DT_HASH or DT_GNU_HASH");
             }
             if let Err(why) = self.loader_reads(table.section(symbols.section()).ok(), symtab) {
+                agree = false;
                 self.gap(format!("symbols: .dynsym {why} DT_SYMTAB"));
             }
             match dynamic.strtab {
                 Some(strtab) => {
                     let strings = table.section(symbols.string_section()).ok();
                     if let Err(why) = self.loader_reads(strings, strtab) {
+                        agree = false;
                         self.gap(format!("symbols: .dynsym's string table {why} DT_STRTAB"));
                     }
                 }
-                None => self.gap("symbols: DT_SYMTAB without DT_STRTAB"),
+                None => {
+                    agree = false;
+                    self.gap("symbols: DT_SYMTAB without DT_STRTAB");
+                }
             }
         }
         // How many symbols a lookup reaches.
         if let Some(hash) = dynamic.hash {
             match self.sysv_hash_count(hash) {
                 Ok(n) if n != count => {
-                    self.gap(format!("symbols: .dynsym has {count} entries, DT_HASH {n}"))
+                    agree = false;
+                    self.gap(format!("symbols: .dynsym has {count} entries, DT_HASH {n}"));
                 }
                 Ok(_) => {}
-                Err(()) => self.gap("symbols: DT_HASH cannot be read"),
+                Err(()) => {
+                    agree = false;
+                    self.gap("symbols: DT_HASH cannot be read");
+                }
             }
         }
         if let Some(gnu_hash) = dynamic.gnu_hash {
             match self.gnu_hash_count(gnu_hash) {
                 // The unhashed symbols are in the table too, whether or not one is hashed.
-                Ok((symoffset, _)) if symoffset > count => self.gap(format!(
-                    "symbols: .dynsym has {count} entries, DT_GNU_HASH's symoffset {symoffset}"
-                )),
-                Ok((_, Some(n))) if n != count => self.gap(format!(
-                    "symbols: .dynsym has {count} entries, DT_GNU_HASH {n}"
-                )),
+                Ok((symoffset, _)) if symoffset > count => {
+                    agree = false;
+                    self.gap(format!(
+                        "symbols: .dynsym has {count} entries, DT_GNU_HASH's symoffset {symoffset}"
+                    ));
+                }
+                Ok((_, Some(n))) if n != count => {
+                    agree = false;
+                    self.gap(format!(
+                        "symbols: .dynsym has {count} entries, DT_GNU_HASH {n}"
+                    ));
+                }
                 // Empty (no count, symoffset within the table), or in agreement.
                 Ok(_) => {}
-                Err(()) => self.gap("symbols: DT_GNU_HASH cannot be read"),
+                Err(()) => {
+                    agree = false;
+                    self.gap("symbols: DT_GNU_HASH cannot be read");
+                }
             }
         }
         // Which symbols a relocation binds: the imports.
         match self.largest_symbol_index(dynamic) {
-            Ok(Some(i)) if u64::from(i) >= count => self.gap(format!(
-                "symbols: a relocation names symbol {i} past .dynsym's {count} entries"
-            )),
+            Ok(Some(i)) if u64::from(i) >= count => {
+                agree = false;
+                self.gap(format!(
+                    "symbols: a relocation names symbol {i} past .dynsym's {count} entries"
+                ));
+            }
             Ok(_) => {}
-            Err(why) => self.gap(format!("symbols: relocations not read: {why}")),
+            Err(why) => {
+                agree = false;
+                self.gap(format!("symbols: relocations not read: {why}"));
+            }
         }
         // ld.so checks versions through DT_VERSYM, DT_VERNEED, and DT_VERDEF, whatever the
         // sections say; object reads the first section of each type.
@@ -967,6 +1169,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 self.gap("versions: .gnu.version does not link .dynsym");
             }
         }
+        agree
     }
 
     /// glibc applies the first `DT_RELACOUNT` entries of `DT_RELA` as RELATIVE whatever their
@@ -1190,11 +1393,38 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
         ranges: &[(u64, u64)],
     ) -> Result<Vec<Vec<Reloc>>, String> {
+        let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
+        self.for_each_rela(dynamic, Some(symbols), |r| {
+            let end = r.extent.map_or(u64::MAX, |n| r.at.saturating_add(n));
+            // A write of no bytes (a NONE, a COPY of a 0-byte symbol) overlaps nothing, even
+            // inside a value (sixth review of #91).
+            if r.at >= end {
+                return;
+            }
+            for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
+                if r.at < *stop && *start < end && hits.len() < 2 {
+                    hits.push((r.at, r.r_type, r.addend));
+                }
+            }
+        })?;
+        Ok(out)
+    }
+
+    /// Every RELA entry of `DT_RELA` and a RELA `DT_JMPREL`, once, in table order (an entry both
+    /// tables list counts once, as in [`Self::relocations`]). `Err` before any entry when the
+    /// tables are malformed (`dynamic: malformed:`), or when a table cannot be read where the
+    /// loader reads it; `f` has then seen the entries of the tables before it. Without
+    /// `symbols` (no `.dynsym`), a COPY's extent is unknown: `None` (unbounded).
+    pub(crate) fn for_each_rela(
+        &self,
+        dynamic: &Dynamic,
+        symbols: Option<&SymbolTable<'d, H, &'d Bounded<R>>>,
+        mut f: impl FnMut(Rela),
+    ) -> Result<(), String> {
         let endian = self.endian;
         if let Some(why) = &dynamic.rela_malformed {
             return Err(why.clone());
         }
-        let mut out: Vec<Vec<Reloc>> = vec![vec![]; ranges.len()];
         let entry = size_of::<H::Rela>() as u64;
         // The entries of the table already read, `[start, end)`.
         let mut listed: Option<(u64, u64)> = None;
@@ -1210,41 +1440,64 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 }) {
                     continue;
                 }
-                let at: u64 = r.r_offset(endian).into();
-                let extent =
-                    self.write_extent(r.r_type(endian, false), r.r_sym(endian, false), symbols);
-                let end = extent.map_or(u64::MAX, |n| at.saturating_add(n));
-                // A write of no bytes (a NONE, a COPY of a 0-byte symbol) overlaps nothing, even
-                // inside a value (sixth review of #91).
-                if at >= end {
-                    continue;
-                }
-                for (hits, (start, stop)) in out.iter_mut().zip(ranges) {
-                    if at < *stop && *start < end && hits.len() < 2 {
-                        hits.push((at, r.r_type(endian, false).0, r.r_addend(endian).into()));
-                    }
-                }
+                let t = r.r_type(endian, false);
+                let sym = r.r_sym(endian, false);
+                f(Rela {
+                    at: r.r_offset(endian).into(),
+                    r_type: t.0,
+                    sym,
+                    addend: r.r_addend(endian).into(),
+                    extent: self.write_extent(t, sym, symbols),
+                });
             }
             listed.get_or_insert((vaddr, vaddr.saturating_add(size)));
         }
-        Ok(out)
+        Ok(())
+    }
+
+    /// Every `DT_RELR` entry, decoded ([`relr_decode`]), read where the loader reads the table.
+    /// `Err` when it cannot be read there, a bitmap comes before any address, or its size is not a
+    /// whole number of entries (after the whole ones were given to `f`).
+    pub(crate) fn for_each_relr(
+        &self,
+        dynamic: &Dynamic,
+        f: impl FnMut(Relr) -> ControlFlow<()>,
+    ) -> Result<(), String> {
+        let Some((vaddr, size)) = dynamic.relr else {
+            return Ok(());
+        };
+        let endian = self.endian;
+        let word = if self.header.is_type_64() {
+            let table = self.relocation_table::<U64<Endianness>>(vaddr, size)?;
+            relr_decode(table.iter().map(|w| w.get(endian)), 8, f)?;
+            8
+        } else {
+            let table = self.relocation_table::<U32<Endianness>>(vaddr, size)?;
+            relr_decode(table.iter().map(|w| u64::from(w.get(endian))), 4, f)?;
+            4
+        };
+        if !size.is_multiple_of(word) {
+            return Err("DT_RELRSZ is not a whole number of entries".to_string());
+        }
+        Ok(())
     }
 
     /// How many bytes a RELA relocation of type `t` writes from its offset (review of #91,
     /// P1-2), or `None` when SIGIL cannot bound it:
     /// - `R_*_NONE` writes none;
     /// - `R_*_COPY` copies at most its symbol's `st_size` (glibc the smaller of this symbol and
-    ///   its definition, musl this one); a symbol past `.dynsym` has no size: unbounded;
+    ///   its definition, musl this one); a symbol past `.dynsym`, or without `symbols`, has no
+    ///   size: unbounded;
     /// - `R_*_TLSDESC` writes two words;
     /// - any other x86-64 or AArch64 type at most 8 bytes: no wider field exists, and
     ///   `R_X86_64_64` writes 8 even in x32, so the bound is not the class's word.
     ///
     /// Another machine's types are not known: unbounded.
-    fn write_extent(
+    pub(crate) fn write_extent(
         &self,
         t: elf::RelocationType,
         sym: u32,
-        symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
+        symbols: Option<&SymbolTable<'d, H, &'d Bounded<R>>>,
     ) -> Option<u64> {
         let (none, copy, tlsdesc) = match self.header.e_machine(self.endian) {
             elf::EM_X86_64 => (
@@ -1262,12 +1515,53 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         if t == none {
             Some(0)
         } else if t == copy {
-            let sym = symbols.symbols().get(usize::try_from(sym).ok()?)?;
+            let sym = symbols?.symbols().get(usize::try_from(sym).ok()?)?;
             Some(sym.st_size(self.endian).into())
         } else if t == tlsdesc {
             Some(16)
         } else {
             Some(8)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::ControlFlow;
+
+    fn words(entries: &[u64]) -> (Vec<(u64, u64)>, Result<(), String>) {
+        let mut out = vec![];
+        let r = relr_decode(entries.iter().copied(), 8, |e| {
+            out.extend(e.words(8));
+            ControlFlow::Continue(())
+        });
+        (out, r)
+    }
+
+    #[test]
+    fn relr_entries_decode_as_the_loaders_apply_them() {
+        // libdata-relr.so's `.relr.dyn` (its `.readelf`): 3 entries, 6 words.
+        let (out, r) = words(&[0x3da8, 0x3, 0x74001]);
+        assert_eq!(r, Ok(()));
+        let at: Vec<u64> = out.iter().map(|w| w.0).collect();
+        assert_eq!(at, [0x3da8, 0x3db0, 0x4010, 0x4020, 0x4028, 0x4030]);
+        assert!(out.iter().all(|(s, e)| e - s == 8));
+        // A bitmap covers 63 words, then the next bitmap starts after them.
+        let (out, _) = words(&[0x1000, u64::MAX, 0b11]);
+        assert_eq!(out.len(), 1 + 63 + 1);
+        assert_eq!(out[63], (0x1000 + 63 * 8, 0x1000 + 64 * 8));
+        assert_eq!(out[64], (0x1000 + 64 * 8, 0x1000 + 65 * 8));
+        // A bitmap before any address.
+        let (out, r) = words(&[0x3]);
+        assert!(out.is_empty());
+        assert_eq!(r, Err("a bitmap before any address".to_string()));
+        // The span of a bitmap: its 63 words.
+        let bitmap = Relr::Bitmap {
+            base: 0x2000,
+            bits: 1,
+        };
+        assert_eq!(bitmap.span(8), (0x2000, 0x2000 + 63 * 8));
+        assert_eq!(Relr::Word(0x10).span(8), (0x10, 0x18));
     }
 }

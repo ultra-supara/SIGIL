@@ -1,0 +1,75 @@
+
+calls-noplt-clang-O0.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <helper>:
+   0:	55                   	push   %rbp
+   1:	48 89 e5             	mov    %rsp,%rbp
+   4:	89 7d fc             	mov    %edi,-0x4(%rbp)
+   7:	6b 45 fc 03          	imul   $0x3,-0x4(%rbp),%eax
+   b:	5d                   	pop    %rbp
+   c:	c3                   	ret
+   d:	0f 1f 00             	nopl   (%rax)
+
+0000000000000010 <kernel>:
+  10:	55                   	push   %rbp
+  11:	48 89 e5             	mov    %rsp,%rbp
+  14:	48 83 ec 10          	sub    $0x10,%rsp
+  18:	89 7d fc             	mov    %edi,-0x4(%rbp)
+  1b:	8b 7d fc             	mov    -0x4(%rbp),%edi
+  1e:	31 c0                	xor    %eax,%eax
+  20:	89 c6                	mov    %eax,%esi
+  22:	31 d2                	xor    %edx,%edx
+  24:	ff 15 00 00 00 00    	call   *0x0(%rip)        # 2a <kernel+0x1a>
+			26: R_X86_64_GOTPCRELX	connect-0x4
+  2a:	48 83 c4 10          	add    $0x10,%rsp
+  2e:	5d                   	pop    %rbp
+  2f:	c3                   	ret
+
+0000000000000030 <loop>:
+  30:	55                   	push   %rbp
+  31:	48 89 e5             	mov    %rsp,%rbp
+  34:	48 83 ec 10          	sub    $0x10,%rsp
+  38:	89 7d fc             	mov    %edi,-0x4(%rbp)
+  3b:	c7 45 f8 00 00 00 00 	movl   $0x0,-0x8(%rbp)
+  42:	c7 45 f4 00 00 00 00 	movl   $0x0,-0xc(%rbp)
+  49:	8b 45 f4             	mov    -0xc(%rbp),%eax
+  4c:	3b 45 fc             	cmp    -0x4(%rbp),%eax
+  4f:	7d 20                	jge    71 <loop+0x41>
+  51:	8b 7d f4             	mov    -0xc(%rbp),%edi
+  54:	31 c0                	xor    %eax,%eax
+  56:	89 c6                	mov    %eax,%esi
+  58:	31 d2                	xor    %edx,%edx
+  5a:	ff 15 00 00 00 00    	call   *0x0(%rip)        # 60 <loop+0x30>
+			5c: R_X86_64_GOTPCRELX	connect-0x4
+  60:	03 45 f8             	add    -0x8(%rbp),%eax
+  63:	89 45 f8             	mov    %eax,-0x8(%rbp)
+  66:	8b 45 f4             	mov    -0xc(%rbp),%eax
+  69:	83 c0 01             	add    $0x1,%eax
+  6c:	89 45 f4             	mov    %eax,-0xc(%rbp)
+  6f:	eb d8                	jmp    49 <loop+0x19>
+  71:	8b 45 f8             	mov    -0x8(%rbp),%eax
+  74:	48 83 c4 10          	add    $0x10,%rsp
+  78:	5d                   	pop    %rbp
+  79:	c3                   	ret
+  7a:	66 0f 1f 44 00 00    	nopw   0x0(%rax,%rax,1)
+
+0000000000000080 <calls_helper>:
+  80:	55                   	push   %rbp
+  81:	48 89 e5             	mov    %rsp,%rbp
+  84:	48 83 ec 10          	sub    $0x10,%rsp
+  88:	89 7d fc             	mov    %edi,-0x4(%rbp)
+  8b:	8b 7d fc             	mov    -0x4(%rbp),%edi
+  8e:	e8 00 00 00 00       	call   93 <calls_helper+0x13>
+			8f: R_X86_64_PLT32	helper-0x4
+  93:	89 c7                	mov    %eax,%edi
+  95:	31 c0                	xor    %eax,%eax
+  97:	89 c6                	mov    %eax,%esi
+  99:	31 d2                	xor    %edx,%edx
+  9b:	ff 15 00 00 00 00    	call   *0x0(%rip)        # a1 <calls_helper+0x21>
+			9d: R_X86_64_GOTPCRELX	connect-0x4
+  a1:	48 83 c4 10          	add    $0x10,%rsp
+  a5:	5d                   	pop    %rbp
+  a6:	c3                   	ret

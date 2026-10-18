@@ -127,6 +127,12 @@ pub const SCOPES: &[ScopeInfo] = &[
         id: "binary",
         checks: &["binary.container"],
     },
+    // Code analysis (PR-5a; the CLI flag comes with PR-5a-2): the direct call sites of the
+    // capability imports.
+    ScopeInfo {
+        id: "binary_code",
+        checks: &["binary.code"],
+    },
 ];
 
 /// An assumption a finding condition may rest on, if the policy accepts it.

@@ -392,6 +392,10 @@
           "description": "Active features explicitly requested (--active); empty for none. Added to sigil-session/1 in PR-3b-2: optional on read (missing means empty), always written by SIGIL.",
           "type": "array",
           "items": {"$ref": "#/$defs/ActiveFeature"}
+        },
+        "code": {
+          "description": "Whether code was analyzed (code analysis, PR-5a; the CLI flag comes with PR-5a-2): the direct call sites of the capability imports. Optional on read (missing means false), always written by SIGIL.",
+          "type": "boolean"
         }
       }
     },
@@ -2170,7 +2174,7 @@
                   "minimum": -9223372036854775808,
                   "maximum": 9223372036854775807
                 },
-                "width": {"type": "integer", "minimum": 0, "maximum": 255},
+                "width": {"description": "Bits read, zero-extended: 8, 16, 32, or 64.", "type": "integer", "minimum": 0, "maximum": 255},
                 "site": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
               }
             }
@@ -2188,7 +2192,7 @@
               "properties": {
                 "reg": {"$ref": "#/$defs/Reg"},
                 "value": {"$ref": "#/$defs/ArgValue"},
-                "bits": {"type": "integer", "minimum": 0, "maximum": 255}
+                "bits": {"description": "The low bits known: 8, 16, or 32.", "type": "integer", "minimum": 0, "maximum": 255}
               }
             }
           }

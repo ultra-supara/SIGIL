@@ -227,6 +227,8 @@ pub enum ValidationError {
     /// A binary inspection's input, its root, or its `binary.container` disagrees with the
     /// session (B9, B10; PR-4b-2a).
     BinaryInput { at: String, why: String },
+    /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a).
+    Code { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -356,6 +358,7 @@ impl fmt::Display for ValidationError {
             ),
             Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
             BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
+            Code { at, why } => write!(f, "{at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -366,6 +369,15 @@ impl fmt::Display for ValidationError {
 }
 
 impl std::error::Error for ValidationError {}
+
+impl ValidationError {
+    fn code(at: &str, why: impl Into<String>) -> Self {
+        ValidationError::Code {
+            at: at.to_string(),
+            why: why.into(),
+        }
+    }
+}
 
 impl Session {
     /// Checks the invariants described in the module documentation. Returns every violation.
@@ -684,6 +696,8 @@ impl<'a> Validator<'a> {
         self.reference_matches();
         self.binaries();
         self.binary_inputs();
+        self.code_coverage();
+        self.import_hints();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -1815,6 +1829,143 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn code_error(&mut self, at: &str, why: impl Into<String>) {
+        self.errors.push(ValidationError::code(at, why));
+    }
+
+    /// C1–C4 (PR-5a spec §5.2): code facts and `binary.code` agree with the request and the
+    /// inputs. C5 is checked on each value by [`Validator::arg`], C6 by
+    /// [`Validator::import_hints`].
+    ///
+    /// - C1: a binary inspection has code facts only with `request.code`, and `request.code` is
+    ///   only for a binary inspection, with a `binary_code_bytes` budget.
+    /// - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
+    ///   instance; without it, there is none.
+    /// - C3: each entry is in the state its input implies ([`expected_binary_code`]).
+    /// - C4: a binary inspection's code facts are of slices whose input's `binary.code` is
+    ///   `Complete` or `Partial`.
+    ///
+    /// C1 and C4 are about a binary inspection: outside one, code facts are the M1 analyzer's
+    /// (plan §4.6.5), which the golden install examples carry, and spec §5 is additive.
+    ///
+    /// [`expected_binary_code`]: crate::binary_input::expected_binary_code
+    fn code_coverage(&mut self) {
+        use crate::binary_input::{
+            expected_binary_code, is_binary_inspection, is_binary_root, BINARY_CODE,
+            BINARY_CODE_BYTES,
+        };
+        use crate::coverage::Coverage;
+        use crate::render::subject;
+        let s = self.s;
+        let binary = is_binary_inspection(&s.request);
+        // C1
+        if s.request.code && !binary {
+            self.code_error("request", "request.code is only for a binary inspection");
+        }
+        if binary && !s.request.code && !s.code.is_empty() {
+            self.code_error("code", "a binary inspection's code facts need request.code");
+        }
+        // C2: every entry needs request.code, and is scoped to an input's instance.
+        let inputs: BTreeMap<&InstanceId, &FileInstance> = s
+            .instances
+            .iter()
+            .filter(|i| is_binary_root(&i.root))
+            .map(|i| (&i.id, i))
+            .collect();
+        let mut per_input: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_CODE)
+        {
+            let at = format!("coverage[{BINARY_CODE} on {}]", subject(&c.scope));
+            if !s.request.code {
+                self.code_error(&at, "binary.code without request.code");
+                continue;
+            }
+            match &c.scope {
+                Ref::Instance(i) if inputs.contains_key(i) => {
+                    per_input.entry(i).or_default().push(c)
+                }
+                _ => self.code_error(&at, "binary.code must be scoped to an input's instance"),
+            }
+        }
+        if !(binary && s.request.code) {
+            return;
+        }
+        if !s.request.budgets.contains_key(BINARY_CODE_BYTES) {
+            self.code_error(
+                "request",
+                format!("request.code without a {BINARY_CODE_BYTES} budget"),
+            );
+        }
+        let mut analyzed: BTreeSet<&SliceId> = BTreeSet::new();
+        for i in inputs.values() {
+            let at = format!("coverage[{BINARY_CODE} on {}]", i.id);
+            // C2: exactly one entry.
+            let entries = per_input.get(&i.id).map(Vec::as_slice).unwrap_or_default();
+            let [c] = entries else {
+                self.code_error(
+                    &at,
+                    format!(
+                        "{} binary.code entries; an input has exactly one",
+                        entries.len()
+                    ),
+                );
+                continue;
+            };
+            // C3. An input that cannot be judged has its error from B9 or the budget above.
+            if let Ok(expected) = expected_binary_code(s, i) {
+                if let Err(why) = expected.admits(c) {
+                    self.code_error(&at, why);
+                }
+            }
+            if matches!(
+                c.state,
+                CoverageState::Complete | CoverageState::Partial { .. }
+            ) {
+                if let InstanceContent::Read { artifact } = &i.content {
+                    let slices = s
+                        .artifacts
+                        .iter()
+                        .filter(|a| a.id == *artifact)
+                        .flat_map(|a| a.slices.iter().map(|x| &x.id));
+                    analyzed.extend(slices);
+                }
+            }
+        }
+        // C4
+        for facts in &s.code {
+            if !analyzed.contains(&facts.slice) {
+                self.code_error(
+                    &format!("code[{}]", facts.slice),
+                    "a slice whose input was not analyzed",
+                );
+            }
+        }
+    }
+
+    /// C6 (PR-5a spec §5.2): an `Import` hint names an import of its slice, at `Symbol(value)`.
+    fn import_hints(&mut self) {
+        use crate::binary::ContainerFacts;
+        use crate::hint::Signal;
+        let s = self.s;
+        for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
+            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
+            if hint.at != Loc::Symbol(hint.value.clone()) {
+                self.code_error(&at, "an import hint's at must be Symbol(value)");
+            }
+            let imported = s.binaries.iter().any(|b| {
+                b.slice == hint.subject
+                    && matches!(&b.container, ContainerFacts::Elf(elf)
+                        if elf.imports.iter().any(|i| i.name == hint.value))
+            });
+            if !imported {
+                self.code_error(&at, "the value is not an import of its slice");
+            }
+        }
+    }
+
     /// V10: a claim by reference matches covers every placement, and its candidates are exactly
     /// the releases that every placement matches.
     fn release_by_rows(
@@ -1869,7 +2020,13 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// Resolves the calls `value` names, and checks its shape (C5), at every level. Every value
+    /// in code facts goes through here: call arguments, indirect targets, predicate-check atoms,
+    /// and guard comparisons.
     fn arg(&mut self, slice: &SliceId, value: &ArgValue, at: &str) {
+        for why in c5(value) {
+            self.code_error(at, why);
+        }
         match value {
             ArgValue::ReturnOf { call, .. } => self.call_ref(slice, call.as_str(), at),
             ArgValue::Load { base, .. } => self.arg(slice, base, at),
@@ -2677,6 +2834,51 @@ impl<'a> Validator<'a> {
             }
         }
     }
+}
+
+/// C5 (PR-5a spec §4.7): what one value may be, apart from the values inside it. A `Load` reads
+/// 8, 16, 32, or 64 bits; a `Low` keeps 8, 16, or 32 bits of a value that is not a `Low`; a `Set`
+/// has 2 to 4 members, none a `Set` or `Unknown`.
+fn c5(value: &ArgValue) -> Vec<String> {
+    let mut why = vec![];
+    match value {
+        ArgValue::Load { width, .. } => {
+            if ![8, 16, 32, 64].contains(width) {
+                why.push(format!("a Load width is 8, 16, 32, or 64, not {width}"));
+            }
+        }
+        ArgValue::Low { value, bits, .. } => {
+            if ![8, 16, 32].contains(bits) {
+                why.push(format!("Low bits are 8, 16, or 32, not {bits}"));
+            }
+            if let ArgValue::Low { bits: inner, .. } = **value {
+                why.push(format!(
+                    "a Low's value is a Low (of {inner} bits): only the smaller width is kept"
+                ));
+            }
+        }
+        ArgValue::Set { members, .. } => {
+            if !(2..=4).contains(&members.len()) {
+                why.push(format!("a Set has 2 to 4 members, not {}", members.len()));
+            }
+            for (n, member) in members.iter().enumerate() {
+                let kind = match member {
+                    ArgValue::Set { .. } => "a Set",
+                    ArgValue::Unknown { .. } => "Unknown",
+                    _ => continue,
+                };
+                why.push(format!(
+                    "a Set has no Set or Unknown member, but member {n} is {kind}"
+                ));
+            }
+        }
+        ArgValue::ConstStr { .. }
+        | ArgValue::ConstInt { .. }
+        | ArgValue::ReturnOf { .. }
+        | ArgValue::Param { .. }
+        | ArgValue::Unknown { .. } => {}
+    }
+    why
 }
 
 /// The coverage states recorded for `check`.

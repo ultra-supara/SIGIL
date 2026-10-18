@@ -17,6 +17,7 @@ fn the_default_policy_requires_only_implemented_scopes() {
         active: false,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(ids(&audit), ["model_store"]);
     assert_eq!(
@@ -32,6 +33,7 @@ fn the_default_policy_requires_only_implemented_scopes() {
         active: false,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert_eq!(
@@ -93,6 +95,7 @@ fn the_plan_example_loads() {
         active: false,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(
         ids(&required),
@@ -146,6 +149,7 @@ extra_groups = ["gid:27"]
         active: false,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(required.last().unwrap().as_str(), "exposure.binds");
     assert_eq!(policy.open_questions.treatment, OqTreatment::Warn);
@@ -323,6 +327,7 @@ fn an_active_feature_adds_the_active_scopes() {
         active: true,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(ids(&audit), ["model_store", "runtime_api"]);
     assert_eq!(required.last().unwrap().as_str(), "runtime_api.version");
@@ -331,6 +336,7 @@ fn an_active_feature_adds_the_active_scopes() {
         active: true,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(ids(&audit), ["model_store", "exposure", "runtime_api"]);
     // Without an active feature, the active scopes are not requested.
@@ -339,6 +345,7 @@ fn an_active_feature_adds_the_active_scopes() {
         active: false,
         install: false,
         binary: false,
+        code: false,
     });
     assert_eq!(ids(&audit), ["model_store", "exposure"]);
     assert!(!ids(&required).contains(&"runtime_api.version".to_string()));
@@ -351,7 +358,8 @@ fn an_active_feature_adds_the_active_scopes() {
                 mode: Mode::Static,
                 active: true,
                 install: false,
-                binary: false
+                binary: false,
+                code: false
             })
             .0),
         ["model_store"]
@@ -371,6 +379,7 @@ fn the_install_adds_runtime_artifacts_and_its_three_checks() {
         active: false,
         install: false,
         binary: false,
+        code: false,
     };
     let (audit, required) = policy.scope(&base);
     let (audit_i, required_i) = policy.scope(&ScopeInput {
@@ -409,6 +418,7 @@ fn a_binary_inspection_audits_binary_audit_only() {
         active: false,
         install: false,
         binary: true,
+        code: false,
     };
     let policy = Policy::builtin_default().unwrap();
     assert_eq!(ids(&policy.binary_audit), ["binary"]);
@@ -435,6 +445,81 @@ fn a_binary_inspection_audits_binary_audit_only() {
     ));
 }
 
+/// PR-5a spec §5: code analysis adds `binary_code_audit` to `binary_audit`.
+#[test]
+fn binary_code_scope_is_added_only_with_code() {
+    let p = Policy::builtin_default().unwrap();
+    let base = ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+        binary: true,
+        code: false,
+    };
+    let (_, without) = p.scope(&base);
+    assert!(!without.iter().any(|c| c.as_str() == "binary.code"));
+    let (audit, with) = p.scope(&ScopeInput { code: true, ..base });
+    assert!(with.iter().any(|c| c.as_str() == "binary.code"));
+    assert!(audit.iter().any(|a| a.as_str() == "binary_code"));
+    // `binary_audit` first, then `binary_code_audit`.
+    assert_eq!(ids(&p.binary_code_audit), ["binary_code"]);
+    assert_eq!(ids(&audit), ["binary", "binary_code"]);
+    assert_eq!(ids(&with), ["binary.container", "binary.code"]);
+    // Code is a binary inspection's: `inspect ollama` never adds the scope.
+    let (audit, _) = p.scope(&ScopeInput {
+        binary: false,
+        code: true,
+        ..base
+    });
+    assert!(!audit.iter().any(|a| a.as_str() == "binary_code"));
+    // A scope in both lists is audited once.
+    let both = Policy::load(
+        "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\n\
+         binary_audit = [\"binary\", \"binary_code\"]\nbinary_code_audit = [\"binary_code\"]\n",
+    )
+    .unwrap();
+    let (audit, required) = both.scope(&ScopeInput { code: true, ..base });
+    assert_eq!(ids(&audit), ["binary", "binary_code"]);
+    assert_eq!(ids(&required), ["binary.container", "binary.code"]);
+}
+
+#[test]
+fn a_policy_without_binary_code_audit_requires_binary_code() {
+    let text = include_str!("../policies/default.toml")
+        .replace("binary_code_audit = [\"binary_code\"]\n", "");
+    assert!(!text.contains("binary_code_audit"));
+    let p = Policy::load(&text).unwrap();
+    let (_, req) = p.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+        binary: true,
+        code: true,
+    });
+    assert!(
+        req.iter().any(|c| c.as_str() == "binary.code"),
+        "fails closed"
+    );
+    let none = include_str!("../policies/default.toml").replace(
+        "binary_code_audit = [\"binary_code\"]",
+        "binary_code_audit = []",
+    );
+    assert!(none.contains("binary_code_audit = []"));
+    let p = Policy::load(&none).unwrap();
+    let (_, req) = p.scope(&ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: false,
+        binary: true,
+        code: true,
+    });
+    assert!(!req.iter().any(|c| c.as_str() == "binary.code"));
+    assert!(matches!(
+        Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\nbinary_code_audit = [\"nope\"]\n"),
+        Err(PolicyError::UnknownScope(s)) if s == "nope"
+    ));
+}
+
 #[test]
 fn scope_input_of_finds_binary_roots() {
     let mut request = sigil_model::RunRequest {
@@ -449,8 +534,12 @@ fn scope_input_of_finds_binary_roots() {
         observe_env: false,
         model_filter: None,
         active: vec![],
+        code: false,
     };
     assert!(ScopeInput::of(&request).binary);
+    assert!(!ScopeInput::of(&request).code);
+    request.code = true;
+    assert!(ScopeInput::of(&request).code);
     request.roots[0].id = sigil_model::RootId::new("models").unwrap();
     assert!(!ScopeInput::of(&request).binary);
 }

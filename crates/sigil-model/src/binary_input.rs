@@ -3,16 +3,26 @@
 //! Each input is its own scan root, `binary-<n>` in argument order, whose path is the file. Its
 //! one instance gets exactly one `binary.container` coverage, whose state is the one
 //! [`expected_binary_container`] derives from the instance, its artifact, and its facts. The
-//! engine records that state, and `Session::validate` (B9) requires it.
+//! engine records that state, and `Session::validate` (B9) requires it. With `request.code`
+//! (PR-5a), each input also gets one `binary.code` coverage, whose state
+//! [`expected_binary_code`] derives the same way (C3).
 
-use crate::artifact::{FileInstance, Format, InstanceContent, NotReadReason, Stability};
-use crate::coverage::CoverageState;
+use crate::artifact::{Arch, FileInstance, Format, InstanceContent, NotReadReason, Stability};
+use crate::coverage::{Coverage, CoverageState};
+use crate::evidence::Ref;
 use crate::id::RootId;
 use crate::session::{RunRequest, Session};
 use crate::text::UntrustedText;
 
 /// The check of a binary inspection: one entry per input, scope `Instance`.
 pub const BINARY_CONTAINER: &str = "binary.container";
+/// The code check of a binary inspection with code (PR-5a): one entry per input, scope
+/// `Instance`.
+pub const BINARY_CODE: &str = "binary.code";
+/// Bytes read for code, per artifact (PR-5a spec §4.10).
+pub const BINARY_CODE_BYTES: &str = "binary_code_bytes";
+/// `binary.code`'s `Unsupported` reason: a container the code analysis does not read.
+pub const CODE_UNSUPPORTED: &str = "code analysis: x86-64 ELF64 little-endian only";
 /// Hashing reads, over all inputs.
 pub const BINARY_BYTES: &str = "binary_bytes";
 /// `binary.container`'s `Unsupported` reason.
@@ -157,4 +167,138 @@ pub fn expected_binary_container(
     } else {
         CoverageState::Partial { missing }
     }))
+}
+
+/// The `binary.code` state an input implies (PR-5a spec §5.2, C3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedCode {
+    /// Exactly this state, without a budget: the container's state for an input whose container
+    /// was not read (`BudgetExceeded`, `Error`, `Unsupported`), or `Unsupported {
+    /// CODE_UNSUPPORTED }` for a container the code analysis does not read (a Mach-O, a fat
+    /// Mach-O, or an ELF with a slice that is not `x86_64`).
+    Exactly(CoverageState),
+    /// An x86-64 ELF, analyzed: `Complete` (only when `parsed`) or `Partial`, with a
+    /// `binary_code_bytes` budget of `limit` whose `used` is at most the limit. `Unsupported {
+    /// CODE_UNSUPPORTED }` without a budget is admitted too: the model records no ELF class or
+    /// byte order, so an x32 or big-endian file is `x86_64` here (plan R-c).
+    Analyzable {
+        /// The request's `binary_code_bytes`.
+        limit: u64,
+        /// The artifact has slices, and each has facts. Otherwise some code was not parsed, and
+        /// the input's code is `Partial` at best.
+        parsed: bool,
+    },
+}
+
+impl ExpectedCode {
+    /// Whether `c`, the input's `binary.code` entry, has the implied state and budget. `Err`
+    /// says how it differs, showing the recorded state as reports do.
+    pub fn admits(&self, c: &Coverage) -> Result<(), String> {
+        use crate::render::coverage_state;
+        let shown = |state: &CoverageState| coverage_state(state).terminal();
+        let is = shown(&c.state);
+        let no_budget = || match c.budget {
+            None => Ok(()),
+            Some(_) => Err(format!(
+                "binary.code is {is} and names a budget, but the input's code is not read"
+            )),
+        };
+        match self {
+            ExpectedCode::Exactly(state) if c.state != *state => Err(format!(
+                "binary.code is {is}, but the input implies {}",
+                shown(state)
+            )),
+            ExpectedCode::Exactly(_) => no_budget(),
+            ExpectedCode::Analyzable { limit, parsed } => match &c.state {
+                CoverageState::Unsupported { what } if what == CODE_UNSUPPORTED => no_budget(),
+                CoverageState::Complete if !parsed => Err(format!(
+                    "binary.code is {is}, but a slice of the input was not parsed"
+                )),
+                CoverageState::Complete | CoverageState::Partial { .. } => match &c.budget {
+                    None => Err(format!(
+                        "binary.code is {is} without a {BINARY_CODE_BYTES} budget"
+                    )),
+                    Some(b) if b.budget != BINARY_CODE_BYTES => Err(format!(
+                        "binary.code is {is}, but its budget is {}, not {BINARY_CODE_BYTES}",
+                        UntrustedText::new(b.budget.as_str()).terminal_line()
+                    )),
+                    Some(b) if b.limit != *limit => Err(format!(
+                        "binary.code is {is}, but its {BINARY_CODE_BYTES} limit is {}, not the request's {limit}",
+                        b.limit
+                    )),
+                    Some(b) if b.used > b.limit => Err(format!(
+                        "binary.code is {is}, but it used {} of {BINARY_CODE_BYTES}, over the limit {}",
+                        b.used, b.limit
+                    )),
+                    Some(_) => Ok(()),
+                },
+                _ => Err(format!(
+                    "binary.code is {is}, but the input implies complete or partial with {BINARY_CODE_BYTES} ({limit}), or {}",
+                    shown(&CoverageState::Unsupported {
+                        what: CODE_UNSUPPORTED.to_string()
+                    })
+                )),
+            },
+        }
+    }
+}
+
+/// What `i`'s read implies for `binary.code`, in a binary inspection with `request.code` (spec
+/// §5.2, C3). Whether the container was read comes from [`expected_binary_container`], not from
+/// its entry. `Err` for an input that cannot be judged: one B9 refuses (including an input over
+/// `binary_bytes` without exactly one `binary.container` entry that B9 admits, since its state
+/// needs that entry's `used`), an analyzable input without a `binary_code_bytes` budget, or a
+/// session without `request.code`.
+pub fn expected_binary_code(s: &Session, i: &FileInstance) -> Result<ExpectedCode, String> {
+    if !s.request.code {
+        return Err("no binary.code without request.code".to_string());
+    }
+    let state = match expected_binary_container(s, i)? {
+        expected @ ExpectedContainer::OverBytes { .. } => {
+            let entries: Vec<&Coverage> = s
+                .coverage
+                .iter()
+                .filter(|c| {
+                    c.check.as_str() == BINARY_CONTAINER && c.scope == Ref::Instance(i.id.clone())
+                })
+                .collect();
+            return match entries.as_slice() {
+                [c] if expected.admits(&c.state) => Ok(ExpectedCode::Exactly(c.state.clone())),
+                _ => Err(format!(
+                    "an input over {BINARY_BYTES} needs one {BINARY_CONTAINER} entry in the state it implies"
+                )),
+            };
+        }
+        ExpectedContainer::Exactly(state) => state,
+    };
+    if !matches!(
+        state,
+        CoverageState::Complete | CoverageState::Partial { .. }
+    ) {
+        return Ok(ExpectedCode::Exactly(state));
+    }
+    let InstanceContent::Read { artifact } = &i.content else {
+        return Err("an input not read has no container to analyze".to_string());
+    };
+    let a = s
+        .artifacts
+        .iter()
+        .find(|a| a.id == *artifact)
+        .ok_or("its artifact is not in the session")?;
+    if !matches!(a.format, Format::Elf { .. }) || a.slices.iter().any(|x| x.arch != Arch::X86_64) {
+        return Ok(ExpectedCode::Exactly(CoverageState::Unsupported {
+            what: CODE_UNSUPPORTED.to_string(),
+        }));
+    }
+    let limit = s
+        .request
+        .budgets
+        .get(BINARY_CODE_BYTES)
+        .copied()
+        .ok_or_else(|| format!("request.code without a {BINARY_CODE_BYTES} budget"))?;
+    let parsed = !a.slices.is_empty()
+        && a.slices
+            .iter()
+            .all(|x| s.binaries.iter().any(|b| b.slice == x.id));
+    Ok(ExpectedCode::Analyzable { limit, parsed })
 }

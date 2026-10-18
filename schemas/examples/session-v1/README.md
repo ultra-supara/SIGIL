@@ -4,7 +4,9 @@
 Every file is labeled `tool.version: "0.0.0-example"` and uses synthetic hashes. The exception is
 `13-loader-slice-spec-example.json`, which reuses the values of the plan's §5.8 example (the
 official Ollama v0.30.6 `libggml` hash and addresses found during PR-0 research) to show the
-intended shape.
+intended shape. `16-binary-code.json` reuses the engine's results for its test fixture
+`suspicious_kernel-gcc-O2.o` (its hash, facts, hint, code facts, and bytes read); its path and
+stat are synthetic.
 
 Each file is generated from a builder in `crates/sigil-model/tests/common/mod.rs` and is checked
 by `crates/sigil-model/tests/examples.rs`. Each must:
@@ -31,3 +33,4 @@ After an intended model change, regenerate them with
 | `12-conflicting-identity` | A file name and an embedded value disagree on the version; both are kept, and the per-file hash still matches |
 | `13-loader-slice-spec-example` | The plan's §5.8 loader slice, corrected to the PR-2 types |
 | `15-binary-inspect` | `sigil binary inspect` of two files: a shared object with complete container facts, and a text file that is `Unsupported`, one `binary.container` entry each: PASS + INCOMPLETE |
+| `16-binary-code` | A binary inspection with code analysis (`request.code`) of one relocatable object: its `connect` import as a hint, the one direct call of `connect` with its function, and `binary.code` `Complete` with its `binary_code_bytes` use: PASS + COMPLETE |

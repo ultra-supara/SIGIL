@@ -5,13 +5,16 @@ use std::fmt;
 use std::path::PathBuf;
 
 use sigil_model::{
-    ActiveFeature, ApiProbe, Artifact, CheckId, Completeness, Coverage, CoverageState, Format,
-    KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot, SchemaVersion,
-    Session, SkipReason, Timestamp, ToolInfo, Unavailability, UntrustedText, Verdict,
-    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
+    ActiveFeature, ApiProbe, Artifact, CheckId, CodeFacts, Completeness, Coverage, CoverageState,
+    Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
+    SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
+    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
+    BINARY_BYTES, BINARY_CODE_BYTES, INSTALL_ROOT,
 };
 
-use crate::analyze::{binary, container, exposure, model_store, release, runtime_api};
+use crate::analyze::binary::CodeCoverageError;
+use crate::analyze::{binary, container, exposure, hints, model_store, release, runtime_api};
+use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
 use crate::collect::named::{self, NamedBudgets};
@@ -61,6 +64,9 @@ pub enum InspectError {
     Reference(Vec<String>),
     /// An input of `binary inspect` that cannot be inspected (exit 1; plan §4.9).
     Input(String),
+    /// Embedded data the engine cannot use, e.g. invalid signatures (a bug, reported rather than
+    /// panicking).
+    Internal(String),
 }
 
 impl fmt::Display for InspectError {
@@ -77,6 +83,7 @@ impl fmt::Display for InspectError {
                 errors.join("; ")
             ),
             InspectError::Input(e) => write!(f, "{e}"),
+            InspectError::Internal(e) => write!(f, "internal error: {e}"),
         }
     }
 }
@@ -184,6 +191,7 @@ fn assemble(
         active: !active.features.is_empty(),
         install: req.install.is_some(),
         binary: false,
+        code: false,
     });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
@@ -255,6 +263,7 @@ fn assemble(
     }
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
+    let hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -268,6 +277,7 @@ fn assemble(
             observe_env: false,
             model_filter: req.model_filter.clone(),
             active: active.features.clone(),
+            code: false,
         },
         observation,
         artifacts,
@@ -281,7 +291,7 @@ fn assemble(
         releases,
         reference_matches,
         binaries,
-        hints: vec![],
+        hints,
         code: vec![],
         relations,
         rule_support: vec![],
@@ -325,8 +335,9 @@ pub struct BinaryRequest {
 }
 
 /// Inspects the files of `req` and evaluates `policy`'s binary scope on the result (spec §4.5).
-/// An input that cannot be inspected is [`InspectError::Input`]. The session is in canonical
-/// order and passes `Session::validate`.
+/// With `req.budgets.binary.code`, the session has `request.code`, the code facts, and one
+/// `binary.code` entry per input (PR-5a spec §5). An input that cannot be inspected is
+/// [`InspectError::Input`]. The session is in canonical order and passes `Session::validate`.
 pub fn binary_session(
     req: &BinaryRequest,
     policy: &Policy,
@@ -335,14 +346,17 @@ pub fn binary_session(
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
     let facts = named::collect(&req.paths, req.budgets).map_err(InspectError::Input)?;
+    let code_request = req.budgets.binary.code;
+    // With code, `binary_code_audit` is added: what `evaluate` derives from `request.code`.
     let (audit, required_checks) = policy.scope(&ScopeInput {
         mode: Mode::Static,
         active: false,
         install: false,
         binary: true,
+        code: code_request.is_some(),
     });
     let relations = container::declares(&facts.binaries);
-    let budgets = BTreeMap::from([
+    let mut budgets = BTreeMap::from([
         (BINARY_BYTES.to_string(), req.budgets.bytes),
         (
             "binary_parse_bytes".to_string(),
@@ -350,6 +364,11 @@ pub fn binary_session(
         ),
         ("binary_imports".to_string(), req.budgets.binary.imports),
     ]);
+    // With code (PR-5a): its byte budget. Its aggregate limits are constants, not recorded.
+    if let Some(c) = code_request {
+        budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
+    }
+    let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -363,6 +382,7 @@ pub fn binary_session(
             observe_env: false,
             model_filter: None,
             active: vec![],
+            code: code_request.is_some(),
         },
         observation,
         artifacts: facts.artifacts,
@@ -376,7 +396,8 @@ pub fn binary_session(
         releases: vec![],
         reference_matches: vec![],
         binaries: facts.binaries,
-        hints: vec![],
+        hints,
+        // Moved out of the outcomes once their coverage is computed, below.
         code: vec![],
         relations,
         rule_support: vec![],
@@ -397,13 +418,45 @@ pub fn binary_session(
             policy_time: policy_time.clone(),
         },
     };
+    // The container's entries first: an input over `binary_bytes` copies its state to
+    // `binary.code`.
     session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
+    let code_coverage = binary::code_coverage(&session, &facts.code).map_err(|e| match e {
+        CodeCoverageError::BadId(e) => InspectError::BadId(e),
+        CodeCoverageError::Undecided(e) => InspectError::Internal(e),
+    })?;
+    session.coverage.extend(code_coverage);
+    session.code = code_facts(facts.code);
     evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
     session.canonicalize();
     session.validate().map_err(|errors| {
         InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
     })?;
     Ok(session)
+}
+
+/// The code facts of each analyzed slice that has a call site, moved out of `outcomes`. One
+/// content named twice is one slice, so one entry.
+fn code_facts(outcomes: Vec<(SliceId, CodeOutcome)>) -> Vec<CodeFacts> {
+    outcomes
+        .into_iter()
+        .filter_map(|(slice, outcome)| match outcome {
+            CodeOutcome::Analyzed {
+                functions,
+                call_sites,
+                ..
+            } if !call_sites.is_empty() => Some(CodeFacts {
+                slice,
+                functions,
+                call_sites,
+                predicate_checks: vec![],
+                close_checks: vec![],
+                guard_regions: vec![],
+                param_mappings: vec![],
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The facts of a model store whose root could not be opened: inventory coverage only.

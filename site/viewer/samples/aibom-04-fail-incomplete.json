@@ -7,7 +7,7 @@
   },
   "session": {
     "schema": "sigil-session/1",
-    "sha256": "ea5411db1b6908e4f666748ef0d1a9c35d975aa9ff33ff41e56d78f752c9a4c7",
+    "sha256": "76158ac839cf765f3be113551a1526933829bda59d3abcaabb3f86bf9dc3711d",
     "mode": "Static",
     "started_at": "2026-10-07T07:00:00Z",
     "policy": {
