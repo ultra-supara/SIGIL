@@ -52,10 +52,11 @@ pub struct CodeBudgets {
     /// the run stops, and the relocations not read are absent from the image.
     pub relocations: usize,
     pub instructions: u64,
-    /// Register-value steps (one instruction's transfer, `value::Machine::step`) of all functions
-    /// together: every pass of each function's fixpoint, and the pass that keeps the values its
-    /// calls need. Charged before each step: past it the run stops, and the function being solved
-    /// fails.
+    /// Register-value steps of all functions together, in every pass of each function's fixpoint
+    /// and in the pass that keeps the values its calls need: one instruction's transfer
+    /// (`value::Machine::step`) is 1, and a join is weighted (`value::JOIN_COST` per predecessor
+    /// examined, `value::REGISTER_JOIN_COST` per register joined). Charged before the work: past
+    /// it the run stops, and the function being solved fails.
     pub value_steps: u64,
     pub call_sites: usize,
     /// The bytes of symbol names copied into the recorded facts (review I2). A function's call
@@ -74,9 +75,9 @@ impl Default for CodeBudgets {
             slots: 1 << 20,
             relocations: 1 << 20,
             instructions: 4_000_000,
-            // 16 times the most real files needed (2,165,594 steps, cuda_v12/libggml-cuda.so, in
-            // Task 15's survey), rounded up to a power of two.
-            value_steps: 1 << 26,
+            // 16 times the most real files needed (5,868,970, cuda_v12/libggml-cuda.so, in Task
+            // 15's survey), rounded up to a power of two.
+            value_steps: 1 << 27,
             call_sites: 65_536,
             name_bytes: 16 << 20,
             gaps: 256,
@@ -402,7 +403,7 @@ mod tests {
                 65_536,
                 1 << 20,
                 4_000_000,
-                1 << 26,
+                1 << 27,
                 65_536,
                 256,
                 1 << 20,

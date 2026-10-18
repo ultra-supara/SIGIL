@@ -618,7 +618,7 @@ GOT slots, the relocations, the FDEs, the references (by text relocations), or
 | GOT slots | 1,048,576 | `JUMP_SLOT` and `GLOB_DAT` slots collected | `code: GOT-slot limit 1048576 reached` |
 | relocations | 1,048,576 | a relocatable object's relocations, on code and on `.eh_frame` | `code: relocation limit 1048576 reached` |
 | decoded instructions | 4,000,000 | instructions of all functions together | `code: decoded-instruction limit 4000000 reached` |
-| value steps | 67,108,864 (2^26) | register-value steps of all functions together: one instruction's transfer, in every pass of each function's fixpoint and in the pass that keeps its calls' values | `code: value-step limit 67108864 reached` |
+| value steps | 134,217,728 (2^27) | register-value work of all functions together, in every pass of each function's fixpoint and in the pass that keeps its calls' values: an instruction's transfer is 1 step; at a join, each predecessor examined is 4, and each register that differs 4 more | `code: value-step limit 134217728 reached` |
 | call sites | 65,536 | recorded call sites, the `ReturnOf` closure included | `code: call-site limit 65536 reached` |
 | name bytes | 16 MiB | bytes of names copied into recorded call sites | `code: name-byte limit 16777216 reached` |
 

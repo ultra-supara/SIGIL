@@ -230,14 +230,16 @@ pub(crate) fn join(a: &Val, b: &Val) -> Val {
     set_of(members)
 }
 
-/// `b` joined into `acc`, in place: only the registers that differ are joined, and nothing else
-/// is cloned.
-fn join_into(acc: &mut State, b: &State) {
+/// `b` joined into `acc`, in place: only the registers that differ are joined, each charged
+/// [`REGISTER_JOIN_COST`] steps first, and nothing else is cloned.
+fn join_into(acc: &mut State, b: &State, run: &mut Run) -> Result<(), Failure> {
     for (x, y) in acc.iter_mut().zip(b) {
         if x != y {
+            charge(run, REGISTER_JOIN_COST)?;
             *x = join(x, y);
         }
     }
+    Ok(())
 }
 
 /// The low `bits` of `v`, as a sub-register read or a 32-bit write gives them. A known
@@ -925,19 +927,29 @@ impl<'c> Graph<'c> {
     }
 
     /// Chain head `h`'s input: the join of what reaches it so far (with the entry state at the
-    /// entry). Each predecessor of a head ends a chain, so its output is kept.
-    fn input(&self, h: usize, entry: &State, out: &[Option<Box<State>>]) -> Option<State> {
+    /// entry). Each predecessor of a head ends a chain, so its output is kept. Each predecessor
+    /// examined is charged [`JOIN_COST`] steps first, whether it has an output yet or not.
+    fn input(
+        &self,
+        h: usize,
+        entry: &State,
+        out: &[Option<Box<State>>],
+        run: &mut Run,
+    ) -> Result<Option<State>, Failure> {
         let mut acc = (h == self.entry).then(|| entry.clone());
-        let (lo, hi) = (*self.pred_at.get(h)?, *self.pred_at.get(h + 1)?);
-        for p in self.preds.get(lo..hi).into_iter().flatten() {
+        let (Some(lo), Some(hi)) = (self.pred_at.get(h), self.pred_at.get(h + 1)) else {
+            return Ok(None);
+        };
+        for p in self.preds.get(*lo..*hi).into_iter().flatten() {
+            charge(run, JOIN_COST)?;
             if let Some(o) = out.get(*p).and_then(|o| o.as_deref()) {
                 match acc.as_mut() {
                     None => acc = Some(o.clone()),
-                    Some(a) => join_into(a, o),
+                    Some(a) => join_into(a, o, run)?,
                 }
             }
         }
-        acc
+        Ok(acc)
     }
 }
 
@@ -964,20 +976,38 @@ pub(crate) fn solve(cfg: &Cfg, img: &Image, run: &mut Run) -> Result<Values, Fai
     Ok(Values { kept })
 }
 
-/// Charges one [`Machine::step`] to the artifact's value-step budget, before it is made (review
-/// of Task 15: 256 passes over up to 200,000 instructions per function need an aggregate bound,
-/// as decoding has). At `budgets.value_steps` the run stops, and the function fails.
-fn charge(run: &mut Run) -> Result<(), Failure> {
-    if run.value_steps >= run.budgets.value_steps {
-        run.limit("value-step", run.budgets.value_steps);
-        return Err(Failure::ArtifactValueSteps);
+/// What a chain head's input pays per predecessor it examines, in value steps: visiting its
+/// state and comparing its 16 registers with the input's (Task 15's final review). Without it, a
+/// head with many predecessors processed many times would cost passes × in-degree joins that no
+/// budget counts. In release, a predecessor whose registers all agree takes about 100 ns, and
+/// one step 20 to 30 ns.
+pub(crate) const JOIN_COST: u64 = 4;
+
+/// What each register that differs pays on top of [`JOIN_COST`], in value steps: its [`join`].
+/// In release, a join of constants or sets of them takes 36 to 85 ns, an Unknown's 2 ns.
+pub(crate) const REGISTER_JOIN_COST: u64 = 4;
+
+/// Charges `cost` value steps to the artifact's budget, before the work is done (review of Task
+/// 15: 256 passes over up to 200,000 instructions per function need an aggregate bound, as
+/// decoding has). A [`Machine::step`] costs 1, a predecessor examined [`JOIN_COST`], and each
+/// register joined [`REGISTER_JOIN_COST`]. Past `budgets.value_steps` the run stops, and the
+/// function fails.
+fn charge(run: &mut Run, cost: u64) -> Result<(), Failure> {
+    match run.value_steps.checked_add(cost) {
+        Some(total) if total <= run.budgets.value_steps => {
+            run.value_steps = total;
+            Ok(())
+        }
+        _ => {
+            run.limit("value-step", run.budgets.value_steps);
+            Err(Failure::ArtifactValueSteps)
+        }
     }
-    run.value_steps += 1;
-    Ok(())
 }
 
 /// The fixpoint, each chain processed at most `passes` times; then `visit` is called with the
-/// state before each kept instruction ([`kept`]). Every step, of both, is charged to `run`.
+/// state before each kept instruction ([`kept`]). Every step and every predecessor's join, of
+/// both, is charged to `run`.
 fn propagate(
     cfg: &Cfg,
     img: &Image,
@@ -995,7 +1025,7 @@ fn propagate(
     let mut done = vec![0u32; g.len()];
     let mut work: BTreeSet<usize> = BTreeSet::from([g.entry]);
     while let Some(h) = work.pop_first() {
-        let Some(mut s) = g.input(h, &entry, &out) else {
+        let Some(mut s) = g.input(h, &entry, &out, run)? else {
             continue;
         };
         let Some(n) = done.get_mut(h) else {
@@ -1009,7 +1039,7 @@ fn propagate(
         for b in g.chain(h) {
             last = b;
             for (_, insn) in g.insns(b).into_iter().flat_map(|(_, i)| i) {
-                charge(run)?;
+                charge(run, 1)?;
                 m.step(&mut s, insn);
             }
         }
@@ -1024,7 +1054,7 @@ fn propagate(
         if !g.head.get(h).copied().unwrap_or(false) {
             continue;
         }
-        let Some(mut s) = g.input(h, &entry, &out) else {
+        let Some(mut s) = g.input(h, &entry, &out, run)? else {
             continue;
         };
         for b in g.chain(h) {
@@ -1035,7 +1065,7 @@ fn propagate(
                 if kept(at, insn, blk) {
                     visit(at, insn, &s);
                 }
-                charge(run)?;
+                charge(run, 1)?;
                 m.step(&mut s, insn);
             }
         }
@@ -1953,5 +1983,73 @@ mod tests {
         assert_eq!(visited, 0, "nothing kept");
         assert_eq!(run.value_steps, 1);
         assert_eq!(run.into_gaps(), ["code: value-step limit 1 reached"]);
+    }
+
+    #[test]
+    fn a_join_is_charged() {
+        // joins_at_a_merge_point's function: the two blocks after the `je` examine one
+        // predecessor each and the call's block two, in the fixpoint and again in the recording
+        // pass, 8 predecessors at JOIN_COST each. At the call's block, rsi (1 or 2) and rcx
+        // (Param or not) differ: 4 register joins at REGISTER_JOIN_COST each. Its 8 instructions
+        // take 16 steps.
+        let (bytes, _) = code(&[
+            &[0x85, 0xff],
+            &[0x74, 0x07],
+            &[0xbe, 0x01, 0, 0, 0],
+            &[0xeb, 0x08],
+            &[0xbe, 0x02, 0, 0, 0],
+            &[0x48, 0x89, 0xc1],
+            &CALL0,
+            &RET,
+        ]);
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&bytes, &img);
+        let mut run = fresh();
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        assert_eq!(run.value_steps, 16 + 8 * JOIN_COST + 4 * REGISTER_JOIN_COST);
+    }
+
+    /// `n` blocks of one `jne h` (rel32) each, then `h`: `call; ret`. `h` has `n` predecessors.
+    fn many_predecessors(n: usize) -> Vec<u8> {
+        let h = 6 * n;
+        let mut bytes = vec![];
+        for k in 0..n {
+            bytes.extend([0x0f, 0x85]);
+            bytes.extend(((h - 6 * (k + 1)) as i32).to_le_bytes());
+        }
+        bytes.extend(CALL0);
+        bytes.extend(RET);
+        bytes
+    }
+
+    #[test]
+    fn value_step_limit_counts_the_joins_of_many_predecessors() {
+        // 1,000 `jne h`: each block after the first examines its one predecessor, and `h` all
+        // 1,000, in the fixpoint and again in the recording pass. Their 1,002 instructions take
+        // 2,004 steps; the joins, 3,998 predecessors at JOIN_COST each, take more than that.
+        let n = 1000;
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&many_predecessors(n), &img);
+        assert_eq!(cfg.blocks.len(), n + 2, "n jne blocks, the call, the ret");
+        let transfers = 2 * (n as u64 + 2);
+        let joins = (4 * n as u64 - 2) * JOIN_COST;
+        let mut run = fresh();
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        assert_eq!(run.value_steps, transfers + joins);
+        // A budget its transfers alone fit: the joins reach the limit.
+        let budget = transfers + joins - 1;
+        let mut run = Run::new(CodeBudgets {
+            value_steps: budget,
+            ..CodeBudgets::default()
+        });
+        assert_eq!(
+            solve(&cfg, &img, &mut run).err(),
+            Some(Failure::ArtifactValueSteps)
+        );
+        assert!(run.stopped());
+        assert_eq!(
+            run.into_gaps(),
+            [format!("code: value-step limit {budget} reached")]
+        );
     }
 }
