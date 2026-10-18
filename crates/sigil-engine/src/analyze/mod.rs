@@ -6,6 +6,7 @@ pub mod components;
 pub mod container;
 pub mod exposure;
 pub mod hints;
+pub mod identity;
 pub mod model_store;
 pub mod release;
 pub mod runtime_api;
