@@ -53,10 +53,16 @@ pub struct CodeBudgets {
     pub relocations: usize,
     pub instructions: u64,
     /// Register-value steps of all functions together, in every pass of each function's fixpoint
-    /// and in the pass that keeps the values its calls need: one instruction's transfer
-    /// (`value::Machine::step`) is 1, and a join is weighted (`value::JOIN_COST` per predecessor
-    /// examined, `value::REGISTER_JOIN_COST` per register joined). Charged before the work: past
-    /// it the run stops, and the function being solved fails.
+    /// and in the pass that keeps the values its calls need, charged before the work; past it
+    /// the run stops, and the function being solved fails. The work is weighted by the size of
+    /// the values it touches (`value::size`: a value's members times one more than its levels of
+    /// loads):
+    /// - an instruction's transfer is 1, plus the size of a set a `mov`/`movzx` copies through
+    ///   part of a register (`value::Machine::cost`);
+    /// - each predecessor a block's input examines is `value::JOIN_COST`, and each register it
+    ///   joins both sizes, or 1 beside an unknown value (`value::join_cost`);
+    /// - a compare that must walk two values (their parts separate allocations), in a join or in
+    ///   the check that a block's output settled, is both sizes (`value::equal_charged`).
     pub value_steps: u64,
     pub call_sites: usize,
     /// The bytes of symbol names copied into the recorded facts (review I2). A function's call
@@ -75,7 +81,7 @@ impl Default for CodeBudgets {
             slots: 1 << 20,
             relocations: 1 << 20,
             instructions: 4_000_000,
-            // 16 times the most real files needed (5,868,970, cuda_v12/libggml-cuda.so, in Task
+            // 16 times the most real files needed (5,190,166, cuda_v12/libggml-cuda.so, in Task
             // 15's survey), rounded up to a power of two.
             value_steps: 1 << 27,
             call_sites: 65_536,

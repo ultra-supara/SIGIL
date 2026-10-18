@@ -318,23 +318,40 @@ fn join_different(a: &Val, b: &Val) -> Val {
 }
 
 /// `b` joined into `acc`, in place: only the registers that differ are joined, and nothing else
-/// is cloned. A compare that walks values is charged both [`size`]s first ([`equal_at_once`]
-/// says when it does not), and a join its [`join_cost`].
+/// is cloned. Each compare is [`equal_charged`], and each join charged its [`join_cost`] first.
 fn join_into(acc: &mut State, b: &State, run: &mut Run) -> Result<(), Failure> {
     for (x, y) in acc.iter_mut().zip(b) {
-        let equal = match equal_at_once(x, y) {
-            Some(equal) => equal,
-            None => {
-                charge(run, size(x) + size(y))?;
-                x == y
-            }
-        };
-        if !equal {
+        if !equal_charged(x, y, run)? {
             charge(run, join_cost(x, y))?;
             *x = join_different(x, y);
         }
     }
     Ok(())
+}
+
+/// Whether `x` and `y` are equal: at once where [`equal_at_once`] tells, else after both
+/// [`size`]s are charged for the walk `==` makes.
+fn equal_charged(x: &Val, y: &Val, run: &mut Run) -> Result<bool, Failure> {
+    match equal_at_once(x, y) {
+        Some(equal) => Ok(equal),
+        None => {
+            charge(run, size(x) + size(y))?;
+            Ok(x == y)
+        }
+    }
+}
+
+/// Whether a chain's new output `new` is its old one `old`, register by register, each compare
+/// [`equal_charged`] (Task 15's final review: a loop that forms its values anew each pass gives
+/// equal values that share nothing, and the fixpoint compares them once per chain and pass). It
+/// stops at the first register that differs.
+fn states_equal(old: &State, new: &State, run: &mut Run) -> Result<bool, Failure> {
+    for (x, y) in old.iter().zip(new) {
+        if !equal_charged(x, y, run)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Whether `x` and `y` are equal, when that is known without walking them: two scalars, two
@@ -588,7 +605,6 @@ impl<'a> Machine<'a> {
         }
     }
 
-    /// `s` after `insn`. `rsp` is never known: every stack address is unknown.
     /// What [`Machine::step`] of `insn` on `s` costs, in value steps: 1, and the [`size`] of a
     /// `Set` that a `mov`/`movzx` copies through part of a register, which a 32-, 16-, or 8-bit
     /// read or write rebuilds member by member (Task 15's final review). Other steps rebuild no
@@ -608,6 +624,7 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// `s` after `insn`. `rsp` is never known: every stack address is unknown.
     pub fn step(&mut self, s: &mut State, insn: &Insn) {
         let ins = &insn.ins;
         match ins.mnemonic() {
@@ -1190,8 +1207,11 @@ fn charge(run: &mut Run, cost: u64) -> Result<(), Failure> {
 }
 
 /// The fixpoint, each chain processed at most `passes` times; then `visit` is called with the
-/// state before each kept instruction ([`kept`]). Every step and every predecessor's join, of
-/// both, is charged to `run`.
+/// state before each kept instruction ([`kept`]). All the work on values is charged to `run`,
+/// before it is done: each step ([`Machine::cost`]), each predecessor examined ([`JOIN_COST`])
+/// and joined ([`join_into`]), and each check that a chain's output settled ([`states_equal`]).
+/// The other comparisons are of fixed size: [`equal_at_once`], a set's at most 2 × [`MAX_SET`]
+/// members sorted when a join or a narrower copy is charged for them, and block addresses.
 fn propagate(
     cfg: &Cfg,
     img: &Image,
@@ -1228,7 +1248,11 @@ fn propagate(
             }
         }
         if let Some(o) = out.get_mut(last) {
-            if o.as_deref() != Some(&s) {
+            let settled = match o.as_deref() {
+                Some(old) => states_equal(old, &s, run)?,
+                None => false,
+            };
+            if !settled {
                 *o = Some(Box::new(s));
                 work.extend(g.succs(last));
             }
@@ -2399,5 +2423,34 @@ mod tests {
         assert_eq!(acc[2], load(Val::Param(0), 8, 64, 2));
         assert_eq!(acc[1], set([c(1), c(2)]));
         assert_eq!(acc[5], Val::Unknown(Why::MergedDisagreeing));
+    }
+
+    #[test]
+    fn a_convergence_compare_that_walks_is_charged() {
+        // 1000: mov rax, [rdi]; 1003: test eax, eax; 1005: jne 1000; 1007: call; 100c: ret.
+        // Each pass of the loop forms rax's load anew: an equal value sharing nothing with the
+        // last pass's, so the check that the loop's output settled walks it.
+        // - the loop, pass 1: its back edge examined (JOIN_COST), 3 steps;
+        // - pass 2: the entry state and the back edge joined (JOIN_COST, rax's Unknown beside a
+        //   load: 1), 3 steps, and the settling compare walks rax: 2 + 2;
+        // - the call's chain: JOIN_COST, 2 steps;
+        // - the recording pass: the loop JOIN_COST + 1 + 3, the call's chain JOIN_COST + 2.
+        let (bytes, at) = code(&[
+            &[0x48, 0x8b, 0x07],
+            &[0x85, 0xc0],
+            &[0x75, 0xf9],
+            &CALL0,
+            &RET,
+        ]);
+        assert_eq!(at[3], 0x1007);
+        let img = Image::empty(Kind::Shared);
+        let cfg = cfg_of(&bytes, &img);
+        let mut run = fresh();
+        assert!(solve(&cfg, &img, &mut run).is_ok());
+        let compare = 2 + 2;
+        assert_eq!(
+            run.value_steps,
+            5 * JOIN_COST + (3 + 1 + 3 + compare + 2) + (1 + 3 + 2)
+        );
     }
 }
