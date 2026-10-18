@@ -8,6 +8,7 @@
 //!   ([`Kept`]), review I1.
 //! - [`Val::Sym`] (spec rev. 2's `SymbolAddr`) is internal: it never leaves the engine.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
@@ -29,8 +30,9 @@ pub(crate) enum Why {
     NotModeled,
 }
 
-/// A register's value. Its parts are shared: a clone is a count.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// A register's value. Its parts are shared: a clone is a count. Its order is the one
+/// `derive(Ord)` gives, without walking a shared part (its `Ord`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Val {
     /// `address`: formed by an address-forming instruction (a `lea`, a relocation), so it may
     /// name a constant string; an immediate never does.
@@ -64,6 +66,79 @@ pub(crate) enum Val {
         site: u64,
     },
     Unknown(Why),
+}
+
+/// Two shared parts in the order of their values; the same allocation is equal at once.
+fn cmp_shared<T: Ord + ?Sized>(a: &Rc<T>, b: &Rc<T>) -> Ordering {
+    if Rc::ptr_eq(a, b) {
+        Ordering::Equal
+    } else {
+        (**a).cmp(&**b)
+    }
+}
+
+/// `derive(Ord)`'s order (variants in declaration order, then their fields in declaration
+/// order), except that a part two values share is not walked: sorting the members of a set
+/// whose loads share one deep base compares the base's address, not its whole tree (Task 15's
+/// final review). `PartialEq` already does so through `Rc`'s.
+impl Ord for Val {
+    fn cmp(&self, other: &Val) -> Ordering {
+        fn rank(v: &Val) -> u8 {
+            match v {
+                Val::Const { .. } => 0,
+                Val::Param(_) => 1,
+                Val::Ret(_) => 2,
+                Val::Load { .. } => 3,
+                Val::Low { .. } => 4,
+                Val::Set(_) => 5,
+                Val::Sym { .. } => 6,
+                Val::Unknown(_) => 7,
+            }
+        }
+        match (self, other) {
+            (
+                Val::Const {
+                    value: a,
+                    address: x,
+                },
+                Val::Const {
+                    value: b,
+                    address: y,
+                },
+            ) => (a, x).cmp(&(b, y)),
+            (Val::Param(a), Val::Param(b)) => a.cmp(b),
+            (Val::Ret(a), Val::Ret(b)) => a.cmp(b),
+            (
+                Val::Load {
+                    base: b1,
+                    offset: o1,
+                    width: w1,
+                    site: s1,
+                },
+                Val::Load {
+                    base: b2,
+                    offset: o2,
+                    width: w2,
+                    site: s2,
+                },
+            ) => cmp_shared(b1, b2).then_with(|| (o1, w1, s1).cmp(&(o2, w2, s2))),
+            (Val::Low { value: v1, bits: x }, Val::Low { value: v2, bits: y }) => {
+                cmp_shared(v1, v2).then_with(|| x.cmp(y))
+            }
+            (Val::Set(a), Val::Set(b)) => cmp_shared(a, b),
+            (Val::Sym { of: o1, site: s1 }, Val::Sym { of: o2, site: s2 }) => {
+                cmp_shared(o1, o2).then_with(|| s1.cmp(s2))
+            }
+            (Val::Unknown(a), Val::Unknown(b)) => a.cmp(b),
+            (a, b) => rank(a).cmp(&rank(b)),
+        }
+    }
+}
+
+impl PartialOrd for Val {
+    fn partial_cmp(&self, other: &Val) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// The symbol a [`Val::Sym`] is the address of.
@@ -163,13 +238,17 @@ fn set(s: &mut State, r: usize, v: Val) {
     }
 }
 
-/// How many loads nest in `v`, through `Low`s and `Set`s.
-fn depth(v: &Val) -> usize {
+/// Whether `n` loads or more nest in `v`, through `Low`s and `Set`s. It stops at the first path
+/// that reaches `n`, so a value that deep is not walked whole.
+fn nests(v: &Val, n: usize) -> bool {
+    if n == 0 {
+        return true;
+    }
     match v {
-        Val::Load { base, .. } => 1 + depth(base),
-        Val::Low { value, .. } => depth(value),
-        Val::Set(members) => members.iter().map(depth).max().unwrap_or(0),
-        _ => 0,
+        Val::Load { base, .. } => nests(base, n - 1),
+        Val::Low { value, .. } => nests(value, n),
+        Val::Set(members) => members.iter().any(|m| nests(m, n)),
+        _ => false,
     }
 }
 
@@ -661,7 +740,7 @@ impl<'a> Machine<'a> {
                     None | Some(Val::Unknown(_)) => return Val::Unknown(Why::FromMemory),
                     Some(bv) => bv,
                 };
-                if depth(bv) >= MAX_LOAD_DEPTH {
+                if nests(bv, MAX_LOAD_DEPTH) {
                     return Val::Unknown(Why::NotModeled);
                 }
                 Val::Load {
@@ -2050,6 +2129,65 @@ mod tests {
         assert_eq!(
             run.into_gaps(),
             [format!("code: value-step limit {budget} reached")]
+        );
+    }
+
+    #[test]
+    fn the_value_order_is_derives() {
+        // Variants in declaration order, then their fields in declaration order (a Load's base
+        // first); the same allocation and an equal copy compare alike.
+        let (p0, p1) = (Rc::new(Val::Param(0)), Rc::new(Val::Param(1)));
+        let l = |base: &Rc<Val>, offset, site| Val::Load {
+            base: base.clone(),
+            offset,
+            width: 64,
+            site,
+        };
+        let sym = named("connect", None, Via::Plt, 7);
+        let mut v = vec![
+            Val::Unknown(Why::NotModeled),
+            Val::Unknown(Why::ClobberedByCall),
+            sym.clone(),
+            set([c(1), c(2)]),
+            set([c(1), c(3)]),
+            lo(c(1), 8),
+            lo(c(1), 16),
+            l(&p1, 0, 1),
+            l(&p0, 1, 0),
+            l(&p0, 0, 5),
+            Val::Ret(2),
+            Val::Param(1),
+            addr(5),
+            c(5),
+            c(4),
+        ];
+        v.sort();
+        assert_eq!(
+            v,
+            [
+                c(4),
+                c(5),
+                addr(5),
+                Val::Param(1),
+                Val::Ret(2),
+                l(&p0, 0, 5),
+                l(&p0, 1, 0),
+                l(&p1, 0, 1),
+                lo(c(1), 8),
+                lo(c(1), 16),
+                set([c(1), c(2)]),
+                set([c(1), c(3)]),
+                sym,
+                Val::Unknown(Why::ClobberedByCall),
+                Val::Unknown(Why::NotModeled),
+            ]
+        );
+        let shared = l(&p0, 0, 5);
+        assert_eq!(shared.cmp(&shared.clone()), std::cmp::Ordering::Equal);
+        assert_eq!(
+            shared.cmp(&load(Val::Param(0), 0, 64, 5)),
+            std::cmp::Ordering::Equal,
+            "an equal copy"
         );
     }
 }
