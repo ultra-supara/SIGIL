@@ -689,6 +689,52 @@ mod tests {
     }
 
     #[test]
+    fn a_function_over_fde_bytes_is_not_read() {
+        // Two FDEs in code: one byte over FDE_BYTES, and exactly FDE_BYTES. The file is 16 bytes:
+        // the first is not decoded, nothing read; the second is tried, and its read refused.
+        let (big, exact) = (0x1000, 0x2000_0000);
+        let f = tempfile::NamedTempFile::new().unwrap();
+        f.as_file().write_all(&[0xc3; 16]).unwrap();
+        let mut img = Image::empty(Kind::Shared);
+        let region = |start, len| Region {
+            start,
+            end: start + len,
+            offset: 0,
+        };
+        img.code = vec![region(big, FDE_BYTES + 0x100), region(exact, FDE_BYTES)];
+        img.targets.insert(name("connect"));
+        img.set_fdes(vec![(big, big + FDE_BYTES + 1), (exact, exact + FDE_BYTES)]);
+        let refs = [big + 1, exact + 1]
+            .into_iter()
+            .map(|at| Reference {
+                at,
+                symbol: name("connect"),
+            })
+            .collect();
+        let mut run = Run::new(CodeBudgets::default());
+        let mut reader = Reader::new(f.as_file(), 16, 1 << 20);
+        let mut rec = Recorder::default();
+        confirm(
+            &img,
+            refs,
+            signatures().unwrap(),
+            &mut reader,
+            &mut run,
+            &mut rec,
+        );
+        assert!(rec.call_sites.is_empty());
+        assert_eq!(reader.used(), 0);
+        assert_eq!(
+            run.into_gaps(),
+            [
+                "code: connect referenced at 0x1001: function at 0x1000: 16777217 bytes",
+                "code: connect referenced at 0x20000001: function at 0x20000000 not read",
+                "code: function at 0x20000000: outside the file",
+            ]
+        );
+    }
+
+    #[test]
     fn a_call_is_confirmed_and_recorded() {
         // 1000: call 0x2000; 1005: ret.
         let mut code = vec![0xe8];
