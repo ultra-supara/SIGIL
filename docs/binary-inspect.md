@@ -131,7 +131,7 @@ once rendered:
   never `none found`.
 - `No capability imports.` replaces the table for an ELF file without capability imports.
 - With `--code`, a line under the table (or under `No capability imports.`) gives the input's
-  `binary.code` status and the code bytes read:
+  `binary.code` status and, when its code was searched, the code bytes read:
   `binary.code: complete; 78 of 268435456 code bytes read.`
 - A Mach-O gets neither the table nor the line.
 
@@ -154,7 +154,7 @@ Absence therefore means "no direct call site in the scanned code", never "not ca
 | Analyzed, and every reference to a capability import in the scanned code is a confirmed direct call (or part of another instruction) | `Complete`, with the code bytes read |
 | Analyzed with gaps (a reference not confirmed, a function not decoded or solved, a refused read, a limit reached), or an x86-64 ELF whose facts were not parsed | `Partial`, listing them (`not parsed` for the last); the confirmed calls are recorded all the same |
 | A Mach-O, an ELF of another machine, an ELF32 or big-endian ELF | `Unsupported` (`code analysis: x86-64 ELF64 little-endian only`) |
-| Not a supported container, over `binary_bytes`, or changed while read | the `binary.container` status |
+| Not a supported container, over `binary_bytes`, or changed or removed while read | the `binary.container` status |
 
 Under the default policy, `binary.code` is required, so any status other than `Complete` makes the
 result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
@@ -167,10 +167,12 @@ result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
   `--budget` takes, and only with `--code` (exit 2 otherwise).
 - **The other limits are fixed,** per artifact: 65,536 references; 1,048,576 FDEs, GOT slots, and
   relocations; 4,000,000 decoded instructions; 134,217,728 register-value steps; 65,536 call
-  sites; and 16 MiB of names. Reaching one records a gap and stops the analysis, so `binary.code`
-  is `Partial`. At most 256 distinct gaps are listed; the others are counted. These limits are
-  not recorded in the session. The [session model](session-model.md#code-analysis-pr-5a) lists
-  each one with its gap.
+  sites; and 16 MiB of call-target names. Reaching one records a gap and stops the analysis, so
+  `binary.code` is `Partial`. Function names and an internal callee's export name count against
+  the same 16 MiB, but they are filled last: one that does not fit is left out, with no gap. At
+  most 256 distinct gaps are listed; the others are counted. These limits are not recorded in
+  the session. The [session model](session-model.md#code-analysis-pr-5a) lists each one with its
+  gap.
 
 ## Inputs and errors
 

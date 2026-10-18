@@ -12,7 +12,8 @@ v2 plan §6.2 PR-5, ADR-006):
 objects.
 
 The other code fixtures, and the shape of each, are listed in
-[`../code/README.md`](../code/README.md). The CLI tests run `sigil binary inspect` on some of the
-built files, `suspicious_kernel-gcc-O2.o` among them: end to end in `crates/sigil-cli/tests/cli.rs`
-(with and without `--code`), and with `--code` under strace in
-`crates/sigil-cli/tests/safety/cli.rs`.
+[`../code/README.md`](../code/README.md). `crates/sigil-cli/tests/cli.rs` runs
+`sigil binary inspect` end to end on some of the built files: `suspicious_kernel-gcc-O2.o` and
+`cfg.so` with `--code`, and `net-plt-gcc.so` (and a stripped copy), `dl.so`, and
+`clean_kernel-gcc-O2.o` without it. `crates/sigil-cli/tests/safety/cli.rs` runs it with `--code`,
+under strace, on `suspicious_kernel-gcc-O2.o` and `net-plt-gcc.so`.
