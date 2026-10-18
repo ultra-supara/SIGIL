@@ -221,6 +221,20 @@
     }
   ],
   "releases": [],
+  "reference_matches": [
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml.so.0.13.1",
+      "instance": "inst:lib/ollama/libggml.so.0.13.1",
+      "result": {
+        "File": {
+          "expected": "40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f",
+          "observed": "40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f"
+        }
+      }
+    }
+  ],
   "hints": [],
   "code": [
     {

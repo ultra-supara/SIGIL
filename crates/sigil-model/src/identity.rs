@@ -19,7 +19,7 @@ pub struct ComponentClaim {
     pub component: ComponentKey,
     pub assertions: Vec<IdentityAssertion>,
     /// Derived by the engine from `assertions` (table in plan §4.4.3). Validation rejects a status
-    /// stronger than the assertions support.
+    /// its assertions do not support (PR-4c-1 spec §5).
     pub status: IdentityStatus,
     /// Every version value, with its source. Never collapsed into one.
     pub versions: Vec<VersionAssertion>,
@@ -97,9 +97,10 @@ pub enum IdentityStatus {
     Conflicting,
     /// A `KnownHash` matched.
     ReferenceMatched,
-    /// A self-name or embedded value plus at least one independent code check that matched.
+    /// A code check that matched, and no matched `KnownHash`.
     Corroborated,
-    /// Only self-names or `Required` names.
+    /// A self-name, an embedded value, or a `Required` name, and nothing stronger. Embedded
+    /// evidence is never `Unidentified` (PR-4c-1 spec §4).
     NameOnly,
     Unidentified,
 }

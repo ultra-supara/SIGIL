@@ -517,12 +517,19 @@ fn denied_components_become_policy_violations() {
     assert_eq!(s.outcome.verdict, Verdict::Fail);
     assert!(s.findings.is_empty(), "a policy violation is not a finding");
 
-    // A name-only claim is enough for an organizational ban; an unidentified one is not.
+    // A name-only claim is enough for an organizational ban; an unidentified one is not. Each
+    // claim keeps only the assertions its status allows (PR-4c-1 spec §5).
     let mut s = example("01-complete-pass");
+    s.components[0]
+        .assertions
+        .retain(|a| !matches!(a, IdentityAssertion::KnownHash { .. }));
     s.components[0].status = IdentityStatus::NameOnly;
     run(&mut s, deny);
     assert_eq!(s.policy_violations.len(), 1);
     let mut s = example("01-complete-pass");
+    s.components[0]
+        .assertions
+        .retain(|a| matches!(a, IdentityAssertion::Signature { .. }));
     s.components[0].status = IdentityStatus::Unidentified;
     run(&mut s, deny);
     assert!(s.policy_violations.is_empty());

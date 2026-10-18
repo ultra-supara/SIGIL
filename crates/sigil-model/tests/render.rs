@@ -285,8 +285,8 @@ fn a_session_with_an_install_shows_its_runtime_artifacts() {
     let row = format!("| {} |", cells.join(" | "));
     assert!(section.contains(&row), "{row}\n{section}");
 
-    // An install root without a comparison says so.
-    let md = render_session(&complete_pass());
+    // An install root without a comparison says so (example 8 has none).
+    let md = render_session(&profile_mismatch());
     assert!(md.contains("not compared with a reference set"), "{md}");
 
     // No install root, no section.

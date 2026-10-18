@@ -238,7 +238,8 @@ pub fn add_profile_knowledge(s: &mut Session) {
     add_knowledge(s, KnowledgeKind::Profile, "ggml.backend-loader", "2", 0xa2);
 }
 
-/// libggml at `lib/ollama/libggml.so.0.13.1`, reference-matched against the official manifest.
+/// libggml at `lib/ollama/libggml.so.0.13.1`, reference-matched against the official manifest:
+/// the claim's `KnownHash` and the row it rests on (PR-4c-1 I1).
 pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
     let g = add_binary(
         s,
@@ -285,6 +286,16 @@ pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
                 instance: g.inst.clone(),
             },
         }],
+    });
+    s.reference_matches.push(ReferenceMatch {
+        reference: id("ollama-official"),
+        release: "v0.30.6".to_string(),
+        member: "lib/ollama/libggml.so.0.13.1".to_string(),
+        instance: Some(g.inst.clone()),
+        result: MemberResult::File {
+            expected: id(sha_hex),
+            observed: id(sha_hex),
+        },
     });
     g
 }
@@ -1260,17 +1271,7 @@ pub fn conflicting_identity() -> Session {
             files: vec![g.inst.clone()],
         },
     });
-    // PR-4a: the per-placement comparison that the claim rests on.
-    s.reference_matches.push(ReferenceMatch {
-        reference: id("ollama-official"),
-        release: "v0.30.6".to_string(),
-        member: "lib/ollama/libggml.so.0.13.1".to_string(),
-        instance: Some(g.inst.clone()),
-        result: MemberResult::File {
-            expected: id(&hex(0x11)),
-            observed: id(&hex(0x11)),
-        },
-    });
+    // The per-placement comparison that the claim and the release rest on is `add_ggml`'s.
     pass_complete(&mut s);
     s
 }

@@ -16,7 +16,8 @@
 //!   `OutOfScope`. A refused connection is evidence for that check only, citing refused probes.
 //! - **Claims do not exceed their evidence.** A condition names the record that decides it and is
 //!   `Met` or `NotMet` only as that record settles (plan §4.4.9, [`Session::settles`]); a finding
-//!   has every condition established; an identity status is not stronger than its assertions;
+//!   has every condition established; an identity status is the one its assertions support, and
+//!   a `KnownHash` is a reference row of the claim's artifact;
 //!   `TargetVerified` and `FeatureMatch` name obligations that passed, with locations;
 //!   `ReferenceVerified` is about the reference artifact itself.
 //! - **Premises are carried** (plan §4.4.7, AC-12). A fact or condition resting on a
@@ -114,11 +115,20 @@ pub enum ValidationError {
     RefusalForAnotherCheck { check: CheckId },
     /// A mapping recorded under a process it does not belong to.
     MappingOfAnotherProcess { pid: u32, at: String },
-    /// An identity status stronger than the assertions support.
+    /// An identity status that its assertions do not support (PR-4c-1 spec §5).
     StatusUnsupported {
         subject: SliceId,
         component: ComponentKey,
         status: IdentityStatus,
+    },
+    /// A `KnownHash` that is not a reference row of a placement of the claim's artifact, or whose
+    /// `matched` is not that row's result (I1; PR-4c-1).
+    KnownHashDisagrees {
+        subject: SliceId,
+        component: ComponentKey,
+        release: String,
+        member: String,
+        why: &'static str,
     },
     /// `TargetVerified` names an obligation that did not pass for that profile and slice.
     ObligationNotPassed {
@@ -281,7 +291,10 @@ impl fmt::Display for ValidationError {
             }
             MappingOfAnotherProcess { pid, at } => write!(f, "{at}: mapping of process {pid} recorded under another process"),
             StatusUnsupported { subject, component, status } => {
-                write!(f, "component {component} of {subject}: status {status:?} is stronger than its assertions")
+                write!(f, "component {component} of {subject}: status {status:?} is not what its assertions support")
+            }
+            KnownHashDisagrees { subject, component, release, member, why } => {
+                write!(f, "component {component} of {subject}: KnownHash {release} {member}: {why}")
             }
             ObligationNotPassed { profile, slice, obligation } => write!(
                 f,
@@ -1246,47 +1259,56 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// The status rule (PR-4c-1 spec §5) and I1. `Signature` is not identity evidence: no rule
+    /// counts it.
     fn components(&mut self) {
         let s = self.s;
         for claim in &s.components {
             let at = format!("components[{} on {}]", claim.component, claim.subject);
             self.slice(&claim.subject, &at);
-            let mut self_named = false;
-            let mut required = false;
+            // A self-name, an embedded value, or a `Required` name.
+            let mut named = false;
             let mut code_match = false;
             let mut hash_match = false;
+            // Identity assertions: every kind but `Signature`.
+            let mut evidence = 0;
             for assertion in &claim.assertions {
                 match assertion {
-                    IdentityAssertion::SelfName { at: e, .. } => {
-                        self_named = true;
+                    IdentityAssertion::SelfName { at: e, .. }
+                    | IdentityAssertion::Embedded { at: e, .. } => {
+                        named = true;
+                        evidence += 1;
                         self.evidence(e, &at);
                     }
                     IdentityAssertion::Required { by, .. } => {
-                        required = true;
+                        named = true;
+                        evidence += 1;
                         self.slice(by, &at);
-                    }
-                    IdentityAssertion::Embedded { at: e, .. } => {
-                        self_named = true;
-                        self.evidence(e, &at);
                     }
                     IdentityAssertion::CodeCheck {
                         profile,
                         check,
                         result,
-                        at: evidence,
+                        at: locations,
                     } => {
+                        evidence += 1;
                         self.profile(profile, &at);
                         self.check_result(&claim.subject, result, &at);
                         self.check_agrees(profile, &claim.subject, check, result, &at);
-                        for e in evidence {
+                        for e in locations {
                             self.evidence(e, &at);
                         }
                         code_match |= matches!(result, CheckResult::Match);
                     }
                     IdentityAssertion::KnownHash {
-                        reference, matched, ..
+                        reference,
+                        release,
+                        member,
+                        matched,
                     } => {
+                        evidence += 1;
                         self.refset(reference.as_str(), &at);
+                        self.known_hash(claim, reference, release, member, *matched);
                         hash_match |= *matched;
                     }
                     IdentityAssertion::Signature { .. } => {}
@@ -1295,12 +1317,14 @@ impl<'a> Validator<'a> {
             for version in &claim.versions {
                 self.evidence(&version.at, &at);
             }
+            // Exactly one of the last four fits any claim; `Conflicting` needs the database, so
+            // the engine decides it, and `validate` only asks for two sources.
             let supported = match claim.status {
-                IdentityStatus::Conflicting => claim.assertions.len() + claim.versions.len() >= 2,
+                IdentityStatus::Conflicting => evidence + claim.versions.len() >= 2,
                 IdentityStatus::ReferenceMatched => hash_match,
-                IdentityStatus::Corroborated => code_match && self_named,
-                IdentityStatus::NameOnly => self_named || required,
-                IdentityStatus::Unidentified => true,
+                IdentityStatus::Corroborated => code_match && !hash_match,
+                IdentityStatus::NameOnly => named && !hash_match && !code_match,
+                IdentityStatus::Unidentified => !named && !hash_match && !code_match,
             };
             if !supported {
                 self.errors.push(ValidationError::StatusUnsupported {
@@ -1309,6 +1333,51 @@ impl<'a> Validator<'a> {
                     status: claim.status,
                 });
             }
+        }
+    }
+
+    /// I1 (PR-4c-1): a `KnownHash` is the reference row, with the same reference, release, and
+    /// member, of a placement of the claim's artifact, and `matched` is that row's result.
+    fn known_hash(
+        &mut self,
+        claim: &crate::identity::ComponentClaim,
+        reference: &crate::id::RefSetId,
+        release: &str,
+        member: &str,
+        matched: bool,
+    ) {
+        let s = self.s;
+        let artifact = claim.subject.artifact();
+        let holds = |id: &InstanceId| {
+            s.instances.iter().any(|i| {
+                i.id == *id
+                    && i.content
+                        == (InstanceContent::Read {
+                            artifact: artifact.clone(),
+                        })
+            })
+        };
+        let row = s.reference_matches.iter().find(|r| {
+            r.reference == *reference
+                && r.release == release
+                && r.member == member
+                && r.instance.as_ref().is_some_and(&holds)
+        });
+        let why = match row {
+            None => Some("no reference row of a placement of the claim's artifact"),
+            Some(r) if r.result.matches() != matched => {
+                Some("matched disagrees with the row's result")
+            }
+            Some(_) => None,
+        };
+        if let Some(why) = why {
+            self.errors.push(ValidationError::KnownHashDisagrees {
+                subject: claim.subject.clone(),
+                component: claim.component.clone(),
+                release: release.to_string(),
+                member: member.to_string(),
+                why,
+            });
         }
     }
 
