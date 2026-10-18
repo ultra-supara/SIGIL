@@ -9,7 +9,8 @@
 //! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
 //! - `rules` lists the detection rules.
 //! - `binary inspect` inspects files directly: each one's digest, format, and container facts, in
-//!   one session (PR-4b-2a).
+//!   one session (PR-4b-2a). With `--code`, it also records the direct call sites of capability
+//!   imports (PR-5a).
 //!
 //! Exit codes: 0 normal, 1 execution error, 2 usage error, 3 `--fail-on` reached by the verdict,
 //! 4 `--fail-on-incomplete` with an incomplete result (when 3 does not apply).
@@ -24,6 +25,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
+use sigil_engine::code::CodeBudgets;
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::named::NamedBudgets;
@@ -46,9 +48,9 @@ use sigil_model::render::{
 };
 use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
-    Completeness, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode, ReleaseBasis,
-    ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict, ARTIFACTS_DISCOVERY,
-    ARTIFACTS_RELEASE, BINARY_BYTES, INSTALL_ROOT,
+    Completeness, Coverage, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode,
+    ReleaseBasis, ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict,
+    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, INSTALL_ROOT,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -71,7 +73,8 @@ enum Command {
         #[command(subcommand)]
         target: InspectTarget,
     },
-    /// Inspect files directly: digest, format, and container facts. Nothing is executed.
+    /// Inspect files directly: digest, format, container facts, and with --code the direct call
+    /// sites of capability imports. Nothing is executed.
     Binary {
         #[command(subcommand)]
         command: BinaryCommand,
@@ -109,11 +112,17 @@ struct BinaryArgs {
     /// error), and is never executed or loaded.
     #[arg(value_name = "PATH", required = true)]
     paths: Vec<PathBuf>,
-    /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies.
+    /// Also analyze code: the direct call sites of capability imports (connect, dlopen, getenv,
+    /// …), with their arguments and functions, and a binary.code check per input. x86-64 ELF
+    /// only; the file is never run or loaded.
+    #[arg(long)]
+    code: bool,
+    /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies, and its
+    /// binary_code_audit with --code.
     #[arg(long, value_name = "FILE")]
     policy: Option<PathBuf>,
-    /// A read budget: binary_bytes, binary_parse_bytes, or binary_imports (e.g.
-    /// binary_bytes=1073741824).
+    /// A read budget: binary_bytes, binary_parse_bytes, binary_imports, or binary_code_bytes,
+    /// which needs --code (e.g. binary_bytes=1073741824).
     #[arg(long = "budget", value_name = "KEY=VALUE")]
     budgets: Vec<String>,
     /// The instant that policy expiry is judged at: now, or RFC 3339 UTC.
@@ -461,7 +470,7 @@ fn conclude(
 fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
     let started_at = now()?;
     let policy_time = policy_time(&args.policy_time, &started_at)?;
-    let budgets = binary_budgets(&args.budgets)?;
+    let budgets = binary_budgets(&args.budgets, args.code)?;
     let target = match &args.out {
         Some(out) => Some(check_binary_out(out, &args.paths)?),
         None => None,
@@ -504,9 +513,12 @@ fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
     )
 }
 
-/// The budgets of `binary inspect`, by the names the session records.
-fn binary_budgets(given: &[String]) -> Result<NamedBudgets, Failure> {
+/// The budgets of `binary inspect`, by the names the session records. With `code` (`--code`),
+/// the code budgets, whose `binary_code_bytes` is the only one `--budget` sets (PR-5a-2 spec
+/// §2): the aggregate limits keep their defaults, which the session does not record.
+fn binary_budgets(given: &[String], code: bool) -> Result<NamedBudgets, Failure> {
     let mut b = NamedBudgets::default();
+    let mut code_budgets = code.then(CodeBudgets::default);
     for entry in given {
         let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
         let Some((key, value)) = entry.split_once('=') else {
@@ -519,14 +531,19 @@ fn binary_budgets(given: &[String]) -> Result<NamedBudgets, Failure> {
             BINARY_BYTES => b.bytes = value,
             "binary_parse_bytes" => b.binary.parse_bytes = value,
             "binary_imports" => b.binary.imports = value,
+            BINARY_CODE_BYTES => match code_budgets.as_mut() {
+                Some(c) => c.bytes = value,
+                None => return Err(usage("needs --code")),
+            },
             _ => {
                 return Err(usage(
                     "unknown budget; known for binary inspect: binary_bytes, \
-                     binary_parse_bytes, binary_imports",
+                     binary_parse_bytes, binary_imports, and with --code binary_code_bytes",
                 ))
             }
         }
     }
+    b.binary.code = code_budgets;
     Ok(b)
 }
 
@@ -974,18 +991,15 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
                 format!("sha256:{}…", &hex[..hex.len().min(12)])
             },
         );
-        let state = match b.coverage.map(|c| &c.state) {
-            Some(CoverageState::Partial { missing }) if missing.len() == 1 => {
-                "partial (1 gap)".to_string()
-            }
-            Some(CoverageState::Partial { missing }) => {
-                format!("partial ({} gaps)", missing.len())
-            }
-            Some(state) => coverage_state(state).terminal(),
-            None => "no coverage entry".to_string(),
+        let state = entry_state(b.coverage);
+        // With code analysis, the input's binary.code state follows (PR-5a-2).
+        let code = if r.code {
+            format!("  code: {}", entry_state(b.code))
+        } else {
+            String::new()
         };
         lines.push(format!(
-            "binary: {}  {}  {sha}  {state}",
+            "binary: {}  {}  {sha}  {state}{code}",
             path.terminal_line(),
             artifact_type(b.artifact)
         ));
@@ -1058,11 +1072,16 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
         ));
     }
     if is_binary_inspection(r) && r.required_checks.is_empty() {
-        lines.push(
-            "note: the policy requires no check of a binary inspection (binary_audit = []): \
+        // What made it empty: binary_audit, and with code analysis binary_code_audit too.
+        let lists = if r.code {
+            "binary_audit = [] and binary_code_audit = []"
+        } else {
+            "binary_audit = []"
+        };
+        lines.push(format!(
+            "note: the policy requires no check of a binary inspection ({lists}): \
              the result is COMPLETE whatever the inputs"
-                .to_string(),
-        );
+        ));
     }
     if r.roots.iter().any(|root| root.id.as_str() == MODELS_ROOT) {
         lines.push(
@@ -1079,6 +1098,22 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
         lines.push(format!("wrote {}", shown_path(out)));
     }
     eprintln!("{}", lines.join("\n"));
+}
+
+/// A binary input's coverage entry on its summary line: `partial (<n> gaps)` for a partial one,
+/// the state otherwise, or `no coverage entry`.
+fn entry_state(c: Option<&Coverage>) -> String {
+    match c.map(|c| &c.state) {
+        // The same count as the Markdown `binary.code` line (`sigil_model::render::code`).
+        Some(CoverageState::Partial { missing }) => {
+            format!(
+                "partial ({})",
+                sigil_model::render::code::partial_gaps(missing.len())
+            )
+        }
+        Some(state) => coverage_state(state).terminal(),
+        None => "no coverage entry".to_string(),
+    }
 }
 
 /// `release: …` for a session with an install root (PR-4a).
