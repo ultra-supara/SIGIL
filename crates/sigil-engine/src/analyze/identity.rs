@@ -123,16 +123,17 @@ fn claim(
         };
         names.push((NameKind::Soname, soname.clone(), at));
     }
-    let component = names
+    // The component each name names, looked up once.
+    let named_as: Vec<Option<&ComponentKey>> = names
         .iter()
-        .find_map(|(_, value, _)| db.component(value.as_bytes()))?
-        .clone();
+        .map(|(_, value, _)| db.component(value.as_bytes()))
+        .collect();
+    let component = named_as.iter().find_map(|key| *key)?.clone();
     let mut assertions = vec![];
     let mut versions = vec![];
-    for (kind, value, at) in names {
+    for ((kind, value, at), key) in names.into_iter().zip(&named_as) {
         // A name's version is the component's only when the name names the component.
-        let version = so_version(value.as_bytes())
-            .filter(|_| db.component(value.as_bytes()) == Some(&component));
+        let version = so_version(value.as_bytes()).filter(|_| *key == Some(&component));
         if let Some(version) = version {
             versions.push(VersionAssertion {
                 value: UntrustedText::from_bytes(version),
@@ -216,7 +217,9 @@ fn claim(
     assertions.push(IdentityAssertion::Signature {
         state: SigState::NotChecked,
     });
-    let status = status(db, &assertions, &versions);
+    // The components the self-names name, from the lookups above.
+    let keys: BTreeSet<&ComponentKey> = named_as.iter().flatten().copied().collect();
+    let status = status(&keys, &assertions, &versions);
     Some(ComponentClaim {
         subject: b.slice.clone(),
         component,
@@ -283,13 +286,14 @@ fn so_version(name: &[u8]) -> Option<&[u8]> {
     is_version(version).then_some(version)
 }
 
-/// The status of a claim, top to bottom (spec §4). `Signature` is not identity evidence.
+/// The status of a claim, top to bottom (spec §4). `keys` are the components that its self-names
+/// name. `Signature` is not identity evidence.
 fn status(
-    db: &ComponentDb,
+    keys: &BTreeSet<&ComponentKey>,
     assertions: &[IdentityAssertion],
     versions: &[VersionAssertion],
 ) -> IdentityStatus {
-    if conflicting(db, assertions, versions) {
+    if conflicting(keys, assertions, versions) {
         return IdentityStatus::Conflicting;
     }
     let hash = assertions
@@ -324,23 +328,16 @@ fn status(
 }
 
 /// Whether two sources disagree on one attribute (spec §4):
-/// - **name:** two self-names that the database maps to different components;
+/// - **name:** two components in `keys`, those that the self-names name;
 /// - **major version:** two versions of one kind whose first numbers differ. The versions of
 ///   self-names (file names, SONAME) are one kind; each embedded field is its own kind, since
 ///   `LLAMA_BUILD_NUMBER` counts builds and is not a library version (plan P-c);
 /// - **commit:** two different values of one commit field.
 fn conflicting(
-    db: &ComponentDb,
+    keys: &BTreeSet<&ComponentKey>,
     assertions: &[IdentityAssertion],
     versions: &[VersionAssertion],
 ) -> bool {
-    let names: BTreeSet<&ComponentKey> = assertions
-        .iter()
-        .filter_map(|a| match a {
-            IdentityAssertion::SelfName { value, .. } => db.component(value.as_bytes()),
-            _ => None,
-        })
-        .collect();
     let mut majors: BTreeMap<Option<&str>, BTreeSet<&[u8]>> = BTreeMap::new();
     for v in versions {
         let kind = match &v.source {
@@ -365,11 +362,11 @@ fn conflicting(
     }
     let major_differs = majors.values().any(|m| m.len() > 1);
     let commit_differs = commits.values().any(|c| c.len() > 1);
-    names.len() > 1 || major_differs || commit_differs
+    keys.len() > 1 || major_differs || commit_differs
 }
 
 /// The first number of a version without its leading zeros: `0` of `0.13.1`, `12` of `012`.
-/// `None` when the version does not start with a digit.
+/// `None` when its first part is empty or not all ASCII digits.
 fn major(version: &[u8]) -> Option<&[u8]> {
     let first = version.split(|b| *b == b'.').next()?;
     if first.is_empty() || !first.iter().all(u8::is_ascii_digit) {
@@ -519,6 +516,21 @@ mod tests {
         components().unwrap()
     }
 
+    /// The status of hand-made evidence, with the components of its self-names looked up.
+    fn status_of(
+        assertions: &[IdentityAssertion],
+        versions: &[VersionAssertion],
+    ) -> IdentityStatus {
+        let keys = assertions
+            .iter()
+            .filter_map(|a| match a {
+                IdentityAssertion::SelfName { value, .. } => db().component(value.as_bytes()),
+                _ => None,
+            })
+            .collect();
+        status(&keys, assertions, versions)
+    }
+
     fn file_result(matches: bool) -> MemberResult {
         let sha = |c: &str| Sha256Hex::new(c.repeat(64)).unwrap();
         MemberResult::File {
@@ -623,6 +635,36 @@ mod tests {
                 sig()
             ]
         );
+    }
+
+    /// At most 40 links (Linux's `MAXSYMLINKS`) lead to the content. In a chain of 41 links to
+    /// the file, the link 40 hops away names the slice and the one 41 hops away does not.
+    #[test]
+    fn a_chain_of_forty_links_names_the_slice_and_one_of_forty_one_does_not() {
+        let mut instances = vec![
+            file(BASE, 'a'),
+            link("lib/ollama/hop1", "libggml-base.so.0.13.1"),
+        ];
+        for n in 2..=41 {
+            instances.push(link(
+                &format!("lib/ollama/hop{n}"),
+                &format!("hop{}", n - 1),
+            ));
+        }
+        let c = only(&instances, elf('a', None, vec![]), &[]);
+        let names: BTreeSet<String> = c
+            .assertions
+            .iter()
+            .filter_map(|a| match a {
+                IdentityAssertion::SelfName { value, .. } => {
+                    Some(value.as_str().unwrap().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        let mut expected: BTreeSet<String> = (1..=40).map(|n| format!("hop{n}")).collect();
+        expected.insert("libggml-base.so.0.13.1".to_string());
+        assert_eq!(names, expected);
     }
 
     /// A renamed file is named by its SONAME; its own name is kept, but its version is not the
@@ -943,15 +985,15 @@ mod tests {
         };
         let one = [mtmd];
         assert_eq!(
-            status(db(), &one, &[v("0", filename()), v("1", build())]),
+            status_of(&one, &[v("0", filename()), v("1", build())]),
             IdentityStatus::NameOnly
         );
         assert_eq!(
-            status(db(), &one, &[v("1", build()), v("2", other)]),
+            status_of(&one, &[v("1", build()), v("2", other)]),
             IdentityStatus::NameOnly
         );
         assert_eq!(
-            status(db(), &one, &[v("1", build()), v("2", build())]),
+            status_of(&one, &[v("1", build()), v("2", build())]),
             IdentityStatus::Conflicting
         );
     }
@@ -970,9 +1012,9 @@ mod tests {
             at_inst("lib/ollama/libmtmd.so.0"),
         );
         let same = [mtmd.clone(), commit("6f3a9f3de"), commit("6f3a9f3de")];
-        assert_eq!(status(db(), &same, &[]), IdentityStatus::NameOnly);
+        assert_eq!(status_of(&same, &[]), IdentityStatus::NameOnly);
         let two = [mtmd, commit("6f3a9f3de"), commit("0000000")];
-        assert_eq!(status(db(), &two, &[]), IdentityStatus::Conflicting);
+        assert_eq!(status_of(&two, &[]), IdentityStatus::Conflicting);
     }
 
     #[test]
@@ -1019,7 +1061,7 @@ mod tests {
             (vec![hash(false), sig()], IdentityStatus::Unidentified),
             (vec![sig()], IdentityStatus::Unidentified),
         ] {
-            assert_eq!(status(db(), &assertions, &[]), expected, "{assertions:?}");
+            assert_eq!(status_of(&assertions, &[]), expected, "{assertions:?}");
         }
     }
 
