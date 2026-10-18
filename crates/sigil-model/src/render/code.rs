@@ -20,19 +20,44 @@ pub const STRING_SHOWN: usize = 64;
 /// A Capabilities cell of an inspection without code analysis.
 pub const NOT_ANALYZED: &str = "not analyzed (use --code)";
 
-/// A Capabilities cell with code analysis and no direct call site of the import.
+/// A Capabilities cell with code analysis, the input's code searched, and no direct call site of
+/// the import.
 pub const NONE_FOUND: &str = "none found (see binary.code)";
+
+/// A Capabilities cell of an inspection with code analysis whose input's code was not searched:
+/// its `binary.code` entry is neither complete nor partial (unsupported, over a budget, …), or
+/// it has none (plan P-p).
+pub const NOT_SEARCHED: &str = "not analyzed (see binary.code)";
 
 /// What an ELF content without a capability import gets instead of its Capabilities table.
 pub const NO_CAPABILITY_IMPORTS: &str = "No capability imports.";
 
-/// A Capabilities cell: [`NOT_ANALYZED`] when the inspection did not analyze code, else
-/// [`call_sites_cell`].
-pub fn capability_cell(analyzed: bool, facts: Option<&CodeFacts>, import: &UntrustedText) -> Shown {
+/// A Capabilities cell: [`NOT_ANALYZED`] when the inspection did not analyze code;
+/// [`NOT_SEARCHED`] when it did, but the input's `binary.code` entry (`code`) does not say its
+/// code was searched; else [`call_sites_cell`].
+pub fn capability_cell(
+    analyzed: bool,
+    code: Option<&Coverage>,
+    facts: Option<&CodeFacts>,
+    import: &UntrustedText,
+) -> Shown {
     if !analyzed {
         return Shown::own(NOT_ANALYZED);
     }
+    if !searched(code) {
+        return Shown::own(NOT_SEARCHED);
+    }
     call_sites_cell(facts, import)
+}
+
+/// Whether an input's `binary.code` entry says its code was searched: complete or partial.
+fn searched(code: Option<&Coverage>) -> bool {
+    code.is_some_and(|c| {
+        matches!(
+            c.state,
+            CoverageState::Complete | CoverageState::Partial { .. }
+        )
+    })
 }
 
 /// The direct call sites of `import` in a slice's `facts`: those whose target is that import, in
@@ -48,7 +73,7 @@ pub fn calls_of<'f>(facts: Option<&'f CodeFacts>, import: &UntrustedText) -> Vec
     calls
 }
 
-/// A Capabilities cell with code analysis: [`NONE_FOUND`], or the number of direct call sites,
+/// A Capabilities cell of searched code: [`NONE_FOUND`], or the number of direct call sites,
 /// then the first [`CALL_SITES_SHOWN`] of them joined by `; `, then how many more the session
 /// JSON holds.
 pub fn call_sites_cell(facts: Option<&CodeFacts>, import: &UntrustedText) -> Shown {
@@ -645,14 +670,73 @@ mod tests {
     #[test]
     fn a_cell_without_code_is_not_analyzed() {
         let f = facts(connects(&[0x20]));
+        let done = entry(CoverageState::Complete, Some((78, 1 << 28)));
         assert_eq!(
-            capability_cell(false, Some(&f), &t("connect")).terminal(),
+            capability_cell(false, Some(&done), Some(&f), &t("connect")).terminal(),
             NOT_ANALYZED
         );
         assert_eq!(
-            capability_cell(true, Some(&f), &t("connect")).terminal(),
+            capability_cell(true, Some(&done), Some(&f), &t("connect")).terminal(),
             "1: kernel @ 0x20: connect(rdi=0)"
         );
+    }
+
+    /// Plan P-p: "none found" only where the input's code was searched (its `binary.code` entry
+    /// is complete or partial); otherwise the cell says the code was not analyzed.
+    #[test]
+    fn a_cell_of_code_not_searched_is_not_analyzed() {
+        let other = facts(vec![call(0x20, import("getenv"), vec![])]);
+        let partial = CoverageState::Partial {
+            missing: vec!["code: a gap".to_string()],
+        };
+        for state in [CoverageState::Complete, partial] {
+            let c = entry(state, Some((78, 1 << 28)));
+            for f in [Some(&other), None] {
+                assert_eq!(
+                    capability_cell(true, Some(&c), f, &t("connect")).terminal(),
+                    NONE_FOUND,
+                    "{c:?}"
+                );
+            }
+        }
+        // Any other state, or no entry: not searched, whatever the facts hold.
+        let f = facts(connects(&[0x20]));
+        let not_searched = [
+            Some(entry(
+                CoverageState::Unsupported {
+                    what: crate::binary_input::CODE_UNSUPPORTED.to_string(),
+                },
+                None,
+            )),
+            Some(entry(
+                CoverageState::BudgetExceeded {
+                    budget: "binary_bytes".to_string(),
+                    used: 2,
+                    limit: 1,
+                },
+                None,
+            )),
+            Some(entry(
+                CoverageState::Error {
+                    message: t("read failed"),
+                },
+                None,
+            )),
+            None,
+        ];
+        for c in &not_searched {
+            assert_eq!(
+                capability_cell(true, c.as_ref(), Some(&f), &t("connect")).terminal(),
+                NOT_SEARCHED,
+                "{c:?}"
+            );
+            assert_eq!(
+                capability_cell(false, c.as_ref(), Some(&f), &t("connect")).terminal(),
+                NOT_ANALYZED,
+                "{c:?}"
+            );
+        }
+        assert_eq!(NOT_SEARCHED, "not analyzed (see binary.code)");
     }
 
     fn entry(state: CoverageState, budget: Option<(u64, u64)>) -> Coverage {

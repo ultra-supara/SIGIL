@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sigil_model::render::code::{NONE_FOUND, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
+use sigil_model::render::code::{NONE_FOUND, NOT_ANALYZED, NOT_SEARCHED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{
     render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT,
 };
@@ -677,14 +677,75 @@ fn no_direct_call_site_is_none_found() {
     let mut s = binary_code();
     s.code.clear();
     let md = render_session(&s);
+    let row = format!(
+        "| {} | {} | {} |",
+        md_esc("posix.network"),
+        md_esc("connect"),
+        md_esc(NONE_FOUND)
+    );
+    assert_eq!(row_of(binaries_section(&md), "posix.network"), row);
+    // A partial search is a search too (plan P-p).
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap()
+        .state = CoverageState::Partial {
+        missing: vec!["code: a gap".to_string()],
+    };
+    let md = render_session(&s);
+    assert_eq!(row_of(binaries_section(&md), "posix.network"), row);
+}
+
+/// Plan P-p: an input whose code was not searched (an aarch64 object: `Unsupported`) gets
+/// "not analyzed (see binary.code)", not "none found".
+#[test]
+fn an_input_whose_code_was_not_searched_is_not_analyzed() {
+    let mut s = binary_code();
+    let slice = SliceId::from_parts(&s.artifacts[0].id, Arch::Aarch64, 0);
+    s.artifacts[0].slices[0].id = slice.clone();
+    s.artifacts[0].slices[0].arch = Arch::Aarch64;
+    s.binaries[0].slice = slice.clone();
+    s.hints[0].subject = slice;
+    s.code.clear();
+    let entry = s
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap();
+    entry.state = CoverageState::Unsupported {
+        what: CODE_UNSUPPORTED.to_string(),
+    };
+    entry.budget = None;
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: ids(&[BINARY_CODE]),
+        gaps: vec![],
+    };
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
     assert_eq!(
-        row_of(binaries_section(&md), "posix.network"),
+        row_of(section, "posix.network"),
         format!(
             "| {} | {} | {} |",
             md_esc("posix.network"),
             md_esc("connect"),
-            md_esc(NONE_FOUND)
+            md_esc(NOT_SEARCHED)
         )
+    );
+    assert!(
+        section.contains(&md_esc(&format!(
+            "binary.code: unsupported ({CODE_UNSUPPORTED})."
+        ))),
+        "{section}"
+    );
+    // No binary.code entry: not searched either.
+    s.coverage.retain(|c| c.check.as_str() != BINARY_CODE);
+    let md = render_session(&s);
+    assert!(
+        row_of(binaries_section(&md), "posix.network")
+            .ends_with(&format!("| {} |", md_esc(NOT_SEARCHED))),
+        "{md}"
     );
 }
 

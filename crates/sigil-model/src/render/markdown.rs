@@ -506,7 +506,7 @@ fn capabilities(
                 vec![
                     esc(h.feature.as_str()),
                     h.value.markdown_inline(),
-                    capability_cell(s.request.code, facts, &h.value).markdown(),
+                    capability_cell(s.request.code, code, facts, &h.value).markdown(),
                 ]
             })
             .collect();
