@@ -121,7 +121,7 @@ pub fn components() -> Result<&'static ComponentDb, String> {
 
 /// Parses a database: each key a valid component key, listed once, with at least one name; each
 /// name one of the three forms, with literals that are not empty.
-pub fn parse(text: &str) -> Result<ComponentDb, String> {
+fn parse(text: &str) -> Result<ComponentDb, String> {
     let raw: RawDb = toml::from_str(text).map_err(|e| format!("components.toml: {e}"))?;
     let mut entries: Vec<(ComponentKey, Vec<NamePattern>)> = vec![];
     for c in raw.component {
@@ -258,6 +258,32 @@ mod tests {
         }
     }
 
+    /// A sample name of each pattern of the embedded database names that entry's own key, so an
+    /// entry added later that overlaps one already there fails here.
+    #[test]
+    fn each_embedded_pattern_names_its_own_entry() {
+        let db = components().unwrap();
+        let mut checked = 0;
+        for (key, patterns) in &db.entries {
+            for pattern in patterns {
+                let samples: Vec<Vec<u8>> = match pattern {
+                    NamePattern::Exact(name) => vec![name.clone()],
+                    NamePattern::Library(base) => {
+                        vec![base.clone(), [base.as_slice(), b".0"].concat()]
+                    }
+                    NamePattern::Affix { prefix, suffix } => {
+                        vec![[prefix.as_slice(), b"x", suffix.as_slice()].concat()]
+                    }
+                };
+                for name in samples {
+                    assert_eq!(db.component(&name), Some(key), "{key}: {}", shown(&name));
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 26);
+    }
+
     #[test]
     fn a_name_two_entries_match_names_no_component() {
         let db = parse(
@@ -293,6 +319,7 @@ mod tests {
             "{ library = \"\" }",
             "{ prefix = \"p\" }",
             "{ prefix = \"p\", suffix = \"\" }",
+            "{ prefix = \"\", suffix = \"s\" }",
             "{ exact = \"x\", library = \"y\" }",
             "{}",
         ] {
