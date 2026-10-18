@@ -753,6 +753,8 @@ fn c3_an_input_over_binary_bytes_has_the_container_state() {
         s.artifacts.clear();
         s.binaries.clear();
         s.relations.clear();
+        // The claim on the slice goes with it (PR-4c-1).
+        s.components.clear();
         s.instances[0].content = InstanceContent::NotRead {
             why: NotReadReason::BudgetExceeded,
         };
@@ -823,6 +825,8 @@ fn c3_an_elf_without_slices_is_partial_at_best() {
         s.artifacts[0].slices.clear();
         s.binaries.clear();
         s.relations.clear();
+        // The claim on the slice goes with it (PR-4c-1).
+        s.components.clear();
         with_code(with_container(s, not_parsed()), state, budget)
     };
     for (state, budget) in [

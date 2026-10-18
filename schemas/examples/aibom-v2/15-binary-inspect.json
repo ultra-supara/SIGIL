@@ -7,7 +7,7 @@
   },
   "session": {
     "schema": "sigil-session/1",
-    "sha256": "e43e4881b7d6a2928b51dfee865dd8c0d92ce9f9d301a313049b6074dc0237a9",
+    "sha256": "a8240b750446a58b6d8ded947e05dcfed44e9badb8565edc4589f36a181cd243",
     "mode": "Static",
     "started_at": "2026-10-07T07:00:00Z",
     "policy": {
@@ -55,7 +55,15 @@
           "id": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
           "arch": "x86_64",
           "sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
-          "components": []
+          "components": [
+            {
+              "component": "ggml-base",
+              "status": "NameOnly",
+              "versions": [
+                "0"
+              ]
+            }
+          ]
         }
       ]
     },

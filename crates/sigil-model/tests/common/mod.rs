@@ -1501,8 +1501,9 @@ pub const ELF_INPUT: &str = "inst:binary-1/libggml-base.so";
 pub const TEXT_INPUT: &str = "inst:binary-2/NOTES.txt";
 
 /// Example 15: `sigil binary inspect` of two files (PR-4b-2a). The first is a shared object with
-/// complete container facts and the hints of its capability imports (`dlopen`, `getenv`); the
-/// second is a text file SIGIL does not parse. PASS + INCOMPLETE.
+/// complete container facts, the hints of its capability imports (`dlopen`, `getenv`), and the
+/// claim its file name and SONAME give (`ggml-base`, `NameOnly`; PR-4c-1); the second is a text
+/// file SIGIL does not parse. PASS + INCOMPLETE.
 pub fn binary_inspect() -> Session {
     let mut s = base(&[BINARY_CONTAINER]);
     s.request.audit = ids(&["binary"]);
@@ -1543,6 +1544,39 @@ pub fn binary_inspect() -> Session {
     let mut input = instance(&id(ELF_INPUT), "binary-1", paths[0], &elf, 11);
     input.discovered_by = vec![DiscoverySource::Argument];
     s.instances.push(input);
+    // What the engine derives (PR-4c-1): both names are ggml-base's; the SONAME has a version.
+    let content = EvidenceRef::Artifact {
+        artifact: elf.clone(),
+    };
+    s.components.push(ComponentClaim {
+        subject: slice.clone(),
+        component: id("ggml-base"),
+        assertions: vec![
+            IdentityAssertion::SelfName {
+                kind: NameKind::Filename,
+                value: t("libggml-base.so"),
+                at: EvidenceRef::Instance {
+                    instance: id(ELF_INPUT),
+                },
+            },
+            IdentityAssertion::SelfName {
+                kind: NameKind::Soname,
+                value: t("libggml-base.so.0"),
+                at: content.clone(),
+            },
+            IdentityAssertion::Signature {
+                state: SigState::NotChecked,
+            },
+        ],
+        status: IdentityStatus::NameOnly,
+        versions: vec![VersionAssertion {
+            value: t("0"),
+            source: VersionSource::SelfName {
+                kind: NameKind::Soname,
+            },
+            at: content,
+        }],
+    });
     let facts = ElfFacts {
         interp: None,
         soname: Some(t("libggml-base.so.0")),
@@ -1647,6 +1681,7 @@ fn binary_inspect_only(root: &str) -> Session {
         .flat_map(|a| a.slices.iter().map(|x| x.id.clone()))
         .collect();
     s.binaries.retain(|b| slices.contains(&b.slice));
+    s.components.retain(|c| slices.contains(&c.subject));
     s.hints.clear();
     s.relations
         .retain(|r| !matches!(r, Relation::Declares { from, .. } if !slices.contains(from)));
