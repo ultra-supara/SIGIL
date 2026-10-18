@@ -579,13 +579,18 @@ fn a_code_inspection_shows_its_code_column_and_call_site() {
         )),
         "{section}"
     );
-    // After the content's imports, before the caveats.
+    // After the content's imports, before the caveats; the binary.code line under the table.
     let imports = section
         .find(&md_esc("Undefined symbols (link time) of"))
         .unwrap();
     let capabilities = section.find(&heading).unwrap();
+    let row = section.find(row_of(section, "posix.network")).unwrap();
+    let line = section.find(&md_esc("binary.code: complete;")).unwrap();
     let caveat = section.find(&md_esc(BINARY_CAVEAT_CODE)).unwrap();
-    assert!(imports < capabilities && capabilities < caveat, "{section}");
+    assert!(
+        imports < capabilities && capabilities < row && row < line && line < caveat,
+        "{section}"
+    );
 }
 
 #[test]
@@ -694,9 +699,11 @@ fn a_content_without_capability_imports_says_so() {
         "{section}"
     );
     assert!(!section.contains(&md_esc("Capabilities of")), "{section}");
-    // The binary.code line still gives the scope.
+    // The binary.code line still gives the scope, under the line.
+    let none = section.find(&md_esc(NO_CAPABILITY_IMPORTS));
+    let line = section.find(&md_esc("binary.code: complete; "));
     assert!(
-        section.contains(&md_esc("binary.code: complete; ")),
+        matches!((none, line), (Some(a), Some(b)) if a < b),
         "{section}"
     );
     let mut s = binary_no_code();
@@ -746,10 +753,17 @@ fn capability_rows_are_import_hints_in_feature_and_import_order() {
         value: t(value),
         at: Loc::Symbol(t(value)),
     };
+    // An import hint of another slice is not this content's.
+    let other = SliceId::from_parts(&id(&format!("sha256:{}", "cc".repeat(32))), Arch::X86_64, 0);
+    let elsewhere = FeatureHint {
+        subject: other,
+        ..hint("posix.network", Signal::Import, "other_slice_import")
+    };
     s.hints = vec![
         hint("posix.network", Signal::Import, "socket"),
         hint("posix.dynamic_loading", Signal::Import, "dlsym"),
         hint("posix.process_spawn", Signal::Export, "exported_fn"),
+        elsewhere,
         hint("posix.network", Signal::Import, "connect"),
     ];
     let md = render_session(&s);
@@ -763,6 +777,60 @@ fn capability_rows_are_import_hints_in_feature_and_import_order() {
         .collect();
     assert_eq!(imports, ["dlsym", "connect", "socket"], "{section}");
     assert!(!section.contains(&md_esc("exported_fn")), "{section}");
+    assert!(!md.contains(&md_esc("other_slice_import")), "{md}");
+}
+
+#[test]
+fn a_content_under_two_inputs_has_its_capabilities_once() {
+    let mut s = binary_code();
+    let copy: InstanceId = id("inst:binary-2/copy.o");
+    let path = "/home/user/src/copy.o";
+    let mut i = instance(&copy, "binary-2", path, &s.artifacts[0].id, 22);
+    i.stat.size = 1248;
+    i.discovered_by = vec![DiscoverySource::Argument];
+    s.instances.push(i);
+    s.request.roots.push(ScanRoot {
+        id: binary_root(2).unwrap(),
+        path: t(path),
+    });
+    let mut code = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap()
+        .clone();
+    code.scope = Ref::Instance(copy.clone());
+    s.coverage.push(code);
+    s.coverage.push(coverage(
+        BINARY_CONTAINER,
+        Ref::Instance(copy),
+        CoverageState::Complete,
+    ));
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    // Two inputs in the overview, one content after it.
+    assert!(row_of(section, path).ends_with(&format!(
+        "| {} | {} |",
+        md_esc("complete"),
+        md_esc("complete")
+    )));
+    assert_eq!(
+        section.matches(&md_esc("Capabilities of")).count(),
+        1,
+        "{section}"
+    );
+    assert_eq!(
+        section.matches(&md_esc("binary.code:")).count(),
+        1,
+        "{section}"
+    );
+    assert_eq!(
+        section.matches(&md_esc("1: kernel @ 0x4d")).count(),
+        1,
+        "{section}"
+    );
 }
 
 #[test]

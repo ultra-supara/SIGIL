@@ -245,10 +245,11 @@ fn binary_inspection(out: &mut String, s: &Session) {
             continue;
         }
         shown.push(&a.id);
+        let path = path_of(b);
         for slice in &a.slices {
             if let Some(facts) = s.binaries.iter().find(|f| f.slice == slice.id) {
-                binary_facts(out, &path_of(b), a, facts);
-                capabilities(out, s, &path_of(b), facts, b.code);
+                binary_facts(out, &path, a, facts);
+                capabilities(out, s, &path, facts, b.code);
             }
         }
     }
