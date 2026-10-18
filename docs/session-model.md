@@ -186,7 +186,13 @@ The rule then yields an open question at most.
   - every condition is decided as its record settles (the table above);
   - a finding has every condition `Met` and evidence;
   - an open question has something open and nothing refuted;
-  - an identity status is not stronger than its assertions;
+  - an identity status is the one its assertions support (PR-4c-1): `ReferenceMatched` needs a
+    matched `KnownHash`; `Corroborated` a `CodeCheck` whose result is `Match`, and no matched
+    `KnownHash`; `NameOnly` a `SelfName`, an `Embedded` value, or a `Required` assertion, and
+    neither of those; `Unidentified` none of these; `Conflicting` two identity assertions or
+    versions at least. `Signature` counts for none;
+  - I1: every `KnownHash` is the reference row, with its reference, release, and member, of a
+    placement of the claim's artifact, and `matched` is that row's result;
   - `TargetVerified`, and the `matched` obligations of a `FeatureMatch`, name obligations that
     passed in a `ProfileMatch` for that profile and slice, with locations;
   - `ReferenceVerified` is about the reference artifact itself.
@@ -714,6 +720,22 @@ synthetic. It shows:
   ]
 }
 ```
+
+## Identification (PR-4c-1)
+
+The engine fills `components` for each ELF slice of an installation or a binary inspection one of
+whose names its database knows ([runtime artifacts](runtime-artifacts.md#components)). It reads
+nothing for it: the claims come from the instances, the binary facts, and the reference rows. A
+claim keeps every source as its own assertion: a `SelfName` per name (`Filename` for each
+placement that holds the content and each link that leads to one, `Soname`), an `Embedded` value
+per known `LLAMA_*` value and Go build info field (`go.version`, and `go.path` or `go.main`), a
+`KnownHash` per reference row of a placement that holds the content, and
+`Signature { NotChecked }`. Its versions are the dotted numbers after `.so.` of the names that
+name its component, and `LLAMA_BUILD_NUMBER`. `Conflicting` (two names of different components,
+two first numbers of one kind of version, or two commits) needs the database, so the engine
+decides it; `validate` checks the other four statuses, that a `Conflicting` claim has two
+identity assertions or versions at least, and I1. `Required` assertions come with PR-4d, and
+code checks with M1 profiles.
 
 ## Fields added to `sigil-session/1`
 

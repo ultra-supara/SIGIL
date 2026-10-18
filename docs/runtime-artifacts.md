@@ -9,7 +9,7 @@ separate questions:
 - **Completeness:** whether the installation holds every member of that release.
 
 - **Status:** `sigil inspect ollama --install-dir PREFIX`, in any mode and with any format.
-- **Source:** plan §4.4.2 and §4.6.2. The session types are described in
+- **Source:** plan §4.4.2, §4.4.3 (components), and §4.6.2. The session types are described in
   [`docs/session-model.md`](session-model.md), and the scope rule in [`docs/policy.md`](policy.md).
 
 ## What is read
@@ -266,10 +266,63 @@ slice in the session, read from the file's own bytes. They are observations, not
   are not known, and the cell says so: `- (imports cut short)`, or the keys followed by
   ` (imports cut short)`.
 
+## Components
+
+An ELF slice of the installation gets a component claim from the facts above when the component
+database knows one of its names (PR-4c-1). Nothing more is read.
+
+- **The database** (`crates/sigil-engine/signatures/components.toml`) has one entry per
+  component, keyed as the upstream library: `ollama`, `ggml`, `ggml-base`, `ggml-backend/cpu`,
+  `ggml-backend/cuda`, `ggml-backend/vulkan`, `llama.cpp`, `llama.cpp/common`, `llama.cpp/mtmd`,
+  `llama.cpp/server`, `llama.cpp/quantize`, `gcc/libgomp`, `cuda-runtime`, `cuda/cublas`, and
+  `cuda/cublasLt`. Each lists the names that name it: an exact name (`ollama`), a library with an
+  optional version (`libggml.so`, `libggml.so.0`, `libggml.so.0.13.1`), or a prefix and a suffix
+  around one variant of ASCII letters, digits, and `_` (`libggml-cpu-<variant>.so`). There are no
+  regular expressions. A name that two entries match names no component. Every regular file of
+  the embedded releases is named by exactly one entry. NVIDIA libraries are identified by name
+  and hash only (plan ADR-010).
+- **Names.** A slice is named by the file name of each stable placement of its content, by each
+  stable symlink placement whose targets lead there one bare file name at a time, in the link's
+  own directory (`libggml-base.so` → `libggml-base.so.0` → `libggml-base.so.0.13.1`; at most 40
+  links, each read as recorded, never followed), and by its SONAME. The claim's component is the
+  first name the database knows: file names in path order, then the SONAME. A slice whose names
+  the database does not know gets no claim, and reports show `-` for it. A Mach-O slice gets
+  none yet.
+- **What a claim holds,** every source kept:
+  - a `SelfName` per name, `Filename` or `Soname`, known to the database or not;
+  - an `Embedded` value per `LLAMA_*` data symbol whose value is known, and the Go build info's
+    `go.version` and `go.path` (`go.main`, the main module's path, when there is no path). They
+    are attributed to the component the names give, and never name one on their own;
+  - a `KnownHash` per reference row of a placement that holds the content (a link's own rows are
+    not counted): its reference, release, and member, and whether it matched;
+  - `Signature { NotChecked }`: no signature is checked, and it is not identity evidence;
+  - versions: the dotted number after `.so.` of each name that names the component (`0.13.1`,
+    `0`), and `LLAMA_BUILD_NUMBER`, each with its source.
+- **Status**, the first that applies:
+
+  | Status | When |
+  |---|---|
+  | `Conflicting` | Two names that the database gives different components; two versions of one kind whose first numbers differ (the names' versions are one kind, and each embedded field is its own: `LLAMA_BUILD_NUMBER` counts builds); or two different `LLAMA_COMMIT` values |
+  | `ReferenceMatched` | A `KnownHash` matched |
+  | `Corroborated` | A code check matched (none yet: code checks come with profiles) |
+  | `NameOnly` | A name or an embedded value |
+
+  `Unidentified` is never given: a claim exists only when the database knows a name. On the
+  official v0.30.6 bundle, each of the 34 files is `ReferenceMatched`, with a matched `KnownHash`
+  for v0.30.6. A mixed installation still gets no release claim (`mixed install: …`, as above):
+  each file's known hashes say which release it matches.
+- **The report.** The **Binaries** table has a **Component** column after **Type**:
+  `<component> (<status>)`, the status in words (for example `ggml-base (reference matched)`),
+  or `-`.
+- **Policy.** A `[[components.deny]]` entry applies to these claims, `NameOnly` ones included
+  ([policy](policy.md)).
+
 ## Not yet
 
-- Component identity (ggml, llama.cpp) from these facts, and the backends a library holds (PR-4c).
-- Resolving NEEDED, RPATH, and RUNPATH to files (PR-4d).
+- Identity from read-only strings, export names, and Go functions, and the open release set of a
+  self-reported commit (PR-4c-2).
+- Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
+  it (PR-4d).
 - Releases outside the embedded set, and releases built from a source commit.
 - Optional members: an installation without a GPU backend's directory is INCOMPLETE against a
   release that ships it.

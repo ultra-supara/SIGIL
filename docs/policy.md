@@ -172,7 +172,10 @@ Evaluation changes only what the policy owns.
   `policy:open_questions.default`.
 - **Denied components:**
   - Every component claim for a denied component becomes a `PolicyViolation`. This includes
-    name-only claims and excludes `Unidentified` ones.
+    name-only claims and excludes `Unidentified` ones. Claims come from identification
+    ([runtime artifacts](runtime-artifacts.md#components)). A deny entry's component is not
+    checked against the component database: a key it does not list (the example's
+    `ggml-backend/rpc` among them) loads, and matches no claim.
   - The violation's evidence is the claim's artifact.
   - Policy violations are separate from technical findings.
 

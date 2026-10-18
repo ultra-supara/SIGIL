@@ -133,6 +133,7 @@ The milestones are in the [Roadmap](docs/sigil-overview.md#roadmap).
 
 - Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, license layers with SPDX detection.
 - The installation's release by reference (`--install-dir`): every file of `bin/ollama` and `lib/ollama` compared with the official release manifests embedded in SIGIL (not a signature check), with attribution and completeness reported separately.
+- Component identification (`--install-dir`, `binary inspect`): each ELF whose file name or SONAME the component database knows gets a component claim from its names, embedded build values, and reference matches, with every source kept. Each of the 34 files of the official v0.30.6 bundle is reference-matched.
 - Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
 - Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
 - The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
