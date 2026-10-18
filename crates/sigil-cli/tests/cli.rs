@@ -9,10 +9,11 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
+use sigil_model::render::code::{NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT};
 use sigil_model::{
-    Completeness, CoverageState, Mode, ProbeResult, Session, UntrustedText, Verdict,
-    BINARY_UNSUPPORTED,
+    Completeness, ContainerFacts, CoverageState, Mode, ProbeResult, Session, UntrustedText,
+    Verdict, BINARY_UNSUPPORTED,
 };
 use tempfile::TempDir;
 
@@ -2205,4 +2206,159 @@ fn binary_code_summary_lines_show_the_code_state() {
     // Without --code, no code state.
     let r = binary(&[&kernel]);
     assert!(!r.stderr.contains("code: "), "{}", r.stderr);
+}
+
+// --- capability hints without --code (#47) ------------------------------------------------------
+
+/// The session's hints as (feature, value).
+fn hint_pairs(s: &Session) -> Vec<(String, String)> {
+    s.hints
+        .iter()
+        .map(|h| (h.feature.to_string(), h.value.as_str().unwrap().to_string()))
+        .collect()
+}
+
+/// A row of a Capabilities table, as the Markdown shows it.
+fn capability_row(feature: &str, import: &str, cell: &str) -> String {
+    format!(
+        "| {} | {} | {} |",
+        esc_md(feature),
+        esc_md(import),
+        esc_md(cell)
+    )
+}
+
+/// Whether the one input's ELF facts say it is stripped.
+fn stripped(s: &Session) -> Option<bool> {
+    match &s.binaries[0].container {
+        ContainerFacts::Elf(e) => e.stripped,
+        ContainerFacts::MachO(_) => None,
+    }
+}
+
+/// #47: a stripped copy of a linked file that imports `connect`. `strip` (binutils) makes the
+/// copy; the test fails, rather than skips, without it.
+#[test]
+fn capability_hints_survive_stripping() {
+    let d = TempDir::new().unwrap();
+    let original = code_fixture("net-plt-gcc.so");
+    let copy = d.path().join("net-stripped.so");
+    let status = std::process::Command::new("strip")
+        .arg("--strip-all")
+        .arg("-o")
+        .arg(&copy)
+        .arg(&original)
+        .status()
+        .unwrap_or_else(|e| panic!("strip (binutils) is required by this test: {e}"));
+    assert!(status.success(), "strip failed");
+    // The copy is stripped, and the original is not: the test is not vacuous.
+    assert_eq!(stripped(&session_of(&binary(&[&original]))), Some(false));
+    let r = binary(&[&copy]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(stripped(&s), Some(true));
+    assert_eq!(
+        hint_pairs(&s),
+        [("posix.network".to_string(), "connect".to_string())]
+    );
+    let r = binary(&[&copy, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&capability_row("posix.network", "connect", NOT_ANALYZED)),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn capability_hints_of_dynamic_loading() {
+    // dl.so imports dlsym (not dlopen: plan P-h).
+    let dl = code_fixture("dl.so");
+    let s = session_of(&binary(&[&dl]));
+    assert_eq!(
+        hint_pairs(&s),
+        [("posix.dynamic_loading".to_string(), "dlsym".to_string())]
+    );
+    let r = binary(&[&dl, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains(&capability_row(
+            "posix.dynamic_loading",
+            "dlsym",
+            NOT_ANALYZED
+        )),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn capability_hints_none_is_an_empty_non_failing_report() {
+    // No undefined symbol at all.
+    let clean = code_fixture("clean_kernel-gcc-O2.o");
+    let r = binary(&[&clean]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.hints.is_empty(), "{:?}", s.hints);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    let r = binary(&[&clean, &"--format", &"md", &"--fail-on-incomplete"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(&format!("\n{}\n", esc_md(NO_CAPABILITY_IMPORTS))),
+        "{}",
+        r.stdout
+    );
+    // With --code too: no call site, and binary.code is complete.
+    let r = binary(&[
+        &"--code",
+        &clean,
+        &"--format",
+        &"md",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains(&esc_md(NO_CAPABILITY_IMPORTS)),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(&esc_md("binary.code: complete; ")),
+        "{}",
+        r.stdout
+    );
+}
+
+/// PR-5a-2 spec §5 Install: an installation whose binary imports `connect` shows the column.
+#[test]
+fn capability_hints_in_an_install_report() {
+    let models = store(true);
+    let tree = TempDir::new().unwrap();
+    fs::create_dir_all(tree.path().join("bin")).unwrap();
+    fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
+    fs::copy(elf_fixture("libdata.so"), tree.path().join("bin/ollama")).unwrap();
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &tree.path(), &"--format", &"md"],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let at = r
+        .stdout
+        .find(&esc_md("Binaries:"))
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    let binaries = &r.stdout[at..];
+    assert!(
+        binaries.contains(&format!("| {} |", esc_md("Capabilities (imports)"))),
+        "{binaries}"
+    );
+    let row = binaries
+        .lines()
+        .find(|l| l.starts_with(&format!("| {} |", esc_md("bin/ollama"))))
+        .unwrap_or_else(|| panic!("{binaries}"));
+    assert!(
+        row.contains(&format!("| {} |", esc_md("posix.network"))),
+        "{row}"
+    );
 }
