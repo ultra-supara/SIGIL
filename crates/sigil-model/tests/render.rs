@@ -544,7 +544,9 @@ fn a_code_inspection_shows_its_code_column_and_call_site() {
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(
-        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Identity | Code |"),
+        section.contains(
+            r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan | Code |"
+        ),
         "{section}"
     );
     let input = row_of(section, KERNEL_PATH);
@@ -661,7 +663,7 @@ fn without_code_a_capability_is_not_analyzed() {
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(
-        section.contains("| Path | SHA\\-256 | Size | Type | Container facts | Identity |\n"),
+        section.contains("| Path | SHA\\-256 | Size | Type | Container facts | Signature scan |\n"),
         "{section}"
     );
     assert_eq!(
@@ -1469,14 +1471,19 @@ fn install_binaries_show_their_signature_keys() {
             build_id: None,
             comment: vec![],
             stripped: Some(true),
-            exports: 1,
-            imports: vec![],
+            exports: 2,
+            imports: vec![ElfImport {
+                name: t("connect"),
+                version: None,
+                weak: false,
+            }],
             data: vec![],
         }),
         go: None,
         gaps: vec![],
     });
     let cell = |s: &Session| -> String {
+        assert_eq!(s.validate(), Ok(()));
         let md = render_session(s);
         let row = md
             .lines()
@@ -1494,18 +1501,37 @@ fn install_binaries_show_their_signature_keys() {
             .to_string()
     };
     assert_eq!(cell(&s), md_esc("-"));
-    for (feature, signal, value) in [
-        ("rpc.code_present", Signal::Export, "ggml_backend_rpc_init"),
-        ("rpc.code_present", Signal::Export, "ggml_backend_rpc_start"),
-        ("a.string", Signal::String, "text"),
-        ("posix.network", Signal::Import, "connect"),
+    let rodata = Loc::Section {
+        name: t(".rodata"),
+        offset: 0x10,
+    };
+    for (feature, signal, value, at) in [
+        (
+            "rpc.code_present",
+            Signal::Export,
+            "ggml_backend_rpc_init",
+            Loc::Symbol(t("ggml_backend_rpc_init")),
+        ),
+        (
+            "rpc.code_present",
+            Signal::Export,
+            "ggml_backend_rpc_start",
+            Loc::Symbol(t("ggml_backend_rpc_start")),
+        ),
+        ("a.string", Signal::String, "text", rodata),
+        (
+            "posix.network",
+            Signal::Import,
+            "connect",
+            Loc::Symbol(t("connect")),
+        ),
     ] {
         s.hints.push(FeatureHint {
             subject: slice.clone(),
             feature: id(feature),
             signal,
             value: t(value),
-            at: Loc::Symbol(t(value)),
+            at,
         });
     }
     assert_eq!(cell(&s), md_esc("a.string, rpc.code_present"));
@@ -1514,10 +1540,11 @@ fn install_binaries_show_their_signature_keys() {
 #[test]
 fn an_elf_content_lists_its_signatures_or_says_none_was_found() {
     let mut s = binary_inspect();
+    assert_eq!(s.validate(), Ok(()));
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(
-        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Identity |"),
+        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan |"),
         "{section}"
     );
     assert!(
@@ -1550,6 +1577,7 @@ fn an_elf_content_lists_its_signatures_or_says_none_was_found() {
         .state = CoverageState::Partial {
         missing: vec![scan_over_gap(64 << 20)],
     };
+    assert_eq!(partial.validate(), Ok(()));
     let md = render_session(&partial);
     let row = row_of(
         binaries_section(&md),
@@ -1564,6 +1592,15 @@ fn an_elf_content_lists_its_signatures_or_says_none_was_found() {
         )),
         "{row}"
     );
+    // A Go function hint needs Go build info in its slice (S3).
+    s.binaries[0].go = Some(GoBuildInfo {
+        version: t("go1.24.1"),
+        path: None,
+        main: None,
+        deps: vec![],
+        settings: vec![],
+        at: Loc::VAddr(0x4000),
+    });
     let slice = s.binaries[0].slice.clone();
     for (feature, signal, value, at) in [
         (
@@ -1599,6 +1636,7 @@ fn an_elf_content_lists_its_signatures_or_says_none_was_found() {
             at,
         });
     }
+    assert_eq!(s.validate(), Ok(()));
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
@@ -1646,4 +1684,34 @@ fn an_elf_content_lists_its_signatures_or_says_none_was_found() {
     );
     // The capabilities table keeps the import hints alone.
     assert!(section.contains(&md_esc("Capabilities of")), "{section}");
+}
+
+/// A binary inspection written before PR-4c-2a has no `binary.identity` entry: its Signature
+/// scan column says so, and the report still renders every input.
+#[test]
+fn a_session_before_signature_scans_has_no_coverage_entry_in_its_column() {
+    let s = without_identity(binary_inspect());
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan |"),
+        "{section}"
+    );
+    assert!(
+        row_of(section, "/home/user/Downloads/libggml-base.so").ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc("no coverage entry")
+        )),
+        "{section}"
+    );
+    let unsupported = md_esc(&format!("unsupported: {BINARY_UNSUPPORTED}"));
+    assert!(
+        row_of(section, "/home/user/Downloads/NOTES.txt").ends_with(&format!(
+            "| {unsupported} | {} |",
+            md_esc("no coverage entry")
+        )),
+        "{section}"
+    );
 }

@@ -997,8 +997,8 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             },
         );
         let state = entry_state(b.coverage);
-        // The input's binary.identity state (PR-4c-2a).
-        let identity = format!("  identity: {}", entry_state(b.identity));
+        // The input's binary.identity state: whether its signature scan was done (PR-4c-2a).
+        let identity = format!("  signature scan: {}", entry_state(b.identity));
         // With code analysis, the input's binary.code state follows (PR-5a-2).
         let code = if r.code {
             format!("  code: {}", entry_state(b.code))

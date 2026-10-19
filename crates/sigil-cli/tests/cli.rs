@@ -2199,7 +2199,7 @@ fn binary_code_summary_lines_show_the_code_state() {
     };
     assert!(
         line("suspicious_kernel-gcc-O2.o")
-            .ends_with("  complete  identity: complete  code: complete"),
+            .ends_with("  complete  signature scan: complete  code: complete"),
         "{}",
         r.stderr
     );
@@ -2450,7 +2450,9 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
     assert!(
-        line.ends_with("  complete  identity: complete  component: llama.cpp/common (name only)"),
+        line.ends_with(
+            "  complete  signature scan: complete  component: llama.cpp/common (name only)"
+        ),
         "{line}"
     );
     let r = binary(&[&path, &"--format", &"md"]);
@@ -2487,7 +2489,10 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .lines()
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
-    assert!(line.ends_with("  complete  identity: complete"), "{line}");
+    assert!(
+        line.ends_with("  complete  signature scan: complete"),
+        "{line}"
+    );
 }
 
 #[test]
@@ -2519,8 +2524,9 @@ fn the_install_report_shows_each_binary_s_component() {
     assert!(row.starts_with(&start), "{row}");
 }
 
-/// PR-4c-2a: each `binary:` line has the input's `binary.identity` state, and the Markdown its
-/// Identity column and Signatures. A Mach-O is not scanned: the inspection is incomplete.
+/// PR-4c-2a: each `binary:` line has the input's `binary.identity` state (`signature scan: …`),
+/// and the Markdown its Signature scan column and Signatures. A Mach-O is not scanned: the
+/// inspection is incomplete.
 #[test]
 fn a_binary_s_identity_is_on_its_summary_line_and_in_its_report() {
     let d = inputs();
@@ -2542,17 +2548,19 @@ fn a_binary_s_identity_is_on_its_summary_line_and_in_its_report() {
             .to_string()
     };
     assert!(
-        line("libdata.so").ends_with("  complete  identity: complete"),
+        line("libdata.so").ends_with("  complete  signature scan: complete"),
         "{}",
         r.stderr
     );
     assert!(
-        line("NOTES.txt").ends_with(&format!("  identity: unsupported: {BINARY_UNSUPPORTED}")),
+        line("NOTES.txt").ends_with(&format!(
+            "  signature scan: unsupported: {BINARY_UNSUPPORTED}"
+        )),
         "{}",
         r.stderr
     );
     assert!(
-        line("hello").ends_with("  complete  identity: unsupported: string scan: ELF only"),
+        line("hello").ends_with("  complete  signature scan: unsupported: string scan: ELF only"),
         "{}",
         r.stderr
     );
@@ -2567,7 +2575,7 @@ fn a_binary_s_identity_is_on_its_summary_line_and_in_its_report() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(
         r.stdout
-            .contains(r"| Path | SHA\-256 | Size | Type | Container facts | Identity |"),
+            .contains(r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan |"),
         "{}",
         r.stdout
     );

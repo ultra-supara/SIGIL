@@ -358,8 +358,9 @@ fn go_executable() -> Vec<u8> {
 }
 
 /// PR-4c-2a: the signature scan of a Go executable reads its `.gopclntab` with `pread` on the
-/// input's own fd: no other read call on it than the hash's `read` and `pread`, and no exec,
-/// dlopen, mmap of the input, or socket. It writes only --out.
+/// input's own fd: no other read call on it than the hash's `read` and `pread`, no `read` after
+/// the first `pread64`, no `lseek`, and no exec, dlopen, mmap of the input, or socket. It writes
+/// only --out.
 #[test]
 fn binary_signature_scan_reads_with_pread_only() {
     let case = "binary_signature_scan_reads_with_pread_only";
@@ -383,7 +384,12 @@ fn binary_signature_scan_reads_with_pread_only() {
     ]);
     let r = run("binary-inspect-signatures", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
-    // The scan ran: both hints are in the report.
+    // The scan ran, in full: both hints are in the report, and binary.identity is complete.
+    assert!(
+        r.stderr.contains("  signature scan: complete"),
+        "{}",
+        r.stderr
+    );
     let report = std::fs::read_to_string(&md).unwrap();
     for feature in ["ollama.llama_server_launch", "ollama.device_discovery"] {
         let shown = sigil_model::UntrustedText::new(feature).markdown_inline();
@@ -411,9 +417,35 @@ fn binary_signature_scan_reads_with_pread_only() {
         assert!(
             !matches!(
                 e.name.as_str(),
-                "readv" | "preadv" | "preadv2" | "sendfile" | "splice" | "copy_file_range"
+                "readv"
+                    | "preadv"
+                    | "preadv2"
+                    | "sendfile"
+                    | "splice"
+                    | "copy_file_range"
+                    | "lseek"
             ),
             "case `{}`: {}",
+            r.case,
+            e.raw
+        );
+    }
+    // One thread reads the input, so the trace's order is the order of its reads: the hash's
+    // sequential `read`s, then only `pread64`.
+    assert!(
+        on_input.iter().all(|e| e.pid == on_input[0].pid),
+        "case `{}`: the input is read by more than one thread (trace: {})",
+        r.case,
+        r.trace_dir.display()
+    );
+    let first_pread = on_input
+        .iter()
+        .position(|e| e.name == "pread64")
+        .unwrap_or_else(|| panic!("case `{}`: no pread64 of the input", r.case));
+    for e in &on_input[first_pread..] {
+        assert!(
+            e.name != "read",
+            "case `{}`: a read after the first pread64: {}",
             r.case,
             e.raw
         );

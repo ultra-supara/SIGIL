@@ -191,7 +191,8 @@ pub const CODE_CAVEAT: &str = "Direct call sites only. A call through a function
 
 /// The inputs of a binary inspection (PR-4b-2a spec §6.1): an overview in argument order, then
 /// each content's container facts, signatures (PR-4c-2a), and capabilities once, in the order of
-/// its first input. The overview's Identity column is each input's `binary.identity` (PR-4c-2a).
+/// its first input. The overview's Signature scan column is each input's `binary.identity`
+/// (PR-4c-2a); the Identity row of a content's facts is its component claims' status (PR-4c-1).
 /// With code analysis (PR-5a-2), the overview has a Code column, and the caveats name the call
 /// sites.
 fn binary_inspection(out: &mut String, s: &Session) {
@@ -251,7 +252,7 @@ fn binary_inspection(out: &mut String, s: &Session) {
         "Size",
         "Type",
         "Container facts",
-        "Identity",
+        "Signature scan",
     ];
     if code {
         header.push("Code");
@@ -532,8 +533,8 @@ fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
 
 /// The signatures of an ELF content (PR-4c-2a spec §6): one row per hint of its slice that is not
 /// an import, in (feature, value) order, or the line [`NO_SIGNATURES`]. Whether the scan was
-/// complete is the input's `binary.identity`, in the overview. A Mach-O gets nothing: it is not
-/// scanned.
+/// complete is the input's `binary.identity`, in the overview's Signature scan column. A Mach-O
+/// gets nothing: it is not scanned.
 fn signatures(out: &mut String, s: &Session, path: &UntrustedText, b: &crate::binary::BinaryFacts) {
     if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
         return;
