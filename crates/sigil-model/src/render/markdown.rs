@@ -532,15 +532,26 @@ fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
 }
 
 /// The signatures of an ELF content (PR-4c-2a spec §6): one row per hint of its slice that is not
-/// an import, in (feature, value) order, or the line [`NO_SIGNATURES`]. Whether the scan was
-/// complete is the input's `binary.identity`, in the overview's Signature scan column. A Mach-O
-/// gets nothing: it is not scanned.
+/// an import, in (feature, value, kind, where) order, or the line [`NO_SIGNATURES`]. The kind and
+/// the where are compared as their cells' text, so the rows do not depend on the session's order,
+/// canonical or not. Whether the scan was complete is the input's `binary.identity`, in the
+/// overview's Signature scan column. A Mach-O gets nothing: it is not scanned.
 fn signatures(out: &mut String, s: &Session, path: &UntrustedText, b: &crate::binary::BinaryFacts) {
     if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
         return;
     }
-    let mut hints: Vec<&FeatureHint> = signature_hints(s, &b.slice).collect();
-    hints.sort_by(|x, y| hint_key(x).cmp(&hint_key(y)));
+    let mut hints: Vec<(&FeatureHint, &str, String)> = signature_hints(s, &b.slice)
+        .map(|h| {
+            (
+                h,
+                super::hint_kind(h.signal),
+                super::hint_where(&h.at).markdown(),
+            )
+        })
+        .collect();
+    hints.sort_by(|(x, x_kind, x_at), (y, y_kind, y_at)| {
+        (hint_key(x), x_kind, x_at).cmp(&(hint_key(y), y_kind, y_at))
+    });
     if hints.is_empty() {
         out.push_str(&esc(NO_SIGNATURES));
         out.push_str("\n\n");
@@ -553,13 +564,13 @@ fn signatures(out: &mut String, s: &Session, path: &UntrustedText, b: &crate::bi
         esc(":")
     ));
     let rows = hints
-        .iter()
-        .map(|h| {
+        .into_iter()
+        .map(|(h, kind, at)| {
             vec![
                 esc(h.feature.as_str()),
-                esc(super::hint_kind(h.signal)),
+                esc(kind),
                 h.value.markdown_inline(),
-                super::hint_where(&h.at).markdown(),
+                at,
             ]
         })
         .collect();
@@ -652,8 +663,8 @@ fn import_hints<'a>(
         .filter(move |h| h.subject == *slice && h.signal == Signal::Import)
 }
 
-/// The order of a content's capability and signature rows: the feature key, then the hint's value
-/// (for a capability, the import's name).
+/// The order of a content's capability rows, and the start of its signature rows' order: the
+/// feature key, then the hint's value (for a capability, the import's name).
 fn hint_key(h: &FeatureHint) -> (&str, &[u8]) {
     (h.feature.as_str(), h.value.as_bytes())
 }

@@ -1715,3 +1715,72 @@ fn a_session_before_signature_scans_has_no_coverage_entry_in_its_column() {
         "{section}"
     );
 }
+
+/// Signature rows are in (feature, value, kind, where) order, whatever the session's order: two
+/// hints of one feature and value differ by their Kind and Where cells (PR-4c-2a).
+#[test]
+fn signature_rows_are_in_feature_value_kind_and_where_order() {
+    let mut s = binary_inspect();
+    // A Go function hint needs Go build info in its slice (S3).
+    s.binaries[0].go = Some(GoBuildInfo {
+        version: t("go1.24.1"),
+        path: None,
+        main: None,
+        deps: vec![],
+        settings: vec![],
+        at: Loc::VAddr(0x4000),
+    });
+    let slice = s.binaries[0].slice.clone();
+    let value = "ggml_backend_rpc_init";
+    let hint = |signal: Signal, value: &str, at: Loc| FeatureHint {
+        subject: slice.clone(),
+        feature: id("x.signature"),
+        signal,
+        value: t(value),
+        at,
+    };
+    let section = |name: &str, offset: u64| Loc::Section {
+        name: t(name),
+        offset,
+    };
+    s.hints.extend([
+        hint(Signal::String, value, section(".rodata", 0x20)),
+        hint(Signal::String, value, section(".rodata", 0x10)),
+        hint(Signal::Export, value, Loc::Symbol(t(value))),
+        hint(Signal::GoFunction, value, section(".gopclntab", 0x30)),
+        hint(Signal::Export, "a", Loc::Symbol(t("a"))),
+    ]);
+    assert_eq!(s.validate(), Ok(()));
+    let rows = |s: &Session| -> Vec<String> {
+        let md = render_session(s);
+        binaries_section(&md)
+            .lines()
+            .skip_while(|l| !l.starts_with("| Feature | Kind | Value | Where |"))
+            .skip(2)
+            .take_while(|l| l.starts_with('|'))
+            .map(str::to_string)
+            .collect()
+    };
+    let row = |cells: [&str; 4]| {
+        format!(
+            "| {} |",
+            cells
+                .iter()
+                .map(|c| md_esc(c))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        )
+    };
+    let expected = [
+        row(["x.signature", "export", "a", "symbol a"]),
+        row(["x.signature", "Go function", value, ".gopclntab + 0x30"]),
+        row(["x.signature", "export", value, &format!("symbol {value}")]),
+        row(["x.signature", "string", value, ".rodata + 0x10"]),
+        row(["x.signature", "string", value, ".rodata + 0x20"]),
+    ];
+    assert_eq!(rows(&s), expected);
+    // The reverse session order renders the same rows.
+    s.hints.reverse();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(rows(&s), expected);
+}
