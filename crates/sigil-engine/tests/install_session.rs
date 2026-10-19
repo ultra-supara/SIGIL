@@ -192,6 +192,11 @@ fn a_missing_install_directory_is_unavailable_and_has_no_rows() {
             why: Unavailability::NotFound
         }
     );
+    // PR-4c-2a: discovery could not run, so artifacts.identity is its state.
+    assert_eq!(
+        state(&s, ARTIFACTS_IDENTITY),
+        state(&s, ARTIFACTS_DISCOVERY)
+    );
     assert!(s.reference_matches.is_empty());
     assert!(matches!(
         s.outcome.completeness,

@@ -122,11 +122,11 @@ fn path_of(facts: &InstallFacts, a: &Artifact) -> String {
 }
 
 /// `artifacts.identity` (PR-4c-2a spec §5): whether every scan the signature database asks for
-/// was done within its budget, for each ELF of the install. Like `artifacts.container`, it is the
-/// discovery's state when discovery could not run or was cut short by an error or a budget, and
-/// otherwise `Complete`, or `Partial` with each gap prefixed by its artifact's path: the scan's
-/// gaps, `string scan: ELF only` for a Mach-O, and `not parsed` for a slice without a scan. An
-/// NVIDIA library (`NameAndHashOnly`) adds none.
+/// was done within its budget, for each ELF and Mach-O of the install. Like
+/// `artifacts.container`, it is the discovery's state when discovery could not run or was cut
+/// short by an error or a budget, and otherwise `Complete`, or `Partial` with each gap prefixed
+/// by its artifact's path: the scan's gaps, `string scan: ELF only` for a Mach-O, and `not
+/// parsed` for a slice without a scan. An NVIDIA library (`NameAndHashOnly`) adds none.
 pub fn identity(facts: &InstallFacts) -> Result<Coverage, String> {
     let check = CheckId::new(ARTIFACTS_IDENTITY).map_err(|e| e.to_string())?;
     let state = match &facts.discovery.state {

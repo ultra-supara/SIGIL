@@ -17,9 +17,9 @@ use sigil_engine::inspect::{
 };
 use sigil_engine::policy::Policy;
 use sigil_model::{
-    scan_over_gap, Completeness, CoverageState, FeatureHint, Loc, Ref, Session, Signal,
-    ARTIFACTS_IDENTITY, BINARY_IDENTITY, BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY,
-    SCAN_NO_SECTIONS,
+    binary_root, scan_over_gap, BinaryFacts, Completeness, CoverageState, FeatureHint,
+    FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY, BINARY_IDENTITY,
+    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NO_SECTIONS,
 };
 use tempfile::TempDir;
 
@@ -296,13 +296,13 @@ fn a_file_whose_soname_alone_is_nvidia_s_is_scanned() {
         .map(|c| c.component.as_str())
         .collect();
     assert_eq!(claims, ["cuda-runtime"]);
-    assert_eq!(identity(&s, 0), CoverageState::Complete);
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
     assert_eq!(scan_of("renamed.so", &bytes), found_nothing(&[]));
     // Named as NVIDIA's runtime, the same bytes are identified by name and hash only.
     let (_d, paths) = files(&[("libcudart.so.12", &bytes)]);
     let s = inspect(&paths, NamedBudgets::default());
     assert_eq!(
-        identity(&s, 0),
+        identity(&s, 1),
         CoverageState::OutOfScope {
             why: NAME_AND_HASH_ONLY_WHY.to_string()
         }
@@ -417,7 +417,7 @@ fn a_relocatable_object_has_no_dynamic_exports() {
     let (_d, paths) = files(&[("net.o", &bytes)]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(signatures(&s).is_empty(), "{:?}", s.hints);
-    assert_eq!(identity(&s, 0), CoverageState::Complete);
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
 /// The scan of `bytes` with the needles of `db`, through `parse_artifact`.
@@ -501,9 +501,30 @@ fn string_needles_are_looked_for_in_read_only_data_sections() {
     );
 }
 
-/// The state of input `k`'s (in instance order) one `binary.identity` entry.
-fn identity(s: &Session, k: usize) -> CoverageState {
-    let i = &s.instances[k];
+/// Input `n`'s instance: the one of its root, `binary-<n>` (inputs are numbered from 1, in
+/// argument order).
+fn input(s: &Session, n: u32) -> &FileInstance {
+    let root = binary_root(n).unwrap();
+    let found: Vec<&FileInstance> = s.instances.iter().filter(|i| i.root == root).collect();
+    assert_eq!(found.len(), 1, "{}", root.as_str());
+    found[0]
+}
+
+/// The facts of input `n`'s one slice.
+fn facts(s: &Session, n: u32) -> &BinaryFacts {
+    let InstanceContent::Read { artifact } = &input(s, n).content else {
+        panic!("input {n} was not read");
+    };
+    let a = s.artifacts.iter().find(|a| a.id == *artifact).unwrap();
+    s.binaries
+        .iter()
+        .find(|b| b.slice == a.slices[0].id)
+        .unwrap()
+}
+
+/// The state of input `n`'s one `binary.identity` entry.
+fn identity(s: &Session, n: u32) -> CoverageState {
+    let i = input(s, n);
     let entries: Vec<&CoverageState> = s
         .coverage
         .iter()
@@ -547,20 +568,22 @@ fn each_input_has_its_identity_state() {
         ("libdata.so", &fixture("elf/libdata.so")),
     ]);
     let s = inspect(&paths, NamedBudgets::default());
-    assert_eq!(identity(&s, 0), CoverageState::Complete);
-    assert!(s
-        .binaries
-        .iter()
-        .any(|b| b.go.is_some() && b.gaps.is_empty()));
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+    let ollama = facts(&s, 1);
+    assert!(
+        ollama.go.is_some() && ollama.gaps.is_empty(),
+        "{:?}",
+        ollama.gaps
+    );
     assert_eq!(
-        identity(&s, 1),
+        identity(&s, 2),
         CoverageState::Partial {
             missing: vec![SCAN_NO_SECTIONS.to_string()]
         }
     );
-    assert_eq!(identity(&s, 2), CoverageState::Complete);
+    assert_eq!(identity(&s, 3), CoverageState::Complete);
     assert_eq!(
-        identity(&s, 3),
+        identity(&s, 4),
         CoverageState::OutOfScope {
             why: NAME_AND_HASH_ONLY_WHY.to_string()
         }
@@ -570,18 +593,18 @@ fn each_input_has_its_identity_state() {
         .iter()
         .any(|c| c.component.as_str() == "cuda-runtime"));
     assert_eq!(
-        identity(&s, 4),
+        identity(&s, 5),
         CoverageState::Unsupported {
             what: SCAN_ELF_ONLY.to_string()
         }
     );
     assert_eq!(
-        identity(&s, 5),
+        identity(&s, 6),
         CoverageState::Unsupported {
             what: BINARY_UNSUPPORTED.to_string()
         }
     );
-    assert_eq!(identity(&s, 6), CoverageState::Complete);
+    assert_eq!(identity(&s, 7), CoverageState::Complete);
     assert!(s
         .request
         .required_checks
@@ -619,7 +642,7 @@ fn a_scan_over_its_budget_keeps_what_it_found_and_is_partial() {
     let found: Vec<String> = signatures(&s).into_iter().map(|h| h.0).collect();
     assert_eq!(found, ["ollama.llama_server_launch"]);
     assert_eq!(
-        identity(&s, 0),
+        identity(&s, 1),
         CoverageState::Partial {
             missing: vec![scan_over_gap(limit)]
         }
@@ -628,7 +651,7 @@ fn a_scan_over_its_budget_keeps_what_it_found_and_is_partial() {
     // With the default budget, both are found.
     let s = inspect(&paths, NamedBudgets::default());
     assert_eq!(signatures(&s).len(), 2);
-    assert_eq!(identity(&s, 0), CoverageState::Complete);
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
 #[test]
@@ -710,7 +733,7 @@ fn a_gopclntab_over_binary_scan_bytes_stops_at_the_limit() {
     let s = inspect(&[path], NamedBudgets::default());
     assert!(signatures(&s).is_empty());
     assert_eq!(
-        identity(&s, 0),
+        identity(&s, 1),
         CoverageState::Partial {
             missing: vec![scan_over_gap(64 << 20)]
         }
@@ -731,7 +754,7 @@ fn a_section_name_that_cannot_be_read_is_a_gap() {
     let s = inspect(&paths, NamedBudgets::default());
     assert!(signatures(&s).is_empty(), "{:?}", s.hints);
     assert_eq!(
-        identity(&s, 0),
+        identity(&s, 1),
         CoverageState::Partial {
             missing: vec![sigil_model::SCAN_NAME_NOT_READ.to_string()]
         }
@@ -776,7 +799,7 @@ fn a_dynsym_the_parse_does_not_read_is_a_gap() {
     let s = inspect(&paths, NamedBudgets::default());
     assert!(signatures(&s).is_empty(), "{:?}", s.hints);
     assert_eq!(
-        identity(&s, 0),
+        identity(&s, 1),
         CoverageState::Partial {
             missing: vec![sigil_model::SCAN_NAME_NOT_READ.to_string()]
         }
