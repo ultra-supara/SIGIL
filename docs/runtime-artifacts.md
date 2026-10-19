@@ -280,7 +280,10 @@ slice in the session, read from the file's own bytes. They are observations, not
   exclusion goes by name, not by content: a Go executable renamed `libcudart.so.12` is not
   scanned either, and its `cuda-runtime` claim reads `name only`, not `reference matched`, since
   its hash is not the release's. The report's **Binaries** table shows the slice's signature keys
-  in the column **Signatures**, after **Capabilities (imports)**, in key order, or `-`.
+  in the column **Signatures**, after **Capabilities (imports)**, in key order, or `-`. A `-`
+  means that no signature hint was found, or that the file was not scanned: a file named as an
+  NVIDIA library is never scanned (ADR-010), and an install session does not record which files
+  those were.
 - **`artifacts.identity`** (scope: the root `install`), a fourth check of `runtime_artifacts`:
 
   | State | When |
