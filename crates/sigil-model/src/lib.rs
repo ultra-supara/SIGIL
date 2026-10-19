@@ -62,10 +62,11 @@ pub use binary::{
 pub use binary_input::{
     binary_root, binary_root_index, expected_binary_code, expected_binary_container,
     expected_binary_identity, is_binary_inspection, is_binary_root, is_scan_gap, scan_over_gap,
-    ExpectedCode, ExpectedContainer, ExpectedIdentity, BINARY_BYTES, BINARY_CHANGED, BINARY_CODE,
-    BINARY_CODE_BYTES, BINARY_CONTAINER, BINARY_IDENTITY, BINARY_NOT_PARSED, BINARY_ROOT_PREFIX,
-    BINARY_SCAN_BYTES, BINARY_UNSUPPORTED, BINARY_VANISHED, CODE_UNSUPPORTED, NAME_AND_HASH_ONLY,
-    NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NAME_NOT_READ, SCAN_NO_SECTIONS, SCAN_READ_FAILED,
+    ExpectedCode, ExpectedContainer, ExpectedIdentity, NoSectionsGap, BINARY_BYTES, BINARY_CHANGED,
+    BINARY_CODE, BINARY_CODE_BYTES, BINARY_CONTAINER, BINARY_IDENTITY, BINARY_NOT_PARSED,
+    BINARY_ROOT_PREFIX, BINARY_SCAN_BYTES, BINARY_UNSUPPORTED, BINARY_VANISHED, CODE_UNSUPPORTED,
+    NAME_AND_HASH_ONLY, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NAME_NOT_READ,
+    SCAN_NO_SECTIONS, SCAN_READ_FAILED,
 };
 pub use code::{
     ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,

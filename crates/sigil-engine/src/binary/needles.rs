@@ -175,6 +175,14 @@ mod tests {
         );
     }
 
+    /// The model's `expected_binary_identity` requires the gap `SCAN_NO_SECTIONS` of a Go ELF
+    /// without a section header table (`NoSectionsGap::Must`): the embedded database has
+    /// Go-function needles, which look in `.gopclntab`.
+    #[test]
+    fn the_embedded_database_looks_for_go_functions() {
+        assert!(!needles().unwrap().of(NeedleKind::GoFunction).is_empty());
+    }
+
     #[test]
     fn each_kind_gives_its_signal() {
         assert_eq!(NeedleKind::Export.signal(), Signal::Export);

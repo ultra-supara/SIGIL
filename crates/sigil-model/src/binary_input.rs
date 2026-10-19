@@ -9,9 +9,10 @@
 //! coverage (PR-4c-2a), whose states [`expected_binary_identity`] derives (S1).
 
 use crate::artifact::{Arch, FileInstance, Format, InstanceContent, NotReadReason, Stability};
+use crate::binary::{BinaryFacts, ContainerFacts};
 use crate::coverage::{Coverage, CoverageState};
 use crate::evidence::Ref;
-use crate::id::RootId;
+use crate::id::{RootId, SliceId};
 use crate::session::{RunRequest, Session};
 use crate::text::UntrustedText;
 
@@ -355,24 +356,66 @@ pub enum ExpectedIdentity {
     /// Mach-O or fat Mach-O; `Partial {` [`BINARY_NOT_PARSED`] `}` for an ELF with a slice
     /// without facts.
     Exactly(CoverageState),
-    /// An ELF with facts, scanned: `Complete`, or `Partial` whose gaps are all scan gaps
-    /// ([`is_scan_gap`]) with the request's `binary_scan_bytes`, `limit`. Also `OutOfScope {`
-    /// [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a slice of the input
-    /// names one of [`NAME_AND_HASH_ONLY`]. The model has no name database: it admits that
-    /// state for such a claim, and the scanned states too (a file whose SONAME alone is
-    /// NVIDIA's is scanned).
+    /// An ELF with facts, scanned: `Complete`, or `Partial` whose gaps are scan gaps
+    /// ([`is_scan_gap`]) with the request's `binary_scan_bytes`, `limit`, sorted and without
+    /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says. Also
+    /// `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a
+    /// slice of the input names one of [`NAME_AND_HASH_ONLY`]. The model has no name database:
+    /// it admits that state for such a claim, and the scanned states too (a file whose SONAME
+    /// alone is NVIDIA's is scanned).
     Scanned {
         limit: u64,
         name_and_hash_only: bool,
+        no_sections: NoSectionsGap,
     },
 }
 
+/// Whether a scanned input's `binary.identity` lists the scan's gap [`SCAN_NO_SECTIONS`], from
+/// its slices' facts (S1, S2). Ordered: the input's is its slices' greatest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NoSectionsGap {
+    /// Never: the slice's section header table was read (`ElfFacts.stripped` is set; B8).
+    Never,
+    /// It may: the slice has no section header table. Whether a needle that applies looks in
+    /// sections is the database's.
+    May,
+    /// It must: the slice has no section header table and has Go build info, so the embedded
+    /// database's Go-function needles, which look in `.gopclntab`, apply. An engine test keeps
+    /// that database with Go-function needles.
+    Must,
+}
+
+/// What `b`, a slice's facts, imply for the scan's gap [`SCAN_NO_SECTIONS`].
+pub(crate) fn no_sections_gap(b: &BinaryFacts) -> NoSectionsGap {
+    match &b.container {
+        ContainerFacts::Elf(elf) if elf.stripped.is_some() => NoSectionsGap::Never,
+        _ if b.go.is_some() => NoSectionsGap::Must,
+        _ => NoSectionsGap::May,
+    }
+}
+
+/// Whether a claim on `slice` names a component identified by name and hash only
+/// ([`NAME_AND_HASH_ONLY`]; ADR-010).
+pub(crate) fn name_and_hash_only(s: &Session, slice: &SliceId) -> bool {
+    s.components
+        .iter()
+        .any(|c| c.subject == *slice && NAME_AND_HASH_ONLY.contains(&c.component.as_str()))
+}
+
 impl ExpectedIdentity {
-    /// Whether `state`, the input's `binary.identity` state, is one implied. `Err` says how it
-    /// differs, showing the states as reports do.
-    pub fn admits(&self, state: &CoverageState) -> Result<(), String> {
+    /// Whether `c`, the input's `binary.identity` entry, has a state implied, and no budget: the
+    /// scan's limit is in its gap (P-h). `Err` says how it differs, showing the states as
+    /// reports do.
+    pub fn admits(&self, c: &Coverage) -> Result<(), String> {
         use crate::render::coverage_state;
         let shown = |state: &CoverageState| coverage_state(state).terminal();
+        let state = &c.state;
+        if c.budget.is_some() {
+            return Err(format!(
+                "{BINARY_IDENTITY} is {} and names a budget; the scan's limit is in its gap",
+                shown(state)
+            ));
+        }
         match self {
             ExpectedIdentity::Exactly(expected) if state == expected => Ok(()),
             ExpectedIdentity::Exactly(expected) => Err(format!(
@@ -383,28 +426,48 @@ impl ExpectedIdentity {
             ExpectedIdentity::Scanned {
                 limit,
                 name_and_hash_only,
-            } => match state {
-                CoverageState::Complete => Ok(()),
-                CoverageState::Partial { missing }
-                    if !missing.is_empty() && missing.iter().all(|g| is_scan_gap(g, *limit)) =>
-                {
-                    Ok(())
+                no_sections,
+            } => {
+                let admitted = match state {
+                    CoverageState::Complete => *no_sections != NoSectionsGap::Must,
+                    CoverageState::Partial { missing } => {
+                        let listed = missing.iter().any(|g| g == SCAN_NO_SECTIONS);
+                        !missing.is_empty()
+                            && missing.windows(2).all(|w| w[0] < w[1])
+                            && missing.iter().all(|g| is_scan_gap(g, *limit))
+                            && match no_sections {
+                                NoSectionsGap::Never => !listed,
+                                NoSectionsGap::May => true,
+                                NoSectionsGap::Must => listed,
+                            }
+                    }
+                    CoverageState::OutOfScope { why } => {
+                        *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY
+                    }
+                    _ => false,
+                };
+                if admitted {
+                    return Ok(());
                 }
-                CoverageState::OutOfScope { why }
-                    if *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY =>
-                {
-                    Ok(())
-                }
-                _ => Err(format!(
-                    "{BINARY_IDENTITY} is {}, but the input implies complete, or partial with scan gaps ({BINARY_SCAN_BYTES} {limit}){}",
+                let gaps =
+                    format!("partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {limit})");
+                let implied = match no_sections {
+                    NoSectionsGap::Never => {
+                        format!("complete, or {gaps} other than {SCAN_NO_SECTIONS:?}")
+                    }
+                    NoSectionsGap::May => format!("complete, or {gaps}"),
+                    NoSectionsGap::Must => format!("{gaps} among them {SCAN_NO_SECTIONS:?}"),
+                };
+                Err(format!(
+                    "{BINARY_IDENTITY} is {}, but the input implies {implied}{}",
                     shown(state),
                     if *name_and_hash_only {
                         ", or out of scope (ADR-010)"
                     } else {
                         ""
                     }
-                )),
-            },
+                ))
+            }
         }
     }
 }
@@ -413,6 +476,11 @@ impl ExpectedIdentity {
 /// and `Session::validate` checks. `Err` for an input that cannot be judged: one B9 refuses
 /// (including an input over `binary_bytes` without the one `binary.container` entry B9 admits),
 /// or an ELF with facts in a session without a `binary_scan_bytes` budget.
+///
+/// A Go ELF without a section header table must list [`SCAN_NO_SECTIONS`]
+/// ([`NoSectionsGap::Must`]): the embedded needle database has Go-function needles, which the
+/// scan looks for in `.gopclntab`, so it cannot be `Complete` (an engine test pins those
+/// needles).
 pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<ExpectedIdentity, String> {
     let state = container_state(s, i)?;
     if !matches!(
@@ -453,12 +521,16 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         .get(BINARY_SCAN_BYTES)
         .copied()
         .ok_or_else(|| format!("an ELF input without a {BINARY_SCAN_BYTES} budget"))?;
-    let name_and_hash_only = s.components.iter().any(|c| {
-        a.slices.iter().any(|x| x.id == c.subject)
-            && NAME_AND_HASH_ONLY.contains(&c.component.as_str())
-    });
+    let no_sections = a
+        .slices
+        .iter()
+        .filter_map(|x| s.binaries.iter().find(|b| b.slice == x.id))
+        .map(no_sections_gap)
+        .max()
+        .unwrap_or(NoSectionsGap::Never);
     Ok(ExpectedIdentity::Scanned {
         limit,
-        name_and_hash_only,
+        name_and_hash_only: a.slices.iter().any(|x| name_and_hash_only(s, &x.id)),
+        no_sections,
     })
 }
