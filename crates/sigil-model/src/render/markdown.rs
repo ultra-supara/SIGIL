@@ -183,12 +183,17 @@ pub const BINARY_CAVEAT: &str = "Container facts only. For an executable or a sh
 /// alone does not show a call.
 pub const BINARY_CAVEAT_CODE: &str = "Container facts and direct call sites. For an executable or a shared object, imports are the names it asks its loader for; for a relocatable object (.o), they are the symbols left for the linker. An import alone does not show that the code calls it; the call sites above are the direct calls found in the code.";
 
+/// What an ELF content without a signature hint gets instead of its Signatures table (PR-4c-2a).
+pub const NO_SIGNATURES: &str = "No signature found.";
+
 /// The scope of code analysis (PR-5a spec §6.1), after [`BINARY_CAVEAT_CODE`].
 pub const CODE_CAVEAT: &str = "Direct call sites only. A call through a function pointer, a function linked statically into the file, and a raw system call are not found, and references from data are not followed. Only executable sections and the ranges of FDEs in .eh_frame are searched, and only code with an FDE is analyzed. In a relocatable object (.o), addresses are file offsets.";
 
 /// The inputs of a binary inspection (PR-4b-2a spec §6.1): an overview in argument order, then
-/// each content's container facts and capabilities once, in the order of its first input. With
-/// code analysis (PR-5a-2), the overview has a Code column, and the caveats name the call sites.
+/// each content's container facts, signatures (PR-4c-2a), and capabilities once, in the order of
+/// its first input. The overview's Identity column is each input's `binary.identity` (PR-4c-2a).
+/// With code analysis (PR-5a-2), the overview has a Code column, and the caveats name the call
+/// sites.
 fn binary_inspection(out: &mut String, s: &Session) {
     use super::{artifact_type, binary_inputs};
     let inputs = binary_inputs(s);
@@ -226,6 +231,10 @@ fn binary_inspection(out: &mut String, s: &Session) {
                     || esc("no coverage entry"),
                     |c| coverage_state(&c.state).markdown(),
                 ),
+                b.identity.map_or_else(
+                    || esc("no coverage entry"),
+                    |c| coverage_state(&c.state).markdown(),
+                ),
             ];
             if code {
                 row.push(b.code.map_or_else(
@@ -236,7 +245,14 @@ fn binary_inspection(out: &mut String, s: &Session) {
             row
         })
         .collect();
-    let mut header = vec!["Path", "SHA-256", "Size", "Type", "Container facts"];
+    let mut header = vec![
+        "Path",
+        "SHA-256",
+        "Size",
+        "Type",
+        "Container facts",
+        "Identity",
+    ];
     if code {
         header.push("Code");
     }
@@ -252,6 +268,7 @@ fn binary_inspection(out: &mut String, s: &Session) {
         for slice in &a.slices {
             if let Some(facts) = s.binaries.iter().find(|f| f.slice == slice.id) {
                 binary_facts(out, s, &path, a, facts);
+                signatures(out, s, &path, facts);
                 capabilities(out, s, &path, facts, b.code);
             }
         }
@@ -513,6 +530,52 @@ fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
     ]
 }
 
+/// The signatures of an ELF content (PR-4c-2a spec §6): one row per hint of its slice that is not
+/// an import, in (feature, value) order, or the line [`NO_SIGNATURES`]. Whether the scan was
+/// complete is the input's `binary.identity`, in the overview. A Mach-O gets nothing: it is not
+/// scanned.
+fn signatures(out: &mut String, s: &Session, path: &UntrustedText, b: &crate::binary::BinaryFacts) {
+    if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
+        return;
+    }
+    let mut hints: Vec<&FeatureHint> = signature_hints(s, &b.slice).collect();
+    hints.sort_by(|x, y| hint_key(x).cmp(&hint_key(y)));
+    if hints.is_empty() {
+        out.push_str(&esc(NO_SIGNATURES));
+        out.push_str("\n\n");
+        return;
+    }
+    out.push_str(&format!(
+        "{} {}{}\n\n",
+        esc("Signatures of"),
+        path.markdown_inline(),
+        esc(":")
+    ));
+    let rows = hints
+        .iter()
+        .map(|h| {
+            vec![
+                esc(h.feature.as_str()),
+                esc(super::hint_kind(h.signal)),
+                h.value.markdown_inline(),
+                super::hint_where(&h.at).markdown(),
+            ]
+        })
+        .collect();
+    table(out, &["Feature", "Kind", "Value", "Where"], rows);
+}
+
+/// A slice's hints that are not imports (PR-4c-2a): the binary report's Signatures rows and the
+/// keys of the install's Signatures column.
+fn signature_hints<'a>(
+    s: &'a Session,
+    slice: &'a crate::id::SliceId,
+) -> impl Iterator<Item = &'a FeatureHint> {
+    s.hints
+        .iter()
+        .filter(move |h| h.subject == *slice && h.signal != Signal::Import)
+}
+
 /// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
 /// slice, in (feature, import) order, or the line `No capability imports.` when it has none.
 /// Hints come only from the imports kept within `binary_imports` (plan P-r): when the list was
@@ -588,7 +651,8 @@ fn import_hints<'a>(
         .filter(move |h| h.subject == *slice && h.signal == Signal::Import)
 }
 
-/// The order of a content's capability rows: the feature key, then the import's name.
+/// The order of a content's capability and signature rows: the feature key, then the hint's value
+/// (for a capability, the import's name).
 fn hint_key(h: &FeatureHint) -> (&str, &[u8]) {
     (h.feature.as_str(), h.value.as_bytes())
 }
@@ -693,7 +757,8 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
 }
 
 /// The container facts of the install's binaries (PR-4b-1): one row per record, with its
-/// component (PR-4c-1) and capability keys (PR-5a-2). Gaps are in the Coverage section.
+/// component (PR-4c-1), capability keys (PR-5a-2), and signature keys (PR-4c-2a). Gaps are in the
+/// Coverage section.
 fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u8]) {
     if s.binaries.is_empty() {
         return;
@@ -836,6 +901,17 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
             if b.imports_cut_short() {
                 capabilities.push_str(IMPORTS_CUT_SHORT_NOTE);
             }
+            // The feature keys of the slice's other hints (PR-4c-2a spec §6).
+            let mut signatures: Vec<&str> = signature_hints(s, &b.slice)
+                .map(|h| h.feature.as_str())
+                .collect();
+            signatures.sort_unstable();
+            signatures.dedup();
+            let signatures = if signatures.is_empty() {
+                "-".to_string()
+            } else {
+                signatures.join(", ")
+            };
             // The slice's component claims (PR-4c-1 spec §6).
             let component = super::component_labels(s, &b.slice).unwrap_or_else(|| "-".to_string());
             vec![
@@ -846,6 +922,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 esc(&needed),
                 esc(&symbol_counts),
                 esc(&capabilities),
+                esc(&signatures),
                 esc(&notes.join("; ")),
             ]
         })
@@ -860,6 +937,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
             "Loaded dylibs / NEEDED",
             "Exports / imports",
             "Capabilities (imports)",
+            "Signatures",
             "Notes",
         ],
         rows,

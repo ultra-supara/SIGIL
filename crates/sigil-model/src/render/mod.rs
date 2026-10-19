@@ -8,8 +8,9 @@ pub mod markdown;
 mod md;
 
 use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
-use crate::evidence::{NotObservable, Ref};
+use crate::evidence::{Loc, NotObservable, Ref};
 use crate::finding::{Action, Completeness, FindingKind, OqTreatment, Severity, Verdict};
+use crate::hint::Signal;
 use crate::identity::IdentityStatus;
 use crate::probe::{target, ActiveFeature, ProbePhase, ProbeResult};
 use crate::session::Mode;
@@ -106,6 +107,8 @@ pub struct BinaryInput<'s> {
     pub coverage: Option<&'s crate::coverage::Coverage>,
     /// Its `binary.code` entry, in an inspection with `request.code` (PR-5a-2).
     pub code: Option<&'s crate::coverage::Coverage>,
+    /// Its `binary.identity` entry (PR-4c-2a).
+    pub identity: Option<&'s crate::coverage::Coverage>,
 }
 
 /// The inputs of a binary inspection, in argument order: `binary-<n>` by number, not in the
@@ -114,7 +117,7 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
     use std::collections::BTreeMap;
 
     use crate::artifact::InstanceContent;
-    use crate::binary_input::{binary_root_index, BINARY_CODE, BINARY_CONTAINER};
+    use crate::binary_input::{binary_root_index, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY};
     let mut roots: Vec<(u32, &crate::session::ScanRoot)> = s
         .request
         .roots
@@ -130,6 +133,7 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
     let artifacts: BTreeMap<_, _> = s.artifacts.iter().map(|a| (&a.id, a)).collect();
     let mut coverage = BTreeMap::new();
     let mut code = BTreeMap::new();
+    let mut identity = BTreeMap::new();
     for c in &s.coverage {
         let Ref::Instance(at) = &c.scope else {
             continue;
@@ -140,6 +144,9 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
             }
             BINARY_CODE => {
                 code.entry(at).or_insert(c);
+            }
+            BINARY_IDENTITY => {
+                identity.entry(at).or_insert(c);
             }
             _ => {}
         }
@@ -154,12 +161,14 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
             });
             let coverage = instance.and_then(|i| coverage.get(&i.id).copied());
             let code = instance.and_then(|i| code.get(&i.id).copied());
+            let identity = instance.and_then(|i| identity.get(&i.id).copied());
             BinaryInput {
                 root,
                 instance,
                 artifact,
                 coverage,
                 code,
+                identity,
             }
         })
         .collect()
@@ -208,6 +217,30 @@ pub fn version_source(source: &crate::identity::VersionSource) -> String {
         }
         .to_string(),
         VersionSource::Embedded { field } => field.clone(),
+    }
+}
+
+/// A hint's kind, as the Signatures tables name it (PR-4c-2a).
+pub fn hint_kind(signal: Signal) -> &'static str {
+    match signal {
+        Signal::Export => "export",
+        Signal::Import => "import",
+        Signal::String => "string",
+        Signal::Needed => "NEEDED",
+        Signal::GoFunction => "Go function",
+    }
+}
+
+/// Where in its slice a hint was found: `symbol <name>`, `<section> + 0x<offset>`, a file offset,
+/// an address, a function, or a call site.
+pub fn hint_where(at: &Loc) -> Shown {
+    match at {
+        Loc::Symbol(name) => Shown::own("symbol ").and_input(name),
+        Loc::Section { name, offset } => Shown::input(name).and(format!(" + {offset:#x}")),
+        Loc::FileOffset(offset) => Shown::own(format!("file offset {offset:#x}")),
+        Loc::VAddr(addr) => Shown::own(format!("address {addr:#x}")),
+        Loc::Function(f) => Shown::own(format!("function {f}")),
+        Loc::CallSite(c) => Shown::own(format!("call site {c}")),
     }
 }
 

@@ -317,6 +317,110 @@ fn binary_code_inspection_reads_only_its_inputs() {
     }
 }
 
+/// A Go executable as SIGIL reads one: Go's build info in `.go.buildinfo` (the engine's fixture
+/// `go/go-amd64.buildinfo`) at 0x4000, and a 12 KiB `.gopclntab` at 0x8000 that holds both
+/// Go-function needles. Never run.
+fn go_executable() -> Vec<u8> {
+    use crate::elf::{ElfImage, PF_R, PF_W, PT_LOAD, SHT_PROGBITS};
+    let piece = include_bytes!("../../../sigil-engine/tests/fixtures/go/go-amd64.buildinfo");
+    let mut pclntab = vec![0u8; 0x3000];
+    for (at, name) in [
+        (
+            0x100,
+            "github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv",
+        ),
+        (
+            0x2000,
+            "github.com/ollama/ollama/discover.discoverNativeDevices",
+        ),
+    ] {
+        pclntab[at..at + name.len()].copy_from_slice(name.as_bytes());
+    }
+    let mut img = ElfImage::new(2);
+    img.put(0x4000, piece).put(0x8000, &pclntab);
+    let end = img.body.len() as u64;
+    img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end)
+        .sec(
+            ".go.buildinfo",
+            SHT_PROGBITS,
+            0x4000,
+            0x4000,
+            piece.len() as u64,
+        )
+        .sec(
+            ".gopclntab",
+            SHT_PROGBITS,
+            0x8000,
+            0x8000,
+            pclntab.len() as u64,
+        );
+    img.build()
+}
+
+/// PR-4c-2a: the signature scan of a Go executable reads its `.gopclntab` with `pread` on the
+/// input's own fd: no other read call on it than the hash's `read` and `pread`, and no exec,
+/// dlopen, mmap of the input, or socket. It writes only --out.
+#[test]
+fn binary_signature_scan_reads_with_pread_only() {
+    let case = "binary_signature_scan_reads_with_pread_only";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let input = fx.target.join("ollama");
+    std::fs::write(&input, go_executable()).unwrap();
+    std::fs::create_dir(fx.target.join("private")).unwrap();
+    std::fs::write(fx.target.join("private/secret.txt"), b"secret").unwrap();
+    let md = fx.out.join("report.md");
+    let args = os(&[
+        &"binary",
+        &"inspect",
+        &input,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    let r = run("binary-inspect-signatures", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    // The scan ran: both hints are in the report.
+    let report = std::fs::read_to_string(&md).unwrap();
+    for feature in ["ollama.llama_server_launch", "ollama.device_discovery"] {
+        let shown = sigil_model::UntrustedText::new(feature).markdown_inline();
+        assert!(report.contains(&shown), "{feature}: {report}");
+    }
+    assert_read_under(&r, &input);
+    assert_never_opened_under(&r, &fx.target.join("private"));
+    assert_opened_only(&r, &fx.target, &[&input]);
+    let path = std::fs::canonicalize(&input).unwrap();
+    let on_input: Vec<_> = r
+        .events
+        .iter()
+        .filter(|e| e.args.first().and_then(|a| fd_path(a)).as_ref() == Some(&path))
+        .collect();
+    // The section, 12288 bytes at 0x8000 (32768), in one pread.
+    assert!(
+        on_input.iter().any(|e| e.name == "pread64"
+            && e.args.get(2).map(|a| a.trim()) == Some("12288")
+            && e.args.get(3).map(|a| a.trim()) == Some("32768")),
+        "case `{}`: no pread64 of .gopclntab (trace: {})",
+        r.case,
+        r.trace_dir.display()
+    );
+    for e in &on_input {
+        assert!(
+            !matches!(
+                e.name.as_str(),
+                "readv" | "preadv" | "preadv2" | "sendfile" | "splice" | "copy_file_range"
+            ),
+            "case `{}`: {}",
+            r.case,
+            e.raw
+        );
+    }
+    assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+}
+
 /// Every file the run opened under `root` is one of `files`; `root` itself (a directory fd) is
 /// allowed. It sees successful opens only (by the fd annotation of their return): give it decoys
 /// the run could open, as `private/secret.txt` is, so that an attempt would show.

@@ -2198,7 +2198,8 @@ fn binary_code_summary_lines_show_the_code_state() {
             .to_string()
     };
     assert!(
-        line("suspicious_kernel-gcc-O2.o").ends_with("  complete  code: complete"),
+        line("suspicious_kernel-gcc-O2.o")
+            .ends_with("  complete  identity: complete  code: complete"),
         "{}",
         r.stderr
     );
@@ -2449,7 +2450,7 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
     assert!(
-        line.ends_with("  complete  component: llama.cpp/common (name only)"),
+        line.ends_with("  complete  identity: complete  component: llama.cpp/common (name only)"),
         "{line}"
     );
     let r = binary(&[&path, &"--format", &"md"]);
@@ -2486,7 +2487,7 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .lines()
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
-    assert!(line.ends_with("  complete"), "{line}");
+    assert!(line.ends_with("  complete  identity: complete"), "{line}");
 }
 
 #[test]
@@ -2516,4 +2517,63 @@ fn the_install_report_shows_each_binary_s_component() {
         esc_md("ollama (name only)")
     );
     assert!(row.starts_with(&start), "{row}");
+}
+
+/// PR-4c-2a: each `binary:` line has the input's `binary.identity` state, and the Markdown its
+/// Identity column and Signatures. A Mach-O is not scanned: the inspection is incomplete.
+#[test]
+fn a_binary_s_identity_is_on_its_summary_line_and_in_its_report() {
+    let d = inputs();
+    let hello = d.path().join("hello");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sigil-engine/tests/fixtures/macho/hello-universal"),
+        &hello,
+    )
+    .unwrap();
+    let (so, notes) = (d.path().join("libdata.so"), d.path().join("NOTES.txt"));
+    let r = binary(&[&so, &notes, &hello]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = |needle: &str| {
+        r.stderr
+            .lines()
+            .find(|l| l.starts_with("binary: ") && l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {}", r.stderr))
+            .to_string()
+    };
+    assert!(
+        line("libdata.so").ends_with("  complete  identity: complete"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        line("NOTES.txt").ends_with(&format!("  identity: unsupported: {BINARY_UNSUPPORTED}")),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        line("hello").ends_with("  complete  identity: unsupported: string scan: ELF only"),
+        "{}",
+        r.stderr
+    );
+    let s = session_of(&r);
+    assert!(
+        matches!(&s.outcome.completeness, Completeness::Incomplete { missing_required, .. }
+            if missing_required.iter().any(|c| c.as_str() == "binary.identity")),
+        "{:?}",
+        s.outcome.completeness
+    );
+    let r = binary(&[&so, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(r"| Path | SHA\-256 | Size | Type | Container facts | Identity |"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(&esc_md("No signature found.")),
+        "{}",
+        r.stdout
+    );
 }

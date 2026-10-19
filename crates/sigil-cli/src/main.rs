@@ -997,6 +997,8 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             },
         );
         let state = entry_state(b.coverage);
+        // The input's binary.identity state (PR-4c-2a).
+        let identity = format!("  identity: {}", entry_state(b.identity));
         // With code analysis, the input's binary.code state follows (PR-5a-2).
         let code = if r.code {
             format!("  code: {}", entry_state(b.code))
@@ -1019,7 +1021,7 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             format!("  component: {}", shown(&labels.join(", ")))
         };
         lines.push(format!(
-            "binary: {}  {}  {sha}  {state}{code}{component}",
+            "binary: {}  {}  {sha}  {state}{identity}{code}{component}",
             path.terminal_line(),
             artifact_type(b.artifact)
         ));
