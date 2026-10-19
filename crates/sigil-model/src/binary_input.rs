@@ -360,9 +360,14 @@ pub enum ExpectedIdentity {
     /// ([`is_scan_gap`]) with the request's `binary_scan_bytes`, `limit`, sorted and without
     /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says. Also
     /// `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a
-    /// slice of the input names one of [`NAME_AND_HASH_ONLY`]. The model has no name database:
-    /// it admits that state for such a claim, and the scanned states too (a file whose SONAME
-    /// alone is NVIDIA's is scanned).
+    /// slice of the input names one of [`NAME_AND_HASH_ONLY`].
+    ///
+    /// The engine excludes a file by its placement's own file name (ADR-010), and scans one whose
+    /// SONAME alone is NVIDIA's. The model has no name database, so it cannot tell the two
+    /// apart: a claim's `SelfName { Filename }` assertions list every placement name, mapped or
+    /// not (PR-4c-1 P-d). It therefore admits `OutOfScope`, and the scanned states, for any
+    /// NVIDIA claim on the slice. The engine is the source of truth here; its tests (PR-4c-2a
+    /// Task 5) pin that it writes `OutOfScope` only for an NVIDIA-named file.
     Scanned {
         limit: u64,
         name_and_hash_only: bool,

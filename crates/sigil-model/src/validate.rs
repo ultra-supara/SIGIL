@@ -3188,6 +3188,12 @@ fn c5(value: &ArgValue) -> Vec<String> {
 /// [`SCAN_NO_SECTIONS`]) unless an NVIDIA library (ADR-010), which is never scanned and adds no
 /// gap.
 ///
+/// That exception holds for any NVIDIA claim on the slice: as for `binary.identity`'s
+/// `OutOfScope` ([`ExpectedIdentity::Scanned`]), the model cannot tell a file the engine
+/// excludes by its placement's file name from one whose SONAME alone is NVIDIA's, which the
+/// engine scans. The engine is the source of truth, and its tests pin the exclusion.
+///
+/// [`ExpectedIdentity::Scanned`]: crate::binary_input::ExpectedIdentity::Scanned
 /// [`NoSectionsGap::Must`]: crate::binary_input::NoSectionsGap::Must
 /// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
 fn install_scanned(s: &Session) -> bool {
