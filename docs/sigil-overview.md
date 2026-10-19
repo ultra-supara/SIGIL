@@ -23,7 +23,7 @@ How to run it: the [Ollama guide](ollama-inspection.md).
 
 ## What SIGIL does not do yet
 
-- Analysis of the runtime's own executables and libraries beyond their release: component identification first, then call-site evidence (see the Roadmap).
+- Analysis of the runtime's own executables and libraries beyond their release and component claims: identity from strings, and code analysis beyond direct call sites (see the Roadmap).
 - Runtimes other than Ollama.
 - Comparing a session against a baseline.
 
@@ -50,7 +50,7 @@ Verdict and completeness are independent: a run can be `PASS` and `INCOMPLETE`. 
 | Milestone | What it brings | Status |
 |---|---|---|
 | M0 | Safety contracts and their syscall tests, the session model, the engine (model store, observe), CLI v2, the active API probe, AI-BOM v2, the viewer | Done |
-| M0 | Identification of the runtime's own files and of its release, and `sigil binary inspect` ([#44](https://github.com/ultra-supara/SIGIL/issues/44)) | In progress: release attribution and ELF/Mach-O container inspection are done; component identification is next |
+| M0 | Identification of the runtime's own files and of its release, and `sigil binary inspect` ([#44](https://github.com/ultra-supara/SIGIL/issues/44)) | In progress: release attribution, ELF/Mach-O container inspection, and component identification from the collected facts (names, embedded build values, reference matches) are done; identity from strings and export names, and NEEDED resolution, are next |
 | M1 | Call-site evidence in the runtime's binaries (`binary inspect --code`; for example `connect` → network), semantic profiles, and how the runtime loads its backends | In progress: direct call sites of capability imports (`binary inspect --code`, x86-64 ELF) are done; branch conditions and guard checks, cross-module edges, semantic profiles, and backend loading are next |
 | M2 | The GGUF parsing path, and advisories matched to what was identified | Planned |
 | M3 | aarch64 and Mach-O binaries | Planned |

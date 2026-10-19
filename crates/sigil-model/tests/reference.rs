@@ -57,7 +57,8 @@ fn a_reference_match_round_trips_as_json() {
 
 #[test]
 fn a_session_without_reference_matches_reads_and_writes_without_them() {
-    let session = common::complete_pass();
+    // Example 8: an install root, and no reference comparison.
+    let session = common::profile_mismatch();
     let json = serde_json::to_value(&session).unwrap();
     assert!(
         json.get("reference_matches").is_none(),

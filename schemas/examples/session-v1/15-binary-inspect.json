@@ -111,7 +111,45 @@
   "listeners": [],
   "probes": [],
   "values": [],
-  "components": [],
+  "components": [
+    {
+      "subject": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1#x86_64@0",
+      "component": "ggml-base",
+      "assertions": [
+        {
+          "SelfName": {
+            "kind": "Filename",
+            "value": "libggml-base.so",
+            "at": {"Instance": {"instance": "inst:binary-1/libggml-base.so"}}
+          }
+        },
+        {
+          "SelfName": {
+            "kind": "Soname",
+            "value": "libggml-base.so.0",
+            "at": {
+              "Artifact": {
+                "artifact": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+              }
+            }
+          }
+        },
+        {"Signature": {"state": "NotChecked"}}
+      ],
+      "status": "NameOnly",
+      "versions": [
+        {
+          "value": "0",
+          "source": {"SelfName": {"kind": "Soname"}},
+          "at": {
+            "Artifact": {
+              "artifact": "sha256:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          }
+        }
+      ]
+    }
+  ],
   "releases": [],
   "binaries": [
     {

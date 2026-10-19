@@ -1,11 +1,13 @@
 //! The assembled session with `--install-dir` (PR-4a): it validates and verifies against the
 //! embedded set, a policy that requires the install's checks without one is incomplete, and the
-//! verifier rejects what `validate` cannot re-derive. Synthetic trees only: no test reads a real
+//! verifier rejects what `validate` cannot re-derive. Its ELF files carry component claims whose
+//! known hashes are their reference rows (PR-4c-1). Synthetic trees only: no test reads a real
 //! installation.
 
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
+use sigil_engine::analyze::identity::derive;
 use sigil_engine::analyze::release::analyze;
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::{collect, InstallBudgets};
@@ -328,11 +330,22 @@ fn the_verifier_rejects_tampering_that_validate_cannot_see() {
     t.reference_matches.remove(at);
     assert_eq!(t.validate(), Ok(()), "validate cannot see it");
     assert!(verify_reference_matches(&t, set).is_err());
-    // Every row of one release removed.
+    // Every row of one release removed, with the known hashes that rest on them (PR-4c-1).
     let mut t = s.clone();
     t.reference_matches.retain(|r| r.release != "v0.30.7");
+    drop_known_hashes(&mut t, "v0.30.7");
     assert_eq!(t.validate(), Ok(()), "validate cannot see it");
     assert!(verify_reference_matches(&t, set).is_err());
+}
+
+/// Removes the claims' `KnownHash` assertions of `release`: a removed row takes the hash that
+/// rests on it (PR-4c-1 I1).
+fn drop_known_hashes(s: &mut Session, release: &str) {
+    for c in &mut s.components {
+        c.assertions.retain(
+            |a| !matches!(a, IdentityAssertion::KnownHash { release: r, .. } if r == release),
+        );
+    }
 }
 
 /// Two releases whose manifests both describe `install()` exactly.
@@ -373,6 +386,8 @@ fn removing_one_identical_release_passes_validate_and_fails_the_verifier() {
     }
     s.reference_matches = r.rows;
     s.releases = r.claim.into_iter().collect();
+    // The claims rest on the rows (PR-4c-1).
+    s.components = derive(&s.instances, &s.binaries, &s.reference_matches).unwrap();
     for c in &mut s.coverage {
         if c.check.as_str() == ARTIFACTS_RELEASE {
             *c = r.coverage.clone();
@@ -388,7 +403,93 @@ fn removing_one_identical_release_passes_validate_and_fails_the_verifier() {
     assert_eq!(state(&s, ARTIFACTS_RELEASE), &CoverageState::Complete);
 
     s.reference_matches.retain(|r| r.release != "vB");
+    drop_known_hashes(&mut s, "vB");
     s.releases[0].candidates = vec!["vA".to_string()];
     assert_eq!(s.validate(), Ok(()), "validate cannot see it");
     assert!(verify_reference_matches(&s, &refs).is_err());
+}
+
+/// PR-4c-1: each ELF of the tree gets a claim; the non-ELF file gets none. `libggml.so.0.13.1`
+/// is named by itself and by its link, and its known hashes are its rows, none matched
+/// (synthetic bytes).
+#[test]
+fn each_elf_of_the_install_gets_a_claim_with_its_rows() {
+    let tree = install();
+    let s = inspect_with_install(&tree);
+    assert_eq!(s.components.len(), 2, "{:?}", s.components);
+    let claim = |key: &str| {
+        s.components
+            .iter()
+            .find(|c| c.component.as_str() == key)
+            .unwrap_or_else(|| panic!("no {key} claim: {:?}", s.components))
+    };
+    let ggml = claim("ggml");
+    assert_eq!(ggml.status, IdentityStatus::NameOnly);
+    let names: Vec<&str> = ggml
+        .assertions
+        .iter()
+        .filter_map(|a| match a {
+            IdentityAssertion::SelfName { value, .. } => value.as_str(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["libggml.so.0", "libggml.so.0.13.1"]);
+    let known: Vec<(&str, &str, bool)> = ggml
+        .assertions
+        .iter()
+        .filter_map(|a| match a {
+            IdentityAssertion::KnownHash {
+                release,
+                member,
+                matched,
+                ..
+            } => Some((release.as_str(), member.as_str(), *matched)),
+            _ => None,
+        })
+        .collect();
+    let member = "lib/ollama/libggml.so.0.13.1";
+    assert_eq!(
+        known,
+        [
+            ("v0.30.5", member, false),
+            ("v0.30.6", member, false),
+            ("v0.30.7", member, false)
+        ]
+    );
+    let versions: Vec<&str> = ggml
+        .versions
+        .iter()
+        .map(|v| v.value.as_str().unwrap())
+        .collect();
+    assert_eq!(versions, ["0", "0.13.1"]);
+    assert_eq!(claim("ollama").status, IdentityStatus::NameOnly);
+}
+
+/// PR-4c-1: against a set that lists the tree's bytes, both ELF files are reference-matched for
+/// both releases. This calls `derive` directly on the collected facts and the set's rows: an
+/// assembled install session checks against the embedded official set only, so `ReferenceMatched`
+/// through a real install session is checked by the manual R-1 run on the local install.
+#[test]
+fn a_matching_reference_set_makes_the_claims_reference_matched() {
+    let tree = install();
+    let facts = collect(tree.path(), InstallBudgets::default()).unwrap();
+    let r = analyze(&facts, &identical_pair()).unwrap();
+    let claims = derive(&facts.instances, &facts.binaries, &r.rows).unwrap();
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    for c in &claims {
+        assert_eq!(c.status, IdentityStatus::ReferenceMatched, "{c:?}");
+        let matched: Vec<&str> = c
+            .assertions
+            .iter()
+            .filter_map(|a| match a {
+                IdentityAssertion::KnownHash {
+                    release,
+                    matched: true,
+                    ..
+                } => Some(release.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(matched, ["vA", "vB"], "{}", c.component);
+    }
 }

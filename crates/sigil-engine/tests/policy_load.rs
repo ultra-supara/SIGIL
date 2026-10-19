@@ -239,18 +239,22 @@ fn every_unknown_or_malformed_input_is_fatal() {
             |e| matches!(e, E::BadGroup(g) if g == "wheel"),
         ),
         (
-            format!("{HEAD}[[components.deny]]\ncomponent = \"x\"\naction = \"ignore\"\nreason = \"r\"\n"),
+            format!("{HEAD}[[components.deny]]\ncomponent = \"ggml\"\naction = \"ignore\"\nreason = \"r\"\n"),
             |e| matches!(e, E::BadDenyAction { .. }),
         ),
         (
             format!(
-                "{HEAD}[[components.deny]]\ncomponent = \"x\"\naction = \"fail\"\nreason = \"r\"\n[[components.deny]]\ncomponent = \"x\"\naction = \"warn\"\nreason = \"r\"\n"
+                "{HEAD}[[components.deny]]\ncomponent = \"ggml\"\naction = \"fail\"\nreason = \"r\"\n[[components.deny]]\ncomponent = \"ggml\"\naction = \"warn\"\nreason = \"r\"\n"
             ),
-            |e| matches!(e, E::DuplicateDeny(c) if c == "x"),
+            |e| matches!(e, E::DuplicateDeny(c) if c == "ggml"),
         ),
         (
-            format!("{HEAD}[[components.deny]]\ncomponent = \"x\"\naction = \"fail\"\nreason = \"\"\n"),
+            format!("{HEAD}[[components.deny]]\ncomponent = \"ggml\"\naction = \"fail\"\nreason = \"\"\n"),
             |e| matches!(e, E::DenyWithoutReason { .. }),
+        ),
+        (
+            format!("{HEAD}[[components.deny]]\ncomponent = \"x\"\naction = \"fail\"\nreason = \"r\"\n"),
+            |e| matches!(e, E::UnknownComponent(c) if c == "x"),
         ),
         ("schema = \"sigil-policy/1\"\nname = \"\"\n".to_string(), |e| {
             matches!(e, E::BadName(_))
@@ -262,6 +266,34 @@ fn every_unknown_or_malformed_input_is_fatal() {
         assert!(expected(&error), "wrong error {error:?} for:\n{text}");
         assert!(!error.to_string().is_empty());
     }
+}
+
+/// A deny entry names a component of the embedded database (`signatures/components.toml`): a
+/// typo or a component SIGIL does not identify would otherwise match nothing, silently.
+#[test]
+fn a_deny_entry_must_name_a_component_sigil_identifies() {
+    let deny = |component: &str| {
+        format!(
+            "{HEAD}[[components.deny]]\ncomponent = \"{component}\"\naction = \"warn\"\nreason = \"r\"\n"
+        )
+    };
+    for known in ["ggml-backend/rpc", "llama.cpp/common", "ollama"] {
+        let policy = Policy::load(&deny(known)).unwrap_or_else(|e| panic!("{known}: {e}"));
+        assert_eq!(
+            ids(&policy.deny.iter().map(|d| &d.component).collect::<Vec<_>>()),
+            [known]
+        );
+    }
+    for unknown in ["llama.cpp/comon", "ggml-backend/metal", "llama.cpp/llama"] {
+        let error = fails(&deny(unknown));
+        assert_eq!(error, PolicyError::UnknownComponent(unknown.to_string()));
+        assert_eq!(
+            error.to_string(),
+            format!("components.deny \"{unknown}\": not a component SIGIL identifies")
+        );
+    }
+    // A key that is not a valid component key at all is still an ID error, as before.
+    assert!(matches!(fails(&deny(" ggml")), PolicyError::BadId(_)));
 }
 
 #[test]

@@ -33,6 +33,8 @@ symlink, is one input. For each input, the session records:
 - **One `binary.container` coverage entry:** the input's status.
 - **Its capability hints,** for each ELF slice, with or without `--code`
   ([below](#capabilities-and-code---code)).
+- **Its component claim,** for an ELF slice whose file name or SONAME the component database
+  knows ([below](#components)).
 - **With `--code`:** the direct call sites of the capability imports, and one `binary.code`
   coverage entry ([below](#capabilities-and-code---code)).
 
@@ -61,6 +63,8 @@ fail on an unsupported or partial input.
 The summary on stderr has one `binary:` line per input, in argument order: its path, type,
 digest, and status. With `--code`, the line ends with the input's `binary.code` status, in the
 same form: for example `code: complete`, `code: partial (3 gaps)`, or `code: unsupported: …`.
+An input with a component claim then ends with `component: <component> (<status>)`, the status
+in words, for example `component: llama.cpp/common (name only)`.
 
 **Imports are not calls.**
 - For an executable or a shared object, imports are the dynamic symbols its loader resolves.
@@ -183,6 +187,26 @@ result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
   most 256 distinct gaps are listed; the others are counted. These limits are not recorded in
   the session. The [session model](session-model.md#code-analysis-pr-5a) lists each one with its
   gap.
+
+## Components
+
+Each ELF input whose file name (after the symlinks in the argument are resolved) or SONAME the
+component database knows gets a component claim, as an installation's files do. The database
+lists 16 components, `ggml-backend/rpc` (`libggml-rpc.so`) among them
+([runtime artifacts](runtime-artifacts.md#components)). Nothing more is read. A binary inspection
+has no reference rows, so a claim is `NameOnly`, or `Conflicting` when two names, two versions of
+one kind, or two commits disagree; it is never `ReferenceMatched`. For example:
+- a file named `libggml-base.so.0.13.1` whose SONAME is `libllama.so` is a `ggml-base` claim (the
+  file name comes first), `Conflicting`;
+- two inputs with the same content, `libmtmd.so.0.0.1` and `libmtmd.so.1`, are one content with
+  one claim, `Conflicting` (versions `0.0.1` and `1`);
+- a stripped `libllama-common.so.0.0.1` keeps its `LLAMA_*` values, read from its dynamic
+  symbols, and is `NameOnly`, as the unstripped file is.
+
+In the Markdown, each content's facts table ends with three rows: **Component**, **Identity**
+(the status in words, for example `name only`), and **Versions** (each value with its source, for
+example `0.0.1 (file name), 1 (LLAMA_BUILD_NUMBER)`), each `-` without a claim. A Mach-O has no
+claim yet, so its rows are `-`.
 
 ## Inputs and errors
 

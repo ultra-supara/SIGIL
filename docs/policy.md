@@ -172,7 +172,9 @@ Evaluation changes only what the policy owns.
   `policy:open_questions.default`.
 - **Denied components:**
   - Every component claim for a denied component becomes a `PolicyViolation`. This includes
-    name-only claims and excludes `Unidentified` ones.
+    name-only claims and excludes `Unidentified` ones. Claims come from identification
+    ([runtime artifacts](runtime-artifacts.md#components)), so a deny entry must name a
+    component of the database; any other key is fatal (below).
   - The violation's evidence is the claim's artifact.
   - Policy violations are separate from technical findings.
 
@@ -211,7 +213,9 @@ Loading fails, and nothing is evaluated, for:
 - a malformed date;
 - `ignore` without a reason (rule or open questions);
 - a principal other than `root`, `runtime`, or `uid:<n>`, and a group other than `gid:<n>`;
-- a component deny entry with `ignore`, without a reason, or listed twice.
+- a component deny entry with `ignore`, without a reason, listed twice, or naming a component
+  that is not in the component database
+  ([runtime artifacts](runtime-artifacts.md#components)).
 
 A typo never silently weakens a policy.
 

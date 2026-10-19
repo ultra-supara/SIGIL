@@ -10,6 +10,7 @@ mod md;
 use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
 use crate::evidence::{NotObservable, Ref};
 use crate::finding::{Action, Completeness, FindingKind, OqTreatment, Severity, Verdict};
+use crate::identity::IdentityStatus;
 use crate::probe::{target, ActiveFeature, ProbePhase, ProbeResult};
 use crate::session::Mode;
 use crate::text::UntrustedText;
@@ -162,6 +163,52 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
             }
         })
         .collect()
+}
+
+/// The component claims of a slice, in session order (PR-4c-1).
+pub fn claims_of<'s>(
+    s: &'s crate::session::Session,
+    slice: &crate::id::SliceId,
+) -> Vec<&'s crate::identity::ComponentClaim> {
+    s.components
+        .iter()
+        .filter(|c| c.subject == *slice)
+        .collect()
+}
+
+/// A claim as reports name it: `<component> (<status>)`, e.g. `llama.cpp/common (name only)`.
+pub fn component_label(c: &crate::identity::ComponentClaim) -> String {
+    format!("{} ({})", c.component, identity_status(c.status))
+}
+
+/// The labels of a slice's claims joined with `, `, or `None` without a claim: the install
+/// table's Component cell and the `binary:` summary line.
+pub fn component_labels(s: &crate::session::Session, slice: &crate::id::SliceId) -> Option<String> {
+    let labels: Vec<String> = claims_of(s, slice)
+        .into_iter()
+        .map(component_label)
+        .collect();
+    if labels.is_empty() {
+        None
+    } else {
+        Some(labels.join(", "))
+    }
+}
+
+/// Where a version value came from: `file name`, `SONAME`, `install name`, `version string`, or
+/// the embedded field, e.g. `LLAMA_BUILD_NUMBER`.
+pub fn version_source(source: &crate::identity::VersionSource) -> String {
+    use crate::identity::{NameKind, VersionSource};
+    match source {
+        VersionSource::SelfName { kind } => match kind {
+            NameKind::Filename => "file name",
+            NameKind::Soname => "SONAME",
+            NameKind::InstallName => "install name",
+            NameKind::VersionString => "version string",
+        }
+        .to_string(),
+        VersionSource::Embedded { field } => field.clone(),
+    }
 }
 
 /// An artifact's type: `ELF Rel x86_64`, `Mach-O`, `other`, or `not read`.
@@ -343,5 +390,16 @@ pub fn severity(s: Severity) -> &'static str {
     match s {
         Severity::Warn => "warn",
         Severity::Fail => "fail",
+    }
+}
+
+/// The label of a value, as reports show it. The JSON (session and AI-BOM) keeps the enum name.
+pub fn identity_status(s: IdentityStatus) -> &'static str {
+    match s {
+        IdentityStatus::Conflicting => "conflicting",
+        IdentityStatus::ReferenceMatched => "reference matched",
+        IdentityStatus::Corroborated => "corroborated",
+        IdentityStatus::NameOnly => "name only",
+        IdentityStatus::Unidentified => "unidentified",
     }
 }

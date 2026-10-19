@@ -3,8 +3,8 @@
 //! A policy says which audit scopes are required (and so which checks must be closed), how open
 //! questions count, which assumptions a finding may rest on, how individual rules are treated, who
 //! is trusted, and which components are denied. Loading is strict: an unknown key, rule, scope,
-//! check, or assumption, a malformed date, and `ignore` without a reason are all fatal, so a typo
-//! never silently weakens a policy.
+//! check, assumption, or denied component, a malformed date, and `ignore` without a reason are
+//! all fatal, so a typo never silently weakens a policy.
 //!
 //! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
 //! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy
@@ -24,6 +24,8 @@ mod evaluate;
 mod raw;
 
 pub use evaluate::{evaluate, outcome, EvaluateError, PolicyWarning};
+
+use crate::analyze::components::components;
 
 /// The schema line every policy starts with.
 pub const SCHEMA: &str = "sigil-policy/1";
@@ -214,6 +216,11 @@ pub enum PolicyError {
         component: String,
     },
     DuplicateDeny(String),
+    /// A deny entry whose component is not a key of the component database: it could match no
+    /// claim (PR-4c-1).
+    UnknownComponent(String),
+    /// The embedded component database is invalid (`the_embedded_database_parses` rules it out).
+    ComponentDatabase(String),
     BadId(String),
 }
 
@@ -245,6 +252,10 @@ impl fmt::Display for PolicyError {
                 write!(f, "components.deny {component:?}: needs a reason")
             }
             DuplicateDeny(c) => write!(f, "components.deny names {c:?} twice"),
+            UnknownComponent(c) => {
+                write!(f, "components.deny {c:?}: not a component SIGIL identifies")
+            }
+            ComponentDatabase(m) => write!(f, "the embedded component database is invalid: {m}"),
             BadId(m) => write!(f, "{m}"),
         }
     }
@@ -368,6 +379,11 @@ impl Policy {
         let mut deny: Vec<ComponentDeny> = vec![];
         for entry in raw.components.deny {
             let component = id(ComponentKey::new(entry.component.as_str()))?;
+            // Fail closed: a key the database does not list would match no claim, silently.
+            let db = components().map_err(PolicyError::ComponentDatabase)?;
+            if !db.knows(&component) {
+                return Err(PolicyError::UnknownComponent(entry.component));
+            }
             if deny.iter().any(|d| d.component == component) {
                 return Err(PolicyError::DuplicateDeny(entry.component));
             }

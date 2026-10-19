@@ -13,7 +13,9 @@ use sigil_model::{
 };
 
 use crate::analyze::binary::CodeCoverageError;
-use crate::analyze::{binary, container, exposure, hints, model_store, release, runtime_api};
+use crate::analyze::{
+    binary, container, exposure, hints, identity, model_store, release, runtime_api,
+};
 use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
@@ -264,6 +266,9 @@ fn assemble(
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
     let hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
+    // PR-4c-1: from the facts above; nothing more is read.
+    let components = identity::derive(&instances, &binaries, &reference_matches)
+        .map_err(InspectError::Internal)?;
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -287,7 +292,7 @@ fn assemble(
         listeners,
         probes: active.probes.clone(),
         values: vec![],
-        components: vec![],
+        components,
         releases,
         reference_matches,
         binaries,
@@ -369,6 +374,9 @@ pub fn binary_session(
         budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
     }
     let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
+    // PR-4c-1: a binary inspection has no reference rows.
+    let components =
+        identity::derive(&facts.instances, &facts.binaries, &[]).map_err(InspectError::Internal)?;
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -392,7 +400,7 @@ pub fn binary_session(
         listeners: vec![],
         probes: vec![],
         values: vec![],
-        components: vec![],
+        components,
         releases: vec![],
         reference_matches: vec![],
         binaries: facts.binaries,
