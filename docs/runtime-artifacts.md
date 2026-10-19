@@ -281,8 +281,8 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   letters, digits, and `_` (`libggml-cpu-<variant>.so`). There are no regular expressions. A name
   that two entries match names no component. Every regular file of the embedded releases is
   named by exactly one entry. `ggml-backend/rpc` (`libggml-rpc.so`, upstream ggml's RPC
-  backend) is in no official release; a policy may deny it. NVIDIA libraries are identified by
-  name and hash only (plan ADR-010).
+  backend) is in none of the embedded releases (v0.30.5–v0.30.7); a policy may deny it. NVIDIA
+  libraries are identified by name and hash only (plan ADR-010).
 - **Names.** A slice is named by the file name of each stable placement of its content, by each
   stable symlink placement whose targets lead there one bare file name at a time, in the link's
   own directory (`libggml-base.so` → `libggml-base.so.0` → `libggml-base.so.0.13.1`; at most 40

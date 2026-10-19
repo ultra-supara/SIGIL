@@ -34,7 +34,8 @@ names = [{ exact = "libggml-cuda.so" }]
 key = "ggml-backend/vulkan"
 names = [{ exact = "libggml-vulkan.so" }]
 
-# Upstream ggml's RPC backend. No official Ollama release ships it; a policy may deny it.
+# Upstream ggml's RPC backend. It is in none of the embedded releases (v0.30.5–v0.30.7); a
+# policy may deny it.
 [[component]]
 key = "ggml-backend/rpc"
 names = [{ exact = "libggml-rpc.so" }]

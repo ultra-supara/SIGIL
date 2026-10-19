@@ -727,9 +727,9 @@ The engine fills `components` for each ELF slice of an installation or a binary 
 whose names its database knows ([runtime artifacts](runtime-artifacts.md#components)). It reads
 nothing for it: the claims come from the instances, the binary facts, and the reference rows. A
 claim keeps every source as its own assertion: a `SelfName` per name (`Filename` for each
-placement that holds the content and each link that leads to one, `Soname`), an `Embedded` value
-per known `LLAMA_*` value and Go build info field (`go.version`, and `go.path` or `go.main`), a
-`KnownHash` per reference row of a placement that holds the content, and
+stable placement that holds the content and each link that leads to one, `Soname`), an
+`Embedded` value per known `LLAMA_*` value and Go build info field (`go.version`, and `go.path`
+or `go.main`), a `KnownHash` per reference row of a placement that holds the content, and
 `Signature { NotChecked }`. Its versions are the dotted numbers after `.so.` of the names that
 name its component, and `LLAMA_BUILD_NUMBER`. `Conflicting` (two names of different components,
 two first numbers of one kind of version, or two commits) needs the database, so the engine
