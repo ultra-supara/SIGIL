@@ -272,15 +272,17 @@ An ELF slice of the installation gets a component claim from the facts above whe
 database knows one of its names (PR-4c-1). Nothing more is read.
 
 - **The database** (`crates/sigil-engine/signatures/components.toml`) has one entry per
-  component, keyed as the upstream library: `ollama`, `ggml`, `ggml-base`, `ggml-backend/cpu`,
-  `ggml-backend/cuda`, `ggml-backend/vulkan`, `llama.cpp`, `llama.cpp/common`, `llama.cpp/mtmd`,
-  `llama.cpp/server`, `llama.cpp/quantize`, `gcc/libgomp`, `cuda-runtime`, `cuda/cublas`, and
-  `cuda/cublasLt`. Each lists the names that name it: an exact name (`ollama`), a library with an
-  optional version (`libggml.so`, `libggml.so.0`, `libggml.so.0.13.1`), or a prefix and a suffix
-  around one variant of ASCII letters, digits, and `_` (`libggml-cpu-<variant>.so`). There are no
-  regular expressions. A name that two entries match names no component. Every regular file of
-  the embedded releases is named by exactly one entry. NVIDIA libraries are identified by name
-  and hash only (plan ADR-010).
+  component, 16 in all, keyed as the upstream library: `ollama`, `ggml`, `ggml-base`,
+  `ggml-backend/cpu`, `ggml-backend/cuda`, `ggml-backend/vulkan`, `ggml-backend/rpc`,
+  `llama.cpp`, `llama.cpp/common`, `llama.cpp/mtmd`, `llama.cpp/server`, `llama.cpp/quantize`,
+  `gcc/libgomp`, `cuda-runtime`, `cuda/cublas`, and `cuda/cublasLt`. Each lists the names that
+  name it: an exact name (`ollama`), a library with an optional version (`libggml.so`,
+  `libggml.so.0`, `libggml.so.0.13.1`), or a prefix and a suffix around one variant of ASCII
+  letters, digits, and `_` (`libggml-cpu-<variant>.so`). There are no regular expressions. A name
+  that two entries match names no component. Every regular file of the embedded releases is
+  named by exactly one entry. `ggml-backend/rpc` (`libggml-rpc.so`, upstream ggml's RPC
+  backend) is in no official release; a policy may deny it. NVIDIA libraries are identified by
+  name and hash only (plan ADR-010).
 - **Names.** A slice is named by the file name of each stable placement of its content, by each
   stable symlink placement whose targets lead there one bare file name at a time, in the link's
   own directory (`libggml-base.so` → `libggml-base.so.0` → `libggml-base.so.0.13.1`; at most 40
@@ -314,13 +316,15 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 - **The report.** The **Binaries** table has a **Component** column after **Type**:
   `<component> (<status>)`, the status in words (for example `ggml-base (reference matched)`),
   or `-`.
-- **Policy.** A `[[components.deny]]` entry applies to these claims, `NameOnly` ones included
+- **Policy.** A `[[components.deny]]` entry applies to these claims, `NameOnly` ones included.
+  Its component must be a key of the database: any other key does not load
   ([policy](policy.md)).
 
 ## Not yet
 
-- Identity from read-only strings, export names, and Go functions, and the open release set of a
-  self-reported commit (PR-4c-2).
+- Identity from read-only strings, export names, and Go functions, the backends a library holds
+  (for example the RPC backend linked into another library, seen by its `ggml_backend_rpc_`
+  exports), and the open release set of a self-reported commit (PR-4c-2).
 - Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
   it (PR-4d).
 - Releases outside the embedded set, and releases built from a source commit.

@@ -191,7 +191,8 @@ result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
 ## Components
 
 Each ELF input whose file name (after the symlinks in the argument are resolved) or SONAME the
-component database knows gets a component claim, as an installation's files do
+component database knows gets a component claim, as an installation's files do. The database
+lists 16 components, `ggml-backend/rpc` (`libggml-rpc.so`) among them
 ([runtime artifacts](runtime-artifacts.md#components)). Nothing more is read. A binary inspection
 has no reference rows, so a claim is `NameOnly`, or `Conflicting` when two names, two versions of
 one kind, or two commits disagree; it is never `ReferenceMatched`. For example:
