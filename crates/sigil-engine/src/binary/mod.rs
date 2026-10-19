@@ -6,6 +6,7 @@ pub mod elf;
 pub mod goinfo;
 pub mod header;
 pub mod macho;
+pub mod needles;
 pub mod read;
 pub mod vaddr;
 

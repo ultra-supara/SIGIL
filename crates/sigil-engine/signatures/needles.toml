@@ -1,0 +1,27 @@
+# Signature needles (PR-4c-2a spec §3; plan §4.4.3). The scan looks for each needle in every ELF
+# file it applies to, and the first match is one feature hint. A hint says the signal exists in
+# the file; it never says the feature is used.
+#
+#   feature  the hint's feature key
+#   kind     export       a prefix of the name of an exported dynamic symbol (.dynsym)
+#            go-function  exact bytes in .gopclntab, in an ELF file with Go build info
+#            string       exact bytes in .rodata, .rodata.*, or .lrodata
+#   value    not empty, at most 4096 bytes
+#
+# The RPC backend is decided by its exports, not by a string: libllama-common's .rodata holds the
+# string ggml_backend_rpc_add_server, but it exports no ggml_backend_rpc_* symbol.
+
+[[needle]]
+feature = "rpc.code_present"
+kind = "export"
+value = "ggml_backend_rpc_"
+
+[[needle]]
+feature = "ollama.llama_server_launch"
+kind = "go-function"
+value = "github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv"
+
+[[needle]]
+feature = "ollama.device_discovery"
+kind = "go-function"
+value = "github.com/ollama/ollama/discover.discoverNativeDevices"

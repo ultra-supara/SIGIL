@@ -8,7 +8,11 @@
 #
 # There are no regular expressions. A name that two entries match names no component. Every
 # regular member of the embedded reference manifests is matched by exactly one entry
-# (tests/components.rs). NVIDIA libraries are identified by name and hash only (ADR-010).
+# (tests/components.rs).
+#
+# `scan = false` (PR-4c-2a): a file whose name names the component is never scanned for
+# signatures (signatures/needles.toml). NVIDIA libraries are identified by name and hash only
+# (ADR-010). Without it, an entry's files are scanned.
 
 [[component]]
 key = "ollama"
@@ -67,11 +71,14 @@ names = [{ library = "libgomp.so" }]
 [[component]]
 key = "cuda-runtime"
 names = [{ library = "libcudart.so" }]
+scan = false
 
 [[component]]
 key = "cuda/cublas"
 names = [{ library = "libcublas.so" }]
+scan = false
 
 [[component]]
 key = "cuda/cublasLt"
 names = [{ library = "libcublasLt.so" }]
+scan = false

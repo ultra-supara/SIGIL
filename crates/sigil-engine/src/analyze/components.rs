@@ -4,6 +4,9 @@
 //! A pattern is an exact name, a library name with an optional version, or a literal prefix and
 //! suffix around one variant. There are no regular expressions. A name that two entries match
 //! names no component: an ambiguity is never resolved by picking one entry.
+//!
+//! An entry with `scan = false` (PR-4c-2a) names files that the signature scan never reads: the
+//! NVIDIA libraries, identified by name and hash only (ADR-010).
 
 use std::sync::OnceLock;
 
@@ -58,6 +61,8 @@ pub fn is_version(text: &[u8]) -> bool {
 pub struct ComponentDb {
     /// In file order.
     entries: Vec<(ComponentKey, Vec<NamePattern>)>,
+    /// The keys of the entries with `scan = false`, in file order.
+    unscanned: Vec<ComponentKey>,
 }
 
 impl ComponentDb {
@@ -90,6 +95,18 @@ impl ComponentDb {
     pub fn knows(&self, key: &ComponentKey) -> bool {
         self.entries.iter().any(|(k, _)| k == key)
     }
+
+    /// The keys of the entries with `scan = false`, in file order (PR-4c-2a).
+    pub fn unscanned(&self) -> &[ComponentKey] {
+        &self.unscanned
+    }
+
+    /// Whether the signature scan reads a file named `name` (PR-4c-2a): unless the component
+    /// `name` names ([`ComponentDb::component`]) has `scan = false`.
+    pub fn scans(&self, name: &[u8]) -> bool {
+        self.component(name)
+            .is_none_or(|key| !self.unscanned.contains(key))
+    }
 }
 
 #[derive(Deserialize)]
@@ -103,6 +120,8 @@ struct RawDb {
 struct RawComponent {
     key: String,
     names: Vec<RawName>,
+    /// `false`: the component's files are never scanned (PR-4c-2a). Omitted: `true`.
+    scan: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -125,10 +144,11 @@ pub fn components() -> Result<&'static ComponentDb, String> {
 }
 
 /// Parses a database: each key a valid component key, listed once, with at least one name; each
-/// name one of the three forms, with literals that are not empty.
+/// name one of the three forms, with literals that are not empty; `scan` a boolean, if given.
 fn parse(text: &str) -> Result<ComponentDb, String> {
     let raw: RawDb = toml::from_str(text).map_err(|e| format!("components.toml: {e}"))?;
     let mut entries: Vec<(ComponentKey, Vec<NamePattern>)> = vec![];
+    let mut unscanned = vec![];
     for c in raw.component {
         let key = ComponentKey::new(c.key).map_err(|e| format!("components.toml: {e}"))?;
         if entries.iter().any(|(k, _)| *k == key) {
@@ -163,9 +183,12 @@ fn parse(text: &str) -> Result<ComponentDb, String> {
             };
             patterns.push(pattern);
         }
+        if c.scan == Some(false) {
+            unscanned.push(key.clone());
+        }
         entries.push((key, patterns));
     }
-    Ok(ComponentDb { entries })
+    Ok(ComponentDb { entries, unscanned })
 }
 
 #[cfg(test)]
@@ -313,6 +336,49 @@ mod tests {
         assert_eq!(
             db.component(b"libggml-rpc.so"),
             Some(&key("ggml-backend/rpc"))
+        );
+    }
+
+    #[test]
+    fn exactly_the_nvidia_entries_are_not_scanned() {
+        let db = components().unwrap();
+        let unscanned: Vec<&str> = db.unscanned().iter().map(ComponentKey::as_str).collect();
+        assert_eq!(unscanned, ["cuda-runtime", "cuda/cublas", "cuda/cublasLt"]);
+        for name in [
+            &b"libcudart.so.12.8.90"[..],
+            b"libcudart.so",
+            b"libcublas.so.13.1.1.3",
+            b"libcublasLt.so.12",
+        ] {
+            assert!(!db.scans(name), "{}", shown(name));
+        }
+        for name in [
+            &b"libggml-cuda.so"[..],
+            b"ollama",
+            b"libggml-base.so.0.13.1",
+            b"libcudart.so.x",
+            b"unknown.so",
+        ] {
+            assert!(db.scans(name), "{}", shown(name));
+        }
+    }
+
+    #[test]
+    fn scan_is_a_boolean_that_defaults_to_true() {
+        let db = parse(
+            "[[component]]\nkey = \"a\"\nnames = [{ exact = \"a\" }]\nscan = false\n\
+             [[component]]\nkey = \"b\"\nnames = [{ exact = \"b\" }]\nscan = true\n\
+             [[component]]\nkey = \"c\"\nnames = [{ exact = \"c\" }]\n",
+        )
+        .unwrap();
+        assert!(!db.scans(b"a"));
+        assert!(db.scans(b"b"));
+        assert!(db.scans(b"c"));
+        assert!(db.scans(b"d"), "a name no entry matches is scanned");
+        assert!(
+            parse("[[component]]\nkey = \"a\"\nnames = [{ exact = \"a\" }]\nscan = \"no\"\n")
+                .unwrap_err()
+                .starts_with("components.toml: ")
         );
     }
 
