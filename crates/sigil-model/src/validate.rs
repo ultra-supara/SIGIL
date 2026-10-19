@@ -232,12 +232,14 @@ pub enum ValidationError {
     /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
     /// (V11).
     ReleaseCoverage { complete: bool },
-    /// A `BinaryFacts` record, or a `Declares` relation, disagrees with the session (B1–B8).
+    /// A `BinaryFacts` record, a `Declares` relation, or `artifacts.identity` disagrees with the
+    /// session (B1–B8; S2, PR-4c-2a).
     Binary { slice: String, why: String },
-    /// A binary inspection's input, its root, or its `binary.container` disagrees with the
-    /// session (B9, B10; PR-4b-2a).
+    /// A binary inspection's input, its root, its `binary.container`, or its `binary.identity`
+    /// disagrees with the session (B9, B10; PR-4b-2a; S1, PR-4c-2a).
     BinaryInput { at: String, why: String },
-    /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a).
+    /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a; S3,
+    /// PR-4c-2a).
     Code { at: String, why: String },
 }
 
@@ -737,7 +739,9 @@ impl<'a> Validator<'a> {
         self.binaries();
         self.binary_inputs();
         self.code_coverage();
+        self.identity_coverage();
         self.import_hints();
+        self.signature_hints();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -2054,6 +2058,157 @@ impl<'a> Validator<'a> {
             });
             if !imported {
                 self.code_error(&at, "the value is not an import of its slice");
+            }
+        }
+    }
+
+    /// S1 and S2 (PR-4c-2a spec §5, §6): the identity coverage agrees with the session.
+    ///
+    /// - S1: a `binary.identity` entry is scoped to the instance of an input of a binary
+    ///   inspection. An input has at most one (a session written before PR-4c-2a has none), in a
+    ///   state [`expected_binary_identity`] admits.
+    /// - S2: `artifacts.identity` is `Complete` only with a complete discovery, and with facts for
+    ///   every slice of the install's binaries, none of them a Mach-O.
+    ///
+    /// [`expected_binary_identity`]: crate::binary_input::expected_binary_identity
+    fn identity_coverage(&mut self) {
+        use crate::artifact::Format;
+        use crate::binary::ARTIFACTS_IDENTITY;
+        use crate::binary_input::{
+            expected_binary_container, expected_binary_identity, is_binary_root, BINARY_IDENTITY,
+        };
+        use crate::coverage::Coverage;
+        use crate::render::subject;
+        let s = self.s;
+        // S1. An instance of a binary root makes the session a binary inspection (B10).
+        let inputs: BTreeMap<&InstanceId, &FileInstance> = s
+            .instances
+            .iter()
+            .filter(|i| is_binary_root(&i.root))
+            .map(|i| (&i.id, i))
+            .collect();
+        let mut per_input: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_IDENTITY)
+        {
+            match &c.scope {
+                Ref::Instance(i) if inputs.contains_key(i) => {
+                    per_input.entry(i).or_default().push(c)
+                }
+                _ => self.input_error(
+                    &format!("coverage[{BINARY_IDENTITY} on {}]", subject(&c.scope)),
+                    "binary.identity must be scoped to an input's instance",
+                ),
+            }
+        }
+        for (id, entries) in per_input {
+            let at = format!("coverage[{BINARY_IDENTITY} on {id}]");
+            let (Some(i), [c]) = (inputs.get(id), entries.as_slice()) else {
+                self.input_error(
+                    &at,
+                    format!(
+                        "{} binary.identity entries; an input has at most one",
+                        entries.len()
+                    ),
+                );
+                continue;
+            };
+            match expected_binary_identity(s, i) {
+                Ok(expected) => {
+                    if let Err(why) = expected.admits(&c.state) {
+                        self.input_error(&at, why);
+                    }
+                }
+                // B9 reports an input whose container it cannot judge.
+                Err(why) if expected_binary_container(s, i).is_ok() => self.input_error(&at, why),
+                Err(_) => {}
+            }
+        }
+        // S2
+        let complete = s
+            .coverage
+            .iter()
+            .any(|c| c.check.as_str() == ARTIFACTS_IDENTITY && c.state == CoverageState::Complete);
+        if complete {
+            let discovery = s.coverage.iter().any(|c| {
+                c.check.as_str() == ARTIFACTS_DISCOVERY && c.state == CoverageState::Complete
+            });
+            let install = RootId::new(INSTALL_ROOT).ok();
+            let binaries: Vec<_> = s
+                .instances
+                .iter()
+                .filter(|i| Some(&i.root) == install.as_ref())
+                .filter_map(|i| match &i.content {
+                    InstanceContent::Read { artifact } => Some(artifact),
+                    InstanceContent::NotRead { .. } => None,
+                })
+                .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+                .filter(|a| {
+                    matches!(
+                        a.format,
+                        Format::Elf { .. } | Format::MachO | Format::MachOFat
+                    )
+                })
+                .collect();
+            let scanned = binaries.iter().all(|a| {
+                matches!(a.format, Format::Elf { .. })
+                    && !a.slices.is_empty()
+                    && a.slices
+                        .iter()
+                        .all(|x| s.binaries.iter().any(|b| b.slice == x.id))
+            });
+            if !(discovery && scanned) {
+                self.errors.push(ValidationError::Binary {
+                    slice: "*".to_string(),
+                    why: format!(
+                        "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, or a slice has no facts"
+                    ),
+                });
+            }
+        }
+    }
+
+    /// S3 (PR-4c-2a spec §6): a signature hint is of an ELF slice, where its kind is found. An
+    /// `Export` hint is at `Symbol(value)`; a `GoFunction` hint in `.gopclntab`, of a slice with
+    /// Go build info; a `String` hint in `.rodata`, `.rodata.*`, or `.lrodata`.
+    fn signature_hints(&mut self) {
+        use crate::binary::ContainerFacts;
+        use crate::hint::Signal;
+        let s = self.s;
+        for hint in &s.hints {
+            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
+            let facts = s.binaries.iter().find(|b| b.slice == hint.subject);
+            let elf = facts.is_some_and(|b| matches!(b.container, ContainerFacts::Elf(_)));
+            let section = match &hint.at {
+                Loc::Section { name, .. } => Some(name.as_bytes()),
+                _ => None,
+            };
+            let why = match hint.signal {
+                Signal::Export if hint.at != Loc::Symbol(hint.value.clone()) => {
+                    Some("an export hint's at must be Symbol(value)")
+                }
+                Signal::GoFunction if section != Some(b".gopclntab") => {
+                    Some("a Go function hint's at must be in .gopclntab")
+                }
+                Signal::GoFunction if facts.is_none_or(|b| b.go.is_none()) => {
+                    Some("a Go function hint needs Go build info in its slice")
+                }
+                Signal::String
+                    if !section.is_some_and(|n| {
+                        n == b".rodata" || n == b".lrodata" || n.starts_with(b".rodata.")
+                    }) =>
+                {
+                    Some("a string hint's at must be in .rodata, .rodata.*, or .lrodata")
+                }
+                Signal::Export | Signal::GoFunction | Signal::String if !elf => {
+                    Some("a signature hint needs ELF facts for its slice")
+                }
+                _ => None,
+            };
+            if let Some(why) = why {
+                self.code_error(&at, why);
             }
         }
     }

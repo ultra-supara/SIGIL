@@ -1691,6 +1691,25 @@ fn binary_inspect_only(root: &str) -> Session {
     s
 }
 
+/// `s` as a binary inspection written before PR-4c-2a: without `binary.identity`, required or
+/// recorded. S1 admits that; the tests of the other rules change an input's container alone.
+pub fn without_identity(mut s: Session) -> Session {
+    let identity = |c: &CheckId| c.as_str() == BINARY_IDENTITY;
+    s.request.required_checks.retain(|c| !identity(c));
+    s.coverage.retain(|c| !identity(&c.check));
+    if let Completeness::Incomplete {
+        missing_required,
+        gaps,
+    } = &mut s.outcome.completeness
+    {
+        missing_required.retain(|c| !identity(c));
+        if missing_required.is_empty() && gaps.is_empty() {
+            s.outcome.completeness = Completeness::Complete;
+        }
+    }
+    s
+}
+
 /// A binary inspection of one x86-64 ELF input with `binary.container` `Complete`: example 15's
 /// shared object alone, which also imports `connect`. PASS + COMPLETE, without code.
 pub fn binary_session_one_elf() -> Session {

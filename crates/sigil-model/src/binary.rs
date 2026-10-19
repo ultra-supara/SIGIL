@@ -14,6 +14,10 @@ use crate::text::UntrustedText;
 /// The container analysis: what was read and what was not (scope `Root(install)`).
 pub const ARTIFACTS_CONTAINER: &str = "artifacts.container";
 
+/// The signature scan of the install's binaries (PR-4c-2a; scope `Root(install)`): every scan
+/// the signature database asks for was done within its budget.
+pub const ARTIFACTS_IDENTITY: &str = "artifacts.identity";
+
 /// The gap of a fat Mach-O slice whose own header names another architecture than its entry in
 /// the fat table (B2).
 pub const FAT_CPU_MISMATCH_GAP: &str = "fat slice: CPU type or subtype disagrees with its header";

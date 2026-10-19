@@ -497,8 +497,8 @@ fn c6_an_import_hint_names_an_import_of_its_slice() {
         "{:?}",
         errors(&s)
     );
-    // Another signal is not C6's.
-    s.hints[0].signal = Signal::String;
+    // Another signal is not C6's (a signature hint is S3's: scan_rules.rs).
+    s.hints[0].signal = Signal::Needed;
     assert_eq!(code_errors(&s), Vec::<String>::new());
 }
 
