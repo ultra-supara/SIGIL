@@ -85,6 +85,11 @@ impl ComponentDb {
     pub fn keys(&self) -> Vec<&ComponentKey> {
         self.entries.iter().map(|(key, _)| key).collect()
     }
+
+    /// Whether `key` is the key of an entry: a component SIGIL identifies.
+    pub fn knows(&self, key: &ComponentKey) -> bool {
+        self.entries.iter().any(|(k, _)| k == key)
+    }
 }
 
 #[derive(Deserialize)]
@@ -184,6 +189,7 @@ mod tests {
                 "ggml-backend/cpu",
                 "ggml-backend/cuda",
                 "ggml-backend/vulkan",
+                "ggml-backend/rpc",
                 "llama.cpp",
                 "llama.cpp/common",
                 "llama.cpp/mtmd",
@@ -281,7 +287,33 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 26);
+        assert_eq!(checked, 27);
+    }
+
+    #[test]
+    fn the_database_knows_its_keys_only() {
+        let db = components().unwrap();
+        let key = |k: &str| ComponentKey::new(k).unwrap();
+        for k in [
+            "ggml-backend/rpc",
+            "llama.cpp/common",
+            "ollama",
+            "cuda/cublasLt",
+        ] {
+            assert!(db.knows(&key(k)), "{k}");
+        }
+        for k in [
+            "llama.cpp/comon",
+            "ggml-backend/metal",
+            "llama.cpp/llama",
+            "cuda/cublaslt",
+        ] {
+            assert!(!db.knows(&key(k)), "{k}");
+        }
+        assert_eq!(
+            db.component(b"libggml-rpc.so"),
+            Some(&key("ggml-backend/rpc"))
+        );
     }
 
     #[test]
