@@ -1680,7 +1680,8 @@ fn two_hundred_inputs_fit_in_32_file_descriptors() {
         String::from_utf8_lossy(&out.stderr)
     );
     let s: Session = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(s.coverage.len(), 200);
+    // One binary.container and one binary.identity entry per input (PR-4c-2a).
+    assert_eq!(s.coverage.len(), 2 * 200);
 }
 
 #[test]

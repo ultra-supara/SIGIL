@@ -8,8 +8,8 @@ use sigil_model::{
     ActiveFeature, ApiProbe, Artifact, CheckId, CodeFacts, Completeness, Coverage, CoverageState,
     Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
     SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
-    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
-    BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
+    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_IDENTITY,
+    ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
 };
 
 use crate::analyze::binary::CodeCoverageError;
@@ -211,6 +211,7 @@ fn assemble(
         let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
+        let identity_coverage = container::identity(&facts).map_err(InspectError::BadId)?;
         roots.push(ScanRoot {
             id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
             path: facts.root_path,
@@ -227,6 +228,7 @@ fn assemble(
         coverage.push(facts.discovery);
         coverage.push(result.coverage);
         coverage.push(container);
+        coverage.push(identity_coverage);
         relations.extend(declares);
         binaries = facts.binaries;
         scans = facts.scans;
@@ -235,8 +237,13 @@ fn assemble(
     } else {
         // A policy that requires the install's checks without one: skipped, so incomplete.
         for check in &required_checks {
-            if [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, ARTIFACTS_CONTAINER]
-                .contains(&check.as_str())
+            if [
+                ARTIFACTS_DISCOVERY,
+                ARTIFACTS_RELEASE,
+                ARTIFACTS_CONTAINER,
+                ARTIFACTS_IDENTITY,
+            ]
+            .contains(&check.as_str())
             {
                 coverage.push(Coverage {
                     check: check.clone(),
@@ -433,6 +440,10 @@ pub fn binary_session(
     // The container's entries first: an input over `binary_bytes` copies its state to
     // `binary.code`.
     session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
+    // PR-4c-2a: after the container's entries, whose state an input over `binary_bytes` copies.
+    let identity_coverage =
+        binary::identity_coverage(&session, &facts.scans).map_err(InspectError::Internal)?;
+    session.coverage.extend(identity_coverage);
     let code_coverage = binary::code_coverage(&session, &facts.code).map_err(|e| match e {
         CodeCoverageError::BadId(e) => InspectError::BadId(e),
         CodeCoverageError::Undecided(e) => InspectError::Internal(e),

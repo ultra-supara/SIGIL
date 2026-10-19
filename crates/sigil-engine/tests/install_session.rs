@@ -285,7 +285,12 @@ fn without_an_install_the_default_requires_nothing_new_and_a_custom_policy_is_sk
     )
     .unwrap();
     let s = inspect_without_install(custom);
-    for check in [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE] {
+    for check in [
+        ARTIFACTS_DISCOVERY,
+        ARTIFACTS_RELEASE,
+        ARTIFACTS_CONTAINER,
+        ARTIFACTS_IDENTITY,
+    ] {
         let c = s
             .coverage
             .iter()

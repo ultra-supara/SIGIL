@@ -1501,16 +1501,17 @@ pub const ELF_INPUT: &str = "inst:binary-1/libggml-base.so";
 pub const TEXT_INPUT: &str = "inst:binary-2/NOTES.txt";
 
 /// Example 15: `sigil binary inspect` of two files (PR-4b-2a). The first is a shared object with
-/// complete container facts, the hints of its capability imports (`dlopen`, `getenv`), and the
-/// claim its file name and SONAME give (`ggml-base`, `NameOnly`; PR-4c-1); the second is a text
-/// file SIGIL does not parse. PASS + INCOMPLETE.
+/// complete container facts, the hints of its capability imports (`dlopen`, `getenv`), the claim
+/// its file name and SONAME give (`ggml-base`, `NameOnly`; PR-4c-1), and a complete signature
+/// scan (PR-4c-2a); the second is a text file SIGIL does not parse. PASS + INCOMPLETE.
 pub fn binary_inspect() -> Session {
-    let mut s = base(&[BINARY_CONTAINER]);
+    let mut s = base(&[BINARY_CONTAINER, BINARY_IDENTITY]);
     s.request.audit = ids(&["binary"]);
     s.request.budgets = BTreeMap::from([
         (BINARY_BYTES.to_string(), 64 << 30),
         ("binary_imports".to_string(), 4096),
         ("binary_parse_bytes".to_string(), 64 << 20),
+        (BINARY_SCAN_BYTES.to_string(), 64 << 20),
     ]);
     let paths = [
         "/home/user/Downloads/libggml-base.so",
@@ -1651,9 +1652,21 @@ pub fn binary_inspect() -> Session {
                 what: BINARY_UNSUPPORTED.to_string(),
             },
         ),
+        coverage(
+            BINARY_IDENTITY,
+            Ref::Instance(id(ELF_INPUT)),
+            CoverageState::Complete,
+        ),
+        coverage(
+            BINARY_IDENTITY,
+            Ref::Instance(id(TEXT_INPUT)),
+            CoverageState::Unsupported {
+                what: BINARY_UNSUPPORTED.to_string(),
+            },
+        ),
     ]);
     s.outcome.completeness = Completeness::Incomplete {
-        missing_required: ids(&[BINARY_CONTAINER]),
+        missing_required: ids(&[BINARY_CONTAINER, BINARY_IDENTITY]),
         gaps: vec![],
     };
     s
@@ -1746,9 +1759,10 @@ pub const KERNEL_HEX: &str = "aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7
 /// §5.3). The hash, container facts, hint, code facts, and `binary_code_bytes` use are what the
 /// engine records for the fixture `suspicious_kernel-gcc-O2.o`; the path and the stat are
 /// synthetic. Its one function, `kernel`, calls `connect(0, 0, 0)`. In a relocatable object an
-/// address is a file offset: `.text` starts at 0x40. PASS + COMPLETE.
+/// address is a file offset: `.text` starts at 0x40. Its signature scan is complete: no needle
+/// applies to it (PR-4c-2a). PASS + COMPLETE.
 pub fn binary_code() -> Session {
-    let mut s = base(&[BINARY_CODE, BINARY_CONTAINER]);
+    let mut s = base(&[BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY]);
     s.request.audit = ids(&["binary", "binary_code"]);
     s.request.code = true;
     s.request.budgets = BTreeMap::from([
@@ -1756,6 +1770,7 @@ pub fn binary_code() -> Session {
         (BINARY_CODE_BYTES.to_string(), 256 << 20),
         ("binary_imports".to_string(), 4096),
         ("binary_parse_bytes".to_string(), 64 << 20),
+        (BINARY_SCAN_BYTES.to_string(), 64 << 20),
     ]);
     let path = "/home/user/src/suspicious_kernel-gcc-O2.o";
     s.request.roots = vec![ScanRoot {
@@ -1852,6 +1867,11 @@ pub fn binary_code() -> Session {
                 limit: 256 << 20,
             }),
         },
+        coverage(
+            BINARY_IDENTITY,
+            Ref::Instance(id(KERNEL_INPUT)),
+            CoverageState::Complete,
+        ),
     ]);
     s
 }

@@ -16,7 +16,11 @@ use sigil_engine::inspect::{
     binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, StoreRequest,
 };
 use sigil_engine::policy::Policy;
-use sigil_model::{FeatureHint, Loc, Session, Signal, SCAN_NO_SECTIONS};
+use sigil_model::{
+    scan_over_gap, Completeness, CoverageState, FeatureHint, Loc, Ref, Session, Signal,
+    ARTIFACTS_IDENTITY, BINARY_IDENTITY, BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY,
+    SCAN_NO_SECTIONS,
+};
 use tempfile::TempDir;
 
 const LAUNCH: &str = "github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv";
@@ -24,8 +28,18 @@ const DISCOVER: &str = "github.com/ollama/ollama/discover.discoverNativeDevices"
 
 /// A `.gopclntab` of `len` bytes with both Go-function needles, at 0x100 and 0x2000.
 fn pclntab(len: usize) -> Vec<u8> {
+    pclntab_with(len, 0x2000)
+}
+
+/// A `.gopclntab` of `len` bytes with the launch needle at 0x100, and the discovery needle at
+/// `discover`.
+fn pclntab_with(len: usize, discover: usize) -> Vec<u8> {
     let mut t = vec![0u8; len];
-    for (at, name) in [(0x10, "runtime.main"), (0x100, LAUNCH), (0x2000, DISCOVER)] {
+    for (at, name) in [
+        (0x10, "runtime.main"),
+        (0x100, LAUNCH),
+        (discover, DISCOVER),
+    ] {
         t[at..at + name.len()].copy_from_slice(name.as_bytes());
     }
     t
@@ -275,6 +289,14 @@ fn a_binary_inspection_records_the_scan_budget() {
 
 /// An install with `bin/ollama` and `lib/ollama/<name>` for each `(name, bytes)` of `libs`.
 fn install(ollama: &[u8], libs: &[(&str, &[u8])]) -> (TempDir, TempDir, Session) {
+    install_with(ollama, libs, InstallBudgets::default())
+}
+
+fn install_with(
+    ollama: &[u8],
+    libs: &[(&str, &[u8])],
+    budgets: InstallBudgets,
+) -> (TempDir, TempDir, Session) {
     let tree = TempDir::new().unwrap();
     std::fs::create_dir_all(tree.path().join("bin")).unwrap();
     std::fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
@@ -283,11 +305,11 @@ fn install(ollama: &[u8], libs: &[(&str, &[u8])]) -> (TempDir, TempDir, Session)
         std::fs::write(tree.path().join("lib/ollama").join(name), bytes).unwrap();
     }
     let models = TempDir::new().unwrap();
-    let s = install_session(tree.path(), models.path());
+    let s = install_session(tree.path(), models.path(), budgets);
     (tree, models, s)
 }
 
-fn install_session(tree: &Path, models: &Path) -> Session {
+fn install_session(tree: &Path, models: &Path, budgets: InstallBudgets) -> Session {
     let req = StoreRequest {
         models_dir: models.to_path_buf(),
         model_filter: None,
@@ -295,7 +317,7 @@ fn install_session(tree: &Path, models: &Path) -> Session {
         manifest_limit: DEFAULT_MANIFEST_LIMIT,
         install: Some(InstallRequest {
             dir: tree.to_path_buf(),
-            budgets: InstallBudgets::default(),
+            budgets,
         }),
     };
     let s = store_session(
@@ -350,6 +372,7 @@ fn a_relocatable_object_has_no_dynamic_exports() {
     let (_d, paths) = files(&[("net.o", &bytes)]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(identity(&s, 0), CoverageState::Complete);
 }
 
 /// The scan of `bytes` with the needles of `db`, through `parse_artifact`.
@@ -433,6 +456,243 @@ fn string_needles_are_looked_for_in_read_only_data_sections() {
     );
 }
 
+/// The state of input `k`'s (in instance order) one `binary.identity` entry.
+fn identity(s: &Session, k: usize) -> CoverageState {
+    let i = &s.instances[k];
+    let entries: Vec<&CoverageState> = s
+        .coverage
+        .iter()
+        .filter(|c| c.check.as_str() == BINARY_IDENTITY && c.scope == Ref::Instance(i.id.clone()))
+        .map(|c| &c.state)
+        .collect();
+    assert_eq!(entries.len(), 1, "{}", i.id);
+    entries[0].clone()
+}
+
+fn missing(s: &Session) -> Vec<String> {
+    match &s.outcome.completeness {
+        Completeness::Complete => vec![],
+        Completeness::Incomplete {
+            missing_required, ..
+        } => missing_required.iter().map(|c| c.to_string()).collect(),
+    }
+}
+
+#[test]
+fn each_input_has_its_identity_state() {
+    let mut no_sections = ElfImage::new(2);
+    let piece = fixture("go/go-amd64.buildinfo");
+    no_sections
+        .put(0x4000, &piece)
+        .put(0x8000, &pclntab(0x3000));
+    let end = no_sections.body.len() as u64;
+    no_sections.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end);
+    // An ELF without section headers that no needle looks into: nothing to read.
+    let mut plain = ElfImage::new(3);
+    plain.put(0x1000, b"plain");
+    let end = plain.body.len() as u64;
+    plain.seg(PT_LOAD, PF_R, 0, 0, end, end);
+    let (_d, paths) = files(&[
+        ("ollama", &go_elf(&pclntab(0x3000), true)),
+        ("stripped-go", &no_sections.build()),
+        ("plain.so", &plain.build()),
+        ("libcudart.so.12", &rpc_library()),
+        ("hello", include_bytes!("fixtures/macho/hello-universal")),
+        ("NOTES.txt", b"notes"),
+        ("libdata.so", &fixture("elf/libdata.so")),
+    ]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert_eq!(identity(&s, 0), CoverageState::Complete);
+    assert!(s
+        .binaries
+        .iter()
+        .any(|b| b.go.is_some() && b.gaps.is_empty()));
+    assert_eq!(
+        identity(&s, 1),
+        CoverageState::Partial {
+            missing: vec![SCAN_NO_SECTIONS.to_string()]
+        }
+    );
+    assert_eq!(identity(&s, 2), CoverageState::Complete);
+    assert_eq!(
+        identity(&s, 3),
+        CoverageState::OutOfScope {
+            why: NAME_AND_HASH_ONLY_WHY.to_string()
+        }
+    );
+    assert!(s
+        .components
+        .iter()
+        .any(|c| c.component.as_str() == "cuda-runtime"));
+    assert_eq!(
+        identity(&s, 4),
+        CoverageState::Unsupported {
+            what: SCAN_ELF_ONLY.to_string()
+        }
+    );
+    assert_eq!(
+        identity(&s, 5),
+        CoverageState::Unsupported {
+            what: BINARY_UNSUPPORTED.to_string()
+        }
+    );
+    assert_eq!(identity(&s, 6), CoverageState::Complete);
+    assert!(s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == BINARY_IDENTITY));
+    assert!(missing(&s).contains(&BINARY_IDENTITY.to_string()));
+    // A Mach-O whose container is complete is incomplete for its scan alone.
+    let (_d, paths) = files(&[("hello", include_bytes!("fixtures/macho/hello-universal"))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert_eq!(missing(&s), [BINARY_IDENTITY]);
+    // The NVIDIA library alone closes the check.
+    let (_d, paths) = files(&[("libcudart.so.12", &rpc_library())]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+}
+
+#[test]
+fn a_scan_over_its_budget_keeps_what_it_found_and_is_partial() {
+    let mib = 1 << 20;
+    let (_d, paths) = files(&[(
+        "ollama",
+        &go_elf(&pclntab_with(2 * mib + 0x1000, mib + 0x100), true),
+    )]);
+    let limit = mib as u64 + 100;
+    let s = inspect(
+        &paths,
+        NamedBudgets {
+            binary: sigil_engine::binary::BinaryBudgets {
+                scan_bytes: limit,
+                ..Default::default()
+            },
+            ..NamedBudgets::default()
+        },
+    );
+    let found: Vec<String> = signatures(&s).into_iter().map(|h| h.0).collect();
+    assert_eq!(found, ["ollama.llama_server_launch"]);
+    assert_eq!(
+        identity(&s, 0),
+        CoverageState::Partial {
+            missing: vec![scan_over_gap(limit)]
+        }
+    );
+    assert_eq!(missing(&s), [BINARY_IDENTITY]);
+    // With the default budget, both are found.
+    let s = inspect(&paths, NamedBudgets::default());
+    assert_eq!(signatures(&s).len(), 2);
+    assert_eq!(identity(&s, 0), CoverageState::Complete);
+}
+
+#[test]
+fn the_install_identity_lists_each_gap_with_its_path() {
+    let rpc = rpc_library();
+    let (_t, _m, s) = install(
+        &go_elf(&pclntab(0x3000), true),
+        &[("libcudart.so.12", &rpc)],
+    );
+    let entry = |s: &Session| {
+        s.coverage
+            .iter()
+            .find(|c| c.check.as_str() == ARTIFACTS_IDENTITY)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(entry(&s).state, CoverageState::Complete);
+    assert_eq!(
+        entry(&s).scope,
+        Ref::Root(sigil_model::RootId::new("install").unwrap())
+    );
+    assert!(s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == ARTIFACTS_IDENTITY));
+    let mib = 1 << 20;
+    let limit = 4096;
+    let (_t, _m, s) = install_with(
+        &go_elf(&pclntab_with(2 * mib, mib), true),
+        &[
+            ("libcudart.so.12", &rpc),
+            ("hello", include_bytes!("fixtures/macho/hello-universal")),
+        ],
+        InstallBudgets {
+            binary: sigil_engine::binary::BinaryBudgets {
+                scan_bytes: limit,
+                ..Default::default()
+            },
+            ..InstallBudgets::default()
+        },
+    );
+    assert_eq!(
+        entry(&s).state,
+        CoverageState::Partial {
+            missing: vec![
+                format!("bin/ollama: {}", scan_over_gap(limit)),
+                format!("lib/ollama/hello: {SCAN_ELF_ONLY}"),
+            ]
+        }
+    );
+    assert!(missing(&s).contains(&ARTIFACTS_IDENTITY.to_string()));
+}
+
+/// Plan convention: run under a 1 GiB address-space cap by `limits.sh`. A Go executable whose
+/// `.gopclntab` claims 96 MiB of a sparse file: the scan reads 64 MiB (`binary_scan_bytes`) in
+/// 1 MiB chunks, and stops there.
+#[test]
+fn a_gopclntab_over_binary_scan_bytes_stops_at_the_limit() {
+    let mut bytes = go_elf(&[], true);
+    let at = (bytes.len() as u64).next_multiple_of(4096);
+    let size: u64 = 96 << 20;
+    let header = sections64(&bytes)
+        .into_iter()
+        .find(|s| s.0 == ".gopclntab")
+        .unwrap()
+        .2;
+    bytes[header + 24..header + 32].copy_from_slice(&at.to_le_bytes());
+    bytes[header + 32..header + 40].copy_from_slice(&size.to_le_bytes());
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("ollama");
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(at + size)
+        .unwrap();
+    let s = inspect(&[path], NamedBudgets::default());
+    assert!(signatures(&s).is_empty());
+    assert_eq!(
+        identity(&s, 0),
+        CoverageState::Partial {
+            missing: vec![scan_over_gap(64 << 20)]
+        }
+    );
+}
+
+#[test]
+fn a_section_name_that_cannot_be_read_is_a_gap() {
+    let mut bytes = go_elf(&pclntab(0x3000), true);
+    let header = sections64(&bytes)
+        .into_iter()
+        .find(|s| s.0 == ".gopclntab")
+        .unwrap()
+        .2;
+    // `sh_name` past the section-name table: it could be `.gopclntab`.
+    bytes[header..header + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+    let (_d, paths) = files(&[("ollama", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 0),
+        CoverageState::Partial {
+            missing: vec![sigil_model::SCAN_NAME_NOT_READ.to_string()]
+        }
+    );
+}
+
 /// The one scan of `bytes`, collected under the file name `name`.
 fn scan_of(name: &str, bytes: &[u8]) -> ScanOutcome {
     let (_d, paths) = files(&[(name, bytes)]);
@@ -470,6 +730,12 @@ fn a_dynsym_the_parse_does_not_read_is_a_gap() {
     let (_d, paths) = files(&[("libggml-rpc.so", &bytes)]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 0),
+        CoverageState::Partial {
+            missing: vec![sigil_model::SCAN_NAME_NOT_READ.to_string()]
+        }
+    );
     // A gap of the scan, never of the container.
     assert!(
         s.binaries[0]

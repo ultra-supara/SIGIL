@@ -649,7 +649,7 @@ sorts before `fn:0x40`. Call arguments keep their register order.
 example. Its facts are the engine's results for the test fixture `suspicious_kernel-gcc-O2.o`, a
 relocatable object whose function `kernel` calls `connect(0, 0, 0)`. Its path and stat are
 synthetic. It shows:
-- a request with code analysis, and its two required checks;
+- a request with code analysis, and its three required checks;
 - the hint: the file imports `connect`;
 - the call site: `kernel` (`.text` at file offset 0x40) calls `connect` at 0x4d through a
   relocation, with three constant arguments;
@@ -663,12 +663,13 @@ synthetic. It shows:
     "mode": "Static",
     "roots": [{"id": "binary-1", "path": "/home/user/src/suspicious_kernel-gcc-O2.o"}],
     "audit": ["binary", "binary_code"],
-    "required_checks": ["binary.code", "binary.container"],
+    "required_checks": ["binary.code", "binary.container", "binary.identity"],
     "budgets": {
       "binary_bytes": 68719476736,
       "binary_code_bytes": 268435456,
       "binary_imports": 4096,
-      "binary_parse_bytes": 67108864
+      "binary_parse_bytes": 67108864,
+      "binary_scan_bytes": 67108864
     },
     "observe_env": false,
     "model_filter": null,

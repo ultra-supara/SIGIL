@@ -2,16 +2,20 @@
 //! `expected_binary_container`, which `Session::validate` (B9) checks against the same session.
 //! With `request.code`, `binary.code` too, one entry per input (PR-5a spec §5.2): what it may be
 //! is the model's `expected_binary_code` (C3), and an analyzed input's is its slice's outcome.
+//! And `binary.identity`, one entry per input (PR-4c-2a spec §5): what it may be is the model's
+//! `expected_binary_identity` (S1), and a scanned input's is its slice's scan.
 
 use std::collections::BTreeMap;
 
 use sigil_model::{
-    expected_binary_code, expected_binary_container, is_binary_root, BudgetUse, CheckId, Coverage,
-    CoverageState, ExpectedCode, ExpectedContainer, FileInstance, InstanceContent, InstanceId, Ref,
-    Session, SliceId, BINARY_CODE, BINARY_CODE_BYTES, BINARY_CONTAINER, BINARY_NOT_PARSED,
-    CODE_UNSUPPORTED,
+    expected_binary_code, expected_binary_container, expected_binary_identity, is_binary_root,
+    BudgetUse, CheckId, Coverage, CoverageState, ExpectedCode, ExpectedContainer, ExpectedIdentity,
+    FileInstance, InstanceContent, InstanceId, Ref, Session, SliceId, BINARY_CODE,
+    BINARY_CODE_BYTES, BINARY_CONTAINER, BINARY_IDENTITY, BINARY_NOT_PARSED, CODE_UNSUPPORTED,
+    NAME_AND_HASH_ONLY_WHY,
 };
 
+use crate::binary::scan::ScanOutcome;
 use crate::code::CodeOutcome;
 
 /// The coverage of every input of `s`. `over`: the bytes hashed before each input that was over
@@ -135,4 +139,61 @@ fn analyzed(
         ),
         None => not_parsed(),
     }
+}
+
+/// The `binary.identity` entry of every input of `s` (PR-4c-2a spec §5). `scans`: each scanned
+/// slice's scan. It runs after the `binary.container` entries are in `s.coverage`: an input over
+/// `binary_bytes` copies its container entry's state. A scanned input's state is its slice's
+/// scan: `Complete`, `Partial` with the scan's gaps, or `OutOfScope` when it was not scanned
+/// (ADR-010). `Err` is a bug: the model cannot judge an input, or a scanned input has no scan.
+pub fn identity_coverage(
+    s: &Session,
+    scans: &[(SliceId, ScanOutcome)],
+) -> Result<Vec<Coverage>, String> {
+    let check = CheckId::new(BINARY_IDENTITY).map_err(|e| e.to_string())?;
+    s.instances
+        .iter()
+        .filter(|i| is_binary_root(&i.root))
+        .map(|i| {
+            let state = match expected_binary_identity(s, i)? {
+                ExpectedIdentity::Exactly(state) => state,
+                ExpectedIdentity::Scanned { .. } => scanned(s, i, scans)?,
+            };
+            Ok(Coverage {
+                check: check.clone(),
+                scope: Ref::Instance(i.id.clone()),
+                state,
+                budget: None,
+            })
+        })
+        .collect()
+}
+
+/// The identity state of a scanned input: its one ELF slice's scan.
+fn scanned(
+    s: &Session,
+    i: &FileInstance,
+    scans: &[(SliceId, ScanOutcome)],
+) -> Result<CoverageState, String> {
+    let slice = match &i.content {
+        InstanceContent::Read { artifact } => s
+            .artifacts
+            .iter()
+            .find(|a| a.id == *artifact)
+            .and_then(|a| a.slices.first()),
+        InstanceContent::NotRead { .. } => None,
+    };
+    let outcome = slice
+        .and_then(|x| scans.iter().find(|(id, _)| *id == x.id))
+        .map(|(_, outcome)| outcome);
+    Ok(match outcome {
+        Some(ScanOutcome::Scanned { gaps, .. }) if gaps.is_empty() => CoverageState::Complete,
+        Some(ScanOutcome::Scanned { gaps, .. }) => CoverageState::Partial {
+            missing: gaps.clone(),
+        },
+        Some(ScanOutcome::NameAndHashOnly) => CoverageState::OutOfScope {
+            why: NAME_AND_HASH_ONLY_WHY.to_string(),
+        },
+        None => return Err(format!("{}: a scanned input without a scan", i.id)),
+    })
 }

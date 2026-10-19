@@ -16,8 +16,13 @@
       {"id": "binary-2", "path": "/home/user/Downloads/NOTES.txt"}
     ],
     "audit": ["binary"],
-    "required_checks": ["binary.container"],
-    "budgets": {"binary_bytes": 68719476736, "binary_imports": 4096, "binary_parse_bytes": 67108864},
+    "required_checks": ["binary.container", "binary.identity"],
+    "budgets": {
+      "binary_bytes": 68719476736,
+      "binary_imports": 4096,
+      "binary_parse_bytes": 67108864,
+      "binary_scan_bytes": 67108864
+    },
     "observe_env": false,
     "model_filter": null,
     "active": [],
@@ -226,6 +231,18 @@
       "scope": {"Instance": "inst:binary-2/NOTES.txt"},
       "state": {"Unsupported": {"what": "not a supported ELF or Mach-O container"}},
       "budget": null
+    },
+    {
+      "check": "binary.identity",
+      "scope": {"Instance": "inst:binary-1/libggml-base.so"},
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "binary.identity",
+      "scope": {"Instance": "inst:binary-2/NOTES.txt"},
+      "state": {"Unsupported": {"what": "not a supported ELF or Mach-O container"}},
+      "budget": null
     }
   ],
   "findings": [],
@@ -233,7 +250,9 @@
   "policy_violations": [],
   "outcome": {
     "verdict": "Pass",
-    "completeness": {"Incomplete": {"missing_required": ["binary.container"], "gaps": []}},
+    "completeness": {
+      "Incomplete": {"missing_required": ["binary.container", "binary.identity"], "gaps": []}
+    },
     "confirmed_failures": 0,
     "confirmed_warnings": 0,
     "policy_time": "2026-10-07T07:00:00Z"

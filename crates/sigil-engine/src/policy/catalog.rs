@@ -113,6 +113,8 @@ pub const SCOPES: &[ScopeInfo] = &[
             "artifacts.discovery",
             "artifacts.release",
             "artifacts.container",
+            // PR-4c-2a: every signature scan done within its budget.
+            "artifacts.identity",
         ],
     },
     ScopeInfo {
@@ -125,7 +127,8 @@ pub const SCOPES: &[ScopeInfo] = &[
     },
     ScopeInfo {
         id: "binary",
-        checks: &["binary.container"],
+        // PR-4c-2a: `binary.identity`, every signature scan done within its budget.
+        checks: &["binary.container", "binary.identity"],
     },
     // Code analysis (`binary inspect --code`, PR-5a): the direct call sites of the capability
     // imports.
