@@ -50,7 +50,8 @@ pub struct Target {
 /// What [`search`] found, and read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Searched {
-    /// The first match of each needle found: in target order, then at the lowest offset.
+    /// The first match of each needle found, at its lowest offset in the first target that has it:
+    /// in target order, then read order, then database order (the needles found in one read).
     pub found: Vec<Found>,
     /// Sorted, without repeats.
     pub gaps: Vec<String>,
@@ -61,11 +62,11 @@ pub struct Searched {
 /// Looks for the needles of each target's kind in its bytes, read from `file` (`size` bytes, from
 /// the read's `fstat`) within `limit` bytes: the Go-function needles in their targets, then the
 /// string needles in theirs, each kind until all its needles are found. A kind without a needle
-/// reads nothing. A target is read only within the file and within its own bytes; one that passes
-/// the end of the file (or whose end overflows) while a needle of its kind is still looked for has
-/// its bytes in the file read, and the gap [`SCAN_READ_FAILED`]. Over `limit`, reading stops, and
-/// what was found is kept with the gap [`scan_over_gap`]. A read that fails leaves the rest of its
-/// target unread, with the gap [`SCAN_READ_FAILED`].
+/// reads nothing. A target is read only within the file and within its own bytes; one with bytes
+/// past the end of the file (or whose end overflows) while a needle of its kind is still looked
+/// for has its bytes in the file read, and the gap [`SCAN_READ_FAILED`]. Over `limit`, reading
+/// stops, and what was found is kept with the gap [`scan_over_gap`]. A read that fails leaves the
+/// rest of its target unread, with the gap [`SCAN_READ_FAILED`]. Each gap is given once.
 pub fn search(
     file: &File,
     size: u64,
@@ -75,13 +76,19 @@ pub fn search(
 ) -> Searched {
     let mut reader = Reader::new(file, size, limit);
     let mut out = Searched::default();
+    // The gaps: bytes of a target not read (past the end of the file, or a failed read), and the
+    // budget.
+    let (mut unread, mut over) = (false, false);
     'kinds: for kind in [NeedleKind::GoFunction, NeedleKind::String] {
         let mut open = needles.of(kind);
         let overlap = needles.overlap(kind);
         for t in targets.iter().filter(|t| t.kind == kind) {
-            if !open.is_empty() && t.offset.checked_add(t.size).is_none_or(|e| e > size) {
-                // Bytes of the section the file does not have: a needle may be there unread.
-                out.gaps.push(SCAN_READ_FAILED.to_string());
+            // Bytes of the section the file does not have: a needle may be there unread.
+            if !open.is_empty()
+                && t.size > 0
+                && t.offset.checked_add(t.size).is_none_or(|e| e > size)
+            {
+                unread = true;
             }
             let end = t.offset.saturating_add(t.size).min(size);
             let mut pos = t.offset;
@@ -90,11 +97,11 @@ pub fn search(
                 let bytes = match reader.read(pos, stop.saturating_add(overlap).min(end) - pos) {
                     Ok(bytes) => bytes,
                     Err(Refusal::Budget) => {
-                        out.gaps.push(scan_over_gap(limit));
+                        over = true;
                         break 'kinds;
                     }
                     Err(_) => {
-                        out.gaps.push(SCAN_READ_FAILED.to_string());
+                        unread = true;
                         break;
                     }
                 };
@@ -109,9 +116,14 @@ pub fn search(
             }
         }
     }
-    out.used = reader.used();
+    if unread {
+        out.gaps.push(SCAN_READ_FAILED.to_string());
+    }
+    if over {
+        out.gaps.push(scan_over_gap(limit));
+    }
     out.gaps.sort();
-    out.gaps.dedup();
+    out.used = reader.used();
     out
 }
 
@@ -282,7 +294,43 @@ mod tests {
             places(&s),
             [("s.needle".to_string(), ".rodata".to_string(), 50)]
         );
+        assert!(s.gaps.is_empty());
         assert_eq!(s.used, 100);
+    }
+
+    #[test]
+    fn a_needle_at_a_chunk_start_is_found_in_the_next_read() {
+        let needles = db(&[("s.needle", "string", "NEEDLE")]);
+        // Chunks start at the section's offset: the needle starts the section's second chunk.
+        let b = bytes(2 * MIB + 200, &[(100 + MIB, "NEEDLE")]);
+        let s = run(&b, 1 << 30, &needles, &[rodata(100, 2 * CHUNK + 50)]);
+        assert_eq!(
+            places(&s),
+            [("s.needle".to_string(), ".rodata".to_string(), CHUNK)]
+        );
+        assert!(s.gaps.is_empty());
+        // Two reads, each the chunk and the overlap (5 bytes).
+        assert_eq!(s.used, 2 * (CHUNK + 5));
+    }
+
+    #[test]
+    fn a_needle_ending_at_the_last_byte_of_a_section_is_found() {
+        let needles = db(&[("s.needle", "string", "abcd")]);
+        // In the section's last read, the four bytes before its end.
+        let b = bytes(MIB + 100, &[(MIB + 6, "abcd")]);
+        let s = run(&b, 1 << 30, &needles, &[rodata(0, CHUNK + 10)]);
+        assert_eq!(
+            places(&s),
+            [("s.needle".to_string(), ".rodata".to_string(), CHUNK + 6)]
+        );
+        assert!(s.gaps.is_empty());
+        assert_eq!(s.used, CHUNK + 3 + 10);
+        // Across the section's end, the file has it; the section does not.
+        let b = bytes(MIB + 100, &[(MIB + 8, "abcd")]);
+        let s = run(&b, 1 << 30, &needles, &[rodata(0, CHUNK + 10)]);
+        assert!(s.found.is_empty());
+        assert!(s.gaps.is_empty());
+        assert_eq!(s.used, CHUNK + 3 + 10);
     }
 
     #[test]
@@ -375,6 +423,30 @@ mod tests {
     }
 
     #[test]
+    fn needles_found_in_one_read_are_in_database_order() {
+        let needles = db(&[("s.a", "string", "aaaa"), ("s.b", "string", "bbbb")]);
+        // `s.b` is at the lower offset, in the same read as `s.a`.
+        let b = bytes(4096, &[(100, "bbbb"), (200, "aaaa")]);
+        let s = run(&b, 1 << 30, &needles, &[rodata(0, 4096)]);
+        assert_eq!(
+            places(&s),
+            [
+                ("s.a".to_string(), ".rodata".to_string(), 200),
+                ("s.b".to_string(), ".rodata".to_string(), 100),
+            ]
+        );
+        // In another target, or a later read, a needle comes after those found before it.
+        let s = run(&b, 1 << 30, &needles, &[rodata(150, 100), rodata(0, 150)]);
+        assert_eq!(
+            places(&s),
+            [
+                ("s.a".to_string(), ".rodata".to_string(), 50),
+                ("s.b".to_string(), ".rodata".to_string(), 100),
+            ]
+        );
+    }
+
+    #[test]
     fn a_failed_read_is_a_gap_and_the_next_target_is_read() {
         let needles = db(&[("s.needle", "string", "abcd")]);
         let b = bytes(100, &[(10, "abcd")]);
@@ -440,5 +512,48 @@ mod tests {
         assert_eq!(s.found[0].signal, Signal::GoFunction);
         assert_eq!(s.gaps, [SCAN_READ_FAILED]);
         assert_eq!(s.used, 0x1000);
+    }
+
+    #[test]
+    fn an_empty_section_past_the_end_of_the_file_is_no_gap() {
+        let go = db(&[("g.f", "go-function", "main.f")]);
+        let b = bytes(1000, &[(10, "main.f")]);
+        // `sh_size` 0: no byte of the section is missing.
+        let s = run(&b, 1 << 30, &go, &[gopclntab(2000, 0)]);
+        assert_eq!(s, Searched::default());
+        let s = run(
+            &b,
+            1 << 30,
+            &go,
+            &[gopclntab(u64::MAX, 0), gopclntab(0, 1000)],
+        );
+        assert_eq!(
+            places(&s),
+            [("g.f".to_string(), ".gopclntab".to_string(), 10)]
+        );
+        assert!(s.gaps.is_empty());
+        assert_eq!(s.used, 1000);
+    }
+
+    #[test]
+    fn the_gaps_are_sorted_and_each_is_given_once() {
+        let needles = db(&[("s.needle", "string", "abcd")]);
+        let b = bytes(1000, &[]);
+        // Two targets past the end of the file, then one over the budget.
+        let s = run(
+            &b,
+            150,
+            &needles,
+            &[rodata(900, 5000), rodata(2000, 100), rodata(0, 1000)],
+        );
+        assert!(s.found.is_empty());
+        assert_eq!(
+            s.gaps,
+            [
+                "string scan: a read failed",
+                "string scan: binary_scan_bytes 150 exceeded"
+            ]
+        );
+        assert_eq!(s.used, 100);
     }
 }

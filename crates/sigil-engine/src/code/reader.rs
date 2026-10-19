@@ -12,7 +12,7 @@ pub const MAX_READ: u64 = 64 << 20;
 /// Why a read was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// It would pass `binary_code_bytes`.
+    /// It would pass the reader's limit (`binary_code_bytes`, or the scan's `binary_scan_bytes`).
     Budget,
     /// The range is not inside the file.
     OutsideFile,
