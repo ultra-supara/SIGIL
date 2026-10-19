@@ -182,10 +182,12 @@ pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 /// The export needles against the exports of the `.dynsym` the loader binds through (one with
 /// no `symbols:` gap, as the code step reads it), in symbol-table order: the first export whose
 /// name starts with a needle is its hint. A relocatable object has no dynamic symbols. A name
-/// that cannot be read is the gap [`SCAN_NAME_NOT_READ`]; so are dynamic symbols the loader has
-/// (`DT_SYMTAB`, or a `PT_DYNAMIC` that cannot be read, which may have it) with no such
-/// `.dynsym`: missing, of another type, or not where `DT_SYMTAB` and `DT_STRTAB` are (plan
-/// review P2). Without an export needle, nothing is read.
+/// that cannot be read is the gap [`SCAN_NAME_NOT_READ`]. So are, while an export needle is not
+/// found, the loader's dynamic symbols when the parse has no such `.dynsym` and the loader has
+/// `DT_SYMTAB` (missing, of another type, or not where `DT_SYMTAB` and `DT_STRTAB` are; plan
+/// review P2), and when the loader's dynamic table could not be read to check a `.dynsym`
+/// against (`PT_DYNAMIC`, or the program headers that would hold it, unreadable): the hints found
+/// are kept. Without an export needle, nothing is read.
 fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'_, R, H>,
     sections: &Sections<'_, R, H>,
@@ -202,13 +204,17 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     if e.header.e_type(endian) == elf::ET_REL {
         return;
     }
+    // The loader's dynamic table was not read, so `loader_agrees` checked no `.dynsym` against
+    // it: its `PT_DYNAMIC` cannot be read, or the program headers that would hold one.
+    let has_dynamic = e.phdrs.iter().any(|p| p.p_type(endian) == elf::PT_DYNAMIC);
+    let phdrs_unread = e.header.e_phnum(endian) != 0 && e.phdrs.is_empty();
+    let unchecked = !dynamic.read && (has_dynamic || phdrs_unread);
     let symbols = sections
         .symbols
         .as_ref()
         .filter(|_| sections.dynamic_symbols_agree);
     let Some(symbols) = symbols else {
-        let has_dynamic = e.phdrs.iter().any(|p| p.p_type(endian) == elf::PT_DYNAMIC);
-        if dynamic.symtab.is_some() || (has_dynamic && !dynamic.read) {
+        if dynamic.symtab.is_some() || unchecked {
             gaps.push(SCAN_NAME_NOT_READ.to_string());
         }
         return;
@@ -250,6 +256,10 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 true
             }
         });
+    }
+    // A `.dynsym` not checked against the loader's table: what it does not have, the loader may.
+    if unchecked && !open.is_empty() {
+        gaps.push(SCAN_NAME_NOT_READ.to_string());
     }
 }
 

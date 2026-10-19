@@ -236,10 +236,12 @@ fn an_nvidia_named_library_is_not_scanned() {
         "{:?}",
         f.scans
     );
-    // The same bytes under another name are scanned, also when an NVIDIA name came first.
+    // The same bytes under another name are scanned, also when an NVIDIA name came first; and an
+    // NVIDIA name that comes after does not relabel the scan.
     for names in [
         &["libggml-rpc.so"][..],
         &["libcudart.so.12", "libggml-rpc.so"],
+        &["libggml-rpc.so", "libcudart.so.12"],
     ] {
         let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (*n, bytes.as_slice())).collect();
         let (_d, paths) = files(&entries);
@@ -513,7 +515,8 @@ fn a_dynsym_that_disagrees_with_the_loader_is_a_gap() {
 
 #[test]
 fn an_elf_without_dt_symtab_has_no_export_gap() {
-    // A static executable has no PT_DYNAMIC; this shared object's has no DT_SYMTAB.
+    // A static executable has no PT_DYNAMIC; this shared object's has no DT_SYMTAB; and one with
+    // no program headers (`e_phnum` 0) is not loaded at all.
     let mut no_symtab = ElfImage::new(3);
     no_symtab.put(0x1000, &dynamic(&[(DT_DEBUG, 0)]));
     let end = no_symtab.body.len() as u64;
@@ -522,6 +525,7 @@ fn an_elf_without_dt_symtab_has_no_export_gap() {
     for (name, bytes) in [
         ("static", fixture("elf/static")),
         ("libnosym.so", no_symtab.build()),
+        ("libnoload.so", ElfImage::new(3).build()),
     ] {
         assert_eq!(scan_of(name, &bytes), found_nothing(&[]), "{name}");
     }
@@ -548,4 +552,83 @@ fn a_relocatable_object_is_not_loaded_so_has_no_export_gap() {
     img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end);
     img.seg(PT_DYNAMIC, PF_R | PF_W, 0x1000, 0x1000, 32, 32);
     assert_eq!(scan_of("dyn.o", &img.build()), found_nothing(&[]));
+}
+
+/// A change to an ELF file's bytes.
+type Patch = fn(&[u8]) -> Vec<u8>;
+
+/// `bytes` with its `PT_DYNAMIC` at an address no `PT_LOAD` maps.
+fn dynamic_unmapped(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let p = phdr64(&out, PT_DYNAMIC);
+    out[p + 16..p + 24].copy_from_slice(&0x10_0000_0000u64.to_le_bytes());
+    out
+}
+
+/// `bytes` with its program headers (`e_phoff`) past the end of the file.
+fn phdrs_past_eof(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let at = out.len() as u64 + 0x1000;
+    out[32..40].copy_from_slice(&at.to_le_bytes());
+    out
+}
+
+/// The loader's dynamic table cannot be read (an unmapped `PT_DYNAMIC`, or program headers past
+/// the end of the file), so the `.dynsym` read is not checked against it: an export needle not
+/// found there is not known to be absent; one found is kept.
+#[test]
+fn exports_not_checked_against_the_loader_s_table_are_a_gap_unless_found() {
+    let patches: [(&str, Patch); 2] = [
+        ("unmapped PT_DYNAMIC", dynamic_unmapped),
+        ("program headers past EOF", phdrs_past_eof),
+    ];
+    let gap = found_nothing(&[sigil_model::SCAN_NAME_NOT_READ]);
+    for (how, patch) in patches {
+        // libdata.so has no RPC export.
+        let bytes = patch(&fixture("elf/libdata.so"));
+        assert_eq!(scan_of("libdata.so", &bytes), gap, "{how}");
+        let (_d, paths) = files(&[("libggml-rpc.so", &patch(&rpc_library()))]);
+        let s = inspect(&paths, NamedBudgets::default());
+        let got: Vec<String> = signatures(&s).into_iter().map(|h| h.0).collect();
+        assert_eq!(got, ["rpc.code_present"], "{how}");
+        let ScanOutcome::Scanned { found, gaps } =
+            scan_of("libggml-rpc.so", &patch(&rpc_library()))
+        else {
+            panic!("{how}: not scanned");
+        };
+        assert_eq!(found.len(), 1, "{how}");
+        assert!(gaps.is_empty(), "{how}: {gaps:?}");
+        // Without a `.dynsym`, nothing is read.
+        let bytes = patch(&retyped(&rpc_library(), ".dynsym", SHT_PROGBITS));
+        assert_eq!(scan_of("libggml-rpc.so", &bytes), gap, "{how}");
+    }
+}
+
+/// The `.dynsym` entry of the symbol named `name` in an ELF64 little-endian file: its offset.
+fn dynsym_entry(bytes: &[u8], name: &[u8]) -> usize {
+    let secs = sections64(bytes);
+    let sec = |n: &str| secs.iter().find(|s| s.0 == n).unwrap().clone();
+    let (dynsym, dynstr) = (sec(".dynsym"), sec(".dynstr"));
+    (dynsym.3..dynsym.3 + dynsym.4)
+        .step_by(24)
+        .map(|at| at as usize)
+        .find(|&at| {
+            let st_name = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as u64;
+            let from = (dynstr.3 + st_name) as usize;
+            st_name < dynstr.4 && bytes[from..].starts_with(name) && bytes[from + name.len()] == 0
+        })
+        .unwrap()
+}
+
+#[test]
+fn an_export_name_that_cannot_be_read_is_a_gap() {
+    // `ggml_backend_rpc_init`'s `st_name` past `.dynstr`: it could be the RPC export.
+    let mut bytes = rpc_library();
+    let at = dynsym_entry(&bytes, b"ggml_backend_rpc_init");
+    bytes[at..at + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+    let (_d, paths) = files(&[("libggml-rpc.so", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    let gap = found_nothing(&[sigil_model::SCAN_NAME_NOT_READ]);
+    assert_eq!(scan_of("libggml-rpc.so", &bytes), gap);
 }

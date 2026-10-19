@@ -83,7 +83,7 @@ fn collect_with(
 ) -> Result<InstallFacts, String> {
     let root = RootId::new(INSTALL_ROOT).map_err(|e| e.to_string())?;
     let check = CheckId::new(ARTIFACTS_DISCOVERY).map_err(|e| e.to_string())?;
-    let scanning = Scanning::embedded()?;
+    let scanning = Scanning::embedded().map_err(|e| format!("internal error: {e}"))?;
     let mut fs = SafeFs::new(FsBudgets {
         max_files: budgets.files,
         max_entries: budgets.entries,
