@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
-use sigil_model::render::markdown::{render_session, CODE_CAVEAT};
+use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
 use sigil_model::{
     CallTarget, Completeness, ContainerFacts, CoverageState, Mode, ProbeResult, Session,
-    UntrustedText, Verdict, BINARY_UNSUPPORTED,
+    UntrustedText, Verdict, BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY,
 };
 use tempfile::TempDir;
 
@@ -2584,4 +2584,32 @@ fn a_binary_s_identity_is_on_its_summary_line_and_in_its_report() {
         "{}",
         r.stdout
     );
+}
+
+/// PR-4c-2a, ADR-010: a file named as NVIDIA's runtime is identified by name and hash only. Its
+/// `binary.identity` is `OutOfScope`, which closes the check, and its report says it was not
+/// scanned rather than that no signature was found.
+#[test]
+fn an_nvidia_named_file_is_not_scanned_and_its_report_says_so() {
+    let d = inputs();
+    let cudart = d.path().join("libcudart.so.12");
+    fs::copy(d.path().join("libdata.so"), &cudart).unwrap();
+    let r = binary(&[&cudart]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("binary: "))
+        .unwrap_or_else(|| panic!("{}", r.stderr));
+    assert!(
+        line.contains(&format!(
+            "  complete  signature scan: out of scope: {NAME_AND_HASH_ONLY_WHY}"
+        )),
+        "{line}"
+    );
+    assert_eq!(session_of(&r).outcome.completeness, Completeness::Complete);
+    let r = binary(&[&cudart, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains(&esc_md(NOT_SCANNED)), "{}", r.stdout);
+    assert!(!r.stdout.contains(&esc_md(NO_SIGNATURES)), "{}", r.stdout);
 }

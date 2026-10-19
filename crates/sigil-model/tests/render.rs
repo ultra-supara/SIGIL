@@ -10,7 +10,7 @@ use sigil_model::render::code::{
     NOT_ANALYZED, NOT_SEARCHED, NO_CAPABILITY_IMPORTS,
 };
 use sigil_model::render::markdown::{
-    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT, NO_SIGNATURES,
+    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES,
 };
 use sigil_model::*;
 
@@ -1783,4 +1783,100 @@ fn signature_rows_are_in_feature_value_kind_and_where_order() {
     s.hints.reverse();
     assert_eq!(s.validate(), Ok(()));
     assert_eq!(rows(&s), expected);
+}
+
+/// `binary_inspect` with its shared object named as NVIDIA's runtime: its claim is
+/// `cuda-runtime`, and its input's `binary.identity` is `OutOfScope` (ADR-010).
+fn nvidia_inspect() -> Session {
+    let mut s = binary_inspect();
+    let elf = InstanceId::new(ELF_INPUT).unwrap();
+    s.components[0].component = id("cuda-runtime");
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_IDENTITY && c.scope == Ref::Instance(elf.clone()))
+        .unwrap()
+        .state = CoverageState::OutOfScope {
+        why: NAME_AND_HASH_ONLY_WHY.to_string(),
+    };
+    s
+}
+
+/// An NVIDIA library is identified by name and hash only (ADR-010): its content was not scanned,
+/// so the report says so instead of `No signature found.` (PR-4c-2a).
+#[test]
+fn an_nvidia_library_says_it_was_not_scanned() {
+    let s = nvidia_inspect();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        row_of(section, "/home/user/Downloads/libggml-base.so").ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc(&format!("out of scope: {NAME_AND_HASH_ONLY_WHY}"))
+        )),
+        "{section}"
+    );
+    assert_eq!(
+        section.matches(&md_esc(NOT_SCANNED)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
+    assert!(!section.contains(&md_esc("Signatures of")), "{section}");
+    // Its imports are the container's: its capabilities are shown.
+    assert!(section.contains(&md_esc("Capabilities of")), "{section}");
+}
+
+/// A content under two inputs is shown once, under its first: the first input's
+/// `binary.identity` says whether it was scanned.
+#[test]
+fn a_content_s_first_input_says_whether_it_was_scanned() {
+    let with_copy = |first: CoverageState, copy: CoverageState| {
+        let mut s = nvidia_inspect();
+        let elf = InstanceId::new(ELF_INPUT).unwrap();
+        s.coverage
+            .iter_mut()
+            .find(|c| c.check.as_str() == BINARY_IDENTITY && c.scope == Ref::Instance(elf.clone()))
+            .unwrap()
+            .state = first;
+        let copy_id: InstanceId = id("inst:binary-3/libcudart.so.12");
+        let path = "/home/user/Downloads/libcudart.so.12";
+        let mut i = instance(&copy_id, "binary-3", path, &s.artifacts[0].id, 33);
+        i.stat.size = 1_048_576;
+        i.discovered_by = vec![DiscoverySource::Argument];
+        s.instances.push(i);
+        s.request.roots.push(ScanRoot {
+            id: binary_root(3).unwrap(),
+            path: t(path),
+        });
+        s.coverage.push(coverage(
+            BINARY_CONTAINER,
+            Ref::Instance(copy_id.clone()),
+            CoverageState::Complete,
+        ));
+        s.coverage
+            .push(coverage(BINARY_IDENTITY, Ref::Instance(copy_id), copy));
+        s.canonicalize();
+        assert_eq!(s.validate(), Ok(()));
+        let md = render_session(&s);
+        binaries_section(&md).to_string()
+    };
+    let out_of_scope = CoverageState::OutOfScope {
+        why: NAME_AND_HASH_ONLY_WHY.to_string(),
+    };
+    let section = with_copy(out_of_scope.clone(), CoverageState::Complete);
+    assert_eq!(
+        section.matches(&md_esc(NOT_SCANNED)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
+    let section = with_copy(CoverageState::Complete, out_of_scope);
+    assert_eq!(
+        section.matches(&md_esc(NO_SIGNATURES)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NOT_SCANNED)), "{section}");
 }

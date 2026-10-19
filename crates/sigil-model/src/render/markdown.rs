@@ -186,6 +186,10 @@ pub const BINARY_CAVEAT_CODE: &str = "Container facts and direct call sites. For
 /// What an ELF content without a signature hint gets instead of its Signatures table (PR-4c-2a).
 pub const NO_SIGNATURES: &str = "No signature found.";
 
+/// What an ELF content gets instead when its first input's `binary.identity` is `OutOfScope`: an
+/// NVIDIA library, never scanned (ADR-010; PR-4c-2a).
+pub const NOT_SCANNED: &str = "Not scanned: identified by name and hash only (ADR-010).";
+
 /// The scope of code analysis (PR-5a spec §6.1), after [`BINARY_CAVEAT_CODE`].
 pub const CODE_CAVEAT: &str = "Direct call sites only. A call through a function pointer, a function linked statically into the file, and a raw system call are not found, and references from data are not followed. Only executable sections and the ranges of FDEs in .eh_frame are searched, and only code with an FDE is analyzed. In a relocatable object (.o), addresses are file offsets.";
 
@@ -269,7 +273,7 @@ fn binary_inspection(out: &mut String, s: &Session) {
         for slice in &a.slices {
             if let Some(facts) = s.binaries.iter().find(|f| f.slice == slice.id) {
                 binary_facts(out, s, &path, a, facts);
-                signatures(out, s, &path, facts);
+                signatures(out, s, &path, facts, b.identity);
                 capabilities(out, s, &path, facts, b.code);
             }
         }
@@ -536,7 +540,17 @@ fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
 /// the where are compared as their cells' text, so the rows do not depend on the session's order,
 /// canonical or not. Whether the scan was complete is the input's `binary.identity`, in the
 /// overview's Signature scan column. A Mach-O gets nothing: it is not scanned.
-fn signatures(out: &mut String, s: &Session, path: &UntrustedText, b: &crate::binary::BinaryFacts) {
+///
+/// `identity` is the `binary.identity` entry of the content's first input, under which it is
+/// shown: when it is `OutOfScope` (an NVIDIA library, ADR-010), the content was not scanned, and
+/// the line is [`NOT_SCANNED`] instead.
+fn signatures(
+    out: &mut String,
+    s: &Session,
+    path: &UntrustedText,
+    b: &crate::binary::BinaryFacts,
+    identity: Option<&Coverage>,
+) {
     if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
         return;
     }
@@ -553,7 +567,11 @@ fn signatures(out: &mut String, s: &Session, path: &UntrustedText, b: &crate::bi
         (hint_key(x), x_kind, x_at).cmp(&(hint_key(y), y_kind, y_at))
     });
     if hints.is_empty() {
-        out.push_str(&esc(NO_SIGNATURES));
+        let scanned = !matches!(
+            identity.map(|c| &c.state),
+            Some(crate::coverage::CoverageState::OutOfScope { .. })
+        );
+        out.push_str(&esc(if scanned { NO_SIGNATURES } else { NOT_SCANNED }));
         out.push_str("\n\n");
         return;
     }
