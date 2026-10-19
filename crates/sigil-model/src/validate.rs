@@ -3181,11 +3181,12 @@ fn c5(value: &ArgValue) -> Vec<String> {
     why
 }
 
-/// The coverage states recorded for `check`.
-/// S2: whether an `artifacts.identity` of `Complete` holds. Discovery is `Complete`, and every
-/// install binary is an ELF with slices, each with facts, and none a Go ELF without a section
-/// header table ([`NoSectionsGap::Must`]: its scan lists [`SCAN_NO_SECTIONS`]) unless an NVIDIA
-/// library (ADR-010), which is never scanned and adds no gap.
+/// Whether an `artifacts.identity` of `Complete` holds (S2).
+///
+/// Discovery is `Complete`, and every install binary is an ELF with slices, each with facts, and
+/// none a Go ELF without a section header table ([`NoSectionsGap::Must`]: its scan lists
+/// [`SCAN_NO_SECTIONS`]) unless an NVIDIA library (ADR-010), which is never scanned and adds no
+/// gap.
 ///
 /// [`NoSectionsGap::Must`]: crate::binary_input::NoSectionsGap::Must
 /// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
@@ -3228,6 +3229,7 @@ fn install_scanned(s: &Session) -> bool {
     discovery && scanned
 }
 
+/// The coverage states recorded for `check`.
 fn states<'s>(s: &'s Session, check: &'s CheckId) -> impl Iterator<Item = &'s CoverageState> + 's {
     s.coverage
         .iter()
