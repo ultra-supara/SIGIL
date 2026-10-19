@@ -6,14 +6,26 @@
 
 use std::fs::File;
 
-use sigil_model::{scan_over_gap, FeatureKey, Loc, Signal, UntrustedText, SCAN_READ_FAILED};
+use object::elf;
+use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, SectionTable, Sym};
+use object::read::{ReadCacheOps, SectionIndex};
+use object::Endianness;
+use sigil_model::{
+    scan_over_gap, FeatureKey, Loc, Signal, UntrustedText, SCAN_NAME_NOT_READ, SCAN_NO_SECTIONS,
+    SCAN_READ_FAILED,
+};
 
+use super::elf::{is_export, Dynamic, Elf, Sections, MAX_IMPORT_NAME};
 use super::needles::{Needle, NeedleKind, Needles};
+use super::read::Bounded;
 use crate::code::reader::{Reader, Refusal};
 
 /// The bytes of a section examined per read. Each read is one chunk and the overlap of its kind
 /// ([`Needles::overlap`]), so that a needle that starts in the chunk is read whole.
 pub const CHUNK: u64 = 1 << 20;
+
+/// The longest section name read. A longer one is a gap.
+pub const MAX_SECTION_NAME: usize = 4096;
 
 /// One needle found: a feature hint without its slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +136,169 @@ pub fn search(
     }
     out.gaps.sort();
     out.used = reader.used();
+    out
+}
+
+/// The signature scan of the ELF `e` (PR-4c-2a), after its container and code steps: the export
+/// needles against the names of its exported dynamic symbols ([`exports`]), then [`search`] for
+/// the Go-function needles in `.gopclntab` (when it has Go build info, `go`) and for the string
+/// needles in `.rodata`, `.rodata.*`, and `.lrodata` ([`targets`]). Names are read through the
+/// parse's cache, charged to `binary_parse_bytes`; section bytes through `file` (the fd and its
+/// `fstat` size), charged to `limit` (`binary_scan_bytes`). What cannot be read is a gap of the
+/// scan, never of the container.
+pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    e: &Elf<'_, R, H>,
+    sections: &Sections<'_, R, H>,
+    dynamic: &Dynamic,
+    go: bool,
+    (file, size): (&File, u64),
+    limit: u64,
+    needles: &Needles,
+) -> ScanOutcome {
+    let mut found = vec![];
+    let mut gaps = vec![];
+    exports(e, sections, dynamic, needles, &mut found, &mut gaps);
+    let kinds: Vec<NeedleKind> = [(NeedleKind::GoFunction, go), (NeedleKind::String, true)]
+        .into_iter()
+        .filter(|(kind, applies)| *applies && !needles.of(*kind).is_empty())
+        .map(|(kind, _)| kind)
+        .collect();
+    if !kinds.is_empty() {
+        match &sections.table {
+            None => gaps.push(SCAN_NO_SECTIONS.to_string()),
+            Some(table) => {
+                let targets = targets(e, table, &kinds, &mut gaps);
+                let searched = search(file, size, limit, needles, &targets);
+                found.extend(searched.found);
+                gaps.extend(searched.gaps);
+            }
+        }
+    }
+    gaps.sort();
+    gaps.dedup();
+    ScanOutcome::Scanned { found, gaps }
+}
+
+/// The export needles against the exports of the `.dynsym` the loader binds through (one with
+/// no `symbols:` gap, as the code step reads it), in symbol-table order: the first export whose
+/// name starts with a needle is its hint. A relocatable object has no dynamic symbols. A name
+/// that cannot be read is the gap [`SCAN_NAME_NOT_READ`]; so are dynamic symbols the loader has
+/// (`DT_SYMTAB`, or a `PT_DYNAMIC` that cannot be read, which may have it) with no such
+/// `.dynsym`: missing, of another type, or not where `DT_SYMTAB` and `DT_STRTAB` are (plan
+/// review P2). Without an export needle, nothing is read.
+fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    e: &Elf<'_, R, H>,
+    sections: &Sections<'_, R, H>,
+    dynamic: &Dynamic,
+    needles: &Needles,
+    found: &mut Vec<Found>,
+    gaps: &mut Vec<String>,
+) {
+    let endian = e.endian;
+    let mut open = needles.of(NeedleKind::Export);
+    if open.is_empty() {
+        return;
+    }
+    if e.header.e_type(endian) == elf::ET_REL {
+        return;
+    }
+    let symbols = sections
+        .symbols
+        .as_ref()
+        .filter(|_| sections.dynamic_symbols_agree);
+    let Some(symbols) = symbols else {
+        let has_dynamic = e.phdrs.iter().any(|p| p.p_type(endian) == elf::PT_DYNAMIC);
+        if dynamic.symtab.is_some() || (has_dynamic && !dynamic.read) {
+            gaps.push(SCAN_NAME_NOT_READ.to_string());
+        }
+        return;
+    };
+    // The symbols' string table, for the names object cannot read (spec §3.7).
+    let strings = sections
+        .table
+        .as_ref()
+        .and_then(|t| t.section(symbols.string_section()).ok())
+        .and_then(|s| s.file_range(endian));
+    for sym in symbols.symbols().iter().skip(1) {
+        if open.is_empty() {
+            break;
+        }
+        if !is_export(sym, endian) {
+            continue;
+        }
+        let name = match sym.name(endian, symbols.strings()) {
+            Ok(name) => Some(name),
+            Err(_) => match strings.map(|s| e.name(s, sym.st_name(endian), MAX_IMPORT_NAME)) {
+                Some(Ok(Some(name))) => Some(name),
+                _ => None,
+            },
+        };
+        let Some(name) = name else {
+            gaps.push(SCAN_NAME_NOT_READ.to_string());
+            continue;
+        };
+        open.retain(|n| {
+            if name.starts_with(&n.value) {
+                found.push(Found {
+                    feature: n.feature.clone(),
+                    signal: n.kind.signal(),
+                    value: UntrustedText::from_bytes(name.to_vec()),
+                    at: Loc::Symbol(UntrustedText::from_bytes(name.to_vec())),
+                });
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+/// The sections of `kinds` in `table`, in table order: `.gopclntab` for the Go-function needles;
+/// `.rodata`, `.rodata.*`, and `.lrodata` for the string needles. A section without file bytes
+/// (`SHT_NOBITS`) is none of them. A section name that cannot be read is the gap
+/// [`SCAN_NAME_NOT_READ`]: it could be one of them.
+fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
+    e: &Elf<'d, R, H>,
+    table: &SectionTable<'d, H, &'d Bounded<R>>,
+    kinds: &[NeedleKind],
+    gaps: &mut Vec<String>,
+) -> Vec<Target> {
+    let endian = e.endian;
+    // The string table the section names are in (`e_shstrndx`).
+    let strings = e
+        .header
+        .shstrndx(endian, e.data)
+        .ok()
+        .and_then(|i| table.section(SectionIndex(i as usize)).ok())
+        .and_then(|s| s.file_range(endian));
+    let mut out = vec![];
+    for s in table.iter().skip(1) {
+        if s.sh_type(endian) == elf::SHT_NOBITS {
+            continue;
+        }
+        let name = match strings.map(|st| e.name(st, s.sh_name(endian), MAX_SECTION_NAME)) {
+            Some(Ok(Some(name))) => name,
+            _ => {
+                gaps.push(SCAN_NAME_NOT_READ.to_string());
+                continue;
+            }
+        };
+        let kind = if name == b".gopclntab" {
+            NeedleKind::GoFunction
+        } else if name == b".rodata" || name == b".lrodata" || name.starts_with(b".rodata.") {
+            NeedleKind::String
+        } else {
+            continue;
+        };
+        if kinds.contains(&kind) {
+            out.push(Target {
+                kind,
+                name: name.to_vec(),
+                offset: s.sh_offset(endian).into(),
+                size: s.sh_size(endian).into(),
+            });
+        }
+    }
     out
 }
 

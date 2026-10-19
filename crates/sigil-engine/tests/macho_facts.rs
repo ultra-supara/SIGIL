@@ -30,6 +30,7 @@ fn parse(bytes: &[u8]) -> Option<ParsedArtifact> {
         &digest,
         &bytes[..bytes.len().min(4)],
         BinaryBudgets::default(),
+        None,
     )
 }
 

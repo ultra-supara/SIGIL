@@ -15,8 +15,9 @@ use sigil_model::{
     NotReadReason, ScanRoot, SliceId, UntrustedText,
 };
 
-use super::binread;
+use super::binread::{self, Scanning};
 use super::fs::{recorded, FsBudgets, ReadOutcome, RelPath, RootError, SafeFs};
+use crate::binary::scan::ScanOutcome;
 use crate::binary::BinaryBudgets;
 use crate::code::CodeOutcome;
 
@@ -25,7 +26,8 @@ use crate::code::CodeOutcome;
 pub struct NamedBudgets {
     /// Bytes hashed over all inputs, as `binary_bytes`.
     pub bytes: u64,
-    /// Each artifact's parse, as `binary_parse_bytes` and `binary_imports`.
+    /// Each artifact's parse and scan, as `binary_parse_bytes`, `binary_imports`, and
+    /// `binary_scan_bytes`.
     pub binary: BinaryBudgets,
 }
 
@@ -51,6 +53,9 @@ pub struct NamedFacts {
     /// container facts (a Mach-O slice not parsed) has one too: `Unsupported`, as every Mach-O
     /// slice's is.
     pub code: Vec<(SliceId, CodeOutcome)>,
+    /// The signature scan of every ELF slice of each content parsed by a read that saw no
+    /// change, sorted by slice (PR-4c-2a).
+    pub scans: Vec<(SliceId, ScanOutcome)>,
     /// For each input over `binary_bytes`: the bytes hashed before it (its `used`).
     pub over: BTreeMap<InstanceId, u64>,
     pub bytes_read: u64,
@@ -114,6 +119,7 @@ fn collect_with(
             inputs.push((canonical, (st.dev(), st.ino())));
         }
     }
+    let scanning = Scanning::embedded().map_err(|e| format!("internal error: {e}"))?;
     let mut facts = NamedFacts::default();
     let mut artifacts = BTreeSet::new();
     let mut parsed = BTreeMap::new();
@@ -152,6 +158,7 @@ fn collect_with(
             left,
             vec![DiscoverySource::Argument],
             budgets.binary,
+            scanning,
             &mut parsed,
             during_read,
         );
@@ -210,7 +217,7 @@ fn collect_with(
         });
         facts.instances.push(instance);
     }
-    (facts.binaries, facts.code) = binread::binaries(parsed, &facts.artifacts);
+    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &facts.artifacts);
     Ok(facts)
 }
 

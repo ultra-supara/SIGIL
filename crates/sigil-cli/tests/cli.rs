@@ -1550,15 +1550,20 @@ fn binary_budgets_apply_with_install_dir_only() {
             &"binary_parse_bytes=4096",
             &"--budget",
             &"binary_imports=2",
+            &"--budget",
+            &"binary_scan_bytes=8192",
         ],
     );
     assert_eq!(r.code, 0, "{}", r.stderr);
     let s = session_of(&r);
     assert_eq!(s.request.budgets["binary_parse_bytes"], 4096);
     assert_eq!(s.request.budgets["binary_imports"], 2);
-    let r = inspect(models.path(), &[&"--budget", &"binary_imports=2"]);
-    assert_eq!(r.code, 2, "{}", r.stderr);
-    assert!(r.stderr.contains("--install-dir"), "{}", r.stderr);
+    assert_eq!(s.request.budgets["binary_scan_bytes"], 8192);
+    for budget in ["binary_imports=2", "binary_scan_bytes=2"] {
+        let r = inspect(models.path(), &[&"--budget", &budget]);
+        assert_eq!(r.code, 2, "{budget}: {}", r.stderr);
+        assert!(r.stderr.contains("--install-dir"), "{budget}: {}", r.stderr);
+    }
 }
 
 // --- binary inspect (PR-4b-2a) ------------------------------------------------------------------
@@ -1761,12 +1766,15 @@ fn binary_budgets_are_recorded_and_others_refused() {
         &"binary_parse_bytes=1048576",
         &"--budget",
         &"binary_imports=10",
+        &"--budget",
+        &"binary_scan_bytes=2048",
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let b = session_of(&r).request.budgets;
     assert_eq!(b["binary_bytes"], 1_000_000);
     assert_eq!(b["binary_parse_bytes"], 1_048_576);
     assert_eq!(b["binary_imports"], 10);
+    assert_eq!(b["binary_scan_bytes"], 2048);
     for bad in ["install_bytes=1", "files_discovered=1", "nope=1"] {
         assert_eq!(binary(&[&so, &"--budget", &bad]).code, 2, "{bad}");
     }

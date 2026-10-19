@@ -16,10 +16,12 @@ use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
 use sigil_model::{
     imports_over_gap, BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText,
-    BINARY_CODE_BYTES,
+    BINARY_CODE_BYTES, SCAN_NO_SECTIONS,
 };
 
+use super::needles::Needles;
 use super::read::Bounded;
+use super::scan::{self, ScanOutcome};
 use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
 use crate::code::{self, CodeOutcome};
@@ -208,16 +210,21 @@ fn empty() -> ElfFacts {
 }
 
 /// The facts of the ELF in `data`, and with `budgets.code` and `file` (the fd `data` reads, and
-/// its `fstat` size) its code analysis (PR-5a spec §4.1). Never fails: what cannot be read is a
-/// gap.
+/// its `fstat` size) its code analysis (PR-5a spec §4.1), and with `needles` and `file` its
+/// signature scan (PR-4c-2a). Never fails: what cannot be read is a gap.
 pub fn parse<R: ReadCacheOps>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
     file: Option<(&File, u64)>,
+    needles: Option<&Needles>,
 ) -> Parsed {
     let parsed = match FileKind::parse(data) {
-        Ok(FileKind::Elf32) => parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file),
-        Ok(FileKind::Elf64) => parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file),
+        Ok(FileKind::Elf32) => {
+            parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file, needles)
+        }
+        Ok(FileKind::Elf64) => {
+            parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file, needles)
+        }
         _ => None,
     };
     let mut parsed = parsed.unwrap_or_else(|| {
@@ -245,6 +252,14 @@ pub fn parse<R: ReadCacheOps>(
                         limit: c.bytes,
                     },
                 }),
+            // No readable header, so no readable section header table: whatever the needles
+            // look for is not known to be absent.
+            scan: needles
+                .filter(|_| file.is_some())
+                .map(|_| ScanOutcome::Scanned {
+                    found: vec![],
+                    gaps: vec![SCAN_NO_SECTIONS.to_string()],
+                }),
         }
     });
     parsed.gaps.sort();
@@ -256,6 +271,7 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
     file: Option<(&File, u64)>,
+    needles: Option<&Needles>,
 ) -> Option<Parsed> {
     let Parts {
         elf: mut e,
@@ -277,12 +293,35 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         (Some(c), Some((f, size))) => Some(code::analyze(&mut e, &sections, &dynamic, f, size, c)),
         _ => None,
     };
+    // PR-4c-2a: last, so that neither the container nor the code step sees its reads.
+    let scan = match (needles, file) {
+        (Some(n), Some(file)) => Some(scan::run(
+            &e,
+            &sections,
+            &dynamic,
+            go.is_some(),
+            file,
+            budgets.scan_bytes,
+            n,
+        )),
+        _ => None,
+    };
     Some(Parsed {
         container: ContainerFacts::Elf(facts),
         go,
         gaps: e.gaps,
         code,
+        scan,
     })
+}
+
+/// Whether `sym` is an export, as `ElfFacts.exports` counts them: defined, global, weak, or
+/// unique, with default or protected visibility.
+pub(crate) fn is_export<S: Sym>(sym: &S, endian: S::Endian) -> bool {
+    let bind = sym.st_bind();
+    sym.st_shndx(endian) != elf::SHN_UNDEF
+        && (bind == elf::STB_GLOBAL || bind == elf::STB_WEAK || bind == elf::STB_GNU_UNIQUE)
+        && matches!(sym.st_visibility(), elf::STV_DEFAULT | elf::STV_PROTECTED)
 }
 
 /// The header, program headers, `PT_DYNAMIC`, build-id, and sections of the ELF in `data`.
@@ -995,13 +1034,8 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                     imports.pop_last();
                     over = true;
                 }
-            } else {
-                let visibility = sym.st_visibility();
-                if (global || bind == elf::STB_GNU_UNIQUE)
-                    && (visibility == elf::STV_DEFAULT || visibility == elf::STV_PROTECTED)
-                {
-                    facts.exports += 1;
-                }
+            } else if is_export(sym, endian) {
+                facts.exports += 1;
             }
         }
         if over {

@@ -9,7 +9,7 @@ use sigil_model::{
     Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
     SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
     UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
-    BINARY_BYTES, BINARY_CODE_BYTES, INSTALL_ROOT,
+    BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
 };
 
 use crate::analyze::binary::CodeCoverageError;
@@ -205,7 +205,7 @@ fn assemble(
     let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
     let mut knowledge = Vec::<KnowledgeRef>::new();
     let (mut releases, mut reference_matches) = (vec![], vec![]);
-    let (mut relations, mut binaries) = (vec![], vec![]);
+    let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
         let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
@@ -229,6 +229,7 @@ fn assemble(
         coverage.push(container);
         relations.extend(declares);
         binaries = facts.binaries;
+        scans = facts.scans;
         reference_matches = result.rows;
         releases.extend(result.claim);
     } else {
@@ -265,7 +266,8 @@ fn assemble(
     }
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
-    let hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
+    let mut hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
+    hints.extend(hints::from_scans(&scans));
     // PR-4c-1: from the facts above; nothing more is read.
     let components = identity::derive(&instances, &binaries, &reference_matches)
         .map_err(InspectError::Internal)?;
@@ -368,12 +370,14 @@ pub fn binary_session(
             req.budgets.binary.parse_bytes,
         ),
         ("binary_imports".to_string(), req.budgets.binary.imports),
+        (BINARY_SCAN_BYTES.to_string(), req.budgets.binary.scan_bytes),
     ]);
     // With code (PR-5a): its byte budget. Its aggregate limits are constants, not recorded.
     if let Some(c) = code_request {
         budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
     }
-    let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
+    let mut hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
+    hints.extend(hints::from_scans(&facts.scans));
     // PR-4c-1: a binary inspection has no reference rows.
     let components =
         identity::derive(&facts.instances, &facts.binaries, &[]).map_err(InspectError::Internal)?;
@@ -543,6 +547,7 @@ fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
         ("install_bytes".to_string(), b.bytes),
         ("binary_parse_bytes".to_string(), b.binary.parse_bytes),
         ("binary_imports".to_string(), b.binary.imports),
+        (BINARY_SCAN_BYTES.to_string(), b.binary.scan_bytes),
     ])
 }
 
