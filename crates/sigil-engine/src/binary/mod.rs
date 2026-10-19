@@ -8,6 +8,7 @@ pub mod header;
 pub mod macho;
 pub mod needles;
 pub mod read;
+pub mod scan;
 pub mod vaddr;
 
 use std::fs::File;

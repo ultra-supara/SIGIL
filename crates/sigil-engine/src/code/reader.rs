@@ -1,5 +1,6 @@
 //! Code bytes (PR-5a spec §4.2): `pread` on the input's fd, never through the parse cache, each
-//! byte charged to `binary_code_bytes` before it is read. Nothing is mapped.
+//! byte charged to `binary_code_bytes` before it is read. Nothing is mapped. The signature scan
+//! (PR-4c-2a) reads section bytes through it too, charged to `binary_scan_bytes`.
 
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -30,7 +31,8 @@ pub(crate) struct Reader<'f> {
 }
 
 impl<'f> Reader<'f> {
-    /// `size`: the file's size from the read's `fstat`; `limit`: `binary_code_bytes`.
+    /// `size`: the file's size from the read's `fstat`; `limit`: the budget it charges
+    /// (`binary_code_bytes`, or the scan's `binary_scan_bytes`).
     pub fn new(file: &'f File, size: u64, limit: u64) -> Reader<'f> {
         Reader {
             file,

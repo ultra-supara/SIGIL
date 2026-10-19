@@ -35,6 +35,22 @@ pub const BINARY_VANISHED: &str = "vanished during the read";
 pub const BINARY_NOT_PARSED: &str = "not parsed";
 /// Binary roots are `binary-<n>`.
 pub const BINARY_ROOT_PREFIX: &str = "binary-";
+/// Bytes the signature scan reads, per artifact (PR-4c-2a spec §4).
+pub const BINARY_SCAN_BYTES: &str = "binary_scan_bytes";
+/// A scan gap: a needle looks in sections, and the file has no readable section header table.
+pub const SCAN_NO_SECTIONS: &str = "string scan: no section headers";
+/// A scan gap: the name of a section or of an exported symbol could not be read, so a needle may
+/// be there unseen.
+pub const SCAN_NAME_NOT_READ: &str = "string scan: a name not read";
+/// A scan gap: a read of a section failed, and the rest of that section was not read; or the
+/// section passes the end of the file, and its bytes past it could not be read.
+pub const SCAN_READ_FAILED: &str = "string scan: a read failed";
+
+/// The scan gap of an artifact whose scan reached `binary_scan_bytes` (`limit`): `string scan:
+/// binary_scan_bytes <limit> exceeded`. What was found before it is kept.
+pub fn scan_over_gap(limit: u64) -> String {
+    format!("string scan: {BINARY_SCAN_BYTES} {limit} exceeded")
+}
 
 /// The root of input `n`; `None` for 0, which `binary_root_index` refuses too.
 pub fn binary_root(n: u32) -> Option<RootId> {
