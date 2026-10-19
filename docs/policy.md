@@ -85,7 +85,7 @@ container; and the container's `BudgetExceeded` or `Error`. A file named as an N
 not scanned, and its `OutOfScope` closes the check (ADR-010). What `binary.identity` records:
 [`docs/binary-inspect.md`](binary-inspect.md#signatures).
 
-`binary_code_audit` fails closed the same way. A policy file that omits it gets `["binary_code"]`,
+`binary_code_audit` fails closed as `binary_audit` does. A policy file that omits it gets `["binary_code"]`,
 so a policy written before it existed still requires every input's code to be analyzed in full.
 Only an explicit `binary_code_audit = []` requires nothing of code. With code analysis, a binary
 inspection requires nothing only when both lists are `[]`: with `binary_audit = []` alone, the

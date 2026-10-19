@@ -211,8 +211,8 @@ match:
 | `string` (exact bytes) | `.rodata`, `.rodata.*`, and `.lrodata` | `signal: String`; `value` the needle; `at: Section { name, offset }` |
 
 The database has three needles:
-- `rpc.code_present`: an export whose name starts with `ggml_backend_rpc_`, so the file exports
-  functions of ggml's RPC backend;
+- `rpc.code_present`: an exported dynamic symbol whose name starts with `ggml_backend_rpc_`, so
+  a name of ggml's RPC backend is among the file's exports;
 - `ollama.llama_server_launch` and `ollama.device_discovery`: Ollama's Go functions
   `github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv` and
   `github.com/ollama/ollama/discover.discoverNativeDevices`.
@@ -273,7 +273,9 @@ each input's `binary.identity` status. (The **Identity** row of a file's facts i
 claims' status, [below](#components).) Each ELF file's facts are followed by its signatures: the
 line `Signatures of <path>:` and a table with one row per hint that is not an import
 (`Feature | Kind | Value | Where`, sorted by feature, value, kind, and where), or instead the line
-`No signature found.` The kind is `export`, `Go function`, or `string`; the where is
+`No signature found.` A file named as an NVIDIA library, whose first input's `binary.identity` is
+`OutOfScope`, was not scanned: its line is `Not scanned: identified by name and hash only
+(ADR-010).` instead. The kind is `export`, `Go function`, or `string`; the where is
 `symbol <name>` or `<section> + 0x<offset>`. For a library whose first RPC export is
 `ggml_backend_rpc_init`, the table reads, once rendered:
 
