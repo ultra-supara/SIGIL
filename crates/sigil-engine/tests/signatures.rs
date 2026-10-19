@@ -268,6 +268,51 @@ fn an_nvidia_named_library_is_not_scanned() {
     }
 }
 
+/// ADR-010: the engine excludes a file by its placement's own file name, never by its SONAME. A
+/// library whose SONAME alone is NVIDIA's (`libcudart.so`, which fits `libdata.so`'s 13-byte
+/// SONAME slot `libdata.so.1\0`) is claimed as `cuda-runtime` and scanned: its `binary.identity`
+/// is the scan's state, never `OutOfScope`. The same bytes under an NVIDIA file name are not
+/// scanned.
+#[test]
+fn a_file_whose_soname_alone_is_nvidia_s_is_scanned() {
+    let bytes = replaced(
+        &fixture("elf/libdata.so"),
+        b"libdata.so.1\0",
+        b"libcudart.so\0",
+    );
+    let (_d, paths) = files(&[("renamed.so", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    let sigil_model::ContainerFacts::Elf(elf) = &s.binaries[0].container else {
+        panic!("an ELF fixture");
+    };
+    assert_eq!(
+        elf.soname.as_ref().and_then(|t| t.as_str()),
+        Some("libcudart.so")
+    );
+    let claims: Vec<&str> = s
+        .components
+        .iter()
+        .filter(|c| c.subject == s.binaries[0].slice)
+        .map(|c| c.component.as_str())
+        .collect();
+    assert_eq!(claims, ["cuda-runtime"]);
+    assert_eq!(identity(&s, 0), CoverageState::Complete);
+    assert_eq!(scan_of("renamed.so", &bytes), found_nothing(&[]));
+    // Named as NVIDIA's runtime, the same bytes are identified by name and hash only.
+    let (_d, paths) = files(&[("libcudart.so.12", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert_eq!(
+        identity(&s, 0),
+        CoverageState::OutOfScope {
+            why: NAME_AND_HASH_ONLY_WHY.to_string()
+        }
+    );
+    assert_eq!(
+        scan_of("libcudart.so.12", &bytes),
+        ScanOutcome::NameAndHashOnly
+    );
+}
+
 #[test]
 fn a_binary_inspection_records_the_scan_budget() {
     let (_d, paths) = files(&[("ollama", &go_elf(&pclntab(0x3000), true))]);
