@@ -375,6 +375,20 @@ mod tests {
         assert!(db.scans(b"b"));
         assert!(db.scans(b"c"));
         assert!(db.scans(b"d"), "a name no entry matches is scanned");
+        // An ambiguity never excludes a file: a name two `scan = false` entries match names no
+        // component, so it is scanned.
+        let db = parse(
+            "[[component]]\nkey = \"e\"\nnames = [{ library = \"libe.so\" }]\nscan = false\n\
+             [[component]]\nkey = \"f\"\nnames = [{ exact = \"libe.so.1\" }]\nscan = false\n",
+        )
+        .unwrap();
+        assert!(!db.scans(b"libe.so"));
+        assert!(!db.scans(b"libe.so.2"));
+        assert_eq!(db.matching(b"libe.so.1").len(), 2);
+        assert!(
+            db.scans(b"libe.so.1"),
+            "a name two entries match is scanned"
+        );
         assert!(
             parse("[[component]]\nkey = \"a\"\nnames = [{ exact = \"a\" }]\nscan = \"no\"\n")
                 .unwrap_err()

@@ -33,6 +33,15 @@ impl NeedleKind {
             NeedleKind::String => Signal::String,
         }
     }
+
+    /// The kind as `needles.toml` spells it.
+    fn name(self) -> &'static str {
+        match self {
+            NeedleKind::Export => "export",
+            NeedleKind::GoFunction => "go-function",
+            NeedleKind::String => "string",
+        }
+    }
 }
 
 /// One needle.
@@ -64,7 +73,7 @@ impl Needles {
             .iter()
             .map(|n| n.value.len() as u64)
             .max()
-            .map_or(0, |longest| longest - 1)
+            .map_or(0, |longest| longest.saturating_sub(1))
     }
 }
 
@@ -113,8 +122,10 @@ pub fn parse(text: &str) -> Result<Needles, String> {
         };
         if needles.contains(&needle) {
             return Err(format!(
-                "needles.toml: {}: a needle listed twice",
-                needle.feature
+                "needles.toml: {}: the {} needle {:?} listed twice",
+                needle.feature,
+                needle.kind.name(),
+                String::from_utf8_lossy(&needle.value)
             ));
         }
         needles.push(needle);
@@ -221,10 +232,19 @@ mod tests {
         ] {
             assert!(one(bad).unwrap_err().starts_with("needles.toml: "), "{bad}");
         }
+        // An unknown top-level key.
+        assert!(parse(&format!("version = 1\n[[needle]]\n{ok}\n"))
+            .unwrap_err()
+            .starts_with("needles.toml: "));
         let twice = format!("[[needle]]\n{ok}\n[[needle]]\n{ok}\n");
         assert_eq!(
             parse(&twice),
-            Err("needles.toml: a.x: a needle listed twice".to_string())
+            Err("needles.toml: a.x: the string needle \"v\" listed twice".to_string())
+        );
+        let go = "feature = \"a.z\"\nkind = \"go-function\"\nvalue = \"p.f\"";
+        assert_eq!(
+            parse(&format!("[[needle]]\n{go}\n[[needle]]\n{go}\n")),
+            Err("needles.toml: a.z: the go-function needle \"p.f\" listed twice".to_string())
         );
         // The same value under another kind or feature is another needle.
         let other_kind = format!(
