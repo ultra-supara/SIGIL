@@ -141,7 +141,17 @@ The rule then yields an open question at most.
   - B6: a Go version is not empty;
   - B7: `artifacts.container` is `Complete` only with a complete discovery, facts for every ELF
     or Mach-O slice of the install, and no gap;
-  - B8: `stripped` is unknown exactly when a `sections: ` gap says why.
+  - B8: `stripped` is unknown exactly when a `sections: ` gap says why;
+  - S2 (PR-4c-2a): a session has at most one `artifacts.identity` entry. It is scoped to the
+    install root, and is `Complete` only with a complete discovery and facts for every slice of
+    the install's ELF and Mach-O files, none of them a Mach-O, and none a Go ELF without section
+    headers unless it is an NVIDIA library; or `Partial` with its gaps; or the discovery's state
+    when discovery did not finish. A session without an install may have it `Skipped` for
+    `--install-dir`, scoped to the audit;
+  - S3 (PR-4c-2a): a signature hint is of a slice with ELF facts: an `Export` hint at
+    `Symbol(value)`, a `GoFunction` hint in `.gopclntab` of a slice with Go build info, a
+    `String` hint in `.rodata`, `.rodata.*`, or `.lrodata`. No slice of an input whose
+    `binary.identity` is `OutOfScope` has one: it was not scanned.
 
   Whether the gaps are right is the parser's contract: `validate` checks the stored results
   against each other, not against the file's bytes.
@@ -155,6 +165,18 @@ The rule then yields an open question at most.
     its budget and limit exact, with `used` at most the limit. Any other state, `NotPresent` and
     `OutOfScope` among them, is invalid. A missing entry is invalid too: `outcome()` closes a
     check when every entry present closes, so a dropped entry would otherwise close it;
+  - S1 (PR-4c-2a): a `binary.identity` entry is scoped to the instance of an input of a binary
+    inspection, and an input has at most one (a session written before PR-4c-2a has none). It
+    names no budget: the scan's limit is in its gap. Its state is one the input implies
+    (`expected_binary_identity`): the `binary.container` state when the container was not read;
+    `Unsupported` (`string scan: ELF only`) for a Mach-O; `Partial` (`not parsed`) for an ELF
+    without facts; otherwise `Complete`, or `Partial` with scan gaps only (`string scan: …`,
+    sorted and unique, the budget's naming the request's `binary_scan_bytes`). A Go ELF without
+    section headers must list `string scan: no section headers`, and a slice whose section header
+    table was read never does. When a claim on the input's slice names `cuda-runtime`,
+    `cuda/cublas`, or `cuda/cublasLt`, `OutOfScope` (ADR-010) is admitted too: the model has no
+    name database, so it cannot tell a file the engine excludes by its file name from one whose
+    SONAME alone is NVIDIA's, which the engine scans;
   - B10: a session with a binary root is a binary inspection: only binary roots, static, no
     active feature, no model filter, no process environment read, no model, and one instance per
     root, at the root's path, discovered by `Argument`. `Argument` appears on no other instance,
@@ -495,11 +517,17 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 - **Instances.** Each root has one instance: ID `inst:binary-<n>/<file name>`, at the root's path,
   discovered by `Argument` (named on the command line).
 - **Coverage.** Each input has one `binary.container` entry, scope `Instance`: its status
-  (B9 above). Under the default policy, the request's audit is `binary`. Without code analysis,
-  its one required check is `binary.container`. With code analysis, each input also has one
-  `binary.code` entry (below).
+  (B9 above), and one `binary.identity` entry (S1 above). Under the default policy, the request's
+  audit is `binary`. Without code analysis, its required checks are `binary.container` and
+  `binary.identity`. With code analysis, each input also has one `binary.code` entry (below).
+  `request.budgets` holds `binary_scan_bytes` (default 64 MiB).
 - **Facts.** An ELF or Mach-O input's facts are `BinaryFacts` records and their `Declares`
   relations, as for an installation. A fat Mach-O has one record per valid architecture slice.
+- **Signature hints** (PR-4c-2a). An ELF input's scan adds one `FeatureHint` per needle found
+  (S3), as an installation's does: `signal` `Export` (`value` the matched export's name, `at`
+  `Symbol(<name>)`), `GoFunction`, or `String` (`value` the needle, `at`
+  `Section { name, offset }`). A hint says that the name is in the file, never that its code runs
+  ([binary inspection](binary-inspect.md#signatures)).
 
 ## Code analysis (PR-5a)
 
