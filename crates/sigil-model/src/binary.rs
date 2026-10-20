@@ -35,6 +35,26 @@ pub fn imports_over_gap(limit: u64) -> String {
     format!("{IMPORTS_OVER_GAP} {limit}")
 }
 
+/// The gap of an ELF whose loader has dynamic symbols (`DT_SYMTAB`) and whose file has no
+/// section header table, so no `.dynsym` to read them by.
+pub const SYMBOLS_NO_SECTIONS_GAP: &str = "symbols: no section header table";
+
+/// The gap of an ELF whose loader has dynamic symbols (`DT_SYMTAB`) and whose section header
+/// table cannot be read.
+pub const SYMBOLS_UNREADABLE_SECTIONS_GAP: &str = "symbols: no readable section header table";
+
+/// The gap of a linked ELF whose loader has dynamic symbols (`DT_SYMTAB`) and whose section
+/// header table has no `SHT_DYNSYM` section with entries.
+pub const SYMBOLS_NO_DYNSYM_GAP: &str = "symbols: no SHT_DYNSYM";
+
+/// The gaps of a linked ELF whose loader's dynamic symbols the parse has no `.dynsym` for: the
+/// signature scan cannot look at its exports (PR-4c-2a; `expected_binary_identity`).
+pub const DYNSYM_UNREAD_GAPS: [&str; 3] = [
+    SYMBOLS_NO_SECTIONS_GAP,
+    SYMBOLS_UNREADABLE_SECTIONS_GAP,
+    SYMBOLS_NO_DYNSYM_GAP,
+];
+
 /// The capability bits of a Mach-O CPU subtype (`CPU_SUBTYPE_MASK`).
 const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
 

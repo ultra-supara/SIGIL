@@ -275,7 +275,8 @@ line `Signatures of <path>:` and a table with one row per hint that is not an im
 (`Feature | Kind | Value | Where`, sorted by feature, value, kind, and where), or instead the line
 `No signature found.` A file named as an NVIDIA library, whose first input's `binary.identity` is
 `OutOfScope`, was not scanned: its line is `Not scanned: identified by name and hash only
-(ADR-010).` instead. The kind is `export`, `Go function`, or `string`; the where is
+(ADR-010).` instead. A session written before PR-4c-2a has no `binary.identity` entry and was
+never scanned: its line is `Not scanned: this session has no binary.identity entry.` The kind is `export`, `Go function`, or `string`; the where is
 `symbol <name>` or `<section> + 0x<offset>`. For a library whose first RPC export is
 `ggml_backend_rpc_init`, the table reads, once rendered:
 

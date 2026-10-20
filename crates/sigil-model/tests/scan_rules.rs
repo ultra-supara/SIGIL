@@ -102,6 +102,23 @@ fn without_sections(mut s: Session, go: bool) -> Session {
     s
 }
 
+/// `s` with the container gap `gap` on its first binary's facts, which a `binary.container` entry
+/// lists (B9).
+fn with_facts_gap(mut s: Session, gap: &str) -> Session {
+    s.binaries[0].gaps.push(gap.to_string());
+    s.binaries[0].gaps.sort();
+    let gaps: Vec<&str> = s.binaries[0].gaps.iter().map(String::as_str).collect();
+    let state = partial(&gaps);
+    for c in s
+        .coverage
+        .iter_mut()
+        .filter(|c| c.check.as_str() == BINARY_CONTAINER)
+    {
+        c.state = state.clone();
+    }
+    s
+}
+
 fn errors_of(s: &Session, kind: fn(&ValidationError) -> bool) -> Vec<String> {
     s.validate()
         .err()
@@ -157,6 +174,7 @@ fn expected_binary_identity_of_each_input() {
             limit: LIMIT,
             name_and_hash_only,
             no_sections,
+            exports_unread: false,
         })
     };
     // An ELF with facts, and a section header table.
@@ -172,6 +190,26 @@ fn expected_binary_identity_of_each_input() {
         expected(&without_sections(s.clone(), true)),
         scanned(false, NoSectionsGap::Must)
     );
+    // A linked ELF whose loader has dynamic symbols the parse did not read: the embedded
+    // database's export needle could not look at its exports, so the scan's gap is required.
+    for gap in DYNSYM_UNREAD_GAPS {
+        assert_eq!(
+            expected(&with_facts_gap(s.clone(), gap)),
+            Ok(ExpectedIdentity::Scanned {
+                limit: LIMIT,
+                name_and_hash_only: false,
+                no_sections: NoSectionsGap::Never,
+                exports_unread: true,
+            }),
+            "{gap}"
+        );
+    }
+    // A relocatable object has no dynamic symbols; another `symbols:` gap is not one of these.
+    let mut t = with_facts_gap(s.clone(), SYMBOLS_NO_DYNSYM_GAP);
+    t.artifacts[0].format = Format::Elf { kind: ElfType::Rel };
+    assert_eq!(expected(&t), scanned(false, NoSectionsGap::Never));
+    let t = with_facts_gap(s.clone(), "symbols: DT_HASH cannot be read");
+    assert_eq!(expected(&t), scanned(false, NoSectionsGap::Never));
     // Claimed as an NVIDIA library.
     for key in NAME_AND_HASH_ONLY {
         let mut t = s.clone();
@@ -257,6 +295,7 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
         limit: LIMIT,
         name_and_hash_only,
         no_sections,
+        exports_unread: false,
     };
     let admits = |e: &ExpectedIdentity, state: &CoverageState| e.admits(&entry(state.clone()));
     let over = scan_over_gap(LIMIT);
@@ -305,6 +344,27 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
             name_and_hash_only,
             "an NVIDIA library is out of scope with or without sections"
         );
+        // Dynamic symbols not read: the export needle's gap must be there.
+        let unread = ExpectedIdentity::Scanned {
+            limit: LIMIT,
+            name_and_hash_only,
+            no_sections: NoSectionsGap::Never,
+            exports_unread: true,
+        };
+        for state in [
+            partial(&[SCAN_NAME_NOT_READ]),
+            partial(&[SCAN_NAME_NOT_READ, SCAN_READ_FAILED]),
+        ] {
+            assert_eq!(admits(&unread, &state), Ok(()), "{state:?}");
+        }
+        for wrong in [CoverageState::Complete, partial(&[SCAN_READ_FAILED])] {
+            assert!(admits(&unread, &wrong).is_err(), "{wrong:?}");
+        }
+        assert_eq!(
+            admits(&unread, &out_of_scope()).is_ok(),
+            name_and_hash_only,
+            "an NVIDIA library is out of scope with or without its exports"
+        );
     }
     assert_eq!(
         admits(&scanned(true, NoSectionsGap::Never), &out_of_scope()),
@@ -321,6 +381,22 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
         Err(format!(
             "binary.identity is complete, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?}, or out of scope (ADR-010)"
         ))
+    );
+    let both = ExpectedIdentity::Scanned {
+        limit: LIMIT,
+        name_and_hash_only: false,
+        no_sections: NoSectionsGap::Must,
+        exports_unread: true,
+    };
+    assert_eq!(
+        admits(&both, &partial(&[SCAN_NO_SECTIONS])),
+        Err(format!(
+            "binary.identity is partial: {SCAN_NO_SECTIONS}, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} and {SCAN_NAME_NOT_READ:?}"
+        ))
+    );
+    assert_eq!(
+        admits(&both, &partial(&[SCAN_NAME_NOT_READ, SCAN_NO_SECTIONS])),
+        Ok(())
     );
     // The scan's limit is in its gap: the entry names no budget (P-h).
     let mut budgeted = entry(CoverageState::Complete);
@@ -358,14 +434,46 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
 
 #[test]
 fn s1_an_input_has_at_most_one_entry_in_a_state_it_implies() {
-    // None: a session written before PR-4c-2a.
-    assert_eq!(input_errors(&elf_session()), Vec::<String>::new());
+    // None: a session written before PR-4c-2a, which has no binary_scan_bytes budget either.
+    let before = common::without_identity(common::binary_session_one_elf());
+    assert!(!before.request.budgets.contains_key(BINARY_SCAN_BYTES));
+    assert_eq!(input_errors(&before), Vec::<String>::new());
     let s = with_identity(elf_session(), CoverageState::Complete);
     assert_eq!(input_errors(&s), Vec::<String>::new());
     let id = s.instances[0].id.clone();
     let at = format!("binary input coverage[binary.identity on {id}]");
+    // With the budget, every session since PR-4c-2a: exactly one entry per input.
+    assert_eq!(
+        input_errors(&elf_session()),
+        [format!(
+            "{at}: 0 binary.identity entries; an input has exactly one"
+        )]
+    );
+    let mut t = common::binary_inspect();
+    assert_eq!(input_errors(&t), Vec::<String>::new());
+    let text = Ref::Instance(InstanceId::new(common::TEXT_INPUT).unwrap());
+    t.coverage
+        .retain(|c| !(c.check.as_str() == BINARY_IDENTITY && c.scope == text));
+    assert_eq!(
+        input_errors(&t),
+        [format!(
+            "binary input coverage[binary.identity on {}]: 0 binary.identity entries; an input has exactly one",
+            common::TEXT_INPUT
+        )]
+    );
     // Two entries.
     let t = with_identity(s.clone(), CoverageState::Complete);
+    assert_eq!(
+        input_errors(&t),
+        [format!(
+            "{at}: 2 binary.identity entries; an input has exactly one"
+        )]
+    );
+    // Without it, a session written before PR-4c-2a: at most one.
+    let t = with_identity(
+        with_identity(before, CoverageState::Complete),
+        CoverageState::Complete,
+    );
     assert_eq!(
         input_errors(&t),
         [format!(
@@ -411,6 +519,14 @@ fn s1_an_input_has_at_most_one_entry_in_a_state_it_implies() {
         partial(&[SCAN_NO_SECTIONS]),
     );
     assert_eq!(input_errors(&t), Vec::<String>::new());
+    // Nor is a linked ELF whose loader's dynamic symbols the parse did not read: its scan could
+    // not look at its exports.
+    let unread = with_facts_gap(elf_session(), SYMBOLS_NO_DYNSYM_GAP);
+    let t = with_identity(unread.clone(), CoverageState::Complete);
+    assert_eq!(identity_errors(&t).len(), 1, "{:?}", input_errors(&t));
+    assert!(identity_errors(&t)[0].contains(SCAN_NAME_NOT_READ));
+    let t = with_identity(unread, partial(&[SCAN_NAME_NOT_READ]));
+    assert_eq!(input_errors(&t), Vec::<String>::new());
     // An ELF without slices was not parsed.
     let mut t = elf_session();
     t.artifacts[0].slices.clear();
@@ -418,12 +534,15 @@ fn s1_an_input_has_at_most_one_entry_in_a_state_it_implies() {
     assert!(identity_errors(&complete)[0].contains("but the input implies partial: not parsed"));
     let not_parsed = with_identity(t, partial(&[BINARY_NOT_PARSED]));
     assert_eq!(identity_errors(&not_parsed), Vec::<String>::new());
-    // Scoped to something other than an input's instance.
+    // Scoped to something other than an input's instance, which leaves the input without one.
     let mut t = s.clone();
     t.coverage.last_mut().unwrap().scope = Ref::Audit;
     assert_eq!(
         input_errors(&t),
-        ["binary input coverage[binary.identity on the audit]: binary.identity must be scoped to an input's instance"]
+        [
+            "binary input coverage[binary.identity on the audit]: binary.identity must be scoped to an input's instance".to_string(),
+            format!("{at}: 0 binary.identity entries; an input has exactly one"),
+        ]
     );
     // Outside a binary inspection.
     let mut t = common::complete_pass();
@@ -512,7 +631,7 @@ fn s2_artifacts_identity_is_complete_only_when_every_binary_was_scanned() {
     let s = with_install_identity(install_session(), CoverageState::Complete);
     assert_eq!(binary_errors(&s), Vec::<String>::new());
     let complaint = vec![
-        "binaries[*]: artifacts.identity is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, or a Go ELF has no section headers".to_string(),
+        "binaries[*]: artifacts.identity is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, or a linked ELF's dynamic symbols were not read".to_string(),
     ];
     // Discovery not complete.
     let mut t = s.clone();
@@ -546,6 +665,15 @@ fn s2_artifacts_identity_is_complete_only_when_every_binary_was_scanned() {
     t.components[0].component = ComponentKey::new("cuda-runtime").unwrap();
     assert_eq!(binary_errors(&t), Vec::<String>::new());
     let t = without_sections(s.clone(), false);
+    assert_eq!(binary_errors(&t), Vec::<String>::new());
+    // A linked ELF whose dynamic symbols were not read (review item 4), unless an NVIDIA library
+    // or a relocatable object.
+    let mut t = with_facts_gap(s.clone(), SYMBOLS_NO_DYNSYM_GAP);
+    assert_eq!(binary_errors(&t), complaint);
+    t.components[0].component = ComponentKey::new("cuda/cublas").unwrap();
+    assert_eq!(binary_errors(&t), Vec::<String>::new());
+    let mut t = with_facts_gap(s.clone(), SYMBOLS_NO_DYNSYM_GAP);
+    t.artifacts[0].format = Format::Elf { kind: ElfType::Rel };
     assert_eq!(binary_errors(&t), Vec::<String>::new());
     // Partial says what was not scanned: nothing to check.
     let t = with_install_identity(

@@ -16,7 +16,8 @@ use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
 use sigil_model::{
     imports_over_gap, BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText,
-    BINARY_CODE_BYTES, SCAN_NO_SECTIONS,
+    BINARY_CODE_BYTES, SCAN_NO_SECTIONS, SYMBOLS_NO_DYNSYM_GAP, SYMBOLS_NO_SECTIONS_GAP,
+    SYMBOLS_UNREADABLE_SECTIONS_GAP,
 };
 
 use super::needles::Needles;
@@ -873,7 +874,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Ok(t) if t.is_empty() => {
                 self.gap("sections: no section header table");
                 if dynamic.symtab.is_some() {
-                    self.gap("symbols: no section header table");
+                    self.gap(SYMBOLS_NO_SECTIONS_GAP);
                 }
                 return none;
             }
@@ -881,7 +882,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             Err(e) => {
                 self.gap(format!("sections: malformed: {e}"));
                 if dynamic.symtab.is_some() {
-                    self.gap("symbols: no readable section header table");
+                    self.gap(SYMBOLS_UNREADABLE_SECTIONS_GAP);
                 }
                 return none;
             }
@@ -944,7 +945,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             if relocatable {
                 self.gap("symbols: no SHT_SYMTAB in a relocatable object");
             } else if dynamic.symtab.is_some() {
-                self.gap("symbols: no SHT_DYNSYM");
+                self.gap(SYMBOLS_NO_DYNSYM_GAP);
             }
             return Sections {
                 table: Some(table),

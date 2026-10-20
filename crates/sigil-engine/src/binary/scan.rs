@@ -182,12 +182,12 @@ pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 /// The export needles against the exports of the `.dynsym` the loader binds through (one with
 /// no `symbols:` gap, as the code step reads it), in symbol-table order: the first export whose
 /// name starts with a needle is its hint. A relocatable object has no dynamic symbols. A name
-/// that cannot be read is the gap [`SCAN_NAME_NOT_READ`]. So are, while an export needle is not
-/// found, the loader's dynamic symbols when the parse has no such `.dynsym` and the loader has
-/// `DT_SYMTAB` (missing, of another type, or not where `DT_SYMTAB` and `DT_STRTAB` are; plan
-/// review P2), and when the loader's dynamic table could not be read to check a `.dynsym`
-/// against (`PT_DYNAMIC`, or the program headers that would hold it, unreadable): the hints found
-/// are kept. Without an export needle, nothing is read.
+/// that cannot be read is the gap [`SCAN_NAME_NOT_READ`], given once. So are, while an export
+/// needle is not found, the loader's dynamic symbols when the parse has no such `.dynsym` and the
+/// loader has `DT_SYMTAB` (missing, of another type, or not where `DT_SYMTAB` and `DT_STRTAB`
+/// are; plan review P2), and when the loader's dynamic table could not be read to check a
+/// `.dynsym` against (`PT_DYNAMIC`, or the program headers that would hold it, unreadable): the
+/// hints found are kept. Without an export needle, nothing is read.
 fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'_, R, H>,
     sections: &Sections<'_, R, H>,
@@ -225,6 +225,8 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         .as_ref()
         .and_then(|t| t.section(symbols.string_section()).ok())
         .and_then(|s| s.file_range(endian));
+    // A name not read, recorded once however many there are.
+    let mut unread = false;
     for sym in symbols.symbols().iter().skip(1) {
         if open.is_empty() {
             break;
@@ -240,7 +242,7 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             },
         };
         let Some(name) = name else {
-            gaps.push(SCAN_NAME_NOT_READ.to_string());
+            unread = true;
             continue;
         };
         open.retain(|n| {
@@ -258,7 +260,7 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         });
     }
     // A `.dynsym` not checked against the loader's table: what it does not have, the loader may.
-    if unchecked && !open.is_empty() {
+    if unread || (unchecked && !open.is_empty()) {
         gaps.push(SCAN_NAME_NOT_READ.to_string());
     }
 }
@@ -266,7 +268,7 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 /// The sections of `kinds` in `table`, in table order: `.gopclntab` for the Go-function needles;
 /// `.rodata`, `.rodata.*`, and `.lrodata` for the string needles. A section without file bytes
 /// (`SHT_NOBITS`) is none of them. A section name that cannot be read is the gap
-/// [`SCAN_NAME_NOT_READ`]: it could be one of them.
+/// [`SCAN_NAME_NOT_READ`], given once: it could be one of them.
 fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     table: &SectionTable<'d, H, &'d Bounded<R>>,
@@ -282,6 +284,8 @@ fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         .and_then(|i| table.section(SectionIndex(i as usize)).ok())
         .and_then(|s| s.file_range(endian));
     let mut out = vec![];
+    // A name not read, recorded once however many there are.
+    let mut unread = false;
     for s in table.iter().skip(1) {
         if s.sh_type(endian) == elf::SHT_NOBITS {
             continue;
@@ -289,7 +293,7 @@ fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         let name = match strings.map(|st| e.name(st, s.sh_name(endian), MAX_SECTION_NAME)) {
             Some(Ok(Some(name))) => name,
             _ => {
-                gaps.push(SCAN_NAME_NOT_READ.to_string());
+                unread = true;
                 continue;
             }
         };
@@ -308,6 +312,9 @@ fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 size: s.sh_size(endian).into(),
             });
         }
+    }
+    if unread {
+        gaps.push(SCAN_NAME_NOT_READ.to_string());
     }
     out
 }
@@ -339,6 +346,7 @@ mod tests {
 
     use super::*;
     use crate::binary::needles::parse;
+    use crate::binary::read::Budgeted;
 
     const MIB: usize = CHUNK as usize;
 
@@ -740,5 +748,87 @@ mod tests {
             ]
         );
         assert_eq!(s.used, 100);
+    }
+
+    type H64 = object::elf::FileHeader64<Endianness>;
+
+    /// The parts of the ELF64 file `f`, as `elf::parse_as` has them before the scan.
+    fn with_parts<T>(
+        f: &tempfile::NamedTempFile,
+        then: impl for<'d, 'f> FnOnce(
+            &Elf<'d, Budgeted<'f>, H64>,
+            &Sections<'d, Budgeted<'f>, H64>,
+            &Dynamic,
+        ) -> T,
+    ) -> T {
+        let file = f.reopen().unwrap();
+        let size = file.metadata().unwrap().len();
+        let data = Bounded::new(Budgeted::new(&file, size), size, 64 << 20);
+        let p = super::super::elf::parts::<_, H64>(&data, crate::binary::BinaryBudgets::default())
+            .unwrap();
+        then(&p.elf, &p.sections, &p.dynamic)
+    }
+
+    fn libdata() -> Vec<u8> {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/elf/libdata.so"
+        ))
+        .unwrap()
+    }
+
+    /// Final branch review: a gap is given once, however many section names cannot be read.
+    #[test]
+    fn section_names_not_read_are_one_gap() {
+        let mut b = libdata();
+        // Every section's `sh_name` past the section-name table (ELF64: `e_shoff` at 40,
+        // `e_shentsize` at 58, `e_shnum` at 60; `sh_name` first in each header).
+        let u16_at = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]) as usize;
+        let shoff = u64::from_le_bytes(b[40..48].try_into().unwrap()) as usize;
+        let (entsize, count) = (u16_at(&b, 58), u16_at(&b, 60));
+        assert!(count > 2, "{count}");
+        for k in 1..count {
+            let at = shoff + k * entsize;
+            b[at..at + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+        }
+        let f = file(&b);
+        with_parts(&f, |e, sections, _| {
+            let table = sections.table.as_ref().unwrap();
+            let mut gaps = vec![];
+            let kinds = [NeedleKind::GoFunction, NeedleKind::String];
+            assert_eq!(targets(e, table, &kinds, &mut gaps), []);
+            assert_eq!(gaps, [SCAN_NAME_NOT_READ]);
+        });
+    }
+
+    /// Final branch review: a gap is given once, however many export names cannot be read.
+    #[test]
+    fn export_names_not_read_are_one_gap() {
+        let mut b = libdata();
+        // Every `.dynsym` entry's `st_name` past its string table.
+        let (offset, size) = {
+            use object::{Object, ObjectSection};
+            let elf = object::read::elf::ElfFile64::<Endianness>::parse(&b[..]).unwrap();
+            elf.section_by_name(".dynsym")
+                .unwrap()
+                .file_range()
+                .unwrap()
+        };
+        let mut exported = 0;
+        for at in (offset..offset + size).step_by(24) {
+            let at = at as usize;
+            b[at..at + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+            // STB_GLOBAL with a defined section: one of the exports the walk names.
+            exported += usize::from(b[at + 4] >> 4 == 1 && b[at + 6..at + 8] != [0, 0]);
+        }
+        assert!(exported > 1, "{exported}");
+        let f = file(&b);
+        let needles = db(&[("rpc.code_present", "export", "ggml_backend_rpc_")]);
+        with_parts(&f, |e, sections, dynamic| {
+            let (mut found, mut gaps) = (vec![], vec![]);
+            exports(e, sections, dynamic, &needles, &mut found, &mut gaps);
+            assert_eq!(found, []);
+            assert_eq!(gaps, [SCAN_NAME_NOT_READ]);
+        });
     }
 }

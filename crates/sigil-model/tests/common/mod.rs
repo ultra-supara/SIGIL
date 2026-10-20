@@ -1705,9 +1705,11 @@ fn binary_inspect_only(root: &str) -> Session {
 }
 
 /// `s` as a binary inspection written before PR-4c-2a: without `binary.identity`, required or
-/// recorded. S1 admits that; the tests of the other rules change an input's container alone.
+/// recorded, and without a `binary_scan_bytes` budget. S1 admits that (with the budget, each
+/// input needs its entry); the tests of the other rules change an input's container alone.
 pub fn without_identity(mut s: Session) -> Session {
     let identity = |c: &CheckId| c.as_str() == BINARY_IDENTITY;
+    s.request.budgets.remove(BINARY_SCAN_BYTES);
     s.request.required_checks.retain(|c| !identity(c));
     s.coverage.retain(|c| !identity(&c.check));
     if let Completeness::Incomplete {

@@ -8,8 +8,10 @@
 //! [`expected_binary_code`] derives the same way (C3). Each input also gets one `binary.identity`
 //! coverage (PR-4c-2a), whose states [`expected_binary_identity`] derives (S1).
 
-use crate::artifact::{Arch, FileInstance, Format, InstanceContent, NotReadReason, Stability};
-use crate::binary::{BinaryFacts, ContainerFacts};
+use crate::artifact::{
+    Arch, ElfType, FileInstance, Format, InstanceContent, NotReadReason, Stability,
+};
+use crate::binary::{BinaryFacts, ContainerFacts, DYNSYM_UNREAD_GAPS};
 use crate::coverage::{Coverage, CoverageState};
 use crate::evidence::Ref;
 use crate::id::{RootId, SliceId};
@@ -358,9 +360,11 @@ pub enum ExpectedIdentity {
     Exactly(CoverageState),
     /// An ELF with facts, scanned: `Complete`, or `Partial` whose gaps are scan gaps
     /// ([`is_scan_gap`]) with the request's `binary_scan_bytes`, `limit`, sorted and without
-    /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says. Also
-    /// `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a
-    /// slice of the input names one of [`NAME_AND_HASH_ONLY`].
+    /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says, and
+    /// [`SCAN_NAME_NOT_READ`] among them when `exports_unread`: a linked ELF whose facts carry
+    /// one of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required. Also `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}`
+    /// when `name_and_hash_only`: a claim on a slice of the input names one of
+    /// [`NAME_AND_HASH_ONLY`].
     ///
     /// The engine excludes a file by its placement's own file name (ADR-010), and scans one whose
     /// SONAME alone is NVIDIA's. The model has no name database, so it cannot tell the two
@@ -372,6 +376,7 @@ pub enum ExpectedIdentity {
         limit: u64,
         name_and_hash_only: bool,
         no_sections: NoSectionsGap,
+        exports_unread: bool,
     },
 }
 
@@ -397,6 +402,18 @@ pub(crate) fn no_sections_gap(b: &BinaryFacts) -> NoSectionsGap {
         _ if b.go.is_some() => NoSectionsGap::Must,
         _ => NoSectionsGap::May,
     }
+}
+
+/// Whether `b`, the facts of a slice of an ELF of kind `kind`, imply the scan's gap
+/// [`SCAN_NAME_NOT_READ`]: a linked ELF whose loader has dynamic symbols the parse has no
+/// `.dynsym` for (its facts carry one of [`DYNSYM_UNREAD_GAPS`]). The scan cannot look at its
+/// exports, and the embedded database has an export needle, which an engine test keeps. A
+/// relocatable object has no dynamic symbols: its exports are never looked at.
+pub(crate) fn exports_unread(b: &BinaryFacts, kind: ElfType) -> bool {
+    kind != ElfType::Rel
+        && b.gaps
+            .iter()
+            .any(|g| DYNSYM_UNREAD_GAPS.contains(&g.as_str()))
 }
 
 /// Whether a claim on `slice` names a component identified by name and hash only
@@ -432,9 +449,12 @@ impl ExpectedIdentity {
                 limit,
                 name_and_hash_only,
                 no_sections,
+                exports_unread,
             } => {
                 let admitted = match state {
-                    CoverageState::Complete => *no_sections != NoSectionsGap::Must,
+                    CoverageState::Complete => {
+                        *no_sections != NoSectionsGap::Must && !*exports_unread
+                    }
                     CoverageState::Partial { missing } => {
                         let listed = missing.iter().any(|g| g == SCAN_NO_SECTIONS);
                         !missing.is_empty()
@@ -445,6 +465,7 @@ impl ExpectedIdentity {
                                 NoSectionsGap::May => true,
                                 NoSectionsGap::Must => listed,
                             }
+                            && (!*exports_unread || missing.iter().any(|g| g == SCAN_NAME_NOT_READ))
                     }
                     CoverageState::OutOfScope { why } => {
                         *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY
@@ -454,14 +475,25 @@ impl ExpectedIdentity {
                 if admitted {
                     return Ok(());
                 }
-                let gaps =
+                let mut required = vec![];
+                if *no_sections == NoSectionsGap::Must {
+                    required.push(format!("{SCAN_NO_SECTIONS:?}"));
+                }
+                if *exports_unread {
+                    required.push(format!("{SCAN_NAME_NOT_READ:?}"));
+                }
+                let mut gaps =
                     format!("partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {limit})");
-                let implied = match no_sections {
-                    NoSectionsGap::Never => {
-                        format!("complete, or {gaps} other than {SCAN_NO_SECTIONS:?}")
-                    }
-                    NoSectionsGap::May => format!("complete, or {gaps}"),
-                    NoSectionsGap::Must => format!("{gaps} among them {SCAN_NO_SECTIONS:?}"),
+                if !required.is_empty() {
+                    gaps.push_str(&format!(" among them {}", required.join(" and ")));
+                }
+                if *no_sections == NoSectionsGap::Never {
+                    gaps.push_str(&format!(" other than {SCAN_NO_SECTIONS:?}"));
+                }
+                let implied = if required.is_empty() {
+                    format!("complete, or {gaps}")
+                } else {
+                    gaps
                 };
                 Err(format!(
                     "{BINARY_IDENTITY} is {}, but the input implies {implied}{}",
@@ -484,8 +516,10 @@ impl ExpectedIdentity {
 ///
 /// A Go ELF without a section header table must list [`SCAN_NO_SECTIONS`]
 /// ([`NoSectionsGap::Must`]): the embedded needle database has Go-function needles, which the
-/// scan looks for in `.gopclntab`, so it cannot be `Complete` (an engine test pins those
-/// needles).
+/// scan looks for in `.gopclntab`, so it cannot be `Complete`. Likewise a linked ELF whose
+/// loader's dynamic symbols the parse did not read (one of [`DYNSYM_UNREAD_GAPS`] in its facts)
+/// must list [`SCAN_NAME_NOT_READ`]: the database has an export needle. Engine tests pin both
+/// needles.
 pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<ExpectedIdentity, String> {
     let state = container_state(s, i)?;
     if !matches!(
@@ -502,15 +536,15 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         .iter()
         .find(|a| a.id == *artifact)
         .ok_or("its artifact is not in the session")?;
-    match a.format {
+    let kind = match a.format {
         Format::MachO | Format::MachOFat => {
             return Ok(ExpectedIdentity::Exactly(CoverageState::Unsupported {
                 what: SCAN_ELF_ONLY.to_string(),
             }))
         }
-        Format::Elf { .. } => {}
+        Format::Elf { kind } => kind,
         _ => return Ok(ExpectedIdentity::Exactly(state)),
-    }
+    };
     let parsed = !a.slices.is_empty()
         && a.slices
             .iter()
@@ -526,16 +560,20 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         .get(BINARY_SCAN_BYTES)
         .copied()
         .ok_or_else(|| format!("an ELF input without a {BINARY_SCAN_BYTES} budget"))?;
-    let no_sections = a
+    let facts: Vec<&BinaryFacts> = a
         .slices
         .iter()
         .filter_map(|x| s.binaries.iter().find(|b| b.slice == x.id))
-        .map(no_sections_gap)
+        .collect();
+    let no_sections = facts
+        .iter()
+        .map(|b| no_sections_gap(b))
         .max()
         .unwrap_or(NoSectionsGap::Never);
     Ok(ExpectedIdentity::Scanned {
         limit,
         name_and_hash_only: a.slices.iter().any(|x| name_and_hash_only(s, &x.id)),
         no_sections,
+        exports_unread: facts.iter().any(|b| exports_unread(b, kind)),
     })
 }

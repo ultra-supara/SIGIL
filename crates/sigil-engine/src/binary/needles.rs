@@ -183,6 +183,14 @@ mod tests {
         assert!(!needles().unwrap().of(NeedleKind::GoFunction).is_empty());
     }
 
+    /// The model's `expected_binary_identity` requires the gap `SCAN_NAME_NOT_READ` of a linked
+    /// ELF whose loader's dynamic symbols the parse did not read (`DYNSYM_UNREAD_GAPS`): the
+    /// embedded database has an export needle, which looks in the exports.
+    #[test]
+    fn the_embedded_database_looks_for_exports() {
+        assert!(!needles().unwrap().of(NeedleKind::Export).is_empty());
+    }
+
     #[test]
     fn each_kind_gives_its_signal() {
         assert_eq!(NeedleKind::Export.signal(), Signal::Export);

@@ -2065,8 +2065,9 @@ impl<'a> Validator<'a> {
     /// S1 and S2 (PR-4c-2a spec §5, §6): the identity coverage agrees with the session.
     ///
     /// - S1: a `binary.identity` entry is scoped to the instance of an input of a binary
-    ///   inspection. An input has at most one (a session written before PR-4c-2a has none), in a
-    ///   state [`expected_binary_identity`] admits, without a budget.
+    ///   inspection. An input has exactly one in a session with a `binary_scan_bytes` budget
+    ///   (every session since PR-4c-2a), and at most one otherwise (a session written before has
+    ///   none), in a state [`expected_binary_identity`] admits, without a budget.
     /// - S2: a session has at most one `artifacts.identity` entry, scoped to the install root:
     ///   `Complete` only as [`install_scanned`] says, `Partial` with its gaps, or the discovery's
     ///   own state when discovery could not finish (`Unavailable`, `BudgetExceeded`, `Error`);
@@ -2078,7 +2079,7 @@ impl<'a> Validator<'a> {
         use crate::binary::ARTIFACTS_IDENTITY;
         use crate::binary_input::{
             expected_binary_container, expected_binary_identity, is_binary_root, ExpectedContainer,
-            BINARY_IDENTITY,
+            BINARY_IDENTITY, BINARY_SCAN_BYTES,
         };
         use crate::coverage::{Coverage, SkipReason};
         use crate::render::{coverage_state, subject};
@@ -2106,17 +2107,30 @@ impl<'a> Validator<'a> {
                 ),
             }
         }
-        for (id, entries) in per_input {
+        // Every session since PR-4c-2a records `binary_scan_bytes` and an entry for each input;
+        // one written before has neither.
+        let scanned = s.request.budgets.contains_key(BINARY_SCAN_BYTES);
+        for (id, i) in &inputs {
             let at = format!("coverage[{BINARY_IDENTITY} on {id}]");
-            let (Some(i), [c]) = (inputs.get(id), entries.as_slice()) else {
-                self.input_error(
-                    &at,
-                    format!(
-                        "{} binary.identity entries; an input has at most one",
-                        entries.len()
-                    ),
-                );
-                continue;
+            let entries = per_input.get(id).map(Vec::as_slice).unwrap_or_default();
+            let c = match entries {
+                [c] => c,
+                [] if !scanned => continue,
+                _ => {
+                    self.input_error(
+                        &at,
+                        format!(
+                            "{} binary.identity entries; an input has {}",
+                            entries.len(),
+                            if scanned {
+                                "exactly one"
+                            } else {
+                                "at most one"
+                            }
+                        ),
+                    );
+                    continue;
+                }
             };
             match expected_binary_identity(s, i) {
                 Ok(expected) => {
@@ -2179,7 +2193,7 @@ impl<'a> Validator<'a> {
                 CoverageState::Complete => {
                     if !install_scanned(s) {
                         why.push(format!(
-                            "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, or a Go ELF has no section headers"
+                            "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, or a linked ELF's dynamic symbols were not read"
                         ));
                     }
                 }
@@ -3185,8 +3199,9 @@ fn c5(value: &ArgValue) -> Vec<String> {
 ///
 /// Discovery is `Complete`, and every install binary is an ELF with slices, each with facts, and
 /// none a Go ELF without a section header table ([`NoSectionsGap::Must`]: its scan lists
-/// [`SCAN_NO_SECTIONS`]) unless an NVIDIA library (ADR-010), which is never scanned and adds no
-/// gap.
+/// [`SCAN_NO_SECTIONS`]) or a linked ELF whose loader's dynamic symbols the parse did not read
+/// (its scan lists [`SCAN_NAME_NOT_READ`]), unless an NVIDIA library (ADR-010), which is never
+/// scanned and adds no gap.
 ///
 /// That exception holds for any NVIDIA claim on the slice: as for `binary.identity`'s
 /// `OutOfScope` ([`ExpectedIdentity::Scanned`]), the model cannot tell a file the engine
@@ -3196,9 +3211,10 @@ fn c5(value: &ArgValue) -> Vec<String> {
 /// [`ExpectedIdentity::Scanned`]: crate::binary_input::ExpectedIdentity::Scanned
 /// [`NoSectionsGap::Must`]: crate::binary_input::NoSectionsGap::Must
 /// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
+/// [`SCAN_NAME_NOT_READ`]: crate::binary_input::SCAN_NAME_NOT_READ
 fn install_scanned(s: &Session) -> bool {
     use crate::artifact::Format;
-    use crate::binary_input::{name_and_hash_only, no_sections_gap, NoSectionsGap};
+    use crate::binary_input::{exports_unread, name_and_hash_only, no_sections_gap, NoSectionsGap};
     let discovery = s
         .coverage
         .iter()
@@ -3221,14 +3237,17 @@ fn install_scanned(s: &Session) -> bool {
         })
         .collect();
     let scanned = binaries.iter().all(|a| {
-        matches!(a.format, Format::Elf { .. })
-            && !a.slices.is_empty()
+        let Format::Elf { kind } = a.format else {
+            return false;
+        };
+        !a.slices.is_empty()
             && a.slices.iter().all(|x| {
                 s.binaries
                     .iter()
                     .find(|b| b.slice == x.id)
                     .is_some_and(|b| {
-                        no_sections_gap(b) != NoSectionsGap::Must || name_and_hash_only(s, &x.id)
+                        (no_sections_gap(b) != NoSectionsGap::Must && !exports_unread(b, kind))
+                            || name_and_hash_only(s, &x.id)
                     })
             })
     });

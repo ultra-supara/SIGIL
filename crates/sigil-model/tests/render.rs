@@ -10,7 +10,8 @@ use sigil_model::render::code::{
     NOT_ANALYZED, NOT_SEARCHED, NO_CAPABILITY_IMPORTS,
 };
 use sigil_model::render::markdown::{
-    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES,
+    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT, NOT_SCANNED, NO_IDENTITY_ENTRY,
+    NO_SIGNATURES,
 };
 use sigil_model::*;
 
@@ -409,13 +410,16 @@ fn eleven_inputs_are_shown_in_argument_order() {
             id: root,
             path: t(&path),
         });
-        s.coverage.push(coverage(
-            BINARY_CONTAINER,
-            Ref::Instance(inst),
-            CoverageState::Unsupported {
-                what: BINARY_UNSUPPORTED.to_string(),
-            },
-        ));
+        let unsupported = CoverageState::Unsupported {
+            what: BINARY_UNSUPPORTED.to_string(),
+        };
+        for check in [BINARY_CONTAINER, BINARY_IDENTITY] {
+            s.coverage.push(coverage(
+                check,
+                Ref::Instance(inst.clone()),
+                unsupported.clone(),
+            ));
+        }
     }
     s.canonicalize();
     assert_eq!(s.validate(), Ok(()));
@@ -512,12 +516,11 @@ fn binary_no_code() -> Session {
     let mut s = binary_code();
     s.request.code = false;
     s.request.audit.retain(|a| a.as_str() == "binary");
-    s.request
-        .required_checks
-        .retain(|c| c.as_str() == BINARY_CONTAINER);
+    let kept = |c: &CheckId| [BINARY_CONTAINER, BINARY_IDENTITY].contains(&c.as_str());
+    s.request.required_checks.retain(kept);
     s.request.budgets.remove(BINARY_CODE_BYTES);
     s.code.clear();
-    s.coverage.retain(|c| c.check.as_str() == BINARY_CONTAINER);
+    s.coverage.retain(|c| kept(&c.check));
     s
 }
 
@@ -1714,6 +1717,13 @@ fn a_session_before_signature_scans_has_no_coverage_entry_in_its_column() {
         )),
         "{section}"
     );
+    // Its ELF was never scanned: the report does not say that no signature was found.
+    assert_eq!(
+        section.matches(&md_esc(NO_IDENTITY_ENTRY)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
 }
 
 /// Signature rows are in (feature, value, kind, where) order, whatever the session's order: two

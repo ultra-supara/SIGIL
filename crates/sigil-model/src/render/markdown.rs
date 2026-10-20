@@ -190,6 +190,10 @@ pub const NO_SIGNATURES: &str = "No signature found.";
 /// NVIDIA library, never scanned (ADR-010; PR-4c-2a).
 pub const NOT_SCANNED: &str = "Not scanned: identified by name and hash only (ADR-010).";
 
+/// What an ELF content gets instead when its first input has no `binary.identity` entry: a
+/// session written before PR-4c-2a, whose files were never scanned.
+pub const NO_IDENTITY_ENTRY: &str = "Not scanned: this session has no binary.identity entry.";
+
 /// The scope of code analysis (PR-5a spec §6.1), after [`BINARY_CAVEAT_CODE`].
 pub const CODE_CAVEAT: &str = "Direct call sites only. A call through a function pointer, a function linked statically into the file, and a raw system call are not found, and references from data are not followed. Only executable sections and the ranges of FDEs in .eh_frame are searched, and only code with an FDE is analyzed. In a relocatable object (.o), addresses are file offsets.";
 
@@ -543,7 +547,8 @@ fn identity_rows(s: &Session, slice: &crate::id::SliceId) -> Vec<Vec<String>> {
 ///
 /// `identity` is the `binary.identity` entry of the content's first input, under which it is
 /// shown: when it is `OutOfScope` (an NVIDIA library, ADR-010), the content was not scanned, and
-/// the line is [`NOT_SCANNED`] instead.
+/// the line is [`NOT_SCANNED`] instead; without one (a session written before PR-4c-2a), nothing
+/// was scanned, and the line is [`NO_IDENTITY_ENTRY`].
 fn signatures(
     out: &mut String,
     s: &Session,
@@ -567,11 +572,12 @@ fn signatures(
         (hint_key(x), x_kind, x_at).cmp(&(hint_key(y), y_kind, y_at))
     });
     if hints.is_empty() {
-        let scanned = !matches!(
-            identity.map(|c| &c.state),
-            Some(crate::coverage::CoverageState::OutOfScope { .. })
-        );
-        out.push_str(&esc(if scanned { NO_SIGNATURES } else { NOT_SCANNED }));
+        let line = match identity.map(|c| &c.state) {
+            None => NO_IDENTITY_ENTRY,
+            Some(crate::coverage::CoverageState::OutOfScope { .. }) => NOT_SCANNED,
+            Some(_) => NO_SIGNATURES,
+        };
+        out.push_str(&esc(line));
         out.push_str("\n\n");
         return;
     }
