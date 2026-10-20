@@ -361,10 +361,10 @@ pub enum ExpectedIdentity {
     /// An ELF with facts, scanned: `Complete`, or `Partial` whose gaps are scan gaps
     /// ([`is_scan_gap`]) with the request's `binary_scan_bytes`, `limit`, sorted and without
     /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says, and
-    /// [`SCAN_NAME_NOT_READ`] among them when `exports_unread`: a linked ELF whose facts carry
-    /// one of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required. Also `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}`
-    /// when `name_and_hash_only`: a claim on a slice of the input names one of
-    /// [`NAME_AND_HASH_ONLY`].
+    /// [`SCAN_NAME_NOT_READ`] among them when `exports_unread`: a linked ELF whose facts carry one
+    /// of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required. Also `OutOfScope {`
+    /// [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a slice of the input
+    /// names one of [`NAME_AND_HASH_ONLY`].
     ///
     /// The engine excludes a file by its placement's own file name (ADR-010), and scans one whose
     /// SONAME alone is NVIDIA's. The model has no name database, so it cannot tell the two
