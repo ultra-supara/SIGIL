@@ -11,8 +11,8 @@ use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, SectionTable, 
 use object::read::{ReadCacheOps, SectionIndex};
 use object::Endianness;
 use sigil_model::{
-    scan_over_gap, FeatureKey, Loc, Signal, UntrustedText, SCAN_NAME_NOT_READ, SCAN_NO_SECTIONS,
-    SCAN_READ_FAILED,
+    scan_over_gap, FeatureKey, Loc, Signal, UntrustedText, SCAN_NAME_NOT_READ, SCAN_NO_GOPCLNTAB,
+    SCAN_NO_SECTIONS, SCAN_READ_FAILED,
 };
 
 use super::elf::{is_export, Dynamic, Elf, Sections, MAX_IMPORT_NAME};
@@ -145,7 +145,8 @@ pub fn search(
 /// needles in `.rodata`, `.rodata.*`, and `.lrodata` ([`targets`]). Names are read through the
 /// parse's cache, charged to `binary_parse_bytes`; section bytes through `file` (the fd and its
 /// `fstat` size), charged to `limit` (`binary_scan_bytes`). What cannot be read is a gap of the
-/// scan, never of the container.
+/// scan, never of the container. A Go ELF whose sections, every name read, have no `.gopclntab`
+/// gets the gap [`SCAN_NO_GOPCLNTAB`]: its Go-function needles were looked for nowhere.
 pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'_, R, H>,
     sections: &Sections<'_, R, H>,
@@ -167,7 +168,18 @@ pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         match &sections.table {
             None => gaps.push(SCAN_NO_SECTIONS.to_string()),
             Some(table) => {
+                // `targets` adds no gap but the one for a name not read.
+                let before = gaps.len();
                 let targets = targets(e, table, &kinds, &mut gaps);
+                let names_read = gaps.len() == before;
+                // Go build info, and no section named `.gopclntab` (PR #97 review P2). With a name
+                // not read, that gap already says the section may be there unseen.
+                if kinds.contains(&NeedleKind::GoFunction)
+                    && names_read
+                    && !targets.iter().any(|t| t.kind == NeedleKind::GoFunction)
+                {
+                    gaps.push(SCAN_NO_GOPCLNTAB.to_string());
+                }
                 let searched = search(file, size, limit, needles, &targets);
                 found.extend(searched.found);
                 gaps.extend(searched.gaps);

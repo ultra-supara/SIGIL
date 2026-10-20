@@ -179,6 +179,8 @@ The rule then yields an open question at most.
     `symbols: no section header table`, `symbols: no readable section header table`, or
     `symbols: no SHT_DYNSYM` must list `string scan: a name not read`: its loader has dynamic
     symbols the parse has no `.dynsym` for, so the export needle could not look at its exports.
+    A Go ELF whose section header table was read may list `string scan: no .gopclntab section`
+    (the model sees no section names); no other ELF does.
     When a claim on the input's slice names `cuda-runtime`,
     `cuda/cublas`, or `cuda/cublasLt`, `OutOfScope` (ADR-010) is admitted too: the model has no
     name database, so it cannot tell a file the engine excludes by its file name from one whose

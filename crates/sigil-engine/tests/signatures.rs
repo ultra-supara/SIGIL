@@ -19,7 +19,7 @@ use sigil_engine::policy::Policy;
 use sigil_model::{
     binary_root, scan_over_gap, BinaryFacts, Completeness, CoverageState, FeatureHint,
     FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY, BINARY_IDENTITY,
-    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NO_SECTIONS,
+    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
 };
 use tempfile::TempDir;
 
@@ -187,6 +187,39 @@ fn a_go_executable_s_gopclntab_gives_both_function_hints() {
         ]
     );
     assert!(s.hints.iter().all(|h| h.subject == s.binaries[0].slice));
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR #97 review P2: a Go executable whose sections, all named, include no `.gopclntab` was not
+/// searched for its Go functions; its scan says so.
+#[test]
+fn a_go_executable_without_a_gopclntab_section_is_partial() {
+    // `.gopclntab` renamed in the section-name table; its bytes and the build info unchanged.
+    let bytes = replaced(
+        &go_elf(&pclntab(0x3000), true),
+        b".gopclntab\0",
+        b".nopclntab\0",
+    );
+    let (_d, paths) = files(&[("ollama", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 1),
+        CoverageState::Partial {
+            missing: vec![SCAN_NO_GOPCLNTAB.to_string()]
+        }
+    );
+    // Without Go build info, no Go-function needle applies: nothing is missing.
+    let bytes = replaced(
+        &go_elf(&pclntab(0x3000), false),
+        b".gopclntab\0",
+        b".nopclntab\0",
+    );
+    let (_d, paths) = files(&[("ollama", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_none());
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
 #[test]

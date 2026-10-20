@@ -52,6 +52,9 @@ pub const SCAN_NAME_NOT_READ: &str = "string scan: a name not read";
 /// A scan gap: a read of a section failed, and the rest of that section was not read; or the
 /// section passes the end of the file, and its bytes past it could not be read.
 pub const SCAN_READ_FAILED: &str = "string scan: a read failed";
+/// A scan gap: the file has Go build info, so its Go-function needles apply, and none of its
+/// sections, every name read, is `.gopclntab`: they were looked for nowhere (PR #97 review P2).
+pub const SCAN_NO_GOPCLNTAB: &str = "string scan: no .gopclntab section";
 
 /// `binary.identity`'s `Unsupported` reason for a Mach-O input, and the gap of a Mach-O artifact
 /// in `artifacts.identity`: SIGIL reads no Mach-O section yet.
@@ -71,7 +74,13 @@ pub fn scan_over_gap(limit: u64) -> String {
 
 /// Whether `gap` is one the scan records, with `limit` as `binary_scan_bytes`.
 pub fn is_scan_gap(gap: &str, limit: u64) -> bool {
-    [SCAN_NO_SECTIONS, SCAN_NAME_NOT_READ, SCAN_READ_FAILED].contains(&gap)
+    [
+        SCAN_NO_SECTIONS,
+        SCAN_NO_GOPCLNTAB,
+        SCAN_NAME_NOT_READ,
+        SCAN_READ_FAILED,
+    ]
+    .contains(&gap)
         || gap == scan_over_gap(limit)
 }
 
@@ -362,9 +371,12 @@ pub enum ExpectedIdentity {
     /// ([`is_scan_gap`]) with the request's `binary_scan_bytes`, `limit`, sorted and without
     /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says, and
     /// [`SCAN_NAME_NOT_READ`] among them when `exports_unread`: a linked ELF whose facts carry one
-    /// of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required. Also `OutOfScope {`
-    /// [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a slice of the input
-    /// names one of [`NAME_AND_HASH_ONLY`].
+    /// of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required.
+    /// [`SCAN_NO_GOPCLNTAB`] only when `no_gopclntab_admitted`: a slice is a Go ELF whose section
+    /// header table was read. The model sees no section names, so it admits the gap there, and
+    /// `Complete` too. Also `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when
+    /// `name_and_hash_only`: a claim on a slice of the input names one of
+    /// [`NAME_AND_HASH_ONLY`].
     ///
     /// The engine excludes a file by its placement's own file name (ADR-010), and scans one whose
     /// SONAME alone is NVIDIA's. The model has no name database, so it cannot tell the two
@@ -377,6 +389,7 @@ pub enum ExpectedIdentity {
         name_and_hash_only: bool,
         no_sections: NoSectionsGap,
         exports_unread: bool,
+        no_gopclntab_admitted: bool,
     },
 }
 
@@ -416,6 +429,13 @@ pub(crate) fn exports_unread(b: &BinaryFacts, kind: ElfType) -> bool {
             .any(|g| DYNSYM_UNREAD_GAPS.contains(&g.as_str()))
 }
 
+/// Whether `b`, a slice's facts, admit the scan's gap [`SCAN_NO_GOPCLNTAB`]: a Go ELF (its
+/// Go-function needles apply) whose section header table was read (`stripped` is set; B8), so
+/// that the scan could find no section named `.gopclntab`.
+pub(crate) fn no_gopclntab_admitted(b: &BinaryFacts) -> bool {
+    b.go.is_some() && matches!(&b.container, ContainerFacts::Elf(elf) if elf.stripped.is_some())
+}
+
 /// Whether a claim on `slice` names a component identified by name and hash only
 /// ([`NAME_AND_HASH_ONLY`]; ADR-010).
 pub(crate) fn name_and_hash_only(s: &Session, slice: &SliceId) -> bool {
@@ -450,6 +470,7 @@ impl ExpectedIdentity {
                 name_and_hash_only,
                 no_sections,
                 exports_unread,
+                no_gopclntab_admitted,
             } => {
                 let admitted = match state {
                     CoverageState::Complete => {
@@ -466,6 +487,8 @@ impl ExpectedIdentity {
                                 NoSectionsGap::Must => listed,
                             }
                             && (!*exports_unread || missing.iter().any(|g| g == SCAN_NAME_NOT_READ))
+                            && (*no_gopclntab_admitted
+                                || !missing.iter().any(|g| g == SCAN_NO_GOPCLNTAB))
                     }
                     CoverageState::OutOfScope { why } => {
                         *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY
@@ -487,8 +510,15 @@ impl ExpectedIdentity {
                 if !required.is_empty() {
                     gaps.push_str(&format!(" among them {}", required.join(" and ")));
                 }
+                let mut refused = vec![];
                 if *no_sections == NoSectionsGap::Never {
-                    gaps.push_str(&format!(" other than {SCAN_NO_SECTIONS:?}"));
+                    refused.push(format!("{SCAN_NO_SECTIONS:?}"));
+                }
+                if !*no_gopclntab_admitted {
+                    refused.push(format!("{SCAN_NO_GOPCLNTAB:?}"));
+                }
+                if !refused.is_empty() {
+                    gaps.push_str(&format!(" other than {}", refused.join(" and ")));
                 }
                 let implied = if required.is_empty() {
                     format!("complete, or {gaps}")
@@ -575,5 +605,6 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         name_and_hash_only: a.slices.iter().any(|x| name_and_hash_only(s, &x.id)),
         no_sections,
         exports_unread: facts.iter().any(|b| exports_unread(b, kind)),
+        no_gopclntab_admitted: facts.iter().any(|b| no_gopclntab_admitted(b)),
     })
 }

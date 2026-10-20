@@ -155,7 +155,12 @@ fn the_scan_gaps_are_the_scan_s_own() {
         scan_over_gap(LIMIT),
         "string scan: binary_scan_bytes 67108864 exceeded"
     );
-    for gap in [SCAN_NO_SECTIONS, SCAN_NAME_NOT_READ, SCAN_READ_FAILED] {
+    for gap in [
+        SCAN_NO_SECTIONS,
+        SCAN_NO_GOPCLNTAB,
+        SCAN_NAME_NOT_READ,
+        SCAN_READ_FAILED,
+    ] {
         assert!(gap.starts_with("string scan: "), "{gap}");
         assert!(is_scan_gap(gap, LIMIT), "{gap}");
     }
@@ -175,6 +180,7 @@ fn expected_binary_identity_of_each_input() {
             name_and_hash_only,
             no_sections,
             exports_unread: false,
+            no_gopclntab_admitted: false,
         })
     };
     // An ELF with facts, and a section header table.
@@ -190,6 +196,20 @@ fn expected_binary_identity_of_each_input() {
         expected(&without_sections(s.clone(), true)),
         scanned(false, NoSectionsGap::Must)
     );
+    // A Go ELF whose section header table was read: the model cannot see whether one of its
+    // sections is `.gopclntab`, so the scan's gap for none is admitted (PR #97 review P2).
+    let mut go = s.clone();
+    go.binaries[0].go = Some(go_info());
+    assert_eq!(
+        expected(&go),
+        Ok(ExpectedIdentity::Scanned {
+            limit: LIMIT,
+            name_and_hash_only: false,
+            no_sections: NoSectionsGap::Never,
+            exports_unread: false,
+            no_gopclntab_admitted: true,
+        })
+    );
     // A linked ELF whose loader has dynamic symbols the parse did not read: the embedded
     // database's export needle could not look at its exports, so the scan's gap is required.
     for gap in DYNSYM_UNREAD_GAPS {
@@ -200,6 +220,7 @@ fn expected_binary_identity_of_each_input() {
                 name_and_hash_only: false,
                 no_sections: NoSectionsGap::Never,
                 exports_unread: true,
+                no_gopclntab_admitted: false,
             }),
             "{gap}"
         );
@@ -296,6 +317,7 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
         name_and_hash_only,
         no_sections,
         exports_unread: false,
+        no_gopclntab_admitted: false,
     };
     let admits = |e: &ExpectedIdentity, state: &CoverageState| e.admits(&entry(state.clone()));
     let over = scan_over_gap(LIMIT);
@@ -350,6 +372,7 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
             name_and_hash_only,
             no_sections: NoSectionsGap::Never,
             exports_unread: true,
+            no_gopclntab_admitted: false,
         };
         for state in [
             partial(&[SCAN_NAME_NOT_READ]),
@@ -365,6 +388,25 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
             name_and_hash_only,
             "an NVIDIA library is out of scope with or without its exports"
         );
+        // A Go ELF with sections may have no `.gopclntab`; no other ELF's scan says so.
+        let go = ExpectedIdentity::Scanned {
+            limit: LIMIT,
+            name_and_hash_only,
+            no_sections: NoSectionsGap::Never,
+            exports_unread: false,
+            no_gopclntab_admitted: true,
+        };
+        for state in [
+            CoverageState::Complete,
+            partial(&[SCAN_NO_GOPCLNTAB]),
+            partial(&[SCAN_READ_FAILED, SCAN_NO_GOPCLNTAB]),
+        ] {
+            assert_eq!(admits(&go, &state), Ok(()), "{state:?}");
+        }
+        for e in [&e, &may] {
+            assert!(admits(e, &partial(&[SCAN_NO_GOPCLNTAB])).is_err(), "{e:?}");
+        }
+        assert!(admits(&must, &partial(&[SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS])).is_err());
     }
     assert_eq!(
         admits(&scanned(true, NoSectionsGap::Never), &out_of_scope()),
@@ -373,13 +415,13 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
     assert_eq!(
         admits(&scanned(false, NoSectionsGap::Never), &out_of_scope()),
         Err(format!(
-            "binary.identity is out of scope: {NAME_AND_HASH_ONLY_WHY}, but the input implies complete, or partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) other than {SCAN_NO_SECTIONS:?}"
+            "binary.identity is out of scope: {NAME_AND_HASH_ONLY_WHY}, but the input implies complete, or partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) other than {SCAN_NO_SECTIONS:?} and {SCAN_NO_GOPCLNTAB:?}"
         ))
     );
     assert_eq!(
         admits(&scanned(true, NoSectionsGap::Must), &CoverageState::Complete),
         Err(format!(
-            "binary.identity is complete, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?}, or out of scope (ADR-010)"
+            "binary.identity is complete, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} other than {SCAN_NO_GOPCLNTAB:?}, or out of scope (ADR-010)"
         ))
     );
     let both = ExpectedIdentity::Scanned {
@@ -387,11 +429,12 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
         name_and_hash_only: false,
         no_sections: NoSectionsGap::Must,
         exports_unread: true,
+        no_gopclntab_admitted: false,
     };
     assert_eq!(
         admits(&both, &partial(&[SCAN_NO_SECTIONS])),
         Err(format!(
-            "binary.identity is partial: {SCAN_NO_SECTIONS}, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} and {SCAN_NAME_NOT_READ:?}"
+            "binary.identity is partial: {SCAN_NO_SECTIONS}, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} and {SCAN_NAME_NOT_READ:?} other than {SCAN_NO_GOPCLNTAB:?}"
         ))
     );
     assert_eq!(
@@ -527,6 +570,14 @@ fn s1_an_input_has_at_most_one_entry_in_a_state_it_implies() {
     assert!(identity_errors(&t)[0].contains(SCAN_NAME_NOT_READ));
     let t = with_identity(unread, partial(&[SCAN_NAME_NOT_READ]));
     assert_eq!(input_errors(&t), Vec::<String>::new());
+    // A Go ELF with sections may have no `.gopclntab` (PR #97 review P2); no other ELF does.
+    let mut go = elf_session();
+    go.binaries[0].go = Some(go_info());
+    let t = with_identity(go, partial(&[SCAN_NO_GOPCLNTAB]));
+    assert_eq!(input_errors(&t), Vec::<String>::new());
+    let t = with_identity(elf_session(), partial(&[SCAN_NO_GOPCLNTAB]));
+    assert_eq!(identity_errors(&t).len(), 1, "{:?}", input_errors(&t));
+    assert!(identity_errors(&t)[0].contains(SCAN_NO_GOPCLNTAB));
     // An ELF without slices was not parsed.
     let mut t = elf_session();
     t.artifacts[0].slices.clear();

@@ -258,6 +258,9 @@ The gaps of a scan cut short:
 - `string scan: no section headers`: a needle that looks in sections applies (with this database,
   the file has Go build info), and the file has no readable section header table; also for an ELF
   whose header cannot be read;
+- `string scan: no .gopclntab section`: the file has Go build info, so the Go-function needles
+  apply, and none of its sections, every name read, is named `.gopclntab`: they were looked for
+  nowhere (a stripped or renamed table). Its other sections are not searched for them;
 - `string scan: a name not read`: a section's or an export's name could not be read; or the
   loader has dynamic symbols (`DT_SYMTAB`) and the parse has no `.dynsym` that agrees with them,
   or the loader's dynamic table could not be read. A needle may be there unseen;
