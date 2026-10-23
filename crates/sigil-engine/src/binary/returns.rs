@@ -70,8 +70,8 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 /// little-endian file; one definition, a function of 1 to [`MAX_FUNCTION`] bytes inside an
 /// executable segment's file bytes (minus pages two segments share); no `DT_REL`; one block
 /// ending in `ret`, decoded; `rax` at its end an address a `lea` formed; inside a segment neither
-/// writable nor executable (minus pages two segments share); a NUL within [`MAX_STRING`] bytes; and no relocation writing the
-/// function's bytes or the string's.
+/// writable nor executable (minus pages two segments share); a NUL within [`MAX_STRING`] bytes;
+/// and no relocation writing the function's bytes or the string's.
 fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
