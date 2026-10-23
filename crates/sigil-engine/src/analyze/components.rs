@@ -1,4 +1,5 @@
-//! The component database (PR-4c-1 spec §3): which file names and SONAMEs name which component.
+//! The component database (PR-4c-1 spec §3): which file names and SONAMEs name which component,
+//! and what each embedded value is (PR-4c-2b).
 //! Data, embedded and parsed once, as `signatures/capabilities.toml` is.
 //!
 //! A pattern is an exact name, a library name with an optional version, or a literal prefix and
@@ -85,10 +86,13 @@ pub enum Role {
 /// One embedded field (PR-4c-2b).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
+    /// The field an `Embedded` assertion names: a known data symbol or an exported function's name.
     pub name: String,
+    /// Where the value is read.
     pub read: Read,
+    /// What the value is.
     pub role: Role,
-    /// For a version: the components whose own version it is, compared with the versions of
+    /// For a version: the components whose own version it is, compared with the versions in
     /// their names (F-I2). Empty: a version of its own kind.
     pub of: Vec<ComponentKey>,
 }
@@ -149,7 +153,8 @@ impl ComponentDb {
             .is_none_or(|key| !self.unscanned.contains(key))
     }
 
-    /// The embedded field named `name` (PR-4c-2b).
+    /// The embedded field named `name` (PR-4c-2b). `None`: the field is not listed, so its value
+    /// has no role.
     pub fn field(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.name == name)
     }
@@ -266,12 +271,24 @@ fn parse(text: &str) -> Result<ComponentDb, String> {
         if name.is_empty() {
             return Err("components.toml: a field with an empty name".to_string());
         }
+        if !name.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err(format!(
+                "components.toml: field {name:?}: not ASCII letters, digits, or punctuation"
+            ));
+        }
         if fields.iter().any(|g| g.name == name) {
             return Err(format!("components.toml: field \"{name}\" listed twice"));
         }
         if f.read == Read::Data && !KNOWN.iter().any(|(known, _)| *known == name) {
             return Err(format!(
                 "components.toml: field \"{name}\": not a known data symbol"
+            ));
+        }
+        if f.read == Read::Function
+            && (KNOWN.iter().any(|(known, _)| *known == name) || name.starts_with("go."))
+        {
+            return Err(format!(
+                "components.toml: field \"{name}\": a known data symbol's or Go build info's name"
             ));
         }
         let mut of: Vec<ComponentKey> = vec![];
@@ -285,7 +302,8 @@ fn parse(text: &str) -> Result<ComponentDb, String> {
                 return Err(format!("components.toml: field \"{name}\": `of` is empty"));
             }
             for k in keys {
-                let key = ComponentKey::new(k).map_err(|e| format!("components.toml: {e}"))?;
+                let key = ComponentKey::new(k)
+                    .map_err(|e| format!("components.toml: field \"{name}\": {e}"))?;
                 if !entries.iter().any(|(e, _)| *e == key) || of.contains(&key) {
                     return Err(format!(
                         "components.toml: field \"{name}\": `of` names \"{key}\", not a \
@@ -655,12 +673,53 @@ mod tests {
             "name = \"f\"\nread = \"function\"\nrole = \"build\"",
             "name = \"f\"\nread = \"function\"",
             "name = \"f\"\nread = \"function\"\nrole = \"commit\"\nkind = \"x\"",
-            "name = \"f\"\nread = \"function\"\nrole = \"version\"\nof = [\" a\"]",
         ] {
             assert!(
                 field(body).unwrap_err().starts_with("components.toml: "),
                 "{body}"
             );
         }
+        assert!(
+            field("name = \"f\"\nread = \"function\"\nrole = \"version\"\nof = [\" a\"]")
+                .unwrap_err()
+                .starts_with("components.toml: field \"f\": ")
+        );
+        for (body, err) in [
+            (
+                "name = \"LLAMA_COMPILER\"\nread = \"function\"\nrole = \"commit\"",
+                "LLAMA_COMPILER",
+            ),
+            (
+                "name = \"go.version\"\nread = \"function\"\nrole = \"version\"",
+                "go.version",
+            ),
+        ] {
+            assert_eq!(
+                field(body),
+                Err(format!(
+                    "components.toml: field \"{err}\": a known data symbol's or Go build info's name"
+                ))
+            );
+        }
+        for (name, shown) in [
+            (" ggml_version", "\" ggml_version\""),
+            ("a\\tb", "\"a\\tb\""),
+        ] {
+            assert_eq!(
+                field(&format!(
+                    "name = \"{name}\"\nread = \"function\"\nrole = \"commit\""
+                )),
+                Err(format!(
+                    "components.toml: field {shown}: not ASCII letters, digits, or punctuation"
+                ))
+            );
+        }
+        assert_eq!(
+            with(
+                "[[field]]\nname = \"LLAMA_COMMIT\"\nread = \"data\"\nrole = \"commit\"\n\
+                 [[field]]\nname = \"LLAMA_COMMIT\"\nread = \"function\"\nrole = \"commit\"\n"
+            ),
+            Err("components.toml: field \"LLAMA_COMMIT\" listed twice".to_string())
+        );
     }
 }

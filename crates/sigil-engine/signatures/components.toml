@@ -1,4 +1,5 @@
-# Component identification by name (PR-4c-1; plan §4.4.3). One entry per component, keyed as the
+# Component identification by name (PR-4c-1; plan §4.4.3), and the embedded fields at the end
+# (PR-4c-2b). One entry per component, keyed as the
 # plan names upstream libraries. A name is a file name or an ELF SONAME. Each pattern is one of:
 #
 #   { exact = "<name>" }                 the name itself
