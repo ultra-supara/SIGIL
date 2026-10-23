@@ -199,7 +199,7 @@ pub(crate) const MAX_LOAD_DEPTH: usize = 3;
 pub(crate) const ARGS: [usize; 6] = [7, 6, 2, 1, 8, 9];
 /// The SysV caller-saved registers: rax rcx rdx rsi rdi r8–r11.
 const CALLER_SAVED: [usize; 9] = [0, 1, 2, 6, 7, 8, 9, 10, 11];
-const RAX: usize = 0;
+pub(crate) const RAX: usize = 0;
 const RCX: usize = 1;
 const RSP: usize = 4;
 const R11: usize = 11;
@@ -1018,7 +1018,7 @@ fn kept(at: u64, insn: &Insn, b: &Block) -> bool {
 }
 
 /// The state at the function's entry.
-fn entry_state() -> State {
+pub(crate) fn entry_state() -> State {
     std::array::from_fn(|r| match ARGS.iter().position(|a| *a == r) {
         Some(k) => Val::Param(k as u8),
         None => Val::Unknown(Why::NotModeled),

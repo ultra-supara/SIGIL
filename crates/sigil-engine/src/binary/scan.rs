@@ -1,9 +1,11 @@
 //! The signature scan (PR-4c-2a spec §2–§4). The needles of [`super::needles`] are looked for in
-//! an ELF file's `.gopclntab` and read-only data sections ([`search`]), read with `pread` on the
+//! an ELF file's `.gopclntab` and read-only data sections (`search`), read with `pread` on the
 //! parse's fd in [`CHUNK`]-byte chunks, each byte charged to `binary_scan_bytes` before it is read
 //! (`code::reader`). Nothing is mapped. Export needles are matched against the names of the
-//! parse's dynamic symbols instead, charged to `binary_parse_bytes`.
+//! parse's dynamic symbols instead, charged to `binary_parse_bytes`. The same walk finds the known
+//! functions whose returned strings [`super::returns`] reads first (PR-4c-2b).
 
+use std::collections::BTreeMap;
 use std::fs::File;
 
 use object::elf;
@@ -11,13 +13,14 @@ use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, SectionTable, 
 use object::read::{ReadCacheOps, SectionIndex};
 use object::Endianness;
 use sigil_model::{
-    scan_over_gap, FeatureKey, Loc, Signal, UntrustedText, SCAN_NAME_NOT_READ, SCAN_NO_GOPCLNTAB,
-    SCAN_NO_SECTIONS, SCAN_READ_FAILED,
+    returned_value_gap, scan_over_gap, DataValue, FeatureKey, FunctionReturn, Loc, Signal,
+    UntrustedText, SCAN_NAME_NOT_READ, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS, SCAN_READ_FAILED,
 };
 
 use super::elf::{is_export, Dynamic, Elf, Sections, MAX_IMPORT_NAME};
 use super::needles::{Needle, NeedleKind, Needles};
 use super::read::Bounded;
+use super::returns::{self, Definition, OVER_BUDGET};
 use crate::code::reader::{Reader, Refusal};
 
 /// The bytes of a section examined per read. Each read is one chunk and the overlap of its kind
@@ -26,6 +29,14 @@ pub const CHUNK: u64 = 1 << 20;
 
 /// The longest section name read. A longer one is a gap.
 pub const MAX_SECTION_NAME: usize = 4096;
+
+/// What the scan looks for (PR-4c-2b): the needles, and the known functions whose returned
+/// strings it reads (the component database's `read = "function"` fields, sorted).
+#[derive(Debug, Clone, Copy)]
+pub struct Sought<'d> {
+    pub needles: &'d Needles,
+    pub functions: &'d [String],
+}
 
 /// One needle found: a feature hint without its slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +60,7 @@ pub enum ScanOutcome {
     NameAndHashOnly,
 }
 
-/// A section [`search`] reads: the kind of needle looked for in it, its name, and its bytes in
+/// A section `search` reads: the kind of needle looked for in it, its name, and its bytes in
 /// the file (`sh_offset`, `sh_size`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -59,7 +70,7 @@ pub struct Target {
     pub size: u64,
 }
 
-/// What [`search`] found, and read.
+/// What `search` found, and read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Searched {
     /// The first match of each needle found, at its lowest offset in the first target that has it:
@@ -71,22 +82,17 @@ pub struct Searched {
     pub used: u64,
 }
 
-/// Looks for the needles of each target's kind in its bytes, read from `file` (`size` bytes, from
-/// the read's `fstat`) within `limit` bytes: the Go-function needles in their targets, then the
-/// string needles in theirs, each kind until all its needles are found. A kind without a needle
-/// reads nothing. A target is read only within the file and within its own bytes; one with bytes
-/// past the end of the file (or whose end overflows) while a needle of its kind is still looked
-/// for has its bytes in the file read, and the gap [`SCAN_READ_FAILED`]. Over `limit`, reading
-/// stops, and what was found is kept with the gap [`scan_over_gap`]. A read that fails leaves the
-/// rest of its target unread, with the gap [`SCAN_READ_FAILED`]. Each gap is given once.
-pub fn search(
-    file: &File,
-    size: u64,
-    limit: u64,
-    needles: &Needles,
-    targets: &[Target],
-) -> Searched {
-    let mut reader = Reader::new(file, size, limit);
+/// Looks for the needles of each target's kind in its bytes, read through `reader` (the file's
+/// fd, its `fstat` size, and `binary_scan_bytes` as its limit): the Go-function needles in their
+/// targets, then the string needles in theirs, each kind until all its needles are found. A kind
+/// without a needle reads nothing. A target is read only within the file and within its own
+/// bytes; one with bytes past the end of the file (or whose end overflows) while a needle of its
+/// kind is still looked for has its bytes in the file read, and the gap [`SCAN_READ_FAILED`]. Over
+/// the limit, reading stops, and what was found is kept with the gap [`scan_over_gap`]. A read
+/// that fails leaves the rest of its target unread, with the gap [`SCAN_READ_FAILED`]. Each gap is
+/// given once. `used` is the reader's, earlier reads included.
+pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Target]) -> Searched {
+    let size = reader.size();
     let mut out = Searched::default();
     // The gaps: bytes of a target not read (past the end of the file, or a failed read), and the
     // budget.
@@ -132,7 +138,7 @@ pub fn search(
         out.gaps.push(SCAN_READ_FAILED.to_string());
     }
     if over {
-        out.gaps.push(scan_over_gap(limit));
+        out.gaps.push(scan_over_gap(reader.limit()));
     }
     out.gaps.sort();
     out.used = reader.used();
@@ -140,13 +146,16 @@ pub fn search(
 }
 
 /// The signature scan of the ELF `e` (PR-4c-2a), after its container and code steps: the export
-/// needles against the names of its exported dynamic symbols ([`exports`]), then [`search`] for
-/// the Go-function needles in `.gopclntab` (when it has Go build info, `go`) and for the string
-/// needles in `.rodata`, `.rodata.*`, and `.lrodata` ([`targets`]). Names are read through the
-/// parse's cache, charged to `binary_parse_bytes`; section bytes through `file` (the fd and its
-/// `fstat` size), charged to `limit` (`binary_scan_bytes`). What cannot be read is a gap of the
-/// scan, never of the container. A Go ELF whose sections, every name read, have no `.gopclntab`
-/// gets the gap [`SCAN_NO_GOPCLNTAB`]: its Go-function needles were looked for nowhere.
+/// needles against the names of its exported dynamic symbols, which also finds the known
+/// functions of `sought` ([`exports`]); the strings those functions return ([`returns::read`],
+/// PR-4c-2b); then [`search`] for the Go-function needles in `.gopclntab` (when it has Go build
+/// info, `go`) and for the string needles in `.rodata`, `.rodata.*`, and `.lrodata`
+/// ([`targets`]). Names are read through the parse's cache, charged to `binary_parse_bytes`;
+/// function, string, and section bytes through `file` (the fd and its `fstat` size), charged to
+/// `limit` (`binary_scan_bytes`). What cannot be read is a gap of the scan, never of the
+/// container: a return not read is the gap [`returned_value_gap`]. A Go ELF whose sections, every
+/// name read, have no `.gopclntab` gets the gap [`SCAN_NO_GOPCLNTAB`]: its Go-function needles
+/// were looked for nowhere. The returns go with the container's facts.
 pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'_, R, H>,
     sections: &Sections<'_, R, H>,
@@ -154,11 +163,27 @@ pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     go: bool,
     (file, size): (&File, u64),
     limit: u64,
-    needles: &Needles,
-) -> ScanOutcome {
+    sought: Sought<'_>,
+) -> (ScanOutcome, Vec<FunctionReturn>) {
+    let needles = sought.needles;
     let mut found = vec![];
     let mut gaps = vec![];
-    exports(e, sections, dynamic, needles, &mut found, &mut gaps);
+    let mut reader = Reader::new(file, size, limit);
+    let defined = exports(e, sections, dynamic, sought, &mut found, &mut gaps);
+    let returns = match &sections.symbols {
+        Some(symbols) if !defined.is_empty() => {
+            returns::read(e, symbols, dynamic, &mut reader, &defined)
+        }
+        _ => vec![],
+    };
+    for r in &returns {
+        if let DataValue::Unknown { why } = &r.value {
+            gaps.push(returned_value_gap(&r.function, why));
+            if why == OVER_BUDGET {
+                gaps.push(scan_over_gap(limit));
+            }
+        }
+    }
     let kinds: Vec<NeedleKind> = [(NeedleKind::GoFunction, go), (NeedleKind::String, true)]
         .into_iter()
         .filter(|(kind, applies)| *applies && !needles.of(*kind).is_empty())
@@ -180,7 +205,7 @@ pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 {
                     gaps.push(SCAN_NO_GOPCLNTAB.to_string());
                 }
-                let searched = search(file, size, limit, needles, &targets);
+                let searched = search(&mut reader, needles, &targets);
                 found.extend(searched.found);
                 gaps.extend(searched.gaps);
             }
@@ -188,33 +213,38 @@ pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     }
     gaps.sort();
     gaps.dedup();
-    ScanOutcome::Scanned { found, gaps }
+    (ScanOutcome::Scanned { found, gaps }, returns)
 }
 
 /// The export needles against the exports of the `.dynsym` the loader binds through (one with
 /// no `symbols:` gap, as the code step reads it), in symbol-table order: the first export whose
-/// name starts with a needle is its hint. A relocatable object has no dynamic symbols. A name
-/// that cannot be read is the gap [`SCAN_NAME_NOT_READ`], given once. So are, while an export
-/// needle is not found, the loader's dynamic symbols when the parse has no such `.dynsym` and the
-/// loader has `DT_SYMTAB` (missing, of another type, or not where `DT_SYMTAB` and `DT_STRTAB`
-/// are; plan review P2), and when the loader's dynamic table could not be read to check a
-/// `.dynsym` against (`PT_DYNAMIC`, or the program headers that would hold it, unreadable): the
-/// hints found are kept. Without an export needle, nothing is read.
+/// name starts with a needle is its hint. The same walk returns the definitions among the
+/// exports of each known function of `sought` (PR-4c-2b), by name, two at most: while a function
+/// is looked for, every export is read, so that a second definition is seen. A relocatable object
+/// has no dynamic symbols. A name that cannot be read is the gap [`SCAN_NAME_NOT_READ`], given
+/// once. So are, while an export needle or a function is not found, the loader's dynamic symbols
+/// when the parse has no such `.dynsym` and the loader has `DT_SYMTAB` (missing, of another type,
+/// or not where `DT_SYMTAB` and `DT_STRTAB` are; plan review P2), and when the loader's dynamic
+/// table could not be read to check a `.dynsym` against (`PT_DYNAMIC`, or the program headers
+/// that would hold it, unreadable): the hints found are kept. Without an export needle or a
+/// function, nothing is read.
 fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'_, R, H>,
     sections: &Sections<'_, R, H>,
     dynamic: &Dynamic,
-    needles: &Needles,
+    sought: Sought<'_>,
     found: &mut Vec<Found>,
     gaps: &mut Vec<String>,
-) {
+) -> BTreeMap<String, Vec<Definition>> {
     let endian = e.endian;
-    let mut open = needles.of(NeedleKind::Export);
-    if open.is_empty() {
-        return;
+    let mut open = sought.needles.of(NeedleKind::Export);
+    let functions = sought.functions;
+    let mut defined: BTreeMap<String, Vec<Definition>> = BTreeMap::new();
+    if open.is_empty() && functions.is_empty() {
+        return defined;
     }
     if e.header.e_type(endian) == elf::ET_REL {
-        return;
+        return defined;
     }
     // The loader's dynamic table was not read, so `loader_agrees` checked no `.dynsym` against
     // it: its `PT_DYNAMIC` cannot be read, or the program headers that would hold one.
@@ -229,7 +259,7 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         if dynamic.symtab.is_some() || unchecked {
             gaps.push(SCAN_NAME_NOT_READ.to_string());
         }
-        return;
+        return defined;
     };
     // The symbols' string table, for the names object cannot read (spec §3.7).
     let strings = sections
@@ -240,7 +270,7 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     // A name not read, recorded once however many there are.
     let mut unread = false;
     for sym in symbols.symbols().iter().skip(1) {
-        if open.is_empty() {
+        if open.is_empty() && functions.is_empty() {
             break;
         }
         if !is_export(sym, endian) {
@@ -270,11 +300,23 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 true
             }
         });
+        if let Some(function) = functions.iter().find(|f| f.as_bytes() == name) {
+            let defs = defined.entry(function.clone()).or_default();
+            if defs.len() < 2 {
+                defs.push(Definition {
+                    value: sym.st_value(endian).into(),
+                    size: sym.st_size(endian).into(),
+                    st_type: sym.st_type(),
+                });
+            }
+        }
     }
     // A `.dynsym` not checked against the loader's table: what it does not have, the loader may.
-    if unread || (unchecked && !open.is_empty()) {
+    let missing = functions.iter().any(|f| !defined.contains_key(f));
+    if unread || (unchecked && (!open.is_empty() || missing)) {
         gaps.push(SCAN_NAME_NOT_READ.to_string());
     }
+    defined
 }
 
 /// The sections of `kinds` in `table`, in table order: `.gopclntab` for the Go-function needles;
@@ -422,7 +464,11 @@ mod tests {
 
     fn run(b: &[u8], limit: u64, needles: &Needles, targets: &[Target]) -> Searched {
         let f = file(b);
-        search(f.as_file(), b.len() as u64, limit, needles, targets)
+        search(
+            &mut Reader::new(f.as_file(), b.len() as u64, limit),
+            needles,
+            targets,
+        )
     }
 
     #[test]
@@ -658,9 +704,7 @@ mod tests {
         let f = file(&b);
         // A size the file does not have: the first target's `pread` comes up short.
         let s = search(
-            f.as_file(),
-            4096,
-            1 << 30,
+            &mut Reader::new(f.as_file(), 4096, 1 << 30),
             &needles,
             &[rodata(0, 4096), rodata(0, 100)],
         );
@@ -838,7 +882,11 @@ mod tests {
         let needles = db(&[("rpc.code_present", "export", "ggml_backend_rpc_")]);
         with_parts(&f, |e, sections, dynamic| {
             let (mut found, mut gaps) = (vec![], vec![]);
-            exports(e, sections, dynamic, &needles, &mut found, &mut gaps);
+            let sought = Sought {
+                needles: &needles,
+                functions: &[],
+            };
+            exports(e, sections, dynamic, sought, &mut found, &mut gaps);
             assert_eq!(found, []);
             assert_eq!(gaps, [SCAN_NAME_NOT_READ]);
         });

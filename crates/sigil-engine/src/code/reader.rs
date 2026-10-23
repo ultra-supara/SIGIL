@@ -71,6 +71,11 @@ impl<'f> Reader<'f> {
     pub fn limit(&self) -> u64 {
         self.limit
     }
+
+    /// The file's size, from the read's `fstat`.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
 }
 
 #[cfg(test)]

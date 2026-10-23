@@ -196,7 +196,7 @@ fn type_name(machine: elf::Machine, t: u32) -> String {
 }
 
 /// A symbol type's name, for the reason.
-fn symbol_type(t: elf::SymbolType) -> String {
+pub(crate) fn symbol_type(t: elf::SymbolType) -> String {
     let name = match t {
         elf::STT_NOTYPE => "STT_NOTYPE",
         elf::STT_OBJECT => "STT_OBJECT",
