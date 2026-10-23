@@ -412,9 +412,33 @@ fn binary_signature_scan_reads_with_pread_only() {
 /// The events on `input`'s fd, once checked: no read call but `read` and `pread64` (none of
 /// `readv`, `preadv`, `preadv2`, `sendfile`, `splice`, `copy_file_range`, `lseek`), all by one
 /// thread, so that the trace's order is the order of its reads: the hash's sequential `read`s,
-/// then only `pread64`.
+/// then only `pread64`. The input is opened exactly once, so every `pread64` accepted is on the
+/// fd that hashed it (the filter matches by path, which a second open would also satisfy); and
+/// no `sendfile` has it as its source.
 fn input_reads<'r>(r: &'r TracedRun, input: &Path) -> Vec<&'r Event> {
     let path = std::fs::canonicalize(input).unwrap();
+    let opens = r
+        .events
+        .iter()
+        .filter(|e| {
+            matches!(e.name.as_str(), "open" | "openat" | "openat2")
+                && fd_path(&e.ret).as_ref() == Some(&path)
+        })
+        .count();
+    assert_eq!(
+        opens,
+        1,
+        "case `{}`: the input is opened {opens} times (trace: {})",
+        r.case,
+        r.trace_dir.display()
+    );
+    assert!(
+        !r.events.iter().any(|e| e.name == "sendfile"
+            && e.args.get(1).and_then(|a| fd_path(a)).as_ref() == Some(&path)),
+        "case `{}`: a sendfile from the input (trace: {})",
+        r.case,
+        r.trace_dir.display()
+    );
     let on_input: Vec<&Event> = r
         .events
         .iter()
@@ -458,18 +482,19 @@ fn input_reads<'r>(r: &'r TracedRun, input: &Path) -> Vec<&'r Event> {
     on_input
 }
 
-/// Whether one of `events` is a `pread64` of `len` bytes at `offset`.
+/// Whether one of `events` is a `pread64` of `len` bytes at `offset` that returned `len`.
 fn has_pread(events: &[&Event], len: u64, offset: u64) -> bool {
     events.iter().any(|e| {
         e.name == "pread64"
             && e.args.get(2).map(|a| a.trim()) == Some(len.to_string().as_str())
             && e.args.get(3).map(|a| a.trim()) == Some(offset.to_string().as_str())
+            && e.ret.trim() == len.to_string()
     })
 }
 
 /// PR-4c-2b: what `ggml_version` and `ggml_commit` return is read by `pread64` of their code and
-/// their strings on the input's fd, charged to the scan; the functions are never run, nothing is
-/// mapped.
+/// their strings on the input's fd; nothing else reads the input, nothing is executed or mapped,
+/// and only the input is opened under the target.
 #[test]
 fn binary_returned_value_reads_with_pread_only() {
     let case = "binary_returned_value_reads_with_pread_only";
@@ -509,8 +534,9 @@ fn binary_returned_value_reads_with_pread_only() {
     assert_never_opened_under(&r, &fx.target.join("private"));
     assert_opened_only(&r, &fx.target, &[&input]);
     let on_input = input_reads(&r, &input);
-    // Each function's 8 bytes (0x1110, 0x1100), then its string to the end of the read-only
-    // segment (0x20c4): from 0x2007, 189 bytes; from 0x2000, 196.
+    // `ggml_commit`'s 8 bytes at 0x1110 and 189 bytes of its string from 0x2007 to the end of
+    // the read-only segment (0x20c4); `ggml_version`'s 8 bytes at 0x1100 and 196 from 0x2000.
+    // File offsets equal addresses in this fixture (README, facts marked †).
     for (len, offset) in [(8, 0x1110), (189, 0x2007), (8, 0x1100), (196, 0x2000)] {
         assert!(
             has_pread(&on_input, len, offset),

@@ -19,9 +19,11 @@ What `build.sh` enforces (it stops with exit 1 otherwise):
 - **The shapes.** Every fact in the **Shape** column below is checked on the built files (the
   instructions of each function within its `st_size`, its symbol type, the SONAME, the machine,
   the dynamic tags, and the strings in `.rodata`), except the facts marked †: addresses and
-  offsets read from the dumps, which the tests use as constants (`tests/returns.rs`, and the safety case in `crates/sigil-cli/tests/safety/cli.rs`,
-  `binary_returned_value_reads_with_pread_only`, which also hard-codes the addresses, offsets, and the
-  8-byte size).
+  offsets read from the dumps, which the tests use as constants (`tests/returns.rs`, and the safety
+  case `binary_returned_value_reads_with_pread_only` in `crates/sigil-cli/tests/safety/cli.rs`,
+  which also hard-codes the addresses, offsets, and the 8-byte size). After a rebuild with another
+  toolchain, re-read the † values from the new dumps and update them in
+  `crates/sigil-engine/tests/returns.rs` and in the safety case.
 - **No half-built tree.** It builds into a temporary directory and replaces the committed files
   only after every check has passed.
 
@@ -32,7 +34,7 @@ Every file is a shared object with SONAME `libggml-base.so.0`, as v0.30.6's
 
 | File | Source | Flags | Shape |
 |---|---|---|---|
-| `version-gcc-O2.so` | `version.c` | gcc `-O2` | both functions `lea X(%rip),%rax; ret` (8 bytes); † `ggml_version` at `0x1100` returns `0x2000` (`0.13.1`), `ggml_commit` at `0x1110` returns `0x2007` (`6f3a9f3de`); † the read-only segment's file bytes end at `0x20c4`, the executable segment's at `0x1121`; † the first `.rela.dyn` entry, at file offset `0x3b0`, is an `R_X86_64_RELATIVE` |
+| `version-gcc-O2.so` | `version.c` | gcc `-O2` | both functions `lea X(%rip),%rax; ret` (8 bytes); † `ggml_version` at `0x1100` returns `0x2000` (`0.13.1`), `ggml_commit` at `0x1110` returns `0x2007` (`6f3a9f3de`); † the read-only segment's file bytes end at `0x20c4`, the executable segment's at `0x1121`; † file offsets equal addresses (the safety case reads by file offset); † the first `.rela.dyn` entry, at file offset `0x3b0`, is an `R_X86_64_RELATIVE` |
 | `version-1.0.0-gcc-O2.so` | `version.c`, `VERSION` `1.0.0` | gcc `-O2` | as `version-gcc-O2.so`; † `ggml_version` returns `1.0.0` |
 | `version-relr-gcc-O2.so` | `version.c` | gcc `-O2`, `-z pack-relative-relocs` | as `version-gcc-O2.so`, with `DT_RELR`; † `.relr.dyn`'s first entry is an address (even) |
 | `version-long-gcc-O2.so` | `version.c`, `VERSION` 300 `x` | gcc `-O2` | the 300 bytes in `.rodata`; † `ggml_version` returns `0x2000`, file offset `0x2000` |
