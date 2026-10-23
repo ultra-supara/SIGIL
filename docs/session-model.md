@@ -142,13 +142,18 @@ The rule then yields an open question at most.
   - B7: `artifacts.container` is `Complete` only with a complete discovery, facts for every ELF
     or Mach-O slice of the install, and no gap;
   - B8: `stripped` is unknown exactly when a `sections: ` gap says why;
+  - B11 (PR-4c-2b): an ELF's `returns` are sorted and unique by function; each is a string with
+    its symbol and the address it was read at, or an `Unknown` value with its symbol alone, never
+    a number. A relocatable object has none. An `Unknown` one's gap is in the identity coverage
+    (S1, S2), not in the record;
   - S2 (PR-4c-2a): a session has at most one `artifacts.identity` entry. It is scoped to the
     install root, and is `Complete` only with a complete discovery and facts for every slice of
     the install's ELF and Mach-O files, none of them a Mach-O, and none a Go ELF without section
-    headers or a linked ELF whose loader's dynamic symbols the parse did not read, unless it is an
-    NVIDIA library; or `Partial` with its gaps; or the discovery's state
-    when discovery did not finish. A session without an install may have it `Skipped` for
-    `--install-dir`, scoped to the audit;
+    headers, a linked ELF whose loader's dynamic symbols the parse did not read, or one with an
+    `Unknown` return (PR-4c-2b), unless it is an NVIDIA library that was not scanned (it then has no
+    returns; one with returns was scanned and is not exempt); or `Partial` with its gaps; or the
+    discovery's state when discovery did not finish. A session without an install may have it
+    `Skipped` for `--install-dir`, scoped to the audit;
   - S3 (PR-4c-2a): a signature hint is of a slice with ELF facts: an `Export` hint at
     `Symbol(value)`, a `GoFunction` hint in `.gopclntab` of a slice with Go build info, a
     `String` hint in `.rodata`, `.rodata.*`, or `.lrodata`. No slice of an input whose
@@ -180,7 +185,9 @@ The rule then yields an open question at most.
     `symbols: no SHT_DYNSYM` must list `string scan: a name not read`: its loader has dynamic
     symbols the parse has no `.dynsym` for, so the export needle could not look at its exports.
     A Go ELF whose section header table was read may list `string scan: no .gopclntab section`
-    (the model sees no section names); no other ELF does.
+    (the model sees no section names); no other ELF does. Each `Unknown` return of its facts must
+    be listed as `returned value: <function>: <why>`, and no other such gap may be (PR-4c-2b); an
+    input whose facts have a return was scanned, so it is never `OutOfScope`.
     When a claim on the input's slice names `cuda-runtime`,
     `cuda/cublas`, or `cuda/cublasLt`, `OutOfScope` (ADR-010) is admitted too: the model has no
     name database, so it cannot tell a file the engine excludes by its file name from one whose
@@ -767,12 +774,14 @@ claim keeps every source as its own assertion: a `SelfName` per name (`Filename`
 stable placement that holds the content and each link that leads to one, `Soname`), an
 `Embedded` value per known `LLAMA_*` value and Go build info field (`go.version`, and `go.path`
 or `go.main`), a `KnownHash` per reference row of a placement that holds the content, and
-`Signature { NotChecked }`. Its versions are the dotted numbers after `.so.` of the names that
-name its component, and `LLAMA_BUILD_NUMBER`. `Conflicting` (two names of different components,
-two first numbers of one kind of version, or two commits) needs the database, so the engine
-decides it; `validate` checks the other four statuses, that a `Conflicting` claim has two
-identity assertions or versions at least, and I1. `Required` assertions come with PR-4d, and
-code checks with M1 profiles.
+`Signature { NotChecked }`; since PR-4c-2b also an `Embedded` value per string `ggml_version` or
+`ggml_commit` returns (`FunctionReturn`). Its versions are the dotted numbers after `.so.` of the
+names that name its component, and the values of the database's version fields
+(`LLAMA_BUILD_NUMBER`, `ggml_version`). `Conflicting` (two names of different components, two
+versions of one kind whose major keys disagree, or two values of one commit field) needs the
+database, so the engine decides it; `validate` checks the other four statuses, that a
+`Conflicting` claim has two identity assertions or versions at least, and I1. `Required`
+assertions come with PR-4d, and code checks with M1 profiles.
 
 ## Fields added to `sigil-session/1`
 
@@ -785,16 +794,17 @@ A field added after sessions without it were written is optional on read, so tho
 | `reference_matches` | PR-4a | `[]` (no installation compared) |
 | `binaries` | PR-4b-1 | `[]` (no binary parsed) |
 | `request.code` | PR-5a | `false` (no code analyzed) |
+| `binaries[].container.Elf.returns` | PR-4c-2b | `[]` (no returned value read) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
-`reference_matches` and `binaries` are the exceptions to "always writes it": SIGIL writes them only
-when they have entries, so a session without `--install-dir` keeps its bytes, and an earlier SIGIL
-still reads it.
+`reference_matches`, `binaries`, and an ELF's `returns` are the exceptions to "always writes it":
+SIGIL writes them only when they have entries, so a session without `--install-dir` keeps its
+bytes, and an earlier SIGIL still reads it.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), and one from before PR-5a a session with `request.code`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, and one from before PR-4c-2b a session with an ELF's `returns`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet

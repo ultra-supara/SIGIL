@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use crate::contracts::{assert_clean, check, report, Contract, Policy};
 use crate::fixtures;
-use crate::trace::{fd_path, require_tracer, run_traced, TracedRun};
+use crate::trace::{fd_path, require_tracer, run_traced, Event, TracedRun};
 
 fn sigil() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_sigil"))
@@ -398,21 +398,52 @@ fn binary_signature_scan_reads_with_pread_only() {
     assert_read_under(&r, &input);
     assert_never_opened_under(&r, &fx.target.join("private"));
     assert_opened_only(&r, &fx.target, &[&input]);
-    let path = std::fs::canonicalize(&input).unwrap();
-    let on_input: Vec<_> = r
-        .events
-        .iter()
-        .filter(|e| e.args.first().and_then(|a| fd_path(a)).as_ref() == Some(&path))
-        .collect();
+    let on_input = input_reads(&r, &input);
     // The section, 12288 bytes at 0x8000 (32768), in one pread.
     assert!(
-        on_input.iter().any(|e| e.name == "pread64"
-            && e.args.get(2).map(|a| a.trim()) == Some("12288")
-            && e.args.get(3).map(|a| a.trim()) == Some("32768")),
+        has_pread(&on_input, 12288, 32768),
         "case `{}`: no pread64 of .gopclntab (trace: {})",
         r.case,
         r.trace_dir.display()
     );
+    assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+}
+
+/// The events on `input`'s fd, once checked: no read call but `read` and `pread64` (none of
+/// `readv`, `preadv`, `preadv2`, `sendfile`, `splice`, `copy_file_range`, `lseek`), all by one
+/// thread, so that the trace's order is the order of its reads: the hash's sequential `read`s,
+/// then only `pread64`. The input is opened exactly once, so every `pread64` accepted is on the
+/// fd that hashed it (the filter matches by path, which a second open would also satisfy); and
+/// no `sendfile` has it as its source.
+fn input_reads<'r>(r: &'r TracedRun, input: &Path) -> Vec<&'r Event> {
+    let path = std::fs::canonicalize(input).unwrap();
+    let opens = r
+        .events
+        .iter()
+        .filter(|e| {
+            matches!(e.name.as_str(), "open" | "openat" | "openat2")
+                && fd_path(&e.ret).as_ref() == Some(&path)
+        })
+        .count();
+    assert_eq!(
+        opens,
+        1,
+        "case `{}`: the input is opened {opens} times (trace: {})",
+        r.case,
+        r.trace_dir.display()
+    );
+    assert!(
+        !r.events.iter().any(|e| e.name == "sendfile"
+            && e.args.get(1).and_then(|a| fd_path(a)).as_ref() == Some(&path)),
+        "case `{}`: a sendfile from the input (trace: {})",
+        r.case,
+        r.trace_dir.display()
+    );
+    let on_input: Vec<&Event> = r
+        .events
+        .iter()
+        .filter(|e| e.args.first().and_then(|a| fd_path(a)).as_ref() == Some(&path))
+        .collect();
     for e in &on_input {
         assert!(
             !matches!(
@@ -430,8 +461,6 @@ fn binary_signature_scan_reads_with_pread_only() {
             e.raw
         );
     }
-    // One thread reads the input, so the trace's order is the order of its reads: the hash's
-    // sequential `read`s, then only `pread64`.
     assert!(
         on_input.iter().all(|e| e.pid == on_input[0].pid),
         "case `{}`: the input is read by more than one thread (trace: {})",
@@ -448,6 +477,73 @@ fn binary_signature_scan_reads_with_pread_only() {
             "case `{}`: a read after the first pread64: {}",
             r.case,
             e.raw
+        );
+    }
+    on_input
+}
+
+/// Whether one of `events` is a `pread64` of `len` bytes at `offset` that returned `len`.
+fn has_pread(events: &[&Event], len: u64, offset: u64) -> bool {
+    events.iter().any(|e| {
+        e.name == "pread64"
+            && e.args.get(2).map(|a| a.trim()) == Some(len.to_string().as_str())
+            && e.args.get(3).map(|a| a.trim()) == Some(offset.to_string().as_str())
+            && e.ret.trim() == len.to_string()
+    })
+}
+
+/// PR-4c-2b: what `ggml_version` and `ggml_commit` return is read by `pread64` of their code and
+/// their strings on the input's fd; nothing else reads the input, nothing is executed or mapped,
+/// and only the input is opened under the target.
+#[test]
+fn binary_returned_value_reads_with_pread_only() {
+    let case = "binary_returned_value_reads_with_pread_only";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let input = fx.target.join("libggml-base.so.0.13.1");
+    std::fs::write(
+        &input,
+        include_bytes!("../../../sigil-engine/tests/fixtures/returns/version-gcc-O2.so"),
+    )
+    .unwrap();
+    std::fs::create_dir(fx.target.join("private")).unwrap();
+    std::fs::write(fx.target.join("private/secret.txt"), b"secret").unwrap();
+    let md = fx.out.join("report.md");
+    let args = os(&[
+        &"binary",
+        &"inspect",
+        &input,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    let r = run("binary-inspect-returns", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("  signature scan: complete"),
+        "{}",
+        r.stderr
+    );
+    let report = std::fs::read_to_string(&md).unwrap();
+    let shown = sigil_model::UntrustedText::new("0.13.1 (ggml_version)").markdown_inline();
+    assert!(report.contains(&shown), "{report}");
+    assert_read_under(&r, &input);
+    assert_never_opened_under(&r, &fx.target.join("private"));
+    assert_opened_only(&r, &fx.target, &[&input]);
+    let on_input = input_reads(&r, &input);
+    // `ggml_commit`'s 8 bytes at 0x1110 and 189 bytes of its string from 0x2007 to the end of
+    // the read-only segment (0x20c4); `ggml_version`'s 8 bytes at 0x1100 and 196 from 0x2000.
+    // File offsets equal addresses in the executable and read-only segments of this fixture
+    // (README, facts marked †).
+    for (len, offset) in [(8, 0x1110), (189, 0x2007), (8, 0x1100), (196, 0x2000)] {
+        assert!(
+            has_pread(&on_input, len, offset),
+            "case `{}`: no pread64 of {len} bytes at {offset:#x} (trace: {})",
+            r.case,
+            r.trace_dir.display()
         );
     }
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));

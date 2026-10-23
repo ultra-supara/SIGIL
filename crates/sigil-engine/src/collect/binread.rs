@@ -17,12 +17,13 @@ use sigil_model::{
 use super::fs::{FileRead, ReadSpec, RelPath, SafeFs};
 use crate::analyze::components::{components, ComponentDb};
 use crate::binary::needles::{needles, Needles};
-use crate::binary::scan::ScanOutcome;
+use crate::binary::scan::{ScanOutcome, Sought};
 use crate::binary::{self, BinaryBudgets, ParsedArtifact};
 use crate::code::CodeOutcome;
 
 /// What the signature scan needs (PR-4c-2a): the needles, and the component database, whose
-/// `scan = false` entries name the files it never reads (ADR-010).
+/// `scan = false` entries name the files it never reads (ADR-010) and whose `read = "function"`
+/// fields name the functions whose returned strings it reads (PR-4c-2b).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Scanning<'d> {
     pub needles: &'d Needles,
@@ -84,14 +85,17 @@ pub(crate) fn read(
                     .as_str()
                     .strip_prefix("sha256:")
                     .and_then(|hex| Sha256Hex::new(hex.to_string()).ok())?;
-                let needles = scanned.then_some(scanning.needles);
+                let sought = scanned.then_some(Sought {
+                    needles: scanning.needles,
+                    functions: scanning.components.functions(),
+                });
                 let mut p = binary::parse_artifact(
                     input.file,
                     input.size,
                     &digest,
                     input.prefix,
                     budgets,
-                    needles,
+                    sought,
                 )?;
                 // Parsed without needles: its ELF slices were not scanned (ADR-010).
                 if !scanned && matches!(p.format, Format::Elf { .. }) {

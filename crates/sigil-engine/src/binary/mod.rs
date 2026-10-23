@@ -8,6 +8,7 @@ pub mod header;
 pub mod macho;
 pub mod needles;
 pub mod read;
+pub mod returns;
 pub mod scan;
 pub mod vaddr;
 
@@ -16,8 +17,7 @@ use std::fs::File;
 use sigil_model::{Arch, ContainerFacts, Format, GoBuildInfo, Sha256Hex};
 
 use crate::code::{CodeBudgets, CodeOutcome};
-use needles::Needles;
-use scan::ScanOutcome;
+use scan::{ScanOutcome, Sought};
 
 /// Budgets of one artifact's parse, recorded as `binary_parse_bytes`, `binary_imports`, and
 /// `binary_scan_bytes`.
@@ -87,25 +87,25 @@ pub fn parse(file: &File, size: u64, budgets: BinaryBudgets) -> Parsed {
     parse_elf(file, size, budgets, None)
 }
 
-/// [`parse`], and with `needles` the signature scan on the same fd (PR-4c-2a).
-fn parse_elf(file: &File, size: u64, budgets: BinaryBudgets, needles: Option<&Needles>) -> Parsed {
+/// [`parse`], and with `sought` the signature scan on the same fd (PR-4c-2a, PR-4c-2b).
+fn parse_elf(file: &File, size: u64, budgets: BinaryBudgets, sought: Option<Sought<'_>>) -> Parsed {
     let data = read::Bounded::new(read::Budgeted::new(file, size), size, budgets.parse_bytes);
-    elf::parse(&data, budgets, Some((file, size)), needles)
+    elf::parse(&data, budgets, Some((file, size)), sought)
 }
 
 /// Parses a recognized ELF or Mach-O artifact. A recognized but malformed Mach-O is returned
 /// with no slices, so callers record a partial inspection rather than treating it as unsupported.
-/// With `needles`, an ELF artifact is scanned for them (PR-4c-2a); a Mach-O never is.
+/// With `sought`, an ELF artifact is scanned for it (PR-4c-2a, PR-4c-2b); a Mach-O never is.
 pub fn parse_artifact(
     file: &File,
     size: u64,
     artifact_sha256: &Sha256Hex,
     prefix: &[u8],
     budgets: BinaryBudgets,
-    needles: Option<&Needles>,
+    sought: Option<Sought<'_>>,
 ) -> Option<ParsedArtifact> {
     if let Some((kind, arch)) = header::read(prefix) {
-        let parsed = parse_elf(file, size, budgets, needles);
+        let parsed = parse_elf(file, size, budgets, sought);
         return Some(ParsedArtifact {
             format: Format::Elf { kind },
             slices: vec![ParsedSlice {

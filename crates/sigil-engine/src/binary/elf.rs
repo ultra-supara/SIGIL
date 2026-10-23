@@ -20,9 +20,8 @@ use sigil_model::{
     SYMBOLS_UNREADABLE_SECTIONS_GAP,
 };
 
-use super::needles::Needles;
 use super::read::Bounded;
-use super::scan::{self, ScanOutcome};
+use super::scan::{self, ScanOutcome, Sought};
 use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
 use crate::code::{self, CodeOutcome};
@@ -207,24 +206,25 @@ fn empty() -> ElfFacts {
         exports: 0,
         imports: vec![],
         data: vec![],
+        returns: vec![],
     }
 }
 
 /// The facts of the ELF in `data`, and with `budgets.code` and `file` (the fd `data` reads, and
-/// its `fstat` size) its code analysis (PR-5a spec §4.1), and with `needles` and `file` its
-/// signature scan (PR-4c-2a). Never fails: what cannot be read is a gap.
+/// its `fstat` size) its code analysis (PR-5a spec §4.1), and with `sought` and `file` its
+/// signature scan (PR-4c-2a, PR-4c-2b). Never fails: what cannot be read is a gap.
 pub fn parse<R: ReadCacheOps>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
     file: Option<(&File, u64)>,
-    needles: Option<&Needles>,
+    sought: Option<Sought<'_>>,
 ) -> Parsed {
     let parsed = match FileKind::parse(data) {
         Ok(FileKind::Elf32) => {
-            parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file, needles)
+            parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file, sought)
         }
         Ok(FileKind::Elf64) => {
-            parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file, needles)
+            parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file, sought)
         }
         _ => None,
     };
@@ -255,7 +255,7 @@ pub fn parse<R: ReadCacheOps>(
                 }),
             // No readable header, so no readable section header table: whatever the needles
             // look for is not known to be absent.
-            scan: needles
+            scan: sought
                 .filter(|_| file.is_some())
                 .map(|_| ScanOutcome::Scanned {
                     found: vec![],
@@ -272,7 +272,7 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     data: &Bounded<R>,
     budgets: BinaryBudgets,
     file: Option<(&File, u64)>,
-    needles: Option<&Needles>,
+    sought: Option<Sought<'_>>,
 ) -> Option<Parsed> {
     let Parts {
         elf: mut e,
@@ -294,17 +294,22 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         (Some(c), Some((f, size))) => Some(code::analyze(&mut e, &sections, &dynamic, f, size, c)),
         _ => None,
     };
-    // PR-4c-2a: last, so that neither the container nor the code step sees its reads.
-    let scan = match (needles, file) {
-        (Some(n), Some(file)) => Some(scan::run(
-            &e,
-            &sections,
-            &dynamic,
-            go.is_some(),
-            file,
-            budgets.scan_bytes,
-            n,
-        )),
+    // PR-4c-2a: last, so that neither the container nor the code step sees its reads. The
+    // returned strings it reads are facts of the container (PR-4c-2b).
+    let scan = match (sought, file) {
+        (Some(sought), Some(file)) => {
+            let (scan, returns) = scan::run(
+                &e,
+                &sections,
+                &dynamic,
+                go.is_some(),
+                file,
+                budgets.scan_bytes,
+                sought,
+            );
+            facts.returns = returns;
+            Some(scan)
+        }
         _ => None,
     };
     Some(Parsed {

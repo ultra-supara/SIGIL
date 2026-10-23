@@ -4,7 +4,8 @@ mod common;
 
 use sigil_model::{
     imports_over_gap, BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport,
-    GoBuildInfo, GoModule, GoSetting, Loc, SliceId, UntrustedText, IMPORTS_OVER_GAP,
+    FunctionReturn, GoBuildInfo, GoModule, GoSetting, Loc, SliceId, UntrustedText,
+    IMPORTS_OVER_GAP,
 };
 
 fn t(s: &str) -> UntrustedText {
@@ -39,6 +40,7 @@ pub fn elf_facts() -> ElfFacts {
             value: DataValue::Text(t("6f3a9f3de")),
             at: vec![Loc::Symbol(t("LLAMA_COMMIT")), Loc::VAddr(0x2000)],
         }],
+        returns: vec![],
     }
 }
 
@@ -145,8 +147,8 @@ fn canonical_order_sorts_records_and_imports_but_keeps_file_order() {
 // --- validation B1–B8 -----------------------------------------------------------------------
 
 use sigil_model::{
-    CheckId, Coverage, CoverageState, DeclKind, Ref, Relation, Session, ValidationError,
-    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY,
+    CheckId, Coverage, CoverageState, DeclKind, ElfType, Format, Ref, Relation, Session,
+    ValidationError, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY,
 };
 
 /// Golden example 12 (one ELF placement under the install root) with valid facts for its slice,
@@ -435,4 +437,89 @@ fn b2_fat_slices_of_one_architecture_have_its_gap() {
     f.cpu_subtype = 8;
     f.fat_cpu_subtype = Some(8);
     assert_eq!(s.validate(), Ok(()));
+}
+
+// --- Returned values (PR-4c-2b) ----------------------------------------------------------------
+
+fn returned(function: &str, value: &str, at: u64) -> FunctionReturn {
+    FunctionReturn {
+        function: function.to_string(),
+        value: DataValue::Text(t(value)),
+        at: vec![Loc::Symbol(t(function)), Loc::VAddr(at)],
+    }
+}
+
+#[test]
+fn returns_are_written_only_when_present_and_read_when_missing() {
+    let mut facts = elf_facts();
+    let json = serde_json::to_value(&facts).unwrap();
+    assert!(json.get("returns").is_none(), "{json}");
+    let back: ElfFacts = serde_json::from_value(json).unwrap();
+    assert_eq!(back, facts);
+    facts.returns = vec![returned("ggml_version", "0.13.1", 0x9d160)];
+    let json = serde_json::to_value(&facts).unwrap();
+    assert_eq!(
+        json["returns"],
+        serde_json::json!([{
+            "function": "ggml_version",
+            "value": {"Text": "0.13.1"},
+            "at": [{"Symbol": "ggml_version"}, {"VAddr": 643424}]
+        }])
+    );
+    let back: ElfFacts = serde_json::from_value(json).unwrap();
+    assert_eq!(back, facts);
+}
+
+#[test]
+fn b11_returns_are_sorted_strings_at_their_symbol_and_address_or_unknown() {
+    let complaint = "is not a string at its symbol and address, or an unknown value at its symbol";
+    let mut s = base();
+    elf(&mut s).returns = vec![
+        returned("ggml_commit", "6f3a9f3de", 0x2007),
+        returned("ggml_version", "0.13.1", 0x2000),
+    ];
+    assert_eq!(s.validate(), Ok(()));
+    let mut u = s.clone();
+    elf(&mut u).returns.reverse();
+    rejected_for(&u, "returns are not sorted and unique by function");
+    let mut u = s.clone();
+    let again = elf(&mut u).returns[0].clone();
+    elf(&mut u).returns.insert(0, again);
+    rejected_for(&u, "returns are not sorted and unique by function");
+    // A number is never returned.
+    let mut u = s.clone();
+    elf(&mut u).returns[0].value = DataValue::Int(1);
+    rejected_for(&u, complaint);
+    // A string without where it was read, or at another symbol.
+    let mut u = s.clone();
+    elf(&mut u).returns[0].at.pop();
+    rejected_for(&u, complaint);
+    let mut u = s.clone();
+    elf(&mut u).returns[0].at[0] = Loc::Symbol(t("ggml_version"));
+    rejected_for(&u, complaint);
+    let mut u = s.clone();
+    elf(&mut u).returns[0].at[1] = Loc::Symbol(t("ggml_commit"));
+    rejected_for(&u, complaint);
+    // An unknown value at its symbol alone.
+    let mut u = s.clone();
+    elf(&mut u).returns[0].value = DataValue::Unknown { why: "x".into() };
+    rejected_for(&u, complaint);
+    elf(&mut u).returns[0].at.pop();
+    assert_eq!(u.validate(), Ok(()));
+    // An unknown value at another function's symbol, or at none.
+    let mut u = s.clone();
+    elf(&mut u).returns[0].value = DataValue::Unknown { why: "x".into() };
+    elf(&mut u).returns[0].at = vec![Loc::Symbol(t("ggml_version"))];
+    rejected_for(&u, complaint);
+    elf(&mut u).returns[0].at = vec![];
+    rejected_for(&u, complaint);
+}
+
+#[test]
+fn b11_a_relocatable_object_has_no_returns() {
+    let mut s = base();
+    elf(&mut s).returns = vec![returned("ggml_version", "0.13.1", 0x2000)];
+    assert_eq!(s.validate(), Ok(()));
+    s.artifacts[0].format = Format::Elf { kind: ElfType::Rel };
+    rejected_for(&s, "a relocatable object has no returns");
 }

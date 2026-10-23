@@ -11,7 +11,7 @@
 use crate::artifact::{
     Arch, ElfType, FileInstance, Format, InstanceContent, NotReadReason, Stability,
 };
-use crate::binary::{BinaryFacts, ContainerFacts, DYNSYM_UNREAD_GAPS};
+use crate::binary::{BinaryFacts, ContainerFacts, DataValue, DYNSYM_UNREAD_GAPS};
 use crate::coverage::{Coverage, CoverageState};
 use crate::evidence::Ref;
 use crate::id::{RootId, SliceId};
@@ -70,6 +70,13 @@ pub const NAME_AND_HASH_ONLY: [&str; 3] = ["cuda-runtime", "cuda/cublas", "cuda/
 /// binary_scan_bytes <limit> exceeded`. What was found before it is kept.
 pub fn scan_over_gap(limit: u64) -> String {
     format!("string scan: {BINARY_SCAN_BYTES} {limit} exceeded")
+}
+
+/// The identity gap of a known exported function whose returned string was not read
+/// (PR-4c-2b): `returned value: <function>: <why>`, `why` being its `FunctionReturn`'s
+/// `Unknown` reason.
+pub fn returned_value_gap(function: &str, why: &str) -> String {
+    format!("returned value: {function}: {why}")
 }
 
 /// Whether `gap` is one the scan records, with `limit` as `binary_scan_bytes`.
@@ -384,12 +391,19 @@ pub enum ExpectedIdentity {
     /// not (PR-4c-1 P-d). It therefore admits `OutOfScope`, and the scanned states, for any
     /// NVIDIA claim on the slice. The engine is the source of truth here; its tests (PR-4c-2a
     /// Task 5) pin that it writes `OutOfScope` only for an NVIDIA-named file.
+    ///
+    /// `unread_returns` (PR-4c-2b): the [`returned_value_gap`] of each `Unknown` return in the
+    /// slices' facts, sorted. Each is among the gaps of a `Partial`, and only they are admitted
+    /// there besides the scan gaps; `Complete` only without one. `any_returns`: the facts have a
+    /// return, so the input was scanned: never `OutOfScope`.
     Scanned {
         limit: u64,
         name_and_hash_only: bool,
         no_sections: NoSectionsGap,
         exports_unread: bool,
         no_gopclntab_admitted: bool,
+        unread_returns: Vec<String>,
+        any_returns: bool,
     },
 }
 
@@ -436,6 +450,27 @@ pub(crate) fn no_gopclntab_admitted(b: &BinaryFacts) -> bool {
     b.go.is_some() && matches!(&b.container, ContainerFacts::Elf(elf) if elf.stripped.is_some())
 }
 
+/// The [`returned_value_gap`] of each `Unknown` return in `b`'s facts (PR-4c-2b): the identity
+/// gaps they require.
+pub(crate) fn unread_returns(b: &BinaryFacts) -> Vec<String> {
+    match &b.container {
+        ContainerFacts::Elf(elf) => elf
+            .returns
+            .iter()
+            .filter_map(|r| match &r.value {
+                DataValue::Unknown { why } => Some(returned_value_gap(&r.function, why)),
+                _ => None,
+            })
+            .collect(),
+        ContainerFacts::MachO(_) => vec![],
+    }
+}
+
+/// Whether `b`'s facts have a return (PR-4c-2b): only a scan reads one.
+pub(crate) fn any_returns(b: &BinaryFacts) -> bool {
+    matches!(&b.container, ContainerFacts::Elf(elf) if !elf.returns.is_empty())
+}
+
 /// Whether a claim on `slice` names a component identified by name and hash only
 /// ([`NAME_AND_HASH_ONLY`]; ADR-010).
 pub(crate) fn name_and_hash_only(s: &Session, slice: &SliceId) -> bool {
@@ -471,16 +506,23 @@ impl ExpectedIdentity {
                 no_sections,
                 exports_unread,
                 no_gopclntab_admitted,
+                unread_returns,
+                any_returns,
             } => {
                 let admitted = match state {
                     CoverageState::Complete => {
-                        *no_sections != NoSectionsGap::Must && !*exports_unread
+                        *no_sections != NoSectionsGap::Must
+                            && !*exports_unread
+                            && unread_returns.is_empty()
                     }
                     CoverageState::Partial { missing } => {
                         let listed = missing.iter().any(|g| g == SCAN_NO_SECTIONS);
                         !missing.is_empty()
                             && missing.windows(2).all(|w| w[0] < w[1])
-                            && missing.iter().all(|g| is_scan_gap(g, *limit))
+                            && missing
+                                .iter()
+                                .all(|g| is_scan_gap(g, *limit) || unread_returns.contains(g))
+                            && unread_returns.iter().all(|g| missing.contains(g))
                             && match no_sections {
                                 NoSectionsGap::Never => !listed,
                                 NoSectionsGap::May => true,
@@ -491,7 +533,7 @@ impl ExpectedIdentity {
                                 || !missing.iter().any(|g| g == SCAN_NO_GOPCLNTAB))
                     }
                     CoverageState::OutOfScope { why } => {
-                        *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY
+                        *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY && !*any_returns
                     }
                     _ => false,
                 };
@@ -505,6 +547,7 @@ impl ExpectedIdentity {
                 if *exports_unread {
                     required.push(format!("{SCAN_NAME_NOT_READ:?}"));
                 }
+                required.extend(unread_returns.iter().map(|g| format!("{g:?}")));
                 let mut gaps =
                     format!("partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {limit})");
                 if !required.is_empty() {
@@ -528,7 +571,7 @@ impl ExpectedIdentity {
                 Err(format!(
                     "{BINARY_IDENTITY} is {}, but the input implies {implied}{}",
                     shown(state),
-                    if *name_and_hash_only {
+                    if *name_and_hash_only && !*any_returns {
                         ", or out of scope (ADR-010)"
                     } else {
                         ""
@@ -549,7 +592,8 @@ impl ExpectedIdentity {
 /// scan looks for in `.gopclntab`, so it cannot be `Complete`. Likewise a linked ELF whose
 /// loader's dynamic symbols the parse did not read (one of [`DYNSYM_UNREAD_GAPS`] in its facts)
 /// must list [`SCAN_NAME_NOT_READ`]: the database has an export needle. Engine tests pin both
-/// needles.
+/// needles. Each `Unknown` return of the input's facts must be listed as its
+/// [`returned_value_gap`] (PR-4c-2b).
 pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<ExpectedIdentity, String> {
     let state = container_state(s, i)?;
     if !matches!(
@@ -606,5 +650,12 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         no_sections,
         exports_unread: facts.iter().any(|b| exports_unread(b, kind)),
         no_gopclntab_admitted: facts.iter().any(|b| no_gopclntab_admitted(b)),
+        unread_returns: {
+            let mut gaps: Vec<String> = facts.iter().flat_map(|b| unread_returns(b)).collect();
+            gaps.sort();
+            gaps.dedup();
+            gaps
+        },
+        any_returns: facts.iter().any(|b| any_returns(b)),
     })
 }

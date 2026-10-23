@@ -181,6 +181,8 @@ fn expected_binary_identity_of_each_input() {
             no_sections,
             exports_unread: false,
             no_gopclntab_admitted: false,
+            unread_returns: vec![],
+            any_returns: false,
         })
     };
     // An ELF with facts, and a section header table.
@@ -208,6 +210,8 @@ fn expected_binary_identity_of_each_input() {
             no_sections: NoSectionsGap::Never,
             exports_unread: false,
             no_gopclntab_admitted: true,
+            unread_returns: vec![],
+            any_returns: false,
         })
     );
     // A linked ELF whose loader has dynamic symbols the parse did not read: the embedded
@@ -221,6 +225,8 @@ fn expected_binary_identity_of_each_input() {
                 no_sections: NoSectionsGap::Never,
                 exports_unread: true,
                 no_gopclntab_admitted: false,
+                unread_returns: vec![],
+                any_returns: false,
             }),
             "{gap}"
         );
@@ -318,6 +324,8 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
         no_sections,
         exports_unread: false,
         no_gopclntab_admitted: false,
+        unread_returns: vec![],
+        any_returns: false,
     };
     let admits = |e: &ExpectedIdentity, state: &CoverageState| e.admits(&entry(state.clone()));
     let over = scan_over_gap(LIMIT);
@@ -373,6 +381,8 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
             no_sections: NoSectionsGap::Never,
             exports_unread: true,
             no_gopclntab_admitted: false,
+            unread_returns: vec![],
+            any_returns: false,
         };
         for state in [
             partial(&[SCAN_NAME_NOT_READ]),
@@ -395,6 +405,8 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
             no_sections: NoSectionsGap::Never,
             exports_unread: false,
             no_gopclntab_admitted: true,
+            unread_returns: vec![],
+            any_returns: false,
         };
         for state in [
             CoverageState::Complete,
@@ -430,6 +442,8 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
         no_sections: NoSectionsGap::Must,
         exports_unread: true,
         no_gopclntab_admitted: false,
+        unread_returns: vec![],
+        any_returns: false,
     };
     assert_eq!(
         admits(&both, &partial(&[SCAN_NO_SECTIONS])),
@@ -660,6 +674,7 @@ fn install_session() -> Session {
             exports: 0,
             imports: vec![],
             data: vec![],
+            returns: vec![],
         }),
         go: None,
         gaps: vec![],
@@ -682,7 +697,7 @@ fn s2_artifacts_identity_is_complete_only_when_every_binary_was_scanned() {
     let s = with_install_identity(install_session(), CoverageState::Complete);
     assert_eq!(binary_errors(&s), Vec::<String>::new());
     let complaint = vec![
-        "binaries[*]: artifacts.identity is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, or a linked ELF's dynamic symbols were not read".to_string(),
+        "binaries[*]: artifacts.identity is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, a linked ELF's dynamic symbols were not read, or a returned value was not read".to_string(),
     ];
     // Discovery not complete.
     let mut t = s.clone();
@@ -967,4 +982,134 @@ fn s3_an_input_not_scanned_has_no_signature_hint() {
         section(".rodata"),
     );
     assert_eq!(code_errors(&s), Vec::<String>::new());
+}
+
+// --- Returned values (PR-4c-2b) ----------------------------------------------------------------
+
+/// `s` with `returns` as its first binary's returns.
+fn with_returns(mut s: Session, returns: Vec<FunctionReturn>) -> Session {
+    let ContainerFacts::Elf(elf) = &mut s.binaries[0].container else {
+        panic!("an ELF");
+    };
+    elf.returns = returns;
+    s
+}
+
+/// `function`'s string `value`, read at `at`.
+fn returned(function: &str, value: &str, at: u64) -> FunctionReturn {
+    FunctionReturn {
+        function: function.to_string(),
+        value: DataValue::Text(UntrustedText::new(value)),
+        at: vec![Loc::Symbol(UntrustedText::new(function)), Loc::VAddr(at)],
+    }
+}
+
+/// `function`'s value, not read for `why`.
+fn not_returned(function: &str, why: &str) -> FunctionReturn {
+    FunctionReturn {
+        function: function.to_string(),
+        value: DataValue::Unknown {
+            why: why.to_string(),
+        },
+        at: vec![Loc::Symbol(UntrustedText::new(function))],
+    }
+}
+
+#[test]
+fn the_returned_value_gap_names_the_function_and_why() {
+    assert_eq!(
+        returned_value_gap("ggml_version", "not decoded: x86-64 only"),
+        "returned value: ggml_version: not decoded: x86-64 only"
+    );
+    assert!(!is_scan_gap(
+        &returned_value_gap("ggml_version", "x"),
+        LIMIT
+    ));
+}
+
+#[test]
+fn s1_a_returned_value_not_read_is_listed_and_keeps_binary_identity_open() {
+    let why = "returns no constant string address";
+    let gap = returned_value_gap("ggml_version", why);
+    let s = with_returns(
+        elf_session(),
+        vec![
+            returned("ggml_commit", "6f3a9f3de", 0x2007),
+            not_returned("ggml_version", why),
+        ],
+    );
+    // Listed, alone or with a scan gap: admitted.
+    let errors = identity_errors(&with_identity(s.clone(), partial(&[&gap])));
+    assert_eq!(errors, Vec::<String>::new());
+    let mut both = [gap.as_str(), SCAN_READ_FAILED];
+    both.sort();
+    let errors = identity_errors(&with_identity(s.clone(), partial(&both)));
+    assert_eq!(errors, Vec::<String>::new());
+    // Complete, or Partial without it: refused, and the error names it.
+    for state in [CoverageState::Complete, partial(&[SCAN_READ_FAILED])] {
+        let errors = identity_errors(&with_identity(s.clone(), state.clone()));
+        assert_eq!(errors.len(), 1, "{state:?}: {errors:?}");
+        assert!(errors[0].contains(&format!("{gap:?}")), "{errors:?}");
+    }
+    // A returned-value gap the facts do not imply: refused.
+    let other = returned_value_gap("ggml_commit", why);
+    let mut listed = [gap.as_str(), other.as_str()];
+    listed.sort();
+    let errors = identity_errors(&with_identity(s.clone(), partial(&listed)));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    // Every value read: Complete, and no returned-value gap.
+    let t = with_returns(
+        elf_session(),
+        vec![
+            returned("ggml_commit", "6f3a9f3de", 0x2007),
+            returned("ggml_version", "0.13.1", 0x2000),
+        ],
+    );
+    let errors = identity_errors(&with_identity(t.clone(), CoverageState::Complete));
+    assert_eq!(errors, Vec::<String>::new());
+    let errors = identity_errors(&with_identity(t, partial(&[&gap])));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}
+
+#[test]
+fn s1_an_input_with_returns_was_scanned_so_it_is_never_out_of_scope() {
+    let mut s = elf_session();
+    s.components[0].component = ComponentKey::new("cuda-runtime").unwrap();
+    let errors = identity_errors(&with_identity(s.clone(), out_of_scope()));
+    assert_eq!(errors, Vec::<String>::new());
+    let t = with_returns(s, vec![returned("ggml_version", "0.13.1", 0x2000)]);
+    let errors = identity_errors(&with_identity(t.clone(), out_of_scope()));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!errors[0].contains("out of scope (ADR-010)"), "{errors:?}");
+    let errors = identity_errors(&with_identity(t, CoverageState::Complete));
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+#[test]
+fn s2_a_returned_value_not_read_keeps_artifacts_identity_open() {
+    let why = "not decoded: x86-64 only";
+    let s = with_returns(install_session(), vec![not_returned("ggml_version", why)]);
+    let complaint = vec![
+        "binaries[*]: artifacts.identity is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, a linked ELF's dynamic symbols were not read, or a returned value was not read".to_string(),
+    ];
+    let t = with_install_identity(s.clone(), CoverageState::Complete);
+    assert_eq!(binary_errors(&t), complaint);
+    let gap = format!(
+        "lib/ollama/libggml.so.0.13.1: {}",
+        returned_value_gap("ggml_version", why)
+    );
+    let t = with_install_identity(s, partial(&[&gap]));
+    assert_eq!(binary_errors(&t), Vec::<String>::new());
+    // A string read keeps it closable.
+    let s = with_returns(
+        install_session(),
+        vec![returned("ggml_version", "0.13.1", 0x2000)],
+    );
+    let t = with_install_identity(s, CoverageState::Complete);
+    assert_eq!(binary_errors(&t), Vec::<String>::new());
+    // An NVIDIA claim does not excuse a slice with returns: they prove it was scanned.
+    let mut u = with_returns(install_session(), vec![not_returned("ggml_version", why)]);
+    u.components[0].component = ComponentKey::new("cuda-runtime").unwrap();
+    let t = with_install_identity(u, CoverageState::Complete);
+    assert_eq!(binary_errors(&t), complaint);
 }

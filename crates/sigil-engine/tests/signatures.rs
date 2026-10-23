@@ -453,8 +453,9 @@ fn a_relocatable_object_has_no_dynamic_exports() {
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
-/// The scan of `bytes` with the needles of `db`, through `parse_artifact`.
+/// The scan of `bytes` with the needles of `db`, and no function, through `parse_artifact`.
 fn scan_with(bytes: &[u8], db: &str) -> ScanOutcome {
+    use sigil_engine::binary::scan::Sought;
     use sigil_engine::binary::{needles, parse_artifact, BinaryBudgets};
     let needles = needles::parse(db).unwrap();
     let f = file(bytes);
@@ -465,7 +466,10 @@ fn scan_with(bytes: &[u8], db: &str) -> ScanOutcome {
         &digest,
         &bytes[..64],
         BinaryBudgets::default(),
-        Some(&needles),
+        Some(Sought {
+            needles: &needles,
+            functions: &[],
+        }),
     )
     .unwrap();
     parsed.slices[0].scan.clone().unwrap()
@@ -942,7 +946,8 @@ fn phdrs_past_eof(bytes: &[u8]) -> Vec<u8> {
 
 /// The loader's dynamic table cannot be read (an unmapped `PT_DYNAMIC`, or program headers past
 /// the end of the file), so the `.dynsym` read is not checked against it: an export needle not
-/// found there is not known to be absent; one found is kept.
+/// found there is not known to be absent; one found is kept. So is a known function not found
+/// there (PR-4c-2b): the embedded database's two are in neither library.
 #[test]
 fn exports_not_checked_against_the_loader_s_table_are_a_gap_unless_found() {
     let patches: [(&str, Patch); 2] = [
@@ -961,6 +966,14 @@ fn exports_not_checked_against_the_loader_s_table_are_a_gap_unless_found() {
         let ScanOutcome::Scanned { found, gaps } =
             scan_of("libggml-rpc.so", &patch(&rpc_library()))
         else {
+            panic!("{how}: not scanned");
+        };
+        assert_eq!(found.len(), 1, "{how}");
+        assert_eq!(gaps, [sigil_model::SCAN_NAME_NOT_READ], "{how}");
+        // Looking for the RPC export alone, the one found leaves nothing missing.
+        let rpc = "[[needle]]\nfeature = \"rpc.code_present\"\nkind = \"export\"\n\
+                   value = \"ggml_backend_rpc_\"\n";
+        let ScanOutcome::Scanned { found, gaps } = scan_with(&patch(&rpc_library()), rpc) else {
             panic!("{how}: not scanned");
         };
         assert_eq!(found.len(), 1, "{how}");
@@ -998,4 +1011,38 @@ fn an_export_name_that_cannot_be_read_is_a_gap() {
     assert!(signatures(&s).is_empty(), "{:?}", s.hints);
     let gap = found_nothing(&[sigil_model::SCAN_NAME_NOT_READ]);
     assert_eq!(scan_of("libggml-rpc.so", &bytes), gap);
+}
+
+/// PR-4c-2b: a returned value not read is a gap of the install's identity, with its path, and
+/// never of its container.
+#[test]
+fn the_install_identity_lists_a_returned_value_not_read() {
+    let (_t, _m, s) = install(
+        &go_elf(&pclntab(0x3000), true),
+        &[("libggml-base.so.0", &fixture("returns/global-gcc-O2.so"))],
+    );
+    let state = |check: &str| {
+        s.coverage
+            .iter()
+            .find(|c| c.check.as_str() == check)
+            .unwrap()
+            .state
+            .clone()
+    };
+    assert_eq!(
+        state(ARTIFACTS_IDENTITY),
+        CoverageState::Partial {
+            missing: vec![format!(
+                "lib/ollama/libggml-base.so.0: {}",
+                sigil_model::returned_value_gap(
+                    "ggml_version",
+                    "returns no constant string address"
+                )
+            )],
+        }
+    );
+    assert_eq!(
+        state(sigil_model::ARTIFACTS_CONTAINER),
+        CoverageState::Complete
+    );
 }

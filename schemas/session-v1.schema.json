@@ -761,7 +761,8 @@
         "stripped": {"type": ["boolean", "null"]},
         "exports": {"type": "integer", "minimum": 0},
         "imports": {"type": "array", "items": {"$ref": "#/$defs/ElfImport"}},
-        "data": {"type": "array", "items": {"$ref": "#/$defs/DataSymbol"}}
+        "data": {"type": "array", "items": {"$ref": "#/$defs/DataSymbol"}},
+        "returns": {"type": "array", "items": {"$ref": "#/$defs/FunctionReturn"}}
       }
     },
     "ElfImport": {
@@ -780,6 +781,16 @@
       "required": ["symbol", "value", "at"],
       "properties": {
         "symbol": {"type": "string", "minLength": 1},
+        "value": {"$ref": "#/$defs/DataValue"},
+        "at": {"type": "array", "items": {"$ref": "#/$defs/Loc"}}
+      }
+    },
+    "FunctionReturn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "value", "at"],
+      "properties": {
+        "function": {"type": "string", "minLength": 1},
         "value": {"$ref": "#/$defs/DataValue"},
         "at": {"type": "array", "items": {"$ref": "#/$defs/Loc"}}
       }
@@ -1828,6 +1839,19 @@
               "additionalProperties": false,
               "required": ["symbol"],
               "properties": {"symbol": {"$ref": "#/$defs/UntrustedText"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["FunctionReturn"],
+          "properties": {
+            "FunctionReturn": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["function"],
+              "properties": {"function": {"$ref": "#/$defs/UntrustedText"}}
             }
           }
         }

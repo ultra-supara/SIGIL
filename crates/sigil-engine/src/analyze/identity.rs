@@ -4,13 +4,16 @@
 //! - **Names.** The file name of each stable placement of the slice's content, of each stable
 //!   symlink placement whose targets lead to one, and the SONAME. The claim's component is the
 //!   first name the database knows: file names in path order, then the SONAME.
-//! - **Embedded values** (`LLAMA_*` data symbols, Go build info) are attributed to that
-//!   component. They never name one on their own.
+//! - **Embedded values** (`LLAMA_*` data symbols, what `ggml_version`/`ggml_commit` return, Go
+//!   build info) are attributed to that component. They never name one on their own.
 //! - **Known hashes:** one per reference row of a placement of the content (install sessions).
-//! - **Versions:** the dotted number after `.so.` of each name that names the component, and
-//!   `LLAMA_BUILD_NUMBER`.
+//! - **Versions:** the dotted number after `.so.` of each name that names the component, and each
+//!   embedded value whose field the database gives the role `version` (PR-4c-2b).
 //! - **Status**, top to bottom: `Conflicting`, `ReferenceMatched`, `Corroborated`, `NameOnly`,
-//!   `Unidentified`.
+//!   `Unidentified`. Versions are compared by their major keys (`major_key`) within a kind: the
+//!   names' versions and those of the fields the database says are the component's own (`of`)
+//!   are one kind (F-I2), and every other version field is its own. Commits are compared per
+//!   field the database gives the role `commit`.
 //!
 //! The placements are indexed once, and each link is resolved once, for all slices (plan P-q):
 //! the work grows with the number of placements and links, not with their product.
@@ -24,16 +27,10 @@ use sigil_model::{
     UntrustedText, VersionAssertion, VersionSource,
 };
 
-use super::components::{components, is_version, ComponentDb};
+use super::components::{components, is_version, ComponentDb, Role};
 
 /// The longest chain of symlink placements followed (Linux's `MAXSYMLINKS`).
 const MAX_HOPS: usize = 40;
-
-/// The embedded fields whose values are commits: two different values of one conflict.
-const COMMIT_FIELDS: &[&str] = &["LLAMA_COMMIT"];
-
-/// The embedded field whose value is a version.
-const VERSION_FIELD: &str = "LLAMA_BUILD_NUMBER";
 
 /// The placements by root and path: one hop of a link is one lookup.
 type ByPath<'i> = BTreeMap<(&'i RootId, &'i [u8]), &'i FileInstance>;
@@ -143,33 +140,48 @@ fn claim(
         }
         assertions.push(IdentityAssertion::SelfName { kind, value, at });
     }
-    for d in &elf.data {
-        let value = match &d.value {
+    // The known data symbols, then the functions' returns (PR-4c-2b): (field, value, where it
+    // was read, how).
+    let data = elf.data.iter().map(|d| {
+        let symbol = UntrustedText::new(d.symbol.as_str());
+        let method = ExtractMethod::DataSymbolPointer {
+            symbol: symbol.clone(),
+        };
+        (&d.symbol, &d.value, &d.at, symbol, method)
+    });
+    let returns = elf.returns.iter().map(|r| {
+        let symbol = UntrustedText::new(r.function.as_str());
+        let method = ExtractMethod::FunctionReturn {
+            function: symbol.clone(),
+        };
+        (&r.function, &r.value, &r.at, symbol, method)
+    });
+    for (field, value, read_at, symbol, method) in data.chain(returns) {
+        let value = match value {
             DataValue::Text(text) => text.clone(),
             DataValue::Int(n) => UntrustedText::new(n.to_string()),
             DataValue::Unknown { .. } => continue,
         };
-        let symbol = UntrustedText::new(d.symbol.as_str());
         // Where the value was read: the string's address, or the symbol of an integer.
-        let loc = d.at.last().cloned();
+        let loc = read_at.last().cloned();
         let at = EvidenceRef::Code {
             slice: b.slice.clone(),
-            loc: loc.unwrap_or_else(|| Loc::Symbol(symbol.clone())),
+            loc: loc.unwrap_or(Loc::Symbol(symbol)),
         };
-        if d.symbol == VERSION_FIELD {
+        if db.field(field).is_some_and(|f| f.role == Role::Version) {
             versions.push(VersionAssertion {
                 value: value.clone(),
                 source: VersionSource::Embedded {
-                    field: d.symbol.clone(),
+                    field: field.clone(),
                 },
                 at: at.clone(),
             });
         }
         assertions.push(IdentityAssertion::Embedded {
-            field: d.symbol.clone(),
+            field: field.clone(),
             value,
             at,
-            method: ExtractMethod::DataSymbolPointer { symbol },
+            method,
         });
     }
     if let Some(go) = &b.go {
@@ -219,7 +231,7 @@ fn claim(
     });
     // The components the self-names name, from the lookups above.
     let keys: BTreeSet<&ComponentKey> = named_as.iter().flatten().copied().collect();
-    let status = status(&keys, &assertions, &versions);
+    let status = status(db, &component, &keys, &assertions, &versions);
     Some(ComponentClaim {
         subject: b.slice.clone(),
         component,
@@ -286,14 +298,16 @@ fn so_version(name: &[u8]) -> Option<&[u8]> {
     is_version(version).then_some(version)
 }
 
-/// The status of a claim, top to bottom (spec §4). `keys` are the components that its self-names
-/// name. `Signature` is not identity evidence.
+/// The status of a claim of `component`, top to bottom (spec §4). `keys` are the components that
+/// its self-names name. `Signature` is not identity evidence.
 fn status(
+    db: &ComponentDb,
+    component: &ComponentKey,
     keys: &BTreeSet<&ComponentKey>,
     assertions: &[IdentityAssertion],
     versions: &[VersionAssertion],
 ) -> IdentityStatus {
-    if conflicting(keys, assertions, versions) {
+    if conflicting(db, component, keys, assertions, versions) {
         return IdentityStatus::Conflicting;
     }
     let hash = assertions
@@ -327,25 +341,33 @@ fn status(
     }
 }
 
-/// Whether two sources disagree on one attribute (spec §4):
+/// Whether two sources disagree on one attribute (spec §4; PR-4c-2b spec §5):
 /// - **name:** two components in `keys`, those that the self-names name;
-/// - **major version:** two versions of one kind whose first numbers differ. The versions of
-///   self-names (file names, SONAME) are one kind; each embedded field is its own kind, since
-///   `LLAMA_BUILD_NUMBER` counts builds and is not a library version (plan P-c);
-/// - **commit:** two different values of one commit field.
+/// - **major version:** two versions of one kind whose major keys disagree ([`disagree`]). The
+///   versions of self-names (file names, SONAME) are one kind, with those of every embedded
+///   field whose `of` holds `component` (F-I2); each other embedded field is its own kind, as
+///   `LLAMA_BUILD_NUMBER`, which counts builds and is not a library version (plan P-c);
+/// - **commit:** two different values of one field whose role is `commit`.
 fn conflicting(
+    db: &ComponentDb,
+    component: &ComponentKey,
     keys: &BTreeSet<&ComponentKey>,
     assertions: &[IdentityAssertion],
     versions: &[VersionAssertion],
 ) -> bool {
-    let mut majors: BTreeMap<Option<&str>, BTreeSet<&[u8]>> = BTreeMap::new();
+    let mut majors: BTreeMap<Option<&str>, BTreeSet<MajorKey<'_>>> = BTreeMap::new();
     for v in versions {
         let kind = match &v.source {
             VersionSource::SelfName { .. } => None,
+            VersionSource::Embedded { field }
+                if db.field(field).is_some_and(|f| f.of.contains(component)) =>
+            {
+                None
+            }
             VersionSource::Embedded { field } => Some(field.as_str()),
         };
-        if let Some(major) = major(v.value.as_bytes()) {
-            majors.entry(kind).or_default().insert(major);
+        if let Some(key) = major_key(v.value.as_bytes()) {
+            majors.entry(kind).or_default().insert(key);
         }
     }
     let mut commits: BTreeMap<&str, BTreeSet<&[u8]>> = BTreeMap::new();
@@ -353,36 +375,66 @@ fn conflicting(
         let IdentityAssertion::Embedded { field, value, .. } = a else {
             continue;
         };
-        if COMMIT_FIELDS.contains(&field.as_str()) {
+        if db.field(field).is_some_and(|f| f.role == Role::Commit) {
             commits
                 .entry(field.as_str())
                 .or_default()
                 .insert(value.as_bytes());
         }
     }
-    let major_differs = majors.values().any(|m| m.len() > 1);
+    // A set per kind: the names of one content are many and their keys few, so the pairwise scan
+    // grows with the distinct keys, not with the names (plan P-q).
+    let major_differs = majors.values().any(|of_kind| {
+        of_kind
+            .iter()
+            .enumerate()
+            .any(|(i, a)| of_kind.iter().skip(i + 1).any(|b| disagree(a, b)))
+    });
     let commit_differs = commits.values().any(|c| c.len() > 1);
     keys.len() > 1 || major_differs || commit_differs
 }
 
-/// The first number of a version without its leading zeros: `0` of `0.13.1`, `12` of `012`.
-/// `None` when its first part is empty or not all ASCII digits.
-fn major(version: &[u8]) -> Option<&[u8]> {
-    let first = version.split(|b| *b == b'.').next()?;
-    if first.is_empty() || !first.iter().all(u8::is_ascii_digit) {
+/// A version's major key (PR-4c-2b spec §5): its first number without leading zeros, and, when
+/// that is `0`, its second number too (semver reads `0.y` as breaking): `(0, Some(13))` of
+/// `0.13.1`, `(12, None)` of `012.1`, `(0, None)` of `0`.
+type MajorKey<'v> = (&'v [u8], Option<&'v [u8]>);
+
+/// The major key of `version`. `None` when its first part is empty or not all ASCII digits; a
+/// second part that is not one or more ASCII digits (or is missing) leaves the key one number.
+fn major_key(version: &[u8]) -> Option<MajorKey<'_>> {
+    let mut parts = version.split(|b| *b == b'.');
+    let first = number(parts.next()?)?;
+    let second = if first == b"0" {
+        parts.next().and_then(number)
+    } else {
+        None
+    };
+    Some((first, second))
+}
+
+/// `part` without its leading zeros, when it is one or more ASCII digits: `12` of `012`, `0` of
+/// `000`.
+fn number(part: &[u8]) -> Option<&[u8]> {
+    if part.is_empty() || !part.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let zeros = first.iter().take_while(|b| **b == b'0').count();
-    first.get(zeros.min(first.len() - 1)..)
+    let zeros = part.iter().take_while(|b| **b == b'0').count();
+    part.get(zeros.min(part.len() - 1)..)
+}
+
+/// Whether two major keys differ at a position both have: `0` and `0.13` agree; `0.12` and
+/// `0.13` do not, nor do `1` and `0.13`.
+fn disagree(a: &MajorKey<'_>, b: &MajorKey<'_>) -> bool {
+    a.0 != b.0 || matches!((a.1, b.1), (Some(x), Some(y)) if x != y)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sigil_model::{
-        Arch, ArtifactId, DataSymbol, DiscoverySource, ElfFacts, GoBuildInfo, GoModule, InstanceId,
-        LinkHop, MachOFacts, MemberResult, ObligationId, ProfileRef, RefSetId, RootId, Sha256Hex,
-        SliceId, StatInfo,
+        Arch, ArtifactId, DataSymbol, DiscoverySource, ElfFacts, FunctionReturn, GoBuildInfo,
+        GoModule, InstanceId, LinkHop, MachOFacts, MemberResult, ObligationId, ProfileRef,
+        RefSetId, RootId, Sha256Hex, SliceId, StatInfo,
     };
 
     const BASE: &str = "lib/ollama/libggml-base.so.0.13.1";
@@ -460,6 +512,7 @@ mod tests {
                 exports: 0,
                 imports: vec![],
                 data,
+                returns: vec![],
             }),
             go: None,
             gaps: vec![],
@@ -516,19 +569,23 @@ mod tests {
         components().unwrap()
     }
 
-    /// The status of hand-made evidence, with the components of its self-names looked up.
+    /// The status of hand-made evidence, with the components of its self-names looked up. The
+    /// claim's component is the first of them (`ollama` without one).
     fn status_of(
         assertions: &[IdentityAssertion],
         versions: &[VersionAssertion],
     ) -> IdentityStatus {
-        let keys = assertions
+        let named: Vec<&ComponentKey> = assertions
             .iter()
             .filter_map(|a| match a {
                 IdentityAssertion::SelfName { value, .. } => db().component(value.as_bytes()),
                 _ => None,
             })
             .collect();
-        status(&keys, assertions, versions)
+        let ollama = ComponentKey::new("ollama").unwrap();
+        let component = named.first().copied().unwrap_or(&ollama);
+        let keys = named.iter().copied().collect();
+        status(db(), component, &keys, assertions, versions)
     }
 
     fn file_result(matches: bool) -> MemberResult {
@@ -948,22 +1005,28 @@ mod tests {
     }
 
     #[test]
-    fn two_first_numbers_of_names_conflict() {
+    fn two_major_keys_of_names_conflict() {
         let conflicting = [
             file("lib/ollama/libmtmd.so.0.0.1", 'a'),
             file("lib/ollama/libmtmd.so.1", 'a'),
         ];
         let c = only(&conflicting, elf('a', None, vec![]), &[]);
         assert_eq!(c.status, IdentityStatus::Conflicting);
+        let minors = [
+            file("lib/ollama/libmtmd.so.0.0.1", 'a'),
+            file("lib/ollama/libmtmd.so.0.1", 'a'),
+        ];
+        let c = only(&minors, elf('a', None, vec![]), &[]);
+        assert_eq!(c.status, IdentityStatus::Conflicting, "0.x minors 0 and 1");
         let agreeing = [
             file("lib/ollama/libmtmd.so.0.0.1", 'a'),
-            file("lib/ollama/libmtmd.so.00.1", 'a'),
+            file("lib/ollama/libmtmd.so.00.000.2", 'a'),
         ];
         let c = only(&agreeing, elf('a', None, vec![]), &[]);
         assert_eq!(
             c.status,
             IdentityStatus::NameOnly,
-            "0 and 00 are one number"
+            "0 and 00 are one number, and 0.x's third is not compared"
         );
     }
 
@@ -1135,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn versions_after_so_and_their_first_numbers() {
+    fn versions_after_so() {
         let v = |name: &str| so_version(name.as_bytes()).map(|v| v.to_vec());
         assert_eq!(v("libggml-base.so.0.13.1"), Some(b"0.13.1".to_vec()));
         assert_eq!(v("libcublasLt.so.12.8.5.5"), Some(b"12.8.5.5".to_vec()));
@@ -1150,13 +1213,204 @@ mod tests {
         ] {
             assert_eq!(v(name), None, "{name}");
         }
-        let m = |v: &str| major(v.as_bytes()).map(|m| m.to_vec());
-        assert_eq!(m("0.13.1"), Some(b"0".to_vec()));
-        assert_eq!(m("012.1"), Some(b"12".to_vec()));
-        assert_eq!(m("000"), Some(b"0".to_vec()));
-        assert_eq!(m("7"), Some(b"7".to_vec()));
+    }
+
+    /// PR-4c-2b spec §5: the major key is the first number, and the second when the first is 0.
+    #[test]
+    fn major_keys_read_0_x_as_semver_does() {
+        let k = |v: &str| {
+            major_key(v.as_bytes()).map(|(a, b)| {
+                let shown = |n: &[u8]| String::from_utf8(n.to_vec()).unwrap();
+                (shown(a), b.map(shown))
+            })
+        };
+        let key = |a: &str, b: Option<&str>| Some((a.to_string(), b.map(str::to_string)));
+        assert_eq!(k("0.13.1"), key("0", Some("13")));
+        assert_eq!(k("00.013"), key("0", Some("13")));
+        assert_eq!(k("0.000"), key("0", Some("0")));
+        assert_eq!(k("0"), key("0", None));
+        assert_eq!(k("0.x"), key("0", None));
+        assert_eq!(k("0."), key("0", None));
+        assert_eq!(k("012.1"), key("12", None));
+        assert_eq!(k("12.8.5.5"), key("12", None));
+        assert_eq!(k("7"), key("7", None));
         for version in ["", "v1", "1a.2", "-1", ".1"] {
-            assert_eq!(m(version), None, "{version}");
+            assert_eq!(k(version), None, "{version}");
         }
+        let d = |a: &str, b: &str| {
+            disagree(
+                &major_key(a.as_bytes()).unwrap(),
+                &major_key(b.as_bytes()).unwrap(),
+            )
+        };
+        assert!(!d("0", "0.13.1"), "the SONAME's 0 has no second number");
+        assert!(!d("0.13.1", "0.13.2"));
+        assert!(!d("0.13", "00.13.0"));
+        assert!(d("0.12.0", "0.13.1"));
+        assert!(d("1", "0.13"));
+        assert!(d("0.13", "1"));
+        assert!(!d("12.8.90", "12"));
+        assert!(d("12", "13.0"));
+    }
+
+    /// The gcc -O2 build's returns: a version and a commit, each a string at its address.
+    fn returns(version: &str) -> Vec<FunctionReturn> {
+        let text = |function: &str, value: &str, at: u64| FunctionReturn {
+            function: function.to_string(),
+            value: DataValue::Text(UntrustedText::new(value)),
+            at: vec![Loc::Symbol(UntrustedText::new(function)), Loc::VAddr(at)],
+        };
+        vec![
+            text("ggml_commit", "6f3a9f3de", 0x2007),
+            text("ggml_version", version, 0x2000),
+        ]
+    }
+
+    fn with_returns(mut b: BinaryFacts, returns: Vec<FunctionReturn>) -> BinaryFacts {
+        let ContainerFacts::Elf(elf) = &mut b.container else {
+            panic!("an ELF");
+        };
+        elf.returns = returns;
+        b
+    }
+
+    #[test]
+    fn returns_are_embedded_values_and_the_version_a_version() {
+        let instances = [file(BASE, 'a')];
+        let b = with_returns(
+            elf('a', Some("libggml-base.so.0"), vec![]),
+            returns("0.13.1"),
+        );
+        let c = only(&instances, b, &[]);
+        let code = |at: u64| EvidenceRef::Code {
+            slice: slice('a'),
+            loc: Loc::VAddr(at),
+        };
+        let embedded = |field: &str, value: &str, at: u64| IdentityAssertion::Embedded {
+            field: field.to_string(),
+            value: UntrustedText::new(value),
+            at: code(at),
+            method: ExtractMethod::FunctionReturn {
+                function: UntrustedText::new(field),
+            },
+        };
+        assert_eq!(
+            c.assertions,
+            [
+                name(NameKind::Filename, "libggml-base.so.0.13.1", at_inst(BASE)),
+                name(
+                    NameKind::Soname,
+                    "libggml-base.so.0",
+                    EvidenceRef::Artifact { artifact: art('a') }
+                ),
+                embedded("ggml_commit", "6f3a9f3de", 0x2007),
+                embedded("ggml_version", "0.13.1", 0x2000),
+                sig(),
+            ]
+        );
+        let ggml_version = VersionSource::Embedded {
+            field: "ggml_version".to_string(),
+        };
+        assert_eq!(
+            c.versions,
+            [
+                version("0.13.1", filename(), at_inst(BASE)),
+                version(
+                    "0",
+                    VersionSource::SelfName {
+                        kind: NameKind::Soname
+                    },
+                    EvidenceRef::Artifact { artifact: art('a') }
+                ),
+                version("0.13.1", ggml_version, code(0x2000)),
+            ]
+        );
+        assert_eq!(c.status, IdentityStatus::NameOnly);
+        // A value not read is no evidence.
+        let mut unread = returns("0.13.1");
+        unread[1].value = DataValue::Unknown { why: "x".into() };
+        unread[1].at.pop();
+        let b = with_returns(elf('a', None, vec![]), unread);
+        let c = only(&instances, b, &[]);
+        assert_eq!(c.versions.len(), 1, "{:?}", c.versions);
+        assert_eq!(c.assertions.len(), 3, "{:?}", c.assertions);
+    }
+
+    /// F-I2 and example 12: ggml_version is ggml-base's own version, compared with its names'.
+    #[test]
+    fn ggml_version_is_compared_with_the_names_of_ggml_base() {
+        let base = [file(BASE, 'a')];
+        let rows = [row("v0.30.6", BASE, Some(BASE), file_result(true))];
+        for (soname, version, status) in [
+            (None, "0.12.0", IdentityStatus::Conflicting),
+            (None, "0.13.2", IdentityStatus::NameOnly),
+            (
+                Some("libggml-base.so.0"),
+                "1.0.0",
+                IdentityStatus::Conflicting,
+            ),
+            (
+                Some("libggml-base.so.0"),
+                "0.13.1",
+                IdentityStatus::NameOnly,
+            ),
+        ] {
+            let b = with_returns(elf('a', soname, vec![]), returns(version));
+            assert_eq!(only(&base, b, &[]).status, status, "{soname:?} {version}");
+        }
+        // No version in the file name: the SONAME's is compared with ggml_version.
+        let bare = [file("lib/ollama/libggml-base.so", 'a')];
+        for (version, status) in [
+            ("1.0.0", IdentityStatus::Conflicting),
+            ("0.13.1", IdentityStatus::NameOnly),
+        ] {
+            let b = with_returns(
+                elf('a', Some("libggml-base.so.0"), vec![]),
+                returns(version),
+            );
+            assert_eq!(only(&bare, b, &[]).status, status, "bare {version}");
+        }
+        // A matched hash does not hide it (example 12).
+        let b = with_returns(elf('a', None, vec![]), returns("0.12.0"));
+        assert_eq!(only(&base, b, &rows).status, IdentityStatus::Conflicting);
+        // Not ggml-base: the value is a version of its own kind.
+        let mtmd = [file("lib/ollama/libmtmd.so.0.0.1", 'a')];
+        let b = with_returns(elf('a', None, vec![]), returns("1.0.0"));
+        let c = only(&mtmd, b, &[]);
+        assert_eq!(c.component.as_str(), "llama.cpp/mtmd");
+        assert_eq!(c.status, IdentityStatus::NameOnly);
+    }
+
+    #[test]
+    fn commits_are_compared_per_field_the_database_names() {
+        let embedded = |field: &str, value: &str| IdentityAssertion::Embedded {
+            field: field.to_string(),
+            value: UntrustedText::new(value),
+            at: EvidenceRef::Artifact { artifact: art('a') },
+            method: ExtractMethod::FunctionReturn {
+                function: UntrustedText::new(field),
+            },
+        };
+        let base = name(NameKind::Filename, "libggml-base.so.0", at_inst(BASE));
+        let two = [
+            base.clone(),
+            embedded("ggml_commit", "6f3a9f3de"),
+            embedded("ggml_commit", "0000000"),
+        ];
+        assert_eq!(status_of(&two, &[]), IdentityStatus::Conflicting);
+        // ggml's commit and llama.cpp's are not one attribute.
+        let fields = [
+            base.clone(),
+            embedded("ggml_commit", "6f3a9f3de"),
+            embedded("LLAMA_COMMIT", "0000000"),
+        ];
+        assert_eq!(status_of(&fields, &[]), IdentityStatus::NameOnly);
+        // A field without the role `commit` is never compared.
+        let other = [
+            base,
+            embedded("ggml_version", "0.13.1"),
+            embedded("ggml_version", "0.12.0"),
+        ];
+        assert_eq!(status_of(&other, &[]), IdentityStatus::NameOnly);
     }
 }

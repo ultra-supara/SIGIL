@@ -1,0 +1,15 @@
+
+version-aarch64.so:     file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+000000000001036c <ggml_version>:
+   1036c:	d503201f 	nop
+   10370:	50f7fc80 	adr	x0, 302 <ggml_version-0x1006a>
+   10374:	d65f03c0 	ret
+
+0000000000010378 <ggml_commit>:
+   10378:	90ffff80 	adrp	x0, 0 <ggml_version-0x1036c>
+   1037c:	910be000 	add	x0, x0, #0x2f8
+   10380:	d65f03c0 	ret

@@ -546,6 +546,111 @@ fn denied_components_become_policy_violations() {
     assert_eq!(s.outcome.verdict, Verdict::Pass);
 }
 
+/// PR-4c-2b spec §6: a deny entry matches a `Conflicting` claim through any of its names, and
+/// the violation's subject is the claim in the session, never the denied key (design review P2).
+#[test]
+fn a_denied_name_of_a_conflicting_claim_is_a_violation_of_that_claim() {
+    let deny = |component: &str| {
+        format!(
+            "[[components.deny]]\ncomponent = \"{component}\"\naction = \"fail\"\nreason = \"not approved\"\n"
+        )
+    };
+    // Example 1's ggml claim, also named by the SONAME of the RPC backend.
+    let conflicting = || {
+        let mut s = example("01-complete-pass");
+        let claim = &mut s.components[0];
+        claim.assertions.insert(
+            1,
+            IdentityAssertion::SelfName {
+                kind: NameKind::Soname,
+                value: UntrustedText::new("libggml-rpc.so"),
+                at: EvidenceRef::Artifact {
+                    artifact: claim.subject.artifact(),
+                },
+            },
+        );
+        claim.status = IdentityStatus::Conflicting;
+        s
+    };
+    let mut s = conflicting();
+    run(&mut s, &deny("ggml-backend/rpc"));
+    assert_eq!(s.policy_violations.len(), 1);
+    let v = &s.policy_violations[0];
+    assert_eq!(
+        v.policy_rule.as_str(),
+        "policy:components.deny.ggml-backend/rpc"
+    );
+    assert_eq!(
+        v.subject,
+        Ref::Component {
+            slice: s.components[0].subject.clone(),
+            component: ComponentKey::new("ggml").unwrap()
+        }
+    );
+    assert!(s.components.iter().any(|c| matches!(
+        &v.subject,
+        Ref::Component { slice, component } if *slice == c.subject && *component == c.component
+    )));
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
+    // Its own component still matches, once.
+    let mut s = conflicting();
+    run(&mut s, &deny("ggml"));
+    assert_eq!(s.policy_violations.len(), 1);
+    // Both entries: one violation each, of the one claim.
+    let mut s = conflicting();
+    run(
+        &mut s,
+        &format!("{}{}", deny("ggml"), deny("ggml-backend/rpc")),
+    );
+    assert_eq!(s.policy_violations.len(), 2);
+    assert!(s
+        .policy_violations
+        .iter()
+        .all(|v| v.subject == s.policy_violations[0].subject));
+    let mut rules: Vec<&str> = s
+        .policy_violations
+        .iter()
+        .map(|v| v.policy_rule.as_str())
+        .collect();
+    rules.sort_unstable();
+    assert_eq!(
+        rules,
+        [
+            "policy:components.deny.ggml",
+            "policy:components.deny.ggml-backend/rpc"
+        ]
+    );
+    // A name the database maps to no component matches nothing more.
+    let mut s = example("01-complete-pass");
+    let artifact = s.components[0].subject.artifact();
+    s.components[0].assertions.insert(
+        1,
+        IdentityAssertion::SelfName {
+            kind: NameKind::Soname,
+            value: UntrustedText::new("libunknown.so"),
+            at: EvidenceRef::Artifact { artifact },
+        },
+    );
+    run(&mut s, &deny("ggml-backend/rpc"));
+    assert!(s.policy_violations.is_empty());
+    // An embedded value is not a name: only self-names name a component.
+    let mut s = example("01-complete-pass");
+    let artifact = s.components[0].subject.artifact();
+    s.components[0].assertions.insert(
+        1,
+        IdentityAssertion::Embedded {
+            field: "LLAMA_COMMIT".into(),
+            value: UntrustedText::new("libggml-rpc.so"),
+            method: ExtractMethod::DataSymbolPointer {
+                symbol: UntrustedText::new("LLAMA_COMMIT"),
+            },
+            at: EvidenceRef::Artifact { artifact },
+        },
+    );
+    run(&mut s, &deny("ggml-backend/rpc"));
+    assert!(s.policy_violations.is_empty());
+}
+
 #[test]
 fn the_verdict_is_the_highest_action_whatever_its_source() {
     let deny = |action: &str| {

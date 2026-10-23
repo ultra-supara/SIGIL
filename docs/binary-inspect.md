@@ -26,7 +26,9 @@ symlink, is one input. For each input, the session records:
   - build-id, `.comment`, stripped;
   - exports and imports;
   - the known data symbols (in a relocatable object, each is `Unknown` with a gap: its data is
-    not linked yet), and Go build info.
+    not linked yet), and Go build info;
+  - what `ggml_version` and `ggml_commit` return, when the file exports them
+    ([below](#returned-values)).
   Mach-O facts include the header CPU type, subtype, file type and flags; UUID, dylib ID, loaded
   dylibs, RPATHs, and dynamic linker. A fat file records each architecture slice's offset, size,
   digest, table CPU type/subtype, and alignment.
@@ -245,14 +247,14 @@ so its claim reads `name only`, not `reference matched`
 
 | The input | `binary.identity` |
 |---|---|
-| An ELF, every scan done within the budget | `Complete` |
-| An ELF with a scan cut short | `Partial`, listing the gaps below; the hints found are kept |
+| An ELF, every scan done within the budget and every returned value read | `Complete` |
+| An ELF with a scan cut short or a returned value not read | `Partial`, listing the gaps below; the hints found are kept |
 | An ELF named as an NVIDIA library | `OutOfScope` (`NVIDIA library: identified by name and hash only (ADR-010)`) |
 | A Mach-O or fat Mach-O | `Unsupported` (`string scan: ELF only`) |
 | An ELF without facts | `Partial` (`not parsed`) |
 | Not a supported container, over `binary_bytes`, or changed or removed while read | the `binary.container` status |
 
-The gaps of a scan cut short:
+The gaps of a scan cut short, and of a value not read:
 - `string scan: binary_scan_bytes <limit> exceeded`: the next read would pass the budget, and
   reading stopped there;
 - `string scan: no section headers`: a needle that looks in sections applies (with this database,
@@ -263,9 +265,12 @@ The gaps of a scan cut short:
   nowhere (a stripped or renamed table). Its other sections are not searched for them;
 - `string scan: a name not read`: a section's or an export's name could not be read; or the
   loader has dynamic symbols (`DT_SYMTAB`) and the parse has no `.dynsym` that agrees with them,
-  or the loader's dynamic table could not be read. A needle may be there unseen;
+  or the loader's dynamic table could not be read. A needle or a known function may be there
+  unseen;
 - `string scan: a read failed`: a read of a section failed, and the rest of that section was not
-  read; or a section passes the end of the file, and only its bytes in the file were read.
+  read; or a section passes the end of the file, and only its bytes in the file were read;
+- `returned value: <function>: <why>`: what an exported function returns was not read
+  ([below](#returned-values)).
 
 These gaps are never `binary.container` gaps: a scan cut short leaves the container facts as they
 are. A Mach-O input that was `COMPLETE` before PR-4c-2a is `INCOMPLETE` now under the default
@@ -291,6 +296,56 @@ whose first RPC export is `ggml_backend_rpc_init`, the table reads, once rendere
 
 The Capabilities table that follows keeps the import hints. A Mach-O gets no signatures.
 
+## Returned values
+
+The scan's walk of the exports also finds the functions the component database reads
+(`read = "function"`): `ggml_version` and `ggml_commit`, which upstream ggml defines in
+`libggml-base` as `return "<constant>";`. What each returns is read first, before the needles,
+without running it (PR-4c-2b). The function is decoded with the same x86-64 decoder and
+register tracking that code analysis uses (PR-5a), and the value is a string only when all of
+these hold:
+- the file is x86-64 ELF64 little-endian;
+- the name is defined once among the exports, as a function (`STT_FUNC`; an `STT_GNU_IFUNC` is
+  not one) of 1 to 64 bytes, inside an executable segment's file bytes;
+- it is defined in a section: a reserved `st_shndx` such as `SHN_ABS` is not one, since the
+  loader does not add the load base to an absolute value, and the code at that address in the
+  file is not what the name exports;
+- no `DT_REL` table is present, and no RELA or RELR relocation writes the function's bytes;
+- its bytes decode to one block that ends in `ret`, and `rax` there holds an address a `lea`
+  formed (`lea rax,[rip+…]`), never an immediate or a loaded pointer;
+- the address is in a segment that is neither writable nor executable, a NUL follows within 256
+  bytes, and no relocation writes the string or its NUL.
+
+The shapes compilers give are read: `lea; ret` (gcc and clang at `-O2`), with a frame
+(`push rbp; mov rbp,rsp; …; pop rbp`) at `-O0`, and with `endbr64` first. gcc's usual non-PIE form,
+`mov eax, imm32`, puts an immediate in the register, not a `lea` address, so it is `Unknown` by
+design (`returns no constant string address`). Otherwise the value is `Unknown`, with one of
+these reasons:
+- not eligible: `not decoded: x86-64 only`, `defined more than once`, `not a function (<type>)`,
+  `not defined in a section (<index>)` (`SHN_ABS`, `SHN_COMMON`, `SHN_XINDEX`, or another
+  reserved index as `st_shndx 0xff00`), `size not recorded`, `longer than 64 bytes`,
+  `not in an executable segment`;
+- the code: `DT_REL relocations are not modeled`, the decoder's own failure,
+  `not one straight block ending in ret`, `returns no constant string address`;
+- the string: `its string is not in read-only data`, `its string has no NUL within 256 bytes`,
+  `its string has no NUL before the end of read-only data`;
+- relocations: `a relocation writes its code`, `a relocation writes its string`,
+  `relocations not read: <why>` (for example `relocations not read: PT_DYNAMIC not read`, when
+  `PT_DYNAMIC` cannot be read);
+- reading: `a read failed`, `not read: binary_scan_bytes exceeded`.
+
+The function's bytes and the string are read with `pread` and charged to `binary_scan_bytes`;
+names go through the parse's cache. A return cut by the budget gives two gaps:
+`returned value: <function>: not read: binary_scan_bytes exceeded` and the scan's
+`string scan: binary_scan_bytes <limit> exceeded`. Each value is recorded in the file's facts
+(`returns`), and an `Unknown` one is the `binary.identity` gap `returned value: <function>: <why>`,
+never a `binary.container` gap. A file that exports neither function has no return, and no gap,
+unless its `.dynsym` cannot be checked against the loader's table: then a function not found there
+gives `string scan: a name not read`. On an arm64 build of `libggml-base`, both values are
+`not decoded: x86-64 only`, so `binary.identity` is `Partial` and the result `INCOMPLETE`. A file
+named as an NVIDIA library is not scanned, and a relocatable object has no dynamic symbols: neither
+is read.
+
 ## Components
 
 Each ELF input whose file name (after the symlinks in the argument are resolved) or SONAME the
@@ -304,7 +359,11 @@ one kind, or two commits disagree; it is never `ReferenceMatched`. For example:
 - two inputs with the same content, `libmtmd.so.0.0.1` and `libmtmd.so.1`, are one content with
   one claim, `Conflicting` (versions `0.0.1` and `1`);
 - a stripped `libllama-common.so.0.0.1` keeps its `LLAMA_*` values, read from its dynamic
-  symbols, and is `NameOnly`, as the unstripped file is.
+  symbols, and is `NameOnly`, as the unstripped file is;
+- a `libggml-base.so.0.13.1` whose `ggml_version` returns `0.12.0` is `Conflicting`: `ggml_version`
+  is `ggml-base`'s own version, and the major keys `0.13` and `0.12` disagree (a `0.x` version's
+  major key is its first two numbers; [runtime artifacts](runtime-artifacts.md#components)). One
+  that returns `0.13.1`, with SONAME `libggml-base.so.0`, is `NameOnly`.
 
 In the Markdown, each content's facts table ends with three rows: **Component**, **Identity**
 (the status in words, for example `name only`), and **Versions** (each value with its source, for

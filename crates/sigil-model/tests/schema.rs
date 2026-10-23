@@ -71,6 +71,7 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         BinaryFacts => "BinaryFacts", ContainerFacts => "ContainerFacts", ElfFacts => "ElfFacts",
         MachOFacts => "MachOFacts",
         ElfImport => "ElfImport", DataSymbol => "DataSymbol", DataValue => "DataValue",
+        FunctionReturn => "FunctionReturn",
         GoBuildInfo => "GoBuildInfo", GoModule => "GoModule", GoSetting => "GoSetting",
         CodeFacts => "CodeFacts", CallRef => "CallRef", FnRef => "FnRef", Function => "Function",
         BoundsSource => "BoundsSource", CallSite => "CallSite", CallKind => "CallKind", CallTarget => "CallTarget",
@@ -109,15 +110,17 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
 }
 
 /// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a,
-/// PR-4b-1, PR-5a). They are optional on read, where a missing list is empty and a missing
-/// `code` is false. `active`, `probes`, and `code` are always written; `reference_matches` and
-/// `binaries` only when non-empty, so sessions without an install keep their bytes.
+/// PR-4b-1, PR-5a, PR-4c-2b). They are optional on read, where a missing list is empty and a
+/// missing `code` is false. `active`, `probes`, and `code` are always written;
+/// `reference_matches`, `binaries`, and an ELF's `returns` only when non-empty, so sessions
+/// without them keep their bytes.
 const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("RunRequest", "active"),
     ("RunRequest", "code"),
     ("Session", "probes"),
     ("Session", "reference_matches"),
     ("Session", "binaries"),
+    ("ElfFacts", "returns"),
 ];
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
@@ -381,6 +384,20 @@ fn gallery() -> Vec<(&'static str, Value)> {
                         value: DataValue::Text(t("6f3a9f3de")),
                         at: vec![Loc::Symbol(t("LLAMA_COMMIT")), Loc::VAddr(0x2000)],
                     }],
+                    returns: vec![
+                        FunctionReturn {
+                            function: "ggml_commit".into(),
+                            value: DataValue::Unknown {
+                                why: "returns no constant string address".into(),
+                            },
+                            at: vec![Loc::Symbol(t("ggml_commit"))],
+                        },
+                        FunctionReturn {
+                            function: "ggml_version".into(),
+                            value: DataValue::Text(t("0.13.1")),
+                            at: vec![Loc::Symbol(t("ggml_version")), Loc::VAddr(0x9d160)],
+                        },
+                    ],
                 }),
                 go: Some(GoBuildInfo {
                     at: Loc::VAddr(0x40_0000),
@@ -500,6 +517,14 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("EvidenceRef", EvidenceRef::Model { model: id(MODEL) }),
         sample("Loc", Loc::FileOffset(64)),
         sample("Loc", Loc::Symbol(t("ggml_backend_load_all"))),
+        // Example 12 had the only string-scan location before PR-4c-2b.
+        sample(
+            "Loc",
+            Loc::Section {
+                name: t(".rodata"),
+                offset: 0x1f40,
+            },
+        ),
         sample(
             "Support",
             Support::Assumed {
@@ -733,6 +758,13 @@ fn gallery() -> Vec<(&'static str, Value)> {
             },
         ),
         sample("ExtractMethod", ExtractMethod::GoBuildInfo),
+        sample("ExtractMethod", ExtractMethod::StringScan),
+        sample(
+            "ExtractMethod",
+            ExtractMethod::FunctionReturn {
+                function: t("ggml_version"),
+            },
+        ),
         sample("IdentityStatus", IdentityStatus::Corroborated),
         sample("IdentityStatus", IdentityStatus::Unidentified),
         sample(

@@ -273,9 +273,16 @@ slice in the session, read from the file's own bytes. They are observations, not
   ([binary inspection](binary-inspect.md#signatures)): export names (`rpc.code_present` for an
   export named `ggml_backend_rpc_…`), Go function names in `.gopclntab`
   (`ollama.llama_server_launch` and `ollama.device_discovery`), and strings in read-only data
-  (none ship yet). Each needle found is a hint: the name is in the file, which
-  does not show that its code runs. Section bytes are charged to `binary_scan_bytes`. A file whose
-  own file name the database gives to an NVIDIA library is never scanned (ADR-010;
+  (none ship yet). Each needle found is a hint: the name is in the file, which does not show
+  that its code runs. Section bytes are charged to `binary_scan_bytes`.
+
+  The same walk of the exports finds `ggml_version` and `ggml_commit`. These are not needles: the
+  strings they return are read first, without running them (PR-4c-2b;
+  [binary inspection](binary-inspect.md#returned-values)), and charged to `binary_scan_bytes` with
+  the functions' bytes. `libggml-base` returns `0.13.1` and `6f3a9f3de` on the official v0.30.6
+  bundle.
+
+  A file whose own file name the database gives to an NVIDIA library is never scanned (ADR-010;
   [below](#components)), unless the same content is also placed under a name that is scanned. The
   exclusion goes by name, not by content: a Go executable renamed `libcudart.so.12` is not
   scanned either, and its `cuda-runtime` claim reads `name only`, not `reference matched`, since
@@ -289,11 +296,13 @@ slice in the session, read from the file's own bytes. They are observations, not
   | State | When |
   |---|---|
   | `Complete` | Discovery is complete, no binary is a Mach-O, and every ELF slice has facts and a scan without a gap (an NVIDIA library is not scanned, and adds no gap) |
-  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, …; the list is in [binary inspection](binary-inspect.md#signatures)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
+  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, …; the list is in [binary inspection](binary-inspect.md#signatures)), and for each returned value not read (`returned value: ggml_version: not decoded: x86-64 only`, …; [binary inspection](binary-inspect.md#returned-values)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
   | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 
   On the official v0.30.6 bundle it is `Complete`: its NVIDIA libraries are not scanned, and
-  `bin/ollama`'s `.gopclntab` (10.9 MiB) is within the budget, with both Go-function hints.
+  `bin/ollama`'s `.gopclntab` (10.9 MiB) is within the budget, with both Go-function hints. On an
+  arm64 installation, `libggml-base`'s two values are not decoded (x86-64 only), so it is
+  `Partial`, and the result `INCOMPLETE`: a value not read is never hidden.
 
 ## Components
 
@@ -314,6 +323,18 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   libraries are identified by name and hash only (plan ADR-010): their entries (`cuda-runtime`,
   `cuda/cublas`, `cuda/cublasLt`) say `scan = false`, so a file whose own file name they name is
   never scanned for signatures. A SONAME or a link's name does not count.
+- **Embedded fields** (PR-4c-2b), in the same database, give each embedded value a role: a
+  version, a commit, or none.
+
+  | Field | Read from | Role |
+  |---|---|---|
+  | `LLAMA_BUILD_NUMBER` | a known data symbol | a version of its own kind (it counts builds) |
+  | `LLAMA_COMMIT` | a known data symbol | a commit |
+  | `ggml_commit` | what the exported function returns | a commit |
+  | `ggml_version` | what the exported function returns | a version, `ggml-base`'s own |
+
+  An embedded value whose field is not listed (`LLAMA_COMPILER`, `LLAMA_BUILD_TARGET`, Go build
+  info) has no role.
 - **Names.** A slice is named by the file name of each stable placement of its content, by each
   stable symlink placement whose targets lead there one bare file name at a time, in the link's
   own directory (`libggml-base.so` → `libggml-base.so.0` → `libggml-base.so.0.13.1`; at most 40
@@ -323,22 +344,33 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   none yet.
 - **What a claim holds,** every source kept:
   - a `SelfName` per name, `Filename` or `Soname`, known to the database or not;
-  - an `Embedded` value per `LLAMA_*` data symbol whose value is known, and the Go build info's
+  - an `Embedded` value per `LLAMA_*` data symbol whose value is known, per string that
+    `ggml_version` or `ggml_commit` was read to return (`FunctionReturn`), and the Go build info's
     `go.version` and `go.path` (`go.main`, the main module's path, when there is no path). They
     are attributed to the component the names give, and never name one on their own;
   - a `KnownHash` per reference row of a placement that holds the content (a link's own rows are
     not counted): its reference, release, and member, and whether it matched;
   - `Signature { NotChecked }`: no signature is checked, and it is not identity evidence;
   - versions: the dotted number after `.so.` of each name that names the component (`0.13.1`,
-    `0`), and `LLAMA_BUILD_NUMBER`, each with its source.
+    `0`), and the value of each embedded field whose role is a version (`LLAMA_BUILD_NUMBER`,
+    `ggml_version`), each with its source.
 - **Status**, the first that applies:
 
   | Status | When |
   |---|---|
-  | `Conflicting` | Two names that the database gives different components; two versions of one kind whose first numbers differ (the names' versions are one kind, and each embedded field is its own: `LLAMA_BUILD_NUMBER` counts builds); or two different `LLAMA_COMMIT` values |
+  | `Conflicting` | Two names that the database gives different components; two versions of one kind whose major keys disagree; or two different values of one commit field (`LLAMA_COMMIT`, `ggml_commit`: ggml's commit and llama.cpp's are not compared with each other) |
   | `ReferenceMatched` | A `KnownHash` matched |
   | `Corroborated` | A code check matched (none yet: code checks come with profiles) |
   | `NameOnly` | A name or an embedded value |
+
+  **Major keys** (PR-4c-2b). A version's major key is its first number, or, when that is `0`, its
+  first two (semver reads `0.y` as breaking). Two keys are compared over the numbers both have, so
+  `0` (a SONAME) agrees with `0.13` and with `0.12`; `0.13.1` agrees with `0.13.2`; `0.12.0`
+  disagrees with `0.13.1`; `1` disagrees with `0.13`. The names' versions and those of a field
+  whose `of` names the component (`ggml_version` for `ggml-base`) are one kind: the version a file
+  reports itself is compared with the versions in its names. Every other version field is its own
+  kind, compared with no other version. `libggml-base`'s `0.13.1` (file name), `0` (SONAME), and
+  `0.13.1` (`ggml_version`) agree.
 
   `Unidentified` is never given: a claim exists only when the database knows a name. On the
   official v0.30.6 bundle, each of the 34 files is `ReferenceMatched`, with a matched `KnownHash`
@@ -347,14 +379,14 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 - **The report.** The **Binaries** table has a **Component** column after **Type**:
   `<component> (<status>)`, the status in words (for example `ggml-base (reference matched)`),
   or `-`.
-- **Policy.** A `[[components.deny]]` entry applies to these claims, `NameOnly` ones included.
-  Its component must be a key of the database: any other key does not load
-  ([policy](policy.md)).
+- **Policy.** A `[[components.deny]]` entry applies to these claims, `NameOnly` ones included,
+  through the claim's component or any of its names (PR-4c-2b): a `Conflicting` claim whose
+  SONAME names a denied component is a violation, whose subject is the claim itself. Its
+  component must be a key of the database: any other key does not load ([policy](policy.md)).
 
 ## Not yet
 
-- Versions and commits read through `ggml_version()` and `ggml_commit()` (PR-4c-2b), and the
-  open release set of a self-reported commit (PR-4c-2c).
+- The open release set of a self-reported commit (PR-4c-2c).
 - Mach-O sections and `__gopclntab`: a Mach-O is not scanned for signatures yet.
 - Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
   it (PR-4d).

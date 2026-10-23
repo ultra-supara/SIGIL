@@ -1,5 +1,6 @@
-# Component identification by name (PR-4c-1; plan §4.4.3). One entry per component, keyed as the
-# plan names upstream libraries. A name is a file name or an ELF SONAME. Each pattern is one of:
+# Component identification by name (PR-4c-1; plan §4.4.3), and the embedded fields at the end
+# (PR-4c-2b). One entry per component, keyed as the plan names upstream libraries. A name is a file
+# name or an ELF SONAME. Each pattern is one of:
 #
 #   { exact = "<name>" }                 the name itself
 #   { library = "<base>" }               <base>, or <base>.<version> (dot-separated decimal numbers)
@@ -82,3 +83,31 @@ scan = false
 key = "cuda/cublasLt"
 names = [{ library = "libcublasLt.so" }]
 scan = false
+
+# Embedded fields (PR-4c-2b): what each embedded value is. `read`: `data`, a known data symbol's
+# value (binary/data.rs), or `function`, the string a known exported function returns, read by the
+# signature scan without running it. `role`: `version` (a version value) or `commit` (two different
+# values of one field conflict). `of`, for a version: the components whose own version it is,
+# compared with the versions in their names (F-I2); without it, a version of its own kind. An
+# embedded value whose field is not listed here has no role.
+
+[[field]]
+name = "LLAMA_BUILD_NUMBER"
+read = "data"
+role = "version"   # a build counter, not a library version (PR-4c-1 P-c)
+
+[[field]]
+name = "LLAMA_COMMIT"
+read = "data"
+role = "commit"
+
+[[field]]
+name = "ggml_commit"
+read = "function"
+role = "commit"
+
+[[field]]
+name = "ggml_version"
+read = "function"
+role = "version"
+of = ["ggml-base"]

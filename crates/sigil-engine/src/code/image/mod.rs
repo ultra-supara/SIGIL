@@ -23,6 +23,7 @@ use crate::binary::elf::{Elf, MAX_IMPORT_NAME};
 use crate::binary::read::Bounded;
 
 pub(crate) use linked::linked;
+pub(crate) use linked::{overlapped_pages, regions};
 pub(crate) use relocatable::relocatable;
 pub(crate) use relocatable::symbol_offset;
 

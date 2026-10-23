@@ -51,6 +51,12 @@ action    = "fail"                 # fail | warn
 reason    = "The RPC backend is outside the internal standard"
 ```
 
+A deny entry matches a component claim through the claim's component or any of its names: a file
+named `libggml-base.so.0` whose SONAME is `libggml-rpc.so` is a `ggml-base` claim, `Conflicting`,
+and the entry above matches it. The violation's subject is that claim, and its rule names the
+denied component (`policy:components.deny.ggml-backend/rpc`). An `Unidentified` claim never
+matches.
+
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
 `[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy
 written before `install_audit` existed loads unchanged, and adds nothing for an installation.
@@ -79,11 +85,11 @@ full. Without code analysis, only an explicit `binary_audit = []` requires nothi
 is then `COMPLETE` whatever the inputs' statuses (the summary says so).
 
 Under the default policy, an input whose `binary.identity` does not close makes the session
-`INCOMPLETE`: `Partial` for a signature scan cut short (its gaps say why) or an ELF without
-facts; `Unsupported` for a Mach-O (no Mach-O section is read yet) or a file that is not a
-container; and the container's `BudgetExceeded` or `Error`. A file named as an NVIDIA library is
-not scanned, and its `OutOfScope` closes the check (ADR-010). What `binary.identity` records:
-[`docs/binary-inspect.md`](binary-inspect.md#signatures).
+`INCOMPLETE`: `Partial` for a signature scan cut short or a returned value not read (its gaps say
+why), or an ELF without facts; `Unsupported` for a Mach-O (no Mach-O section is read yet) or a
+file that is not a container; and the container's `BudgetExceeded` or `Error`. A file named as
+an NVIDIA library is not scanned, and its `OutOfScope` closes the check (ADR-010). What
+`binary.identity` records: [`docs/binary-inspect.md`](binary-inspect.md#signatures).
 
 `binary_code_audit` fails closed as `binary_audit` does. A policy file that omits it gets `["binary_code"]`,
 so a policy written before it existed still requires every input's code to be analyzed in full.
@@ -164,7 +170,8 @@ set: a check added or removed is a difference, their order is not (a session sav
 JSON lists them sorted). Such a policy changes the technical
 conclusions, so the session must be analyzed again with it. A policy that differs only in its
 decisions (rule overrides, open-question treatment, denied components) can re-evaluate a recorded
-session.
+session. Deny entries are matched through the evaluating build's component database, so a build
+with other names may give other violations for the same session.
 
 ## What evaluation does
 
@@ -178,8 +185,9 @@ Evaluation changes only what the policy owns.
 - **Open questions:** the `[open_questions]` treatment applies, with source
   `policy:open_questions.default`.
 - **Denied components:**
-  - Every component claim for a denied component becomes a `PolicyViolation`. This includes
-    name-only claims and excludes `Unidentified` ones. Claims come from identification
+  - Every component claim of a denied component, or one that any of the claim's
+    names (file name or SONAME) names, becomes a `PolicyViolation`. This includes name-only
+    claims and excludes `Unidentified` ones. Claims come from identification
     ([runtime artifacts](runtime-artifacts.md#components)), so a deny entry must name a
     component of the database; any other key is fatal (below).
   - The violation's evidence is the claim's artifact.
