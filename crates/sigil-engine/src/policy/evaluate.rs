@@ -18,13 +18,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use sigil_model::{
-    Action, AssumptionAcceptance, AssumptionId, CheckId, Completeness, CoverageState, Date,
-    EvidenceRef, IdentityStatus, KnowledgeKind, OpenQuestionDecision, OqTreatment, Outcome,
-    PolicyDecision, PolicyRuleRef, PolicyViolation, Ref, RuleId, Session, Severity, Timestamp,
-    Verdict,
+    Action, AssumptionAcceptance, AssumptionId, CheckId, Completeness, ComponentClaim,
+    ComponentKey, CoverageState, Date, EvidenceRef, IdentityAssertion, IdentityStatus,
+    KnowledgeKind, OpenQuestionDecision, OqTreatment, Outcome, PolicyDecision, PolicyRuleRef,
+    PolicyViolation, Ref, RuleId, Session, Severity, Timestamp, Verdict,
 };
 
 use super::{Policy, ScopeInput};
+use crate::analyze::components::{components, ComponentDb};
 
 /// Something the operator should know about how the policy applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,9 @@ pub enum EvaluateError {
         request: Vec<CheckId>,
         policy: Vec<CheckId>,
     },
+    /// The embedded component database, which a deny entry is matched through (PR-4c-2b), is
+    /// invalid. Its tests rule this out.
+    ComponentDatabase(String),
 }
 
 impl fmt::Display for EvaluateError {
@@ -66,6 +70,9 @@ impl fmt::Display for EvaluateError {
                 list(policy.iter().map(CheckId::as_str).collect()),
                 list(request.iter().map(CheckId::as_str).collect())
             ),
+            EvaluateError::ComponentDatabase(m) => {
+                write!(f, "the embedded component database is invalid: {m}")
+            }
         }
     }
 }
@@ -104,6 +111,7 @@ pub fn evaluate(
             policy: required,
         });
     }
+    let db = components().map_err(EvaluateError::ComponentDatabase)?;
 
     // The policy's own entry replaces any earlier one, in place.
     let at = session
@@ -172,8 +180,8 @@ pub fn evaluate(
                 .components
                 .iter()
                 .filter(move |claim| {
-                    claim.component == deny.component
-                        && claim.status != IdentityStatus::Unidentified
+                    claim.status != IdentityStatus::Unidentified
+                        && names(db, claim).contains(&&deny.component)
                 })
                 .map(move |claim| PolicyViolation {
                     policy_rule: deny.source.clone(),
@@ -196,6 +204,19 @@ pub fn evaluate(
 
     session.outcome = outcome(session, policy_time);
     Ok(warnings)
+}
+
+/// The components a claim is named as (PR-4c-2b spec §6): its own, and the one each of its
+/// self-names names in `db`. More than one only for a `Conflicting` claim, which a deny entry of
+/// any of them matches; its violation's subject is still the claim, of its own component.
+fn names<'c>(db: &'c ComponentDb, claim: &'c ComponentClaim) -> BTreeSet<&'c ComponentKey> {
+    let mut keys = BTreeSet::from([&claim.component]);
+    for a in &claim.assertions {
+        if let IdentityAssertion::SelfName { value, .. } = a {
+            keys.extend(db.component(value.as_bytes()));
+        }
+    }
+    keys
 }
 
 /// Whether an override valid through `expires` (a UTC day) has expired at `time`.
