@@ -13,7 +13,7 @@ export LC_ALL=C
 D=$(pwd)
 T=$(mktemp -d)
 B="$T/out"
-mkdir "$B" "$T/lst"
+mkdir "$B"
 trap 'rm -rf "$T"' EXIT
 trap 'exit 1' HUP INT TERM
 
@@ -21,9 +21,15 @@ fail() { echo "build.sh: $*" >&2; exit 1; }
 
 # The toolchain, compared with the committed COMPILERS before anything is built.
 toolchain() {
-  local tool v
+  local tool v p
+  # The assembler and linkers are the ones the compilers run, not whatever else is on PATH.
   for tool in gcc clang as ld ld.lld; do
-    v=$($tool --version) || fail "$tool --version failed"
+    case $tool in
+      as | ld) p=$(gcc -print-prog-name=$tool) || fail "gcc -print-prog-name=$tool failed" ;;
+      ld.lld) p=$(clang -print-prog-name=ld.lld) || fail "clang -print-prog-name=ld.lld failed" ;;
+      *) p=$tool ;;
+    esac
+    v=$("$p" --version) || fail "$p --version failed"
     printf '%s\n' "$v" | sed -n 1p
   done
 }
@@ -55,13 +61,16 @@ cd "$B"
 X86="version-gcc-O2.so version-clang-O0.so version-cet-gcc-O0.so version-1.0.0-gcc-O2.so
   version-relr-gcc-O2.so version-long-gcc-O2.so global-gcc-O2.so branch-gcc-O0.so"
 
+# Helpers that read a tool's output assign it first, with `|| exit 1`, so a failed tool is never
+# read as "no match": `set -e` does not apply inside a function called from a condition.
+
 # The instructions (mnemonic and operands, one per line, without addresses or comments) in the
 # st_size bytes of the exported function $2 of $1, from objdump -d.
 insns() {
   local sym out
   sym=$(dynsym "$1" "$2") || exit 1
   set -- "$1" "$2" $sym
-  out=$(objdump -d --no-show-raw-insn --start-address=0x$3 --stop-address=$((0x$3 + $4)) "$1") \
+  out=$(objdump -d -z --no-show-raw-insn --start-address=0x$3 --stop-address=$((0x$3 + $4)) "$1") \
     || fail "objdump -d $1"
   printf '%s\n' "$out" | awk '
     /^[0-9a-f]+ <.*>:$/ { on = 1; next }
@@ -94,11 +103,16 @@ dynsym() {
 for f in $X86 version-aarch64.so; do
   [ "$(soname "$f")" = libggml-base.so.0 ] || fail "$f: SONAME is not libggml-base.so.0"
   for s in ggml_version ggml_commit; do
-    set -- $(dynsym "$f" $s)
+    r=$(dynsym "$f" $s) || exit 1
+    set -- $r
     [ "$3" = FUNC ] || fail "$f: $s is $3, not FUNC"
   done
 done
 readelf -hW version-aarch64.so | grep -Eq 'Machine: +AArch64' || fail "version-aarch64.so: not AArch64"
+for f in $X86 version-aarch64.so; do
+  h=$(readelf -hW "$f") || fail "readelf -h $f"
+  printf '%s\n' "$h" | grep -Eq 'Type: +DYN' || fail "$f: not ET_DYN"
+done
 for f in $X86; do
   readelf -hW "$f" | grep -Eq 'Machine: +Advanced Micro Devices X86-64' || fail "$f: not x86-64"
 done
@@ -107,12 +121,17 @@ done
 norm() {
   local got
   got=$(insns "$1" "$2") || exit 1
-  printf '%s\n' "$got" | sed -E 's/lea +0x[0-9a-f]+\(%rip\),%rax/lea    X(%rip),%rax/'
+  printf '%s\n' "$got" | sed -E -e 's/lea +0x[0-9a-f]+\(%rip\),%rax/lea    X(%rip),%rax/' \
+    -e 's/mov +0x[0-9a-f]+\(%rip\),%rax/mov    X(%rip),%rax/'
 }
-# Fails unless the function $2 of $1 is the instructions $3, one per line, as `norm` writes them.
+# Fails unless the function $2 of $1 is the instructions $3, one per line, as `norm` writes them,
+# in exactly $4 bytes (its st_size).
 same() {
-  local got
+  local got sym
   got=$(norm "$1" "$2") || exit 1
+  sym=$(dynsym "$1" "$2") || exit 1
+  set -- "$1" "$2" "$3" "$4" $sym
+  [ "$6" = "$4" ] || fail "$1: $2 is $6 bytes, expected $4"
   [ "$got" = "$3" ] || fail "$1: $2 is
 $got
 expected
@@ -120,16 +139,15 @@ $3"
 }
 lea_ret="$(printf 'lea    X(%%rip),%%rax\nret')"
 for f in version-gcc-O2.so version-1.0.0-gcc-O2.so version-relr-gcc-O2.so version-long-gcc-O2.so; do
-  same "$f" ggml_version "$lea_ret"
-  same "$f" ggml_commit "$lea_ret"
+  same "$f" ggml_version "$lea_ret" 8
+  same "$f" ggml_commit "$lea_ret" 8
 done
 framed="$(printf 'push   %%rbp\nmov    %%rsp,%%rbp\nlea    X(%%rip),%%rax\npop    %%rbp\nret')"
-same version-clang-O0.so ggml_version "$framed"
-same version-cet-gcc-O0.so ggml_version "$(printf 'endbr64\n%s' "$framed")"
-same global-gcc-O2.so ggml_commit "$lea_ret"
-g=$(insns global-gcc-O2.so ggml_version) || exit 1
-printf '%s\n' "$g" | sed -n 1p | grep -Eq '^mov +0x[0-9a-f]+\(%rip\),%rax$' || fail "global: $g"
-printf '%s\n' "$g" | sed -n 2p | grep -Eq '^mov +\(%rax\),%rax$' || fail "global: $g"
+same version-clang-O0.so ggml_version "$framed" 13
+same version-cet-gcc-O0.so ggml_version "$(printf 'endbr64\n%s' "$framed")" 17
+same global-gcc-O2.so ggml_commit "$lea_ret" 8
+same global-gcc-O2.so ggml_version \
+  "$(printf 'mov    X(%%rip),%%rax\nmov    (%%rax),%%rax\nret')" 11
 b=$(insns branch-gcc-O0.so ggml_version) || exit 1
 n=$(printf '%s\n' "$b" | grep -Ec '^(je|jne|jmp) ') || true
 [ "$n" -ge 2 ] || fail "branch: $n jumps in
@@ -141,8 +159,9 @@ for f in $X86; do
   tag "$f" RELA || fail "$f: no DT_RELA"
 done
 for f in $X86 version-aarch64.so; do
+  [ "$f" = version-relr-gcc-O2.so ] || ! tag "$f" RELR || fail "$f: has DT_RELR"
   tag "$f" REL && fail "$f: has DT_REL"
-  [ "$(readelf -dW "$f" | grep -c '(TEXTREL)')" -eq 0 ] || fail "$f: has DT_TEXTREL"
+  tag "$f" TEXTREL && fail "$f: has DT_TEXTREL"
 done
 # The strings: what each version function returns, in .rodata.
 for f in $X86; do
@@ -151,7 +170,9 @@ for f in $X86; do
     version-long-*) v=$L ;;
     *) v=0.13.1 ;;
   esac
-  readelf -p .rodata "$f" | grep -q "  $v\$" || fail "$f: no \"$v\" in .rodata"
+  ro=$(readelf -p .rodata "$f") || fail "readelf -p .rodata $f"
+  printf '%s\n' "$ro" | awk -v v="$v" '{ sub(/^ *\[ *[0-9a-f]+\] +/, ""); if ($0 == v) f = 1 } END { exit !f }' \
+    || fail "$f: no \"$v\" in .rodata"
 done
 
 for f in $X86 version-aarch64.so; do
