@@ -355,7 +355,7 @@ fn conflicting(
     assertions: &[IdentityAssertion],
     versions: &[VersionAssertion],
 ) -> bool {
-    let mut majors: BTreeMap<Option<&str>, Vec<MajorKey>> = BTreeMap::new();
+    let mut majors: BTreeMap<Option<&str>, BTreeSet<MajorKey<'_>>> = BTreeMap::new();
     for v in versions {
         let kind = match &v.source {
             VersionSource::SelfName { .. } => None,
@@ -367,7 +367,7 @@ fn conflicting(
             VersionSource::Embedded { field } => Some(field.as_str()),
         };
         if let Some(key) = major_key(v.value.as_bytes()) {
-            majors.entry(kind).or_default().push(key);
+            majors.entry(kind).or_default().insert(key);
         }
     }
     let mut commits: BTreeMap<&str, BTreeSet<&[u8]>> = BTreeMap::new();
@@ -382,10 +382,13 @@ fn conflicting(
                 .insert(value.as_bytes());
         }
     }
-    let major_differs = majors.values().any(|keys| {
-        keys.iter()
+    // A set per kind: the names of one content are many and their keys few, so the pairwise scan
+    // grows with the distinct keys, not with the names (plan P-q).
+    let major_differs = majors.values().any(|of_kind| {
+        of_kind
+            .iter()
             .enumerate()
-            .any(|(i, a)| keys.iter().skip(i + 1).any(|b| disagree(a, b)))
+            .any(|(i, a)| of_kind.iter().skip(i + 1).any(|b| disagree(a, b)))
     });
     let commit_differs = commits.values().any(|c| c.len() > 1);
     keys.len() > 1 || major_differs || commit_differs
@@ -397,7 +400,7 @@ fn conflicting(
 type MajorKey<'v> = (&'v [u8], Option<&'v [u8]>);
 
 /// The major key of `version`. `None` when its first part is empty or not all ASCII digits; a
-/// second part that is not all digits (or is missing) leaves the key one number.
+/// second part that is not one or more ASCII digits (or is missing) leaves the key one number.
 fn major_key(version: &[u8]) -> Option<MajorKey<'_>> {
     let mut parts = version.split(|b| *b == b'.');
     let first = number(parts.next()?)?;
@@ -1002,13 +1005,19 @@ mod tests {
     }
 
     #[test]
-    fn two_first_numbers_of_names_conflict() {
+    fn two_major_keys_of_names_conflict() {
         let conflicting = [
             file("lib/ollama/libmtmd.so.0.0.1", 'a'),
             file("lib/ollama/libmtmd.so.1", 'a'),
         ];
         let c = only(&conflicting, elf('a', None, vec![]), &[]);
         assert_eq!(c.status, IdentityStatus::Conflicting);
+        let minors = [
+            file("lib/ollama/libmtmd.so.0.0.1", 'a'),
+            file("lib/ollama/libmtmd.so.0.1", 'a'),
+        ];
+        let c = only(&minors, elf('a', None, vec![]), &[]);
+        assert_eq!(c.status, IdentityStatus::Conflicting, "0.x minors 0 and 1");
         let agreeing = [
             file("lib/ollama/libmtmd.so.0.0.1", 'a'),
             file("lib/ollama/libmtmd.so.00.000.2", 'a'),
@@ -1189,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn versions_after_so_and_their_first_numbers() {
+    fn versions_after_so() {
         let v = |name: &str| so_version(name.as_bytes()).map(|v| v.to_vec());
         assert_eq!(v("libggml-base.so.0.13.1"), Some(b"0.13.1".to_vec()));
         assert_eq!(v("libcublasLt.so.12.8.5.5"), Some(b"12.8.5.5".to_vec()));
@@ -1348,6 +1357,18 @@ mod tests {
         ] {
             let b = with_returns(elf('a', soname, vec![]), returns(version));
             assert_eq!(only(&base, b, &[]).status, status, "{soname:?} {version}");
+        }
+        // No version in the file name: the SONAME's is compared with ggml_version.
+        let bare = [file("lib/ollama/libggml-base.so", 'a')];
+        for (version, status) in [
+            ("1.0.0", IdentityStatus::Conflicting),
+            ("0.13.1", IdentityStatus::NameOnly),
+        ] {
+            let b = with_returns(
+                elf('a', Some("libggml-base.so.0"), vec![]),
+                returns(version),
+            );
+            assert_eq!(only(&bare, b, &[]).status, status, "bare {version}");
         }
         // A matched hash does not hide it (example 12).
         let b = with_returns(elf('a', None, vec![]), returns("0.12.0"));
