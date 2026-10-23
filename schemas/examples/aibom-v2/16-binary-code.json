@@ -7,7 +7,7 @@
   },
   "session": {
     "schema": "sigil-session/1",
-    "sha256": "85d344f6bac57d3e297f932a6614157fd1cb511efc7022e78206835604a7d21c",
+    "sha256": "62d560975bf5f193518ec23b3d317fb42896b5ef5e1b08dbc24080215049dd3c",
     "mode": "Static",
     "started_at": "2026-10-07T07:00:00Z",
     "policy": {
@@ -66,6 +66,14 @@
     },
     {
       "check": "binary.container",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.identity",
       "required": true,
       "closed": true,
       "states": {

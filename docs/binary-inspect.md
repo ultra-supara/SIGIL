@@ -2,9 +2,9 @@
 
 `sigil binary inspect` reads one or more files and writes one session (or its Markdown) for all
 of them. For each file the session holds its digest, size, format, container facts, and, for ELF,
-the capability imports it asks for (`connect`, `dlopen`, …). With `--code`, it also records where
-an x86-64 ELF file calls those imports directly. It needs no model store, installation, or
-running runtime, and it never executes or loads what it reads.
+the capability imports it asks for (`connect`, `dlopen`, …) and the signatures found in it. With
+`--code`, it also records where an x86-64 ELF file calls those imports directly. It needs no
+model store, installation, or running runtime, and it never executes or loads what it reads.
 
 ```bash
 cargo run -q -p sigil-cli -- binary inspect ./libggml-base.so
@@ -31,6 +31,10 @@ symlink, is one input. For each input, the session records:
   dylibs, RPATHs, and dynamic linker. A fat file records each architecture slice's offset, size,
   digest, table CPU type/subtype, and alignment.
 - **One `binary.container` coverage entry:** the input's status.
+- **One `binary.identity` coverage entry:** whether every scan the signature database asks for
+  was done within its budget ([below](#signatures)).
+- **Its signature hints,** for an ELF slice: the database's needles found in it, export names and
+  Go function names ([below](#signatures)).
 - **Its capability hints,** for each ELF slice, with or without `--code`
   ([below](#capabilities-and-code---code)).
 - **Its component claim,** for an ELF slice whose file name or SONAME the component database
@@ -46,8 +50,10 @@ symlink, is one input. For each input, the session records:
 | Over the `binary_bytes` budget | `BudgetExceeded`: not read, later inputs still are |
 | Changed or removed while it was read | `Error` |
 
-Under the default policy, any status other than `Complete` makes the result `INCOMPLETE`. The same
-holds for any policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
+Under the default policy, any `binary.container` or `binary.identity` status other than
+`Complete` makes the result `INCOMPLETE`, except a `binary.identity` of `OutOfScope` (a file
+named as an NVIDIA library, [below](#signatures)), which closes the check. The same holds for any
+policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
 `binary_audit = []` requires nothing, and the result is then `COMPLETE` whatever the statuses.
 With `--code`, `binary_code_audit` adds `binary.code` the same way, so a run with `--code`
 requires nothing only when both `binary_audit = []` and `binary_code_audit = []`.
@@ -61,10 +67,13 @@ No rule judges binaries yet, so the verdict is `PASS`. Use `--fail-on-incomplete
 fail on an unsupported or partial input.
 
 The summary on stderr has one `binary:` line per input, in argument order: its path, type,
-digest, and status. With `--code`, the line ends with the input's `binary.code` status, in the
-same form: for example `code: complete`, `code: partial (3 gaps)`, or `code: unsupported: …`.
-An input with a component claim then ends with `component: <component> (<status>)`, the status
-in words, for example `component: llama.cpp/common (name only)`.
+digest, and status, then its `binary.identity` status in the same form, after `signature scan:`:
+for example `signature scan: complete`, `signature scan: partial (1 gap)`, or
+`signature scan: unsupported: string scan: ELF only`. With `--code`, the line goes on with the
+input's `binary.code` status, in the same form: for example `code: complete`,
+`code: partial (3 gaps)`, or `code: unsupported: …`. An input with a component claim then ends
+with `component: <component> (<status>)`, the status in words, for example
+`component: llama.cpp/common (name only)`.
 
 **Imports are not calls.**
 - For an executable or a shared object, imports are the dynamic symbols its loader resolves.
@@ -188,6 +197,100 @@ result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
   the session. The [session model](session-model.md#code-analysis-pr-5a) lists each one with its
   gap.
 
+## Signatures
+
+A binary inspection scans each ELF input for the needles of the signature database
+(`crates/sigil-engine/signatures/needles.toml`), on the fd that hashed the file, after its parse
+(and, with `--code`, its code analysis). Each needle found is one feature hint, at its first
+match:
+
+| Needle kind | Looked for in | Hint |
+|---|---|---|
+| `export` (a prefix) | the names of the exported dynamic symbols (`.dynsym`), in symbol-table order; a relocatable object has none | `signal: Export`; `value` and `at: Symbol` the first matching export's name |
+| `go-function` (exact bytes) | `.gopclntab`, in a file with Go build info | `signal: GoFunction`; `value` the needle; `at: Section { ".gopclntab", offset }`, the offset from the section's start |
+| `string` (exact bytes) | `.rodata`, `.rodata.*`, and `.lrodata` | `signal: String`; `value` the needle; `at: Section { name, offset }` |
+
+The database has three needles:
+- `rpc.code_present`: an exported dynamic symbol whose name starts with `ggml_backend_rpc_`, so
+  a name of ggml's RPC backend is among the file's exports;
+- `ollama.llama_server_launch` and `ollama.device_discovery`: Ollama's Go functions
+  `github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv` and
+  `github.com/ollama/ollama/discover.discoverNativeDevices`.
+
+No string needle ships yet. `libllama-common`'s `.rodata` holds the string
+`ggml_backend_rpc_add_server`, but the library exports no RPC symbol, so a string needle would
+misreport the backend. A hint says that a name is in the file, never that the code runs it. A
+missing hint says only that the needle is not where the scan looked.
+
+**Reading.** Export and section names are read through the parse's cache, under
+`binary_parse_bytes`. Section bytes are read with `pread` in 1 MiB chunks; each read takes the
+chunk and, past it, the longest needle of its kind minus one byte, so a needle that starts in a
+chunk is read whole. Every byte is charged to **`binary_scan_bytes`** (64 MiB per artifact) before
+it is read. A section is read only within the file and within its own offset and size, and a
+`SHT_NOBITS` section never. A kind of needle stops reading once all its needles are found, and a
+kind no needle uses is not read: with this database, `.rodata` never is, and a file without Go
+build info reads no section bytes.
+
+**NVIDIA libraries.** A file whose own file name the component database gives to `cuda-runtime`,
+`cuda/cublas`, or `cuda/cublasLt` (`libcudart.so…`, `libcublas.so…`, `libcublasLt.so…`: their
+entries say `scan = false`) is identified by name and hash only (ADR-010), and never scanned. Its
+SONAME does not count: a file whose SONAME alone is `libcudart.so` is scanned. A content given
+under two names is scanned if one of them is not such a name. The exclusion goes by name, not by
+content: a file renamed to such a name (for example, a Go executable named `libcudart.so.12`) is
+not scanned either, and has no signature hint. In an installation, its hash is not the release's,
+so its claim reads `name only`, not `reference matched`
+([runtime artifacts](runtime-artifacts.md#components)).
+
+**`binary.identity`**, one entry per input:
+
+| The input | `binary.identity` |
+|---|---|
+| An ELF, every scan done within the budget | `Complete` |
+| An ELF with a scan cut short | `Partial`, listing the gaps below; the hints found are kept |
+| An ELF named as an NVIDIA library | `OutOfScope` (`NVIDIA library: identified by name and hash only (ADR-010)`) |
+| A Mach-O or fat Mach-O | `Unsupported` (`string scan: ELF only`) |
+| An ELF without facts | `Partial` (`not parsed`) |
+| Not a supported container, over `binary_bytes`, or changed or removed while read | the `binary.container` status |
+
+The gaps of a scan cut short:
+- `string scan: binary_scan_bytes <limit> exceeded`: the next read would pass the budget, and
+  reading stopped there;
+- `string scan: no section headers`: a needle that looks in sections applies (with this database,
+  the file has Go build info), and the file has no readable section header table; also for an ELF
+  whose header cannot be read;
+- `string scan: no .gopclntab section`: the file has Go build info, so the Go-function needles
+  apply, and none of its sections, every name read, is named `.gopclntab`: they were looked for
+  nowhere (a stripped or renamed table). Its other sections are not searched for them;
+- `string scan: a name not read`: a section's or an export's name could not be read; or the
+  loader has dynamic symbols (`DT_SYMTAB`) and the parse has no `.dynsym` that agrees with them,
+  or the loader's dynamic table could not be read. A needle may be there unseen;
+- `string scan: a read failed`: a read of a section failed, and the rest of that section was not
+  read; or a section passes the end of the file, and only its bytes in the file were read.
+
+These gaps are never `binary.container` gaps: a scan cut short leaves the container facts as they
+are. A Mach-O input that was `COMPLETE` before PR-4c-2a is `INCOMPLETE` now under the default
+policy: SIGIL reads no Mach-O section yet.
+
+In the Markdown, the overview table has a **Signature scan** column after **Container facts**:
+each input's `binary.identity` status. (The **Identity** row of a file's facts is its component
+claims' status, [below](#components).) Each ELF file's facts are followed by its signatures: the
+line `Signatures of <path>:` and a table with one row per hint that is not an import
+(`Feature | Kind | Value | Where`, sorted by feature, value, kind, and where), or instead the line
+`No signature found.` A file named as an NVIDIA library, whose first input's `binary.identity` is
+`OutOfScope`, was not scanned: its line is `Not scanned: identified by name and hash only
+(ADR-010).` instead. A session written before PR-4c-2a has no `binary.identity` entry and was never
+scanned: its line is `Not scanned: this session has no binary.identity entry.` The kind is `export`,
+`Go function`, or `string`; the where is `symbol <name>` or `<section> + 0x<offset>`. For a library
+whose first RPC export is `ggml_backend_rpc_init`, the table reads, once rendered:
+
+```text
+| Feature | Kind | Value | Where |
+|---|---|---|---|
+| rpc.code_present | export | ggml_backend_rpc_init | symbol ggml_backend_rpc_init |
+```
+
+The Capabilities table that follows keeps the import hints. A Mach-O gets no signatures.
+
 ## Components
 
 Each ELF input whose file name (after the symlinks in the argument are resolved) or SONAME the
@@ -238,6 +341,7 @@ Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them
 | `binary_bytes` | 64 GiB | bytes hashed over all inputs |
 | `binary_parse_bytes` | 64 MiB | per artifact's parse |
 | `binary_imports` | 4096 | imports kept per artifact |
+| `binary_scan_bytes` | 64 MiB | section bytes the signature scan reads, per artifact |
 | `binary_code_bytes` | 256 MiB | bytes read for code, per artifact; with `--code` only |
 
 ## `--out`
@@ -261,7 +365,7 @@ Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them
 
 ## Policy
 
-The policy's `binary_audit` is what a binary inspection requires: `["binary"]`, whose check is
-`binary.container`, when the policy sets it that way or leaves it out. With `--code`,
-`binary_code_audit` is added after it: `["binary_code"]`, whose check is `binary.code`, when the
-policy sets it that way or leaves it out. See [policy](policy.md).
+The policy's `binary_audit` is what a binary inspection requires: `["binary"]`, whose checks are
+`binary.container` and `binary.identity`, when the policy sets it that way or leaves it out. With
+`--code`, `binary_code_audit` is added after it: `["binary_code"]`, whose check is `binary.code`,
+when the policy sets it that way or leaves it out. See [policy](policy.md).

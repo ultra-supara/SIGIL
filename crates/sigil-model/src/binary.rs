@@ -14,6 +14,10 @@ use crate::text::UntrustedText;
 /// The container analysis: what was read and what was not (scope `Root(install)`).
 pub const ARTIFACTS_CONTAINER: &str = "artifacts.container";
 
+/// The signature scan of the install's binaries (PR-4c-2a; scope `Root(install)`): every scan
+/// the signature database asks for was done within its budget.
+pub const ARTIFACTS_IDENTITY: &str = "artifacts.identity";
+
 /// The gap of a fat Mach-O slice whose own header names another architecture than its entry in
 /// the fat table (B2).
 pub const FAT_CPU_MISMATCH_GAP: &str = "fat slice: CPU type or subtype disagrees with its header";
@@ -30,6 +34,26 @@ pub const IMPORTS_OVER_GAP: &str = "imports: over binary_imports";
 pub fn imports_over_gap(limit: u64) -> String {
     format!("{IMPORTS_OVER_GAP} {limit}")
 }
+
+/// The gap of an ELF whose loader has dynamic symbols (`DT_SYMTAB`) and whose file has no
+/// section header table, so no `.dynsym` to read them by.
+pub const SYMBOLS_NO_SECTIONS_GAP: &str = "symbols: no section header table";
+
+/// The gap of an ELF whose loader has dynamic symbols (`DT_SYMTAB`) and whose section header
+/// table cannot be read.
+pub const SYMBOLS_UNREADABLE_SECTIONS_GAP: &str = "symbols: no readable section header table";
+
+/// The gap of a linked ELF whose loader has dynamic symbols (`DT_SYMTAB`) and whose section
+/// header table has no `SHT_DYNSYM` section with entries.
+pub const SYMBOLS_NO_DYNSYM_GAP: &str = "symbols: no SHT_DYNSYM";
+
+/// The gaps of a linked ELF whose loader's dynamic symbols the parse has no `.dynsym` for: the
+/// signature scan cannot look at its exports (PR-4c-2a; `expected_binary_identity`).
+pub const DYNSYM_UNREAD_GAPS: [&str; 3] = [
+    SYMBOLS_NO_SECTIONS_GAP,
+    SYMBOLS_UNREADABLE_SECTIONS_GAP,
+    SYMBOLS_NO_DYNSYM_GAP,
+];
 
 /// The capability bits of a Mach-O CPU subtype (`CPU_SUBTYPE_MASK`).
 const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;

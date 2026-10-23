@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
-use sigil_model::render::markdown::{render_session, CODE_CAVEAT};
+use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
 use sigil_model::{
     CallTarget, Completeness, ContainerFacts, CoverageState, Mode, ProbeResult, Session,
-    UntrustedText, Verdict, BINARY_UNSUPPORTED,
+    UntrustedText, Verdict, BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY,
 };
 use tempfile::TempDir;
 
@@ -1550,15 +1550,20 @@ fn binary_budgets_apply_with_install_dir_only() {
             &"binary_parse_bytes=4096",
             &"--budget",
             &"binary_imports=2",
+            &"--budget",
+            &"binary_scan_bytes=8192",
         ],
     );
     assert_eq!(r.code, 0, "{}", r.stderr);
     let s = session_of(&r);
     assert_eq!(s.request.budgets["binary_parse_bytes"], 4096);
     assert_eq!(s.request.budgets["binary_imports"], 2);
-    let r = inspect(models.path(), &[&"--budget", &"binary_imports=2"]);
-    assert_eq!(r.code, 2, "{}", r.stderr);
-    assert!(r.stderr.contains("--install-dir"), "{}", r.stderr);
+    assert_eq!(s.request.budgets["binary_scan_bytes"], 8192);
+    for budget in ["binary_imports=2", "binary_scan_bytes=2"] {
+        let r = inspect(models.path(), &[&"--budget", &budget]);
+        assert_eq!(r.code, 2, "{budget}: {}", r.stderr);
+        assert!(r.stderr.contains("--install-dir"), "{budget}: {}", r.stderr);
+    }
 }
 
 // --- binary inspect (PR-4b-2a) ------------------------------------------------------------------
@@ -1675,7 +1680,8 @@ fn two_hundred_inputs_fit_in_32_file_descriptors() {
         String::from_utf8_lossy(&out.stderr)
     );
     let s: Session = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(s.coverage.len(), 200);
+    // One binary.container and one binary.identity entry per input (PR-4c-2a).
+    assert_eq!(s.coverage.len(), 2 * 200);
 }
 
 #[test]
@@ -1761,12 +1767,15 @@ fn binary_budgets_are_recorded_and_others_refused() {
         &"binary_parse_bytes=1048576",
         &"--budget",
         &"binary_imports=10",
+        &"--budget",
+        &"binary_scan_bytes=2048",
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let b = session_of(&r).request.budgets;
     assert_eq!(b["binary_bytes"], 1_000_000);
     assert_eq!(b["binary_parse_bytes"], 1_048_576);
     assert_eq!(b["binary_imports"], 10);
+    assert_eq!(b["binary_scan_bytes"], 2048);
     for bad in ["install_bytes=1", "files_discovered=1", "nope=1"] {
         assert_eq!(binary(&[&so, &"--budget", &bad]).code, 2, "{bad}");
     }
@@ -2189,7 +2198,8 @@ fn binary_code_summary_lines_show_the_code_state() {
             .to_string()
     };
     assert!(
-        line("suspicious_kernel-gcc-O2.o").ends_with("  complete  code: complete"),
+        line("suspicious_kernel-gcc-O2.o")
+            .ends_with("  complete  signature scan: complete  code: complete"),
         "{}",
         r.stderr
     );
@@ -2440,7 +2450,9 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
     assert!(
-        line.ends_with("  complete  component: llama.cpp/common (name only)"),
+        line.ends_with(
+            "  complete  signature scan: complete  component: llama.cpp/common (name only)"
+        ),
         "{line}"
     );
     let r = binary(&[&path, &"--format", &"md"]);
@@ -2477,7 +2489,10 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
         .lines()
         .find(|l| l.starts_with("binary: "))
         .unwrap_or_else(|| panic!("{}", r.stderr));
-    assert!(line.ends_with("  complete"), "{line}");
+    assert!(
+        line.ends_with("  complete  signature scan: complete"),
+        "{line}"
+    );
 }
 
 #[test]
@@ -2507,4 +2522,94 @@ fn the_install_report_shows_each_binary_s_component() {
         esc_md("ollama (name only)")
     );
     assert!(row.starts_with(&start), "{row}");
+}
+
+/// PR-4c-2a: each `binary:` line has the input's `binary.identity` state (`signature scan: …`),
+/// and the Markdown its Signature scan column and Signatures. A Mach-O is not scanned: the
+/// inspection is incomplete.
+#[test]
+fn a_binary_s_identity_is_on_its_summary_line_and_in_its_report() {
+    let d = inputs();
+    let hello = d.path().join("hello");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sigil-engine/tests/fixtures/macho/hello-universal"),
+        &hello,
+    )
+    .unwrap();
+    let (so, notes) = (d.path().join("libdata.so"), d.path().join("NOTES.txt"));
+    let r = binary(&[&so, &notes, &hello]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = |needle: &str| {
+        r.stderr
+            .lines()
+            .find(|l| l.starts_with("binary: ") && l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}: {}", r.stderr))
+            .to_string()
+    };
+    assert!(
+        line("libdata.so").ends_with("  complete  signature scan: complete"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        line("NOTES.txt").ends_with(&format!(
+            "  signature scan: unsupported: {BINARY_UNSUPPORTED}"
+        )),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        line("hello").ends_with("  complete  signature scan: unsupported: string scan: ELF only"),
+        "{}",
+        r.stderr
+    );
+    let s = session_of(&r);
+    assert!(
+        matches!(&s.outcome.completeness, Completeness::Incomplete { missing_required, .. }
+            if missing_required.iter().any(|c| c.as_str() == "binary.identity")),
+        "{:?}",
+        s.outcome.completeness
+    );
+    let r = binary(&[&so, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains(r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan |"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(&esc_md("No signature found.")),
+        "{}",
+        r.stdout
+    );
+}
+
+/// PR-4c-2a, ADR-010: a file named as NVIDIA's runtime is identified by name and hash only. Its
+/// `binary.identity` is `OutOfScope`, which closes the check, and its report says it was not
+/// scanned rather than that no signature was found.
+#[test]
+fn an_nvidia_named_file_is_not_scanned_and_its_report_says_so() {
+    let d = inputs();
+    let cudart = d.path().join("libcudart.so.12");
+    fs::copy(d.path().join("libdata.so"), &cudart).unwrap();
+    let r = binary(&[&cudart]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = r
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("binary: "))
+        .unwrap_or_else(|| panic!("{}", r.stderr));
+    assert!(
+        line.contains(&format!(
+            "  complete  signature scan: out of scope: {NAME_AND_HASH_ONLY_WHY}"
+        )),
+        "{line}"
+    );
+    assert_eq!(session_of(&r).outcome.completeness, Completeness::Complete);
+    let r = binary(&[&cudart, &"--format", &"md"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains(&esc_md(NOT_SCANNED)), "{}", r.stdout);
+    assert!(!r.stdout.contains(&esc_md(NO_SIGNATURES)), "{}", r.stdout);
 }

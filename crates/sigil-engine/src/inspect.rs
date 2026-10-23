@@ -8,8 +8,8 @@ use sigil_model::{
     ActiveFeature, ApiProbe, Artifact, CheckId, CodeFacts, Completeness, Coverage, CoverageState,
     Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
     SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
-    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
-    BINARY_BYTES, BINARY_CODE_BYTES, INSTALL_ROOT,
+    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_IDENTITY,
+    ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
 };
 
 use crate::analyze::binary::CodeCoverageError;
@@ -205,12 +205,13 @@ fn assemble(
     let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
     let mut knowledge = Vec::<KnowledgeRef>::new();
     let (mut releases, mut reference_matches) = (vec![], vec![]);
-    let (mut relations, mut binaries) = (vec![], vec![]);
+    let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
         let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
+        let identity_coverage = container::identity(&facts).map_err(InspectError::BadId)?;
         roots.push(ScanRoot {
             id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
             path: facts.root_path,
@@ -227,15 +228,22 @@ fn assemble(
         coverage.push(facts.discovery);
         coverage.push(result.coverage);
         coverage.push(container);
+        coverage.push(identity_coverage);
         relations.extend(declares);
         binaries = facts.binaries;
+        scans = facts.scans;
         reference_matches = result.rows;
         releases.extend(result.claim);
     } else {
         // A policy that requires the install's checks without one: skipped, so incomplete.
         for check in &required_checks {
-            if [ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, ARTIFACTS_CONTAINER]
-                .contains(&check.as_str())
+            if [
+                ARTIFACTS_DISCOVERY,
+                ARTIFACTS_RELEASE,
+                ARTIFACTS_CONTAINER,
+                ARTIFACTS_IDENTITY,
+            ]
+            .contains(&check.as_str())
             {
                 coverage.push(Coverage {
                     check: check.clone(),
@@ -265,7 +273,8 @@ fn assemble(
     }
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
-    let hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
+    let mut hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
+    hints.extend(hints::from_scans(&scans));
     // PR-4c-1: from the facts above; nothing more is read.
     let components = identity::derive(&instances, &binaries, &reference_matches)
         .map_err(InspectError::Internal)?;
@@ -368,12 +377,14 @@ pub fn binary_session(
             req.budgets.binary.parse_bytes,
         ),
         ("binary_imports".to_string(), req.budgets.binary.imports),
+        (BINARY_SCAN_BYTES.to_string(), req.budgets.binary.scan_bytes),
     ]);
     // With code (PR-5a): its byte budget. Its aggregate limits are constants, not recorded.
     if let Some(c) = code_request {
         budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
     }
-    let hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
+    let mut hints = hints::derive(&facts.binaries).map_err(InspectError::Internal)?;
+    hints.extend(hints::from_scans(&facts.scans));
     // PR-4c-1: a binary inspection has no reference rows.
     let components =
         identity::derive(&facts.instances, &facts.binaries, &[]).map_err(InspectError::Internal)?;
@@ -429,6 +440,10 @@ pub fn binary_session(
     // The container's entries first: an input over `binary_bytes` copies its state to
     // `binary.code`.
     session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
+    // PR-4c-2a: after the container's entries, whose state an input over `binary_bytes` copies.
+    let identity_coverage =
+        binary::identity_coverage(&session, &facts.scans).map_err(InspectError::Internal)?;
+    session.coverage.extend(identity_coverage);
     let code_coverage = binary::code_coverage(&session, &facts.code).map_err(|e| match e {
         CodeCoverageError::BadId(e) => InspectError::BadId(e),
         CodeCoverageError::Undecided(e) => InspectError::Internal(e),
@@ -543,6 +558,7 @@ fn install_budgets(b: InstallBudgets) -> BTreeMap<String, u64> {
         ("install_bytes".to_string(), b.bytes),
         ("binary_parse_bytes".to_string(), b.binary.parse_bytes),
         ("binary_imports".to_string(), b.binary.imports),
+        (BINARY_SCAN_BYTES.to_string(), b.binary.scan_bytes),
     ])
 }
 

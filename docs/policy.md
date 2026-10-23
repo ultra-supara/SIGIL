@@ -59,13 +59,13 @@ written before `install_audit` existed loads unchanged, and adds nothing for an 
 `active_audit` when an active feature is requested, plus `install_audit` when the session has an
 `install` root (`--install-dir`). The session records the result. Evaluation computes it again from
 the recorded request, so the two always agree. A policy that lists `runtime_artifacts` in `audit`
-gets both its checks `Skipped { Flag("--install-dir") }` on a run without `--install-dir`, and the
-result is INCOMPLETE.
+gets each of its checks `Skipped { Flag("--install-dir") }` on a run without `--install-dir`, and
+the result is INCOMPLETE.
 
 **A binary inspection** (`sigil binary inspect`, a session whose roots are `binary-<n>`) audits
-`binary_audit`: `["binary"]`, whose check is `binary.container`, one entry per input. The other
-lists and `extra_required` apply to `inspect ollama` only, so an organization's extra checks for
-an installation do not make every binary inspection incomplete.
+`binary_audit`: `["binary"]`, whose checks are `binary.container` and `binary.identity`, one
+entry each per input. The other lists and `extra_required` apply to `inspect ollama` only, so an
+organization's extra checks for an installation do not make every binary inspection incomplete.
 
 **With code analysis** (`request.code`), `binary_code_audit` is added after `binary_audit`, without
 repeats: `["binary_code"]`, whose check is `binary.code`, one entry per input. Without code
@@ -78,7 +78,14 @@ the session, so it adds the same scope.
 full. Without code analysis, only an explicit `binary_audit = []` requires nothing, and the result
 is then `COMPLETE` whatever the inputs' statuses (the summary says so).
 
-`binary_code_audit` fails closed the same way. A policy file that omits it gets `["binary_code"]`,
+Under the default policy, an input whose `binary.identity` does not close makes the session
+`INCOMPLETE`: `Partial` for a signature scan cut short (its gaps say why) or an ELF without
+facts; `Unsupported` for a Mach-O (no Mach-O section is read yet) or a file that is not a
+container; and the container's `BudgetExceeded` or `Error`. A file named as an NVIDIA library is
+not scanned, and its `OutOfScope` closes the check (ADR-010). What `binary.identity` records:
+[`docs/binary-inspect.md`](binary-inspect.md#signatures).
+
+`binary_code_audit` fails closed as `binary_audit` does. A policy file that omits it gets `["binary_code"]`,
 so a policy written before it existed still requires every input's code to be analyzed in full.
 Only an explicit `binary_code_audit = []` requires nothing of code. With code analysis, a binary
 inspection requires nothing only when both lists are `[]`: with `binary_audit = []` alone, the
@@ -108,9 +115,9 @@ so requesting it gives an honest `INCOMPLETE`.
 | `model_store` | `model_store.inventory`, `model_store.integrity`, `model_store.license` | PR-3a-2 |
 | `exposure` | `exposure.binds` | PR-3a-2 (observe mode) |
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
-| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container` | PR-4a, PR-4b-1 (`--install-dir`) |
+| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container`, `artifacts.identity` | PR-4a, PR-4b-1, PR-4c-2a (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
-| `binary` | `binary.container` | PR-4b-2a and PR-4b-2b (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
+| `binary` | `binary.container`, `binary.identity` | PR-4b-2a, PR-4b-2b, and PR-4c-2a (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
 | `binary_code` | `binary.code` | PR-5a (a binary inspection with code analysis) |
 
 **Rules** (kind, default severity):

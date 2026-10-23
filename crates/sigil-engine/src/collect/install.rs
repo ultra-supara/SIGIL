@@ -15,10 +15,12 @@ use sigil_model::{
     ARTIFACTS_DISCOVERY, INSTALL_ROOT,
 };
 
+use super::binread::Scanning;
 use super::fs::{
     instance_id, recorded, Entry, EntryType, FsBudgets, ReadOutcome, RelPath, RootError, SafeFs,
     WalkError,
 };
+use crate::binary::scan::ScanOutcome;
 use crate::binary::{BinaryBudgets, ParsedArtifact};
 
 /// Budgets of the install scan, recorded with an `install_` prefix.
@@ -31,7 +33,8 @@ pub struct InstallBudgets {
     pub entries: u64,
     /// Bytes read for hashing, over the whole scan, as `install_bytes`.
     pub bytes: u64,
-    /// Each ELF or Mach-O artifact's parse, as `binary_parse_bytes` and `binary_imports`.
+    /// Each ELF or Mach-O artifact's parse and scan, as `binary_parse_bytes`, `binary_imports`,
+    /// and `binary_scan_bytes`.
     pub binary: BinaryBudgets,
 }
 
@@ -58,6 +61,8 @@ pub struct InstallFacts {
     pub bytes_read: u64,
     /// The container facts of each ELF or Mach-O slice, parsed once on the fd that hashed it.
     pub binaries: Vec<sigil_model::BinaryFacts>,
+    /// The signature scan of each ELF slice, on the same fd (PR-4c-2a), sorted by slice.
+    pub scans: Vec<(sigil_model::SliceId, ScanOutcome)>,
 }
 
 const BIN: &str = "bin/ollama";
@@ -78,6 +83,7 @@ fn collect_with(
 ) -> Result<InstallFacts, String> {
     let root = RootId::new(INSTALL_ROOT).map_err(|e| e.to_string())?;
     let check = CheckId::new(ARTIFACTS_DISCOVERY).map_err(|e| e.to_string())?;
+    let scanning = Scanning::embedded().map_err(|e| format!("internal error: {e}"))?;
     let mut fs = SafeFs::new(FsBudgets {
         max_files: budgets.files,
         max_entries: budgets.entries,
@@ -104,6 +110,7 @@ fn collect_with(
             code: None,
             ..budgets.binary
         },
+        scanning,
         parsed: BTreeMap::new(),
     };
     let state = match opened {
@@ -122,12 +129,13 @@ fn collect_with(
         }
     };
     // No code was asked for (`binary.code` is forced to `None` above): no outcomes.
-    let (binaries, _) = super::binread::binaries(c.parsed, &c.artifacts);
+    let (binaries, _, scans) = super::binread::binaries(c.parsed, &c.artifacts);
     Ok(InstallFacts {
         root_path,
         instances: c.instances,
         artifacts: c.artifacts,
         binaries,
+        scans,
         discovery: Coverage {
             check,
             scope: Ref::Root(root),
@@ -156,6 +164,7 @@ struct Collector<'a> {
     found: u32,
     during_read: &'a dyn Fn(&RelPath),
     binary: BinaryBudgets,
+    scanning: Scanning<'static>,
     /// Each recognized binary artifact parsed so far, by content.
     parsed: BTreeMap<sigil_model::ArtifactId, ParsedArtifact>,
 }
@@ -376,6 +385,7 @@ impl Collector<'_> {
             left,
             vec![DiscoverySource::Walk],
             self.binary,
+            self.scanning,
             &mut self.parsed,
             self.during_read,
         );

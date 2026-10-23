@@ -15,6 +15,10 @@ mod cli;
 mod contracts;
 #[cfg(target_os = "linux")]
 mod controls;
+// The engine tests' ELF image builder: the signature scan's executable is built as there.
+#[cfg(target_os = "linux")]
+#[path = "../../../sigil-engine/tests/common/elf.rs"]
+mod elf;
 #[cfg(target_os = "linux")]
 mod fixtures;
 #[cfg(target_os = "linux")]

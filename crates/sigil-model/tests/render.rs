@@ -10,7 +10,8 @@ use sigil_model::render::code::{
     NOT_ANALYZED, NOT_SEARCHED, NO_CAPABILITY_IMPORTS,
 };
 use sigil_model::render::markdown::{
-    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT,
+    render_session, BINARY_CAVEAT, BINARY_CAVEAT_CODE, CODE_CAVEAT, NOT_SCANNED, NO_IDENTITY_ENTRY,
+    NO_SIGNATURES,
 };
 use sigil_model::*;
 
@@ -409,13 +410,16 @@ fn eleven_inputs_are_shown_in_argument_order() {
             id: root,
             path: t(&path),
         });
-        s.coverage.push(coverage(
-            BINARY_CONTAINER,
-            Ref::Instance(inst),
-            CoverageState::Unsupported {
-                what: BINARY_UNSUPPORTED.to_string(),
-            },
-        ));
+        let unsupported = CoverageState::Unsupported {
+            what: BINARY_UNSUPPORTED.to_string(),
+        };
+        for check in [BINARY_CONTAINER, BINARY_IDENTITY] {
+            s.coverage.push(coverage(
+                check,
+                Ref::Instance(inst.clone()),
+                unsupported.clone(),
+            ));
+        }
     }
     s.canonicalize();
     assert_eq!(s.validate(), Ok(()));
@@ -512,12 +516,11 @@ fn binary_no_code() -> Session {
     let mut s = binary_code();
     s.request.code = false;
     s.request.audit.retain(|a| a.as_str() == "binary");
-    s.request
-        .required_checks
-        .retain(|c| c.as_str() == BINARY_CONTAINER);
+    let kept = |c: &CheckId| [BINARY_CONTAINER, BINARY_IDENTITY].contains(&c.as_str());
+    s.request.required_checks.retain(kept);
     s.request.budgets.remove(BINARY_CODE_BYTES);
     s.code.clear();
-    s.coverage.retain(|c| c.check.as_str() == BINARY_CONTAINER);
+    s.coverage.retain(|c| kept(&c.check));
     s
 }
 
@@ -544,13 +547,16 @@ fn a_code_inspection_shows_its_code_column_and_call_site() {
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(
-        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Code |"),
+        section.contains(
+            r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan | Code |"
+        ),
         "{section}"
     );
     let input = row_of(section, KERNEL_PATH);
     assert!(
         input.ends_with(&format!(
-            "| {} | {} |",
+            "| {} | {} | {} |",
+            md_esc("complete"),
             md_esc("complete"),
             md_esc("complete")
         )),
@@ -660,7 +666,7 @@ fn without_code_a_capability_is_not_analyzed() {
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(
-        section.contains("| Path | SHA\\-256 | Size | Type | Container facts |\n"),
+        section.contains("| Path | SHA\\-256 | Size | Type | Container facts | Signature scan |\n"),
         "{section}"
     );
     assert_eq!(
@@ -949,7 +955,9 @@ fn capability_rows_are_import_hints_in_feature_and_import_order() {
         .map(|l| l.split(" | ").nth(1).unwrap())
         .collect();
     assert_eq!(imports, ["dlsym", "connect", "socket"], "{section}");
-    assert!(!section.contains(&md_esc("exported_fn")), "{section}");
+    // The export is a signature (PR-4c-2a), not a capability.
+    let signature = row_of(section, "posix.process_spawn");
+    assert!(signature.contains(&md_esc("exported_fn")), "{section}");
     assert!(!md.contains(&md_esc("other_slice_import")), "{md}");
 }
 
@@ -975,6 +983,11 @@ fn a_content_under_two_inputs_has_its_capabilities_once() {
     code.scope = Ref::Instance(copy.clone());
     s.coverage.push(code);
     s.coverage.push(coverage(
+        BINARY_IDENTITY,
+        Ref::Instance(copy.clone()),
+        CoverageState::Complete,
+    ));
+    s.coverage.push(coverage(
         BINARY_CONTAINER,
         Ref::Instance(copy),
         CoverageState::Complete,
@@ -991,6 +1004,11 @@ fn a_content_under_two_inputs_has_its_capabilities_once() {
     )));
     assert_eq!(
         section.matches(&md_esc("Capabilities of")).count(),
+        1,
+        "{section}"
+    );
+    assert_eq!(
+        section.matches(&md_esc(NO_SIGNATURES)).count(),
         1,
         "{section}"
     );
@@ -1103,7 +1121,9 @@ fn install_binaries_show_their_capability_keys() {
             .to_string();
         let table = &section[section.find(&md_esc("Binaries:")).unwrap()..];
         assert!(
-            table.contains(r"| Exports \/ imports | Capabilities \(imports\) | Notes |"),
+            table.contains(
+                r"| Exports \/ imports | Capabilities \(imports\) | Signatures | Notes |"
+            ),
             "{table}"
         );
         let row = table
@@ -1435,4 +1455,438 @@ fn each_identity_status_is_shown_in_words() {
             fact_row("Identity", words)
         );
     }
+}
+
+/// The install's Signatures column (PR-4c-2a spec §6): the keys of the slice's hints that are not
+/// imports, or `-`.
+#[test]
+fn install_binaries_show_their_signature_keys() {
+    let mut s = complete_pass();
+    let slice = s.artifacts[0].slices[0].id.clone();
+    s.binaries.push(BinaryFacts {
+        slice: slice.clone(),
+        container: ContainerFacts::Elf(ElfFacts {
+            interp: None,
+            soname: None,
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![],
+            stripped: Some(true),
+            exports: 2,
+            imports: vec![ElfImport {
+                name: t("connect"),
+                version: None,
+                weak: false,
+            }],
+            data: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    let cell = |s: &Session| -> String {
+        assert_eq!(s.validate(), Ok(()));
+        let md = render_session(s);
+        let row = md
+            .lines()
+            .find(|l| {
+                l.starts_with('|') && l.contains(&md_esc("libggml.so.0")) && l.contains("Dyn")
+            })
+            .unwrap_or_else(|| panic!("{md}"))
+            .to_string();
+        // Path, Type, Component, SONAME, NEEDED, counts, capabilities, then the signatures.
+        row.trim_matches('|')
+            .split(" | ")
+            .map(str::trim)
+            .nth(7)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(cell(&s), md_esc("-"));
+    let rodata = Loc::Section {
+        name: t(".rodata"),
+        offset: 0x10,
+    };
+    for (feature, signal, value, at) in [
+        (
+            "rpc.code_present",
+            Signal::Export,
+            "ggml_backend_rpc_init",
+            Loc::Symbol(t("ggml_backend_rpc_init")),
+        ),
+        (
+            "rpc.code_present",
+            Signal::Export,
+            "ggml_backend_rpc_start",
+            Loc::Symbol(t("ggml_backend_rpc_start")),
+        ),
+        ("a.string", Signal::String, "text", rodata),
+        (
+            "posix.network",
+            Signal::Import,
+            "connect",
+            Loc::Symbol(t("connect")),
+        ),
+    ] {
+        s.hints.push(FeatureHint {
+            subject: slice.clone(),
+            feature: id(feature),
+            signal,
+            value: t(value),
+            at,
+        });
+    }
+    assert_eq!(cell(&s), md_esc("a.string, rpc.code_present"));
+}
+
+#[test]
+fn an_elf_content_lists_its_signatures_or_says_none_was_found() {
+    let mut s = binary_inspect();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan |"),
+        "{section}"
+    );
+    assert!(
+        row_of(section, "/home/user/Downloads/libggml-base.so").ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc("complete")
+        )),
+        "{section}"
+    );
+    let unsupported = md_esc(&format!("unsupported: {BINARY_UNSUPPORTED}"));
+    assert!(
+        row_of(section, "/home/user/Downloads/NOTES.txt")
+            .ends_with(&format!("| {unsupported} | {unsupported} |")),
+        "{section}"
+    );
+    assert_eq!(
+        section.matches(&md_esc(NO_SIGNATURES)).count(),
+        1,
+        "{section}"
+    );
+    // The column is the input's binary.identity, not its binary.container.
+    let mut partial = s.clone();
+    let elf = InstanceId::new(ELF_INPUT).unwrap();
+    partial
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_IDENTITY && c.scope == Ref::Instance(elf.clone()))
+        .unwrap()
+        .state = CoverageState::Partial {
+        missing: vec![scan_over_gap(64 << 20)],
+    };
+    assert_eq!(partial.validate(), Ok(()));
+    let md = render_session(&partial);
+    let row = row_of(
+        binaries_section(&md),
+        "/home/user/Downloads/libggml-base.so",
+    )
+    .to_string();
+    assert!(
+        row.ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc("partial: string scan: binary_scan_bytes 67108864 exceeded")
+        )),
+        "{row}"
+    );
+    // A Go function hint needs Go build info in its slice (S3).
+    s.binaries[0].go = Some(GoBuildInfo {
+        version: t("go1.24.1"),
+        path: None,
+        main: None,
+        deps: vec![],
+        settings: vec![],
+        at: Loc::VAddr(0x4000),
+    });
+    let slice = s.binaries[0].slice.clone();
+    for (feature, signal, value, at) in [
+        (
+            "ollama.llama_server_launch",
+            Signal::GoFunction,
+            "main.launch",
+            Loc::Section {
+                name: t(".gopclntab"),
+                offset: 0x100,
+            },
+        ),
+        (
+            "rpc.code_present",
+            Signal::Export,
+            "ggml_backend_rpc_init",
+            Loc::Symbol(t("ggml_backend_rpc_init")),
+        ),
+        (
+            "a.string",
+            Signal::String,
+            "text",
+            Loc::Section {
+                name: t(".rodata.str1.1"),
+                offset: 0x2a,
+            },
+        ),
+    ] {
+        s.hints.push(FeatureHint {
+            subject: slice.clone(),
+            feature: id(feature),
+            signal,
+            value: t(value),
+            at,
+        });
+    }
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
+    let heading = format!(
+        "{} {}{}",
+        md_esc("Signatures of"),
+        md_esc("/home/user/Downloads/libggml-base.so"),
+        md_esc(":")
+    );
+    assert!(section.contains(&heading), "{section}");
+    let rows: Vec<&str> = section
+        .lines()
+        .skip_while(|l| !l.starts_with("| Feature | Kind | Value | Where |"))
+        .skip(2)
+        .take_while(|l| l.starts_with('|'))
+        .collect();
+    let row = |cells: [&str; 4]| {
+        format!(
+            "| {} |",
+            cells
+                .iter()
+                .map(|c| md_esc(c))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        )
+    };
+    assert_eq!(
+        rows,
+        [
+            row(["a.string", "string", "text", ".rodata.str1.1 + 0x2a"]),
+            row([
+                "ollama.llama_server_launch",
+                "Go function",
+                "main.launch",
+                ".gopclntab + 0x100"
+            ]),
+            row([
+                "rpc.code_present",
+                "export",
+                "ggml_backend_rpc_init",
+                "symbol ggml_backend_rpc_init"
+            ]),
+        ],
+        "{section}"
+    );
+    // The capabilities table keeps the import hints alone.
+    assert!(section.contains(&md_esc("Capabilities of")), "{section}");
+}
+
+/// A binary inspection written before PR-4c-2a has no `binary.identity` entry: its Signature
+/// scan column says so, and the report still renders every input.
+#[test]
+fn a_session_before_signature_scans_has_no_coverage_entry_in_its_column() {
+    let s = without_identity(binary_inspect());
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        section.contains(r"| Path | SHA\-256 | Size | Type | Container facts | Signature scan |"),
+        "{section}"
+    );
+    assert!(
+        row_of(section, "/home/user/Downloads/libggml-base.so").ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc("no coverage entry")
+        )),
+        "{section}"
+    );
+    let unsupported = md_esc(&format!("unsupported: {BINARY_UNSUPPORTED}"));
+    assert!(
+        row_of(section, "/home/user/Downloads/NOTES.txt").ends_with(&format!(
+            "| {unsupported} | {} |",
+            md_esc("no coverage entry")
+        )),
+        "{section}"
+    );
+    // Its ELF was never scanned: the report does not say that no signature was found.
+    assert_eq!(
+        section.matches(&md_esc(NO_IDENTITY_ENTRY)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
+}
+
+/// Signature rows are in (feature, value, kind, where) order, whatever the session's order: two
+/// hints of one feature and value differ by their Kind and Where cells (PR-4c-2a).
+#[test]
+fn signature_rows_are_in_feature_value_kind_and_where_order() {
+    let mut s = binary_inspect();
+    // A Go function hint needs Go build info in its slice (S3).
+    s.binaries[0].go = Some(GoBuildInfo {
+        version: t("go1.24.1"),
+        path: None,
+        main: None,
+        deps: vec![],
+        settings: vec![],
+        at: Loc::VAddr(0x4000),
+    });
+    let slice = s.binaries[0].slice.clone();
+    let value = "ggml_backend_rpc_init";
+    let hint = |signal: Signal, value: &str, at: Loc| FeatureHint {
+        subject: slice.clone(),
+        feature: id("x.signature"),
+        signal,
+        value: t(value),
+        at,
+    };
+    let section = |name: &str, offset: u64| Loc::Section {
+        name: t(name),
+        offset,
+    };
+    s.hints.extend([
+        hint(Signal::String, value, section(".rodata", 0x20)),
+        hint(Signal::String, value, section(".rodata", 0x10)),
+        hint(Signal::Export, value, Loc::Symbol(t(value))),
+        hint(Signal::GoFunction, value, section(".gopclntab", 0x30)),
+        hint(Signal::Export, "a", Loc::Symbol(t("a"))),
+    ]);
+    assert_eq!(s.validate(), Ok(()));
+    let rows = |s: &Session| -> Vec<String> {
+        let md = render_session(s);
+        binaries_section(&md)
+            .lines()
+            .skip_while(|l| !l.starts_with("| Feature | Kind | Value | Where |"))
+            .skip(2)
+            .take_while(|l| l.starts_with('|'))
+            .map(str::to_string)
+            .collect()
+    };
+    let row = |cells: [&str; 4]| {
+        format!(
+            "| {} |",
+            cells
+                .iter()
+                .map(|c| md_esc(c))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        )
+    };
+    let expected = [
+        row(["x.signature", "export", "a", "symbol a"]),
+        row(["x.signature", "Go function", value, ".gopclntab + 0x30"]),
+        row(["x.signature", "export", value, &format!("symbol {value}")]),
+        row(["x.signature", "string", value, ".rodata + 0x10"]),
+        row(["x.signature", "string", value, ".rodata + 0x20"]),
+    ];
+    assert_eq!(rows(&s), expected);
+    // The reverse session order renders the same rows.
+    s.hints.reverse();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(rows(&s), expected);
+}
+
+/// `binary_inspect` with its shared object named as NVIDIA's runtime: its claim is
+/// `cuda-runtime`, and its input's `binary.identity` is `OutOfScope` (ADR-010).
+fn nvidia_inspect() -> Session {
+    let mut s = binary_inspect();
+    let elf = InstanceId::new(ELF_INPUT).unwrap();
+    s.components[0].component = id("cuda-runtime");
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_IDENTITY && c.scope == Ref::Instance(elf.clone()))
+        .unwrap()
+        .state = CoverageState::OutOfScope {
+        why: NAME_AND_HASH_ONLY_WHY.to_string(),
+    };
+    s
+}
+
+/// An NVIDIA library is identified by name and hash only (ADR-010): its content was not scanned,
+/// so the report says so instead of `No signature found.` (PR-4c-2a).
+#[test]
+fn an_nvidia_library_says_it_was_not_scanned() {
+    let s = nvidia_inspect();
+    assert_eq!(s.validate(), Ok(()));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        row_of(section, "/home/user/Downloads/libggml-base.so").ends_with(&format!(
+            "| {} | {} |",
+            md_esc("complete"),
+            md_esc(&format!("out of scope: {NAME_AND_HASH_ONLY_WHY}"))
+        )),
+        "{section}"
+    );
+    assert_eq!(
+        section.matches(&md_esc(NOT_SCANNED)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
+    assert!(!section.contains(&md_esc("Signatures of")), "{section}");
+    // Its imports are the container's: its capabilities are shown.
+    assert!(section.contains(&md_esc("Capabilities of")), "{section}");
+}
+
+/// A content under two inputs is shown once, under its first: the first input's
+/// `binary.identity` says whether it was scanned.
+#[test]
+fn a_content_s_first_input_says_whether_it_was_scanned() {
+    let with_copy = |first: CoverageState, copy: CoverageState| {
+        let mut s = nvidia_inspect();
+        let elf = InstanceId::new(ELF_INPUT).unwrap();
+        s.coverage
+            .iter_mut()
+            .find(|c| c.check.as_str() == BINARY_IDENTITY && c.scope == Ref::Instance(elf.clone()))
+            .unwrap()
+            .state = first;
+        let copy_id: InstanceId = id("inst:binary-3/libcudart.so.12");
+        let path = "/home/user/Downloads/libcudart.so.12";
+        let mut i = instance(&copy_id, "binary-3", path, &s.artifacts[0].id, 33);
+        i.stat.size = 1_048_576;
+        i.discovered_by = vec![DiscoverySource::Argument];
+        s.instances.push(i);
+        s.request.roots.push(ScanRoot {
+            id: binary_root(3).unwrap(),
+            path: t(path),
+        });
+        s.coverage.push(coverage(
+            BINARY_CONTAINER,
+            Ref::Instance(copy_id.clone()),
+            CoverageState::Complete,
+        ));
+        s.coverage
+            .push(coverage(BINARY_IDENTITY, Ref::Instance(copy_id), copy));
+        s.canonicalize();
+        assert_eq!(s.validate(), Ok(()));
+        let md = render_session(&s);
+        binaries_section(&md).to_string()
+    };
+    let out_of_scope = CoverageState::OutOfScope {
+        why: NAME_AND_HASH_ONLY_WHY.to_string(),
+    };
+    let section = with_copy(out_of_scope.clone(), CoverageState::Complete);
+    assert_eq!(
+        section.matches(&md_esc(NOT_SCANNED)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NO_SIGNATURES)), "{section}");
+    let section = with_copy(CoverageState::Complete, out_of_scope);
+    assert_eq!(
+        section.matches(&md_esc(NO_SIGNATURES)).count(),
+        1,
+        "{section}"
+    );
+    assert!(!section.contains(&md_esc(NOT_SCANNED)), "{section}");
 }

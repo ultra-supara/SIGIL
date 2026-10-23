@@ -50,7 +50,8 @@ use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
     Completeness, Coverage, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode,
     ReleaseBasis, ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict,
-    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, INSTALL_ROOT,
+    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES,
+    INSTALL_ROOT,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -122,8 +123,8 @@ struct BinaryArgs {
     /// binary_code_audit with --code.
     #[arg(long, value_name = "FILE")]
     policy: Option<PathBuf>,
-    /// A read budget: binary_bytes, binary_parse_bytes, binary_imports, or binary_code_bytes,
-    /// which needs --code (e.g. binary_bytes=1073741824).
+    /// A read budget: binary_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, or
+    /// binary_code_bytes, which needs --code (e.g. binary_bytes=1073741824).
     #[arg(long = "budget", value_name = "KEY=VALUE")]
     budgets: Vec<String>,
     /// The instant that policy expiry is judged at: now, or RFC 3339 UTC.
@@ -532,6 +533,7 @@ fn binary_budgets(given: &[String], code: bool) -> Result<NamedBudgets, Failure>
             BINARY_BYTES => b.bytes = value,
             "binary_parse_bytes" => b.binary.parse_bytes = value,
             "binary_imports" => b.binary.imports = value,
+            BINARY_SCAN_BYTES => b.binary.scan_bytes = value,
             BINARY_CODE_BYTES => match code_budgets.as_mut() {
                 Some(c) => c.bytes = value,
                 None => return Err(usage("needs --code")),
@@ -539,7 +541,8 @@ fn binary_budgets(given: &[String], code: bool) -> Result<NamedBudgets, Failure>
             _ => {
                 return Err(usage(
                     "unknown budget; known for binary inspect: binary_bytes, \
-                     binary_parse_bytes, binary_imports, and with --code binary_code_bytes",
+                     binary_parse_bytes, binary_imports, binary_scan_bytes, and with --code \
+                     binary_code_bytes",
                 ))
             }
         }
@@ -813,11 +816,12 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
             "install_files_discovered" => install_budgets.files = value,
             "install_entries_listed" => install_budgets.entries = value,
             "install_bytes" => install_budgets.bytes = value,
-            "binary_parse_bytes" | "binary_imports" if !install => {
+            "binary_parse_bytes" | "binary_imports" | BINARY_SCAN_BYTES if !install => {
                 return Err(usage("this budget applies to --install-dir only"));
             }
             "binary_parse_bytes" => install_budgets.binary.parse_bytes = value,
             "binary_imports" => install_budgets.binary.imports = value,
+            BINARY_SCAN_BYTES => install_budgets.binary.scan_bytes = value,
             _ => {
                 return Err(usage(
                     "unknown budget; known: files_discovered, entries_listed, directory_entries, \
@@ -825,7 +829,7 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
                      fds_per_process, tcp_table_bytes, with --active api-probe \
                      api_connect_ms, api_io_ms, api_response_bytes, and with --install-dir \
                      install_files_discovered, install_entries_listed, install_bytes, \
-                     binary_parse_bytes, binary_imports",
+                     binary_parse_bytes, binary_imports, binary_scan_bytes",
                 ))
             }
         }
@@ -993,6 +997,8 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             },
         );
         let state = entry_state(b.coverage);
+        // The input's binary.identity state: whether its signature scan was done (PR-4c-2a).
+        let identity = format!("  signature scan: {}", entry_state(b.identity));
         // With code analysis, the input's binary.code state follows (PR-5a-2).
         let code = if r.code {
             format!("  code: {}", entry_state(b.code))
@@ -1015,7 +1021,7 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             format!("  component: {}", shown(&labels.join(", ")))
         };
         lines.push(format!(
-            "binary: {}  {}  {sha}  {state}{code}{component}",
+            "binary: {}  {}  {sha}  {state}{identity}{code}{component}",
             path.terminal_line(),
             artifact_type(b.artifact)
         ));

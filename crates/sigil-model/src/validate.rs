@@ -232,12 +232,14 @@ pub enum ValidationError {
     /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
     /// (V11).
     ReleaseCoverage { complete: bool },
-    /// A `BinaryFacts` record, or a `Declares` relation, disagrees with the session (B1–B8).
+    /// A `BinaryFacts` record, a `Declares` relation, or `artifacts.identity` disagrees with the
+    /// session (B1–B8; S2, PR-4c-2a).
     Binary { slice: String, why: String },
-    /// A binary inspection's input, its root, or its `binary.container` disagrees with the
-    /// session (B9, B10; PR-4b-2a).
+    /// A binary inspection's input, its root, its `binary.container`, or its `binary.identity`
+    /// disagrees with the session (B9, B10; PR-4b-2a; S1, PR-4c-2a).
     BinaryInput { at: String, why: String },
-    /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a).
+    /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a; S3,
+    /// PR-4c-2a).
     Code { at: String, why: String },
 }
 
@@ -737,7 +739,9 @@ impl<'a> Validator<'a> {
         self.binaries();
         self.binary_inputs();
         self.code_coverage();
+        self.identity_coverage();
         self.import_hints();
+        self.signature_hints();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
@@ -2058,6 +2062,224 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// S1 and S2 (PR-4c-2a spec §5, §6): the identity coverage agrees with the session.
+    ///
+    /// - S1: a `binary.identity` entry is scoped to the instance of an input of a binary
+    ///   inspection. An input has exactly one in a session with a `binary_scan_bytes` budget
+    ///   (every session since PR-4c-2a), and at most one otherwise (a session written before has
+    ///   none), in a state [`expected_binary_identity`] admits, without a budget.
+    /// - S2: a session has at most one `artifacts.identity` entry, scoped to the install root:
+    ///   `Complete` only as [`install_scanned`] says, `Partial` with its gaps, or the discovery's
+    ///   own state when discovery could not finish (`Unavailable`, `BudgetExceeded`, `Error`);
+    ///   or, in a session without an install, `Skipped` for `--install-dir`, scoped to the audit
+    ///   (P-i, P-m). No other state closes it.
+    ///
+    /// [`expected_binary_identity`]: crate::binary_input::expected_binary_identity
+    fn identity_coverage(&mut self) {
+        use crate::binary::ARTIFACTS_IDENTITY;
+        use crate::binary_input::{
+            expected_binary_container, expected_binary_identity, is_binary_root, ExpectedContainer,
+            BINARY_IDENTITY, BINARY_SCAN_BYTES,
+        };
+        use crate::coverage::{Coverage, SkipReason};
+        use crate::render::{coverage_state, subject};
+        let s = self.s;
+        // S1. An instance of a binary root makes the session a binary inspection (B10).
+        let inputs: BTreeMap<&InstanceId, &FileInstance> = s
+            .instances
+            .iter()
+            .filter(|i| is_binary_root(&i.root))
+            .map(|i| (&i.id, i))
+            .collect();
+        let mut per_input: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_IDENTITY)
+        {
+            match &c.scope {
+                Ref::Instance(i) if inputs.contains_key(i) => {
+                    per_input.entry(i).or_default().push(c)
+                }
+                _ => self.input_error(
+                    &format!("coverage[{BINARY_IDENTITY} on {}]", subject(&c.scope)),
+                    "binary.identity must be scoped to an input's instance",
+                ),
+            }
+        }
+        // Every session since PR-4c-2a records `binary_scan_bytes` and an entry for each input;
+        // one written before has neither.
+        let scanned = s.request.budgets.contains_key(BINARY_SCAN_BYTES);
+        for (id, i) in &inputs {
+            let at = format!("coverage[{BINARY_IDENTITY} on {id}]");
+            let entries = per_input.get(id).map(Vec::as_slice).unwrap_or_default();
+            let c = match entries {
+                [c] => c,
+                [] if !scanned => continue,
+                _ => {
+                    self.input_error(
+                        &at,
+                        format!(
+                            "{} binary.identity entries; an input has {}",
+                            entries.len(),
+                            if scanned {
+                                "exactly one"
+                            } else {
+                                "at most one"
+                            }
+                        ),
+                    );
+                    continue;
+                }
+            };
+            match expected_binary_identity(s, i) {
+                Ok(expected) => {
+                    if let Err(why) = expected.admits(c) {
+                        self.input_error(&at, why);
+                    }
+                }
+                // B9 reports an input whose container it cannot judge, and an input over
+                // `binary_bytes` whose `binary.container` entry it does not admit.
+                Err(why)
+                    if matches!(
+                        expected_binary_container(s, i),
+                        Ok(ExpectedContainer::Exactly(_))
+                    ) =>
+                {
+                    self.input_error(&at, why)
+                }
+                Err(_) => {}
+            }
+        }
+        // S2
+        let install = RootId::new(INSTALL_ROOT).ok();
+        let with_install = s
+            .request
+            .roots
+            .iter()
+            .any(|r| Some(&r.id) == install.as_ref());
+        let at_install = install.map(Ref::Root);
+        let discovery = s
+            .coverage
+            .iter()
+            .find(|c| c.check.as_str() == ARTIFACTS_DISCOVERY)
+            .map(|c| &c.state);
+        let entries: Vec<&Coverage> = s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == ARTIFACTS_IDENTITY)
+            .collect();
+        let mut why = vec![];
+        if entries.len() > 1 {
+            why.push(format!(
+                "{} {ARTIFACTS_IDENTITY} entries; a session has at most one",
+                entries.len()
+            ));
+        }
+        for c in entries {
+            let shown = coverage_state(&c.state).terminal();
+            match &c.state {
+                CoverageState::Skipped { by } if c.scope == Ref::Audit => {
+                    let flag = matches!(by, SkipReason::Flag { flag } if flag == "--install-dir");
+                    if !flag || with_install {
+                        why.push(format!(
+                            "{ARTIFACTS_IDENTITY} is {shown}, but only a session without an install skips it, for --install-dir"
+                        ));
+                    }
+                }
+                _ if Some(&c.scope) != at_install.as_ref() => why.push(format!(
+                    "{ARTIFACTS_IDENTITY} must be scoped to the install root"
+                )),
+                CoverageState::Complete => {
+                    if !install_scanned(s) {
+                        why.push(format!(
+                            "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, or a linked ELF's dynamic symbols were not read"
+                        ));
+                    }
+                }
+                CoverageState::Partial { missing } if !missing.is_empty() => {}
+                state @ (CoverageState::Unavailable { .. }
+                | CoverageState::BudgetExceeded { .. }
+                | CoverageState::Error { .. })
+                    if discovery == Some(state) => {}
+                _ => why.push(format!(
+                    "{ARTIFACTS_IDENTITY} is {shown}, but it is complete, partial, the discovery's state when discovery did not finish, or skipped without an install"
+                )),
+            }
+        }
+        self.binary_errors("*", why);
+    }
+
+    /// S3 (PR-4c-2a spec §6): a signature hint is of an ELF slice, where its kind is found. An
+    /// `Export` hint is at `Symbol(value)`; a `GoFunction` hint in `.gopclntab`, of a slice with
+    /// Go build info; a `String` hint in `.rodata`, `.rodata.*`, or `.lrodata`. A slice of an
+    /// input whose `binary.identity` is `OutOfScope` was never scanned (ADR-010): it has none.
+    fn signature_hints(&mut self) {
+        use crate::binary::ContainerFacts;
+        use crate::binary_input::BINARY_IDENTITY;
+        use crate::hint::Signal;
+        let s = self.s;
+        // The slices of the inputs not scanned.
+        let unscanned: BTreeSet<&SliceId> = s
+            .coverage
+            .iter()
+            .filter(|c| {
+                c.check.as_str() == BINARY_IDENTITY
+                    && matches!(c.state, CoverageState::OutOfScope { .. })
+            })
+            .filter_map(|c| match &c.scope {
+                Ref::Instance(id) => s.instances.iter().find(|i| i.id == *id),
+                _ => None,
+            })
+            .filter_map(|i| match &i.content {
+                InstanceContent::Read { artifact } => {
+                    s.artifacts.iter().find(|a| a.id == *artifact)
+                }
+                InstanceContent::NotRead { .. } => None,
+            })
+            .flat_map(|a| a.slices.iter().map(|x| &x.id))
+            .collect();
+        for hint in &s.hints {
+            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
+            let facts = s.binaries.iter().find(|b| b.slice == hint.subject);
+            let elf = facts.is_some_and(|b| matches!(b.container, ContainerFacts::Elf(_)));
+            let section = match &hint.at {
+                Loc::Section { name, .. } => Some(name.as_bytes()),
+                _ => None,
+            };
+            let why = match hint.signal {
+                Signal::Export if hint.at != Loc::Symbol(hint.value.clone()) => {
+                    Some("an export hint's at must be Symbol(value)")
+                }
+                Signal::GoFunction if section != Some(b".gopclntab") => {
+                    Some("a Go function hint's at must be in .gopclntab")
+                }
+                Signal::GoFunction if facts.is_none_or(|b| b.go.is_none()) => {
+                    Some("a Go function hint needs Go build info in its slice")
+                }
+                Signal::String
+                    if !section.is_some_and(|n| {
+                        n == b".rodata" || n == b".lrodata" || n.starts_with(b".rodata.")
+                    }) =>
+                {
+                    Some("a string hint's at must be in .rodata, .rodata.*, or .lrodata")
+                }
+                Signal::Export | Signal::GoFunction | Signal::String if !elf => {
+                    Some("a signature hint needs ELF facts for its slice")
+                }
+                Signal::Export | Signal::GoFunction | Signal::String
+                    if unscanned.contains(&hint.subject) =>
+                {
+                    Some("a signature hint of a slice whose input was not scanned (ADR-010)")
+                }
+                _ => None,
+            };
+            if let Some(why) = why {
+                self.code_error(&at, why);
+            }
+        }
+    }
+
     /// V10: a claim by reference matches covers every placement, and its candidates are exactly
     /// the releases that every placement matches.
     fn release_by_rows(
@@ -2971,6 +3193,65 @@ fn c5(value: &ArgValue) -> Vec<String> {
         | ArgValue::Unknown { .. } => {}
     }
     why
+}
+
+/// Whether an `artifacts.identity` of `Complete` holds (S2).
+///
+/// Discovery is `Complete`, and every install binary is an ELF with slices, each with facts, and
+/// none a Go ELF without a section header table ([`NoSectionsGap::Must`]: its scan lists
+/// [`SCAN_NO_SECTIONS`]) or a linked ELF whose loader's dynamic symbols the parse did not read
+/// (its scan lists [`SCAN_NAME_NOT_READ`]), unless an NVIDIA library (ADR-010), which is never
+/// scanned and adds no gap.
+///
+/// That exception holds for any NVIDIA claim on the slice: as for `binary.identity`'s
+/// `OutOfScope` ([`ExpectedIdentity::Scanned`]), the model cannot tell a file the engine
+/// excludes by its placement's file name from one whose SONAME alone is NVIDIA's, which the
+/// engine scans. The engine is the source of truth, and its tests pin the exclusion.
+///
+/// [`ExpectedIdentity::Scanned`]: crate::binary_input::ExpectedIdentity::Scanned
+/// [`NoSectionsGap::Must`]: crate::binary_input::NoSectionsGap::Must
+/// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
+/// [`SCAN_NAME_NOT_READ`]: crate::binary_input::SCAN_NAME_NOT_READ
+fn install_scanned(s: &Session) -> bool {
+    use crate::artifact::Format;
+    use crate::binary_input::{exports_unread, name_and_hash_only, no_sections_gap, NoSectionsGap};
+    let discovery = s
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == ARTIFACTS_DISCOVERY && c.state == CoverageState::Complete);
+    let install = RootId::new(INSTALL_ROOT).ok();
+    let binaries: Vec<_> = s
+        .instances
+        .iter()
+        .filter(|i| Some(&i.root) == install.as_ref())
+        .filter_map(|i| match &i.content {
+            InstanceContent::Read { artifact } => Some(artifact),
+            InstanceContent::NotRead { .. } => None,
+        })
+        .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+        .filter(|a| {
+            matches!(
+                a.format,
+                Format::Elf { .. } | Format::MachO | Format::MachOFat
+            )
+        })
+        .collect();
+    let scanned = binaries.iter().all(|a| {
+        let Format::Elf { kind } = a.format else {
+            return false;
+        };
+        !a.slices.is_empty()
+            && a.slices.iter().all(|x| {
+                s.binaries
+                    .iter()
+                    .find(|b| b.slice == x.id)
+                    .is_some_and(|b| {
+                        (no_sections_gap(b) != NoSectionsGap::Must && !exports_unread(b, kind))
+                            || name_and_hash_only(s, &x.id)
+                    })
+            })
+    });
+    discovery && scanned
 }
 
 /// The coverage states recorded for `check`.

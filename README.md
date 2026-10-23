@@ -38,7 +38,7 @@ SIGIL produces that artefact: one session per inspection, as JSON and as Markdow
 | License | The license layer, its SPDX id where detected, and an excerpt |
 | Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
 | Runtime API (`--active api-probe`) | Whether `GET /api/version` answered at one literal address, and the version it reported |
-| Binaries (`binary inspect`) | Each file's SHA-256, format, and container facts (ELF, Mach-O); an ELF file's capability imports (for example `connect` → `posix.network`), as imports, not calls; with `--code`, the direct call sites of those imports in x86-64 ELF code, with their arguments |
+| Binaries (`binary inspect`) | Each file's SHA-256, format, and container facts (ELF, Mach-O); an ELF file's capability imports (for example `connect` → `posix.network`), as imports, not calls; its signature hints (the RPC backend's exports, Ollama's Go function names), as names found in the file, not behavior; with `--code`, the direct call sites of those imports in x86-64 ELF code, with their arguments |
 | Outcome | Verdict (`PASS` / `WARN` / `FAIL`) and completeness (`COMPLETE` / `INCOMPLETE`), side by side |
 
 ## Why local-first, LLM-free
@@ -134,6 +134,7 @@ The milestones are in the [Roadmap](docs/sigil-overview.md#roadmap).
 - Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, license layers with SPDX detection.
 - The installation's release by reference (`--install-dir`): every file of `bin/ollama` and `lib/ollama` compared with the official release manifests embedded in SIGIL (not a signature check), with attribution and completeness reported separately.
 - Component identification (`--install-dir`, `binary inspect`): each ELF whose file name or SONAME the component database knows gets a component claim from its names, embedded build values, and reference matches, with every source kept. Each of the 34 files of the official v0.30.6 bundle is reference-matched.
+- Signature scans (`--install-dir`, `binary inspect`): each ELF file is searched for the needles of an embedded database: export-name prefixes, and Go function names in `.gopclntab` (string needles for read-only data are supported; none ship yet). Section bytes are read with `pread` within `binary_scan_bytes` (64 MiB per file). Each needle found is a hint, and `binary.identity` and `artifacts.identity` say whether every scan was done. A file named as an NVIDIA library is identified by name and hash only, and not scanned.
 - Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
 - Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment.
 - The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.

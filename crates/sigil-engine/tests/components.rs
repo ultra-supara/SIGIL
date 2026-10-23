@@ -128,3 +128,12 @@ fn a_symlink_member_names_the_component_of_its_file() {
         assert_eq!(links, 17, "{}", release.tag);
     }
 }
+
+/// PR-4c-2a: the components whose files are never scanned (`scan = false`) are the model's
+/// `NAME_AND_HASH_ONLY`, for which `Session::validate` admits `binary.identity` `OutOfScope`.
+#[test]
+fn the_unscanned_components_are_the_model_s_name_and_hash_only() {
+    let db = components().unwrap();
+    let unscanned: Vec<&str> = db.unscanned().iter().map(|k| k.as_str()).collect();
+    assert_eq!(unscanned, sigil_model::NAME_AND_HASH_ONLY);
+}

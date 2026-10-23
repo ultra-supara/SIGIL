@@ -119,8 +119,9 @@ release: install not found
 
 ## Coverage
 
-`artifacts.discovery`, `artifacts.release`, and `artifacts.container` (see Binaries) belong to the
-scope `runtime_artifacts`, which the default policy audits when `--install-dir` is given.
+`artifacts.discovery`, `artifacts.release`, `artifacts.container`, and `artifacts.identity` (see
+Binaries) belong to the scope `runtime_artifacts`, which the default policy audits when
+`--install-dir` is given.
 
 **`artifacts.discovery`** (scope: the root `install`):
 
@@ -243,7 +244,9 @@ slice in the session, read from the file's own bytes. They are observations, not
   - `binary_parse_bytes` (64 MiB per artifact) bounds the parser's input cache, before anything
     is allocated, with 128 bytes of bookkeeping charged per cached read. A test measures the
     heap: files declaring millions of entries stay within it plus the output limits;
-  - `binary_imports` (4,096 per slice).
+  - `binary_imports` (4,096 per slice);
+  - `binary_scan_bytes` (64 MiB per artifact): the section bytes the signature scan reads
+    (below).
 - **`artifacts.container`** (scope: the root `install`), a third check of `runtime_artifacts`:
 
   | State | When |
@@ -265,6 +268,32 @@ slice in the session, read from the file's own bytes. They are observations, not
   the slice's import list was cut short at `binary_imports`, the keys of the imports past the cut
   are not known, and the cell says so: `- (imports cut short)`, or the keys followed by
   ` (imports cut short)`.
+- **Signatures** (PR-4c-2a). Each ELF slice is also scanned for the signature database's needles,
+  on the same fd, after its parse, as a binary inspection scans it
+  ([binary inspection](binary-inspect.md#signatures)): export names (`rpc.code_present` for an
+  export named `ggml_backend_rpc_…`), Go function names in `.gopclntab`
+  (`ollama.llama_server_launch` and `ollama.device_discovery`), and strings in read-only data
+  (none ship yet). Each needle found is a hint: the name is in the file, which
+  does not show that its code runs. Section bytes are charged to `binary_scan_bytes`. A file whose
+  own file name the database gives to an NVIDIA library is never scanned (ADR-010;
+  [below](#components)), unless the same content is also placed under a name that is scanned. The
+  exclusion goes by name, not by content: a Go executable renamed `libcudart.so.12` is not
+  scanned either, and its `cuda-runtime` claim reads `name only`, not `reference matched`, since
+  its hash is not the release's. The report's **Binaries** table shows the slice's signature keys
+  in the column **Signatures**, after **Capabilities (imports)**, in key order, or `-`. A `-`
+  means that no signature hint was found, or that the file was not scanned: a file named as an
+  NVIDIA library is never scanned (ADR-010), and an install session does not record which files
+  those were.
+- **`artifacts.identity`** (scope: the root `install`), a fourth check of `runtime_artifacts`:
+
+  | State | When |
+  |---|---|
+  | `Complete` | Discovery is complete, no binary is a Mach-O, and every ELF slice has facts and a scan without a gap (an NVIDIA library is not scanned, and adds no gap) |
+  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, …; the list is in [binary inspection](binary-inspect.md#signatures)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
+  | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
+
+  On the official v0.30.6 bundle it is `Complete`: its NVIDIA libraries are not scanned, and
+  `bin/ollama`'s `.gopclntab` (10.9 MiB) is within the budget, with both Go-function hints.
 
 ## Components
 
@@ -282,7 +311,9 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   that two entries match names no component. Every regular file of the embedded releases is
   named by exactly one entry. `ggml-backend/rpc` (`libggml-rpc.so`, upstream ggml's RPC
   backend) is in none of the embedded releases (v0.30.5–v0.30.7); a policy may deny it. NVIDIA
-  libraries are identified by name and hash only (plan ADR-010).
+  libraries are identified by name and hash only (plan ADR-010): their entries (`cuda-runtime`,
+  `cuda/cublas`, `cuda/cublasLt`) say `scan = false`, so a file whose own file name they name is
+  never scanned for signatures. A SONAME or a link's name does not count.
 - **Names.** A slice is named by the file name of each stable placement of its content, by each
   stable symlink placement whose targets lead there one bare file name at a time, in the link's
   own directory (`libggml-base.so` → `libggml-base.so.0` → `libggml-base.so.0.13.1`; at most 40
@@ -322,9 +353,9 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 
 ## Not yet
 
-- Identity from read-only strings, export names, and Go functions, the backends a library holds
-  (for example the RPC backend linked into another library, seen by its `ggml_backend_rpc_`
-  exports), and the open release set of a self-reported commit (PR-4c-2).
+- Versions and commits read through `ggml_version()` and `ggml_commit()` (PR-4c-2b), and the
+  open release set of a self-reported commit (PR-4c-2c).
+- Mach-O sections and `__gopclntab`: a Mach-O is not scanned for signatures yet.
 - Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
   it (PR-4d).
 - Releases outside the embedded set, and releases built from a source commit.

@@ -1,9 +1,10 @@
-//! Level B capability hints (PR-5a spec §4.9): one per capability import of an ELF slice. They
-//! say the import exists, never that it is called; code analysis (`binary inspect --code`, PR-5a)
-//! adds the call sites.
+//! Level B hints. Capability hints (PR-5a spec §4.9): one per capability import of an ELF slice.
+//! They say the import exists, never that it is called; code analysis (`binary inspect --code`,
+//! PR-5a) adds the call sites. Signature hints (PR-4c-2a): one per needle the scan found.
 
-use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal};
+use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal, SliceId};
 
+use crate::binary::scan::ScanOutcome;
 use crate::code::data::signatures;
 
 /// The hints of `binaries`, sorted by (slice, feature, name). A Mach-O slice has none: its facts
@@ -38,6 +39,28 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
     // An import needed at two versions is one hint.
     out.dedup();
     Ok(out)
+}
+
+/// The signature hints of `scans` (PR-4c-2a): one per needle found, in the order of `scans`
+/// and of each slice's finds. A slice not scanned has none.
+pub fn from_scans(scans: &[(SliceId, ScanOutcome)]) -> Vec<FeatureHint> {
+    scans
+        .iter()
+        .flat_map(|(slice, outcome)| {
+            match outcome {
+                ScanOutcome::Scanned { found, .. } => found.as_slice(),
+                ScanOutcome::NameAndHashOnly => &[],
+            }
+            .iter()
+            .map(move |f| FeatureHint {
+                subject: slice.clone(),
+                feature: f.feature.clone(),
+                signal: f.signal,
+                value: f.value.clone(),
+                at: f.at.clone(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

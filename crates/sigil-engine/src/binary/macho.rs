@@ -537,6 +537,7 @@ fn parse_thin<R: object::read::ReadCacheOps>(
             go: None,
             gaps,
             code: None,
+            scan: None,
         },
     ))
 }
@@ -767,6 +768,7 @@ fn parsed_slice(
         go: parsed.go,
         gaps,
         code: None,
+        scan: None,
     }
 }
 
@@ -798,6 +800,7 @@ fn unparsed_slice(offset: u64, size: u64, arch: Arch, sha256: Sha256Hex) -> Pars
         go: None,
         gaps: vec![],
         code: None,
+        scan: None,
     }
 }
 

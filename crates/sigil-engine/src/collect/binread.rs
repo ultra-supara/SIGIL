@@ -2,23 +2,50 @@
 //! `binary inspect`; PR-4b-2a spec §4.2). It:
 //! - hashes the file within a byte limit;
 //! - identifies ELF and Mach-O containers;
-//! - parses each content once, on the fd that hashed it;
-//! - keeps the facts, and the code outcomes, only from a read that saw no change.
+//! - parses each content once, on the fd that hashed it, and scans an ELF content for the
+//!   signature needles there (PR-4c-2a), unless its name says it is identified by name and hash
+//!   only;
+//! - keeps the facts, the code outcomes, and the scans only from a read that saw no change.
 
 use std::collections::BTreeMap;
 
 use sigil_model::{
-    Artifact, ArtifactId, BinaryFacts, DiscoverySource, RootId, Sha256Hex, Slice, SliceId,
+    Artifact, ArtifactId, BinaryFacts, DiscoverySource, Format, RootId, Sha256Hex, Slice, SliceId,
     Stability,
 };
 
 use super::fs::{FileRead, ReadSpec, RelPath, SafeFs};
+use crate::analyze::components::{components, ComponentDb};
+use crate::binary::needles::{needles, Needles};
+use crate::binary::scan::ScanOutcome;
 use crate::binary::{self, BinaryBudgets, ParsedArtifact};
 use crate::code::CodeOutcome;
 
+/// What the signature scan needs (PR-4c-2a): the needles, and the component database, whose
+/// `scan = false` entries name the files it never reads (ADR-010).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Scanning<'d> {
+    pub needles: &'d Needles,
+    pub components: &'d ComponentDb,
+}
+
+impl Scanning<'static> {
+    /// The embedded databases. `Err` only if one is invalid, which their tests rule out.
+    pub(crate) fn embedded() -> Result<Self, String> {
+        Ok(Scanning {
+            needles: needles()?,
+            components: components()?,
+        })
+    }
+}
+
 /// Reads `rel` under `root` without following any symlink. The file is hashed only if it is at
 /// most `limit` bytes (a larger one is `NotRead { BudgetExceeded }`), and a recognized content
-/// not in `parsed` yet is parsed. `during` runs while the file is open (the tests' hook).
+/// not in `parsed` yet is parsed. An ELF content is scanned for `scanning.needles`, unless the
+/// database names `rel`'s file name as a component with `scan = false`: its slices are then
+/// `NameAndHashOnly`. A content read so far only under such names is parsed and scanned again
+/// under a name that is scanned, so another name never hides it from the scan. `during` runs
+/// while the file is open (the tests' hook).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn read(
     fs: &SafeFs,
@@ -27,9 +54,13 @@ pub(crate) fn read(
     limit: u64,
     discovered_by: Vec<DiscoverySource>,
     budgets: BinaryBudgets,
+    scanning: Scanning<'_>,
     parsed: &mut BTreeMap<ArtifactId, ParsedArtifact>,
     during: &dyn Fn(&RelPath),
 ) -> FileRead {
+    let scanned = rel
+        .name()
+        .is_none_or(|name| scanning.components.scans(name.as_bytes()));
     let (mut read, facts) = {
         let before = &*parsed;
         fs.read_entry_with(
@@ -42,7 +73,10 @@ pub(crate) fn read(
             discovered_by,
             |input| {
                 during(rel);
-                if before.contains_key(input.artifact) {
+                if before
+                    .get(input.artifact)
+                    .is_some_and(|p| !scanned || !name_and_hash_only(p))
+                {
                     return None;
                 }
                 let digest = input
@@ -50,7 +84,22 @@ pub(crate) fn read(
                     .as_str()
                     .strip_prefix("sha256:")
                     .and_then(|hex| Sha256Hex::new(hex.to_string()).ok())?;
-                binary::parse_artifact(input.file, input.size, &digest, input.prefix, budgets)
+                let needles = scanned.then_some(scanning.needles);
+                let mut p = binary::parse_artifact(
+                    input.file,
+                    input.size,
+                    &digest,
+                    input.prefix,
+                    budgets,
+                    needles,
+                )?;
+                // Parsed without needles: its ELF slices were not scanned (ADR-010).
+                if !scanned && matches!(p.format, Format::Elf { .. }) {
+                    for slice in &mut p.slices {
+                        slice.scan.get_or_insert(ScanOutcome::NameAndHashOnly);
+                    }
+                }
+                Some(p)
             },
         )
     };
@@ -81,15 +130,29 @@ pub(crate) fn read(
     read
 }
 
-/// One `BinaryFacts` per parsed slice with container facts, and the code outcome of each slice
-/// that has one (PR-5a; with or without container facts), each sorted by slice. `parsed` holds
-/// only the contents of reads that saw no change ([`read`]), so neither part comes from a read
-/// that saw one.
+/// Whether `p` was read only under names that are not scanned.
+fn name_and_hash_only(p: &ParsedArtifact) -> bool {
+    p.slices
+        .iter()
+        .any(|s| s.scan == Some(ScanOutcome::NameAndHashOnly))
+}
+
+/// What the parsed slices give: their facts, code outcomes, and scans.
+pub(crate) type Slices = (
+    Vec<BinaryFacts>,
+    Vec<(SliceId, CodeOutcome)>,
+    Vec<(SliceId, ScanOutcome)>,
+);
+
+/// One `BinaryFacts` per parsed slice with container facts, the code outcome of each slice that
+/// has one (PR-5a; with or without container facts), and the scan of each slice that has one
+/// (PR-4c-2a), each sorted by slice. `parsed` holds only the contents of reads that saw no change
+/// ([`read`]), so no part comes from a read that saw one.
 pub(crate) fn binaries(
     parsed: BTreeMap<ArtifactId, ParsedArtifact>,
     artifacts: &[Artifact],
-) -> (Vec<BinaryFacts>, Vec<(SliceId, CodeOutcome)>) {
-    let (mut out, mut code) = (vec![], vec![]);
+) -> Slices {
+    let (mut out, mut code, mut scans) = (vec![], vec![], vec![]);
     for (id, parsed_artifact) in parsed {
         let Some(artifact) = artifacts.iter().find(|a| a.id == id) else {
             continue;
@@ -101,6 +164,9 @@ pub(crate) fn binaries(
             }
             if let Some(outcome) = parsed_slice.code {
                 code.push((slice_id.clone(), outcome));
+            }
+            if let Some(outcome) = parsed_slice.scan {
+                scans.push((slice_id.clone(), outcome));
             }
             let Some(container) = parsed_slice.container else {
                 continue;
@@ -115,5 +181,6 @@ pub(crate) fn binaries(
     }
     out.sort_by(|a, b| a.slice.cmp(&b.slice));
     code.sort_by(|a, b| a.0.cmp(&b.0));
-    (out, code)
+    scans.sort_by(|a, b| a.0.cmp(&b.0));
+    (out, code, scans)
 }

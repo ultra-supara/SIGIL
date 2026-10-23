@@ -4,9 +4,11 @@ mod common;
 
 use sigil_model::*;
 
-/// A valid binary inspection of one x86-64 ELF input, with `binary.container` `Complete`.
+/// A valid binary inspection of one x86-64 ELF input, with `binary.container` `Complete`, and
+/// without `binary.identity` (`common::without_identity`): C3's cases change the input's
+/// container alone.
 fn session(code: bool) -> Session {
-    let mut s = common::binary_session_one_elf();
+    let mut s = common::without_identity(common::binary_session_one_elf());
     s.request.code = code;
     if code {
         s.request
@@ -497,8 +499,8 @@ fn c6_an_import_hint_names_an_import_of_its_slice() {
         "{:?}",
         errors(&s)
     );
-    // Another signal is not C6's.
-    s.hints[0].signal = Signal::String;
+    // Another signal is not C6's (a signature hint is S3's: scan_rules.rs).
+    s.hints[0].signal = Signal::Needed;
     assert_eq!(code_errors(&s), Vec::<String>::new());
 }
 

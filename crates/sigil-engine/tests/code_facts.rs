@@ -36,7 +36,7 @@ fn try_slices_at(path: &Path, budgets: BinaryBudgets) -> Option<Vec<ParsedSlice>
     let n = file.read_at(&mut prefix, 0).unwrap();
     prefix.truncate(n);
     let digest = Sha256Hex::new("0".repeat(64)).unwrap();
-    parse_artifact(&file, size, &digest, &prefix, budgets).map(|p| p.slices)
+    parse_artifact(&file, size, &digest, &prefix, budgets, None).map(|p| p.slices)
 }
 
 fn with_code(code: CodeBudgets) -> BinaryBudgets {

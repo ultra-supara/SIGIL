@@ -35,8 +35,10 @@ fn argument_is_serialized_as_its_name() {
     );
 }
 
+/// Example 15 without `binary.identity` (`without_identity`): B9's cases change an input's
+/// container alone.
 fn valid() -> Session {
-    let mut s = binary_inspect();
+    let mut s = without_identity(binary_inspect());
     s.canonicalize();
     assert_eq!(s.validate(), Ok(()), "example 15 must be valid");
     s
