@@ -284,6 +284,12 @@ fn the_code_must_decode_to_one_block_that_leaves_a_lea_address_in_rax() {
     let disp = VERSION_FN as usize + 3;
     bytes[disp..disp + 4].copy_from_slice(&(-7i32).to_le_bytes());
     assert_eq!(version_why(&bytes), "its string is not in read-only data");
+    // `.data`, writable: not read-only data either.
+    let mut bytes = returns_fixture("version-gcc-O2.so");
+    let disp = VERSION_FN as usize + 3;
+    let rel = 0x4000i32 - (VERSION_FN as i32 + 7);
+    bytes[disp..disp + 4].copy_from_slice(&rel.to_le_bytes());
+    assert_eq!(version_why(&bytes), "its string is not in read-only data");
     // `mov eax, 0x2000; ret`: the address as an immediate, never a string.
     let mut bytes = returns_fixture("version-gcc-O2.so");
     let at = VERSION_FN as usize;
