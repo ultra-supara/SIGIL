@@ -153,8 +153,7 @@ The rule then yields an open question at most.
     `Unknown` return (PR-4c-2b), unless it is an NVIDIA library that was not scanned (it then has no
     returns; one with returns was scanned and is not exempt); or `Partial` with its gaps; or the
     discovery's state when discovery did not finish. A session without an install may have it
-    `Skipped` for
-    `--install-dir`, scoped to the audit;
+    `Skipped` for `--install-dir`, scoped to the audit;
   - S3 (PR-4c-2a): a signature hint is of a slice with ELF facts: an `Export` hint at
     `Symbol(value)`, a `GoFunction` hint in `.gopclntab` of a slice with Go build info, a
     `String` hint in `.rodata`, `.rodata.*`, or `.lrodata`. No slice of an input whose

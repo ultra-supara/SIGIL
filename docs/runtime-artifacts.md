@@ -367,7 +367,7 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   first two (semver reads `0.y` as breaking). Two keys are compared over the numbers both have, so
   `0` (a SONAME) agrees with `0.13` and with `0.12`; `0.13.1` agrees with `0.13.2`; `0.12.0`
   disagrees with `0.13.1`; `1` disagrees with `0.13`. The names' versions and those of a field
-  whose role names the component (`ggml_version` for `ggml-base`) are one kind: the version a file
+  whose `of` names the component (`ggml_version` for `ggml-base`) are one kind: the version a file
   reports itself is compared with the versions in its names. Every other version field is its own
   kind, compared with no other version. `libggml-base`'s `0.13.1` (file name), `0` (SONAME), and
   `0.13.1` (`ggml_version`) agree.

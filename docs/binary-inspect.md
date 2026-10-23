@@ -247,8 +247,8 @@ so its claim reads `name only`, not `reference matched`
 
 | The input | `binary.identity` |
 |---|---|
-| An ELF, every scan done within the budget | `Complete` |
-| An ELF with a scan cut short | `Partial`, listing the gaps below; the hints found are kept |
+| An ELF, every scan done within the budget and every returned value read | `Complete` |
+| An ELF with a scan cut short or a returned value not read | `Partial`, listing the gaps below; the hints found are kept |
 | An ELF named as an NVIDIA library | `OutOfScope` (`NVIDIA library: identified by name and hash only (ADR-010)`) |
 | A Mach-O or fat Mach-O | `Unsupported` (`string scan: ELF only`) |
 | An ELF without facts | `Partial` (`not parsed`) |
@@ -265,7 +265,8 @@ The gaps of a scan cut short, and of a value not read:
   nowhere (a stripped or renamed table). Its other sections are not searched for them;
 - `string scan: a name not read`: a section's or an export's name could not be read; or the
   loader has dynamic symbols (`DT_SYMTAB`) and the parse has no `.dynsym` that agrees with them,
-  or the loader's dynamic table could not be read. A needle may be there unseen;
+  or the loader's dynamic table could not be read. A needle or a known function may be there
+  unseen;
 - `string scan: a read failed`: a read of a section failed, and the rest of that section was not
   read; or a section passes the end of the file, and only its bytes in the file were read;
 - `returned value: <function>: <why>`: what an exported function returns was not read
@@ -332,12 +333,13 @@ The function's bytes and the string are read with `pread` and charged to `binary
 names go through the parse's cache. A return cut by the budget gives two gaps:
 `returned value: <function>: not read: binary_scan_bytes exceeded` and the scan's
 `string scan: binary_scan_bytes <limit> exceeded`. Each value is recorded in the file's facts
-(`returns`), and an `Unknown` one is the `binary.identity` gap
-`returned value: <function>: <why>`, never a `binary.container` gap. A file that exports neither
-function has no return, and no gap. On an arm64 build of `libggml-base`, both values are
+(`returns`), and an `Unknown` one is the `binary.identity` gap `returned value: <function>: <why>`,
+never a `binary.container` gap. A file that exports neither function has no return, and no gap,
+unless its `.dynsym` cannot be checked against the loader's table: then a function not found there
+gives `string scan: a name not read`. On an arm64 build of `libggml-base`, both values are
 `not decoded: x86-64 only`, so `binary.identity` is `Partial` and the result `INCOMPLETE`. A file
-named as an NVIDIA library is not scanned, and a relocatable object has no dynamic symbols:
-neither is read.
+named as an NVIDIA library is not scanned, and a relocatable object has no dynamic symbols: neither
+is read.
 
 ## Components
 
