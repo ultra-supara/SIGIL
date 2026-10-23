@@ -592,7 +592,8 @@ impl ExpectedIdentity {
 /// scan looks for in `.gopclntab`, so it cannot be `Complete`. Likewise a linked ELF whose
 /// loader's dynamic symbols the parse did not read (one of [`DYNSYM_UNREAD_GAPS`] in its facts)
 /// must list [`SCAN_NAME_NOT_READ`]: the database has an export needle. Engine tests pin both
-/// needles.
+/// needles. Each `Unknown` return of the input's facts must be listed as its
+/// [`returned_value_gap`] (PR-4c-2b).
 pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<ExpectedIdentity, String> {
     let state = container_state(s, i)?;
     if !matches!(

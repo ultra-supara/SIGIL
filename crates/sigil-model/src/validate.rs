@@ -233,7 +233,7 @@ pub enum ValidationError {
     /// (V11).
     ReleaseCoverage { complete: bool },
     /// A `BinaryFacts` record, a `Declares` relation, or `artifacts.identity` disagrees with the
-    /// session (B1–B8; S2, PR-4c-2a).
+    /// session (B1–B8, B11; S2, PR-4c-2a).
     Binary { slice: String, why: String },
     /// A binary inspection's input, its root, its `binary.container`, or its `binary.identity`
     /// disagrees with the session (B9, B10; PR-4b-2a; S1, PR-4c-2a).
@@ -1606,6 +1606,16 @@ impl<'a> Validator<'a> {
                                 ));
                             }
                         }
+                    }
+                    // B11 (PR-4c-2b): the scan never looks for functions in a relocatable object.
+                    if matches!(
+                        artifact.format,
+                        crate::artifact::Format::Elf {
+                            kind: crate::artifact::ElfType::Rel
+                        }
+                    ) && !elf.returns.is_empty()
+                    {
+                        why.push("a relocatable object has no returns".to_string());
                     }
                     // B11 (PR-4c-2b): one return per function, sorted; a string with where it
                     // was read, an unknown value with its function alone; never a number. An
@@ -3228,10 +3238,11 @@ fn c5(value: &ArgValue) -> Vec<String> {
 /// [`returned_value_gap`]; PR-4c-2b), unless an NVIDIA library (ADR-010), which is never scanned
 /// and adds no gap.
 ///
-/// That exception holds for any NVIDIA claim on the slice: as for `binary.identity`'s
-/// `OutOfScope` ([`ExpectedIdentity::Scanned`]), the model cannot tell a file the engine
-/// excludes by its placement's file name from one whose SONAME alone is NVIDIA's, which the
-/// engine scans. The engine is the source of truth, and its tests pin the exclusion.
+/// That exception holds for any NVIDIA claim on a slice without returns (such a file is never
+/// scanned, so it has none; a return proves the file was scanned, as S1 says): as for
+/// `binary.identity`'s `OutOfScope` ([`ExpectedIdentity::Scanned`]), the model cannot tell a file
+/// the engine excludes by its placement's file name from one whose SONAME alone is NVIDIA's,
+/// which the engine scans. The engine is the source of truth, and its tests pin the exclusion.
 ///
 /// [`ExpectedIdentity::Scanned`]: crate::binary_input::ExpectedIdentity::Scanned
 /// [`NoSectionsGap::Must`]: crate::binary_input::NoSectionsGap::Must
@@ -3241,7 +3252,8 @@ fn c5(value: &ArgValue) -> Vec<String> {
 fn install_scanned(s: &Session) -> bool {
     use crate::artifact::Format;
     use crate::binary_input::{
-        exports_unread, name_and_hash_only, no_sections_gap, unread_returns, NoSectionsGap,
+        any_returns, exports_unread, name_and_hash_only, no_sections_gap, unread_returns,
+        NoSectionsGap,
     };
     let discovery = s
         .coverage
@@ -3277,7 +3289,7 @@ fn install_scanned(s: &Session) -> bool {
                         (no_sections_gap(b) != NoSectionsGap::Must
                             && !exports_unread(b, kind)
                             && unread_returns(b).is_empty())
-                            || name_and_hash_only(s, &x.id)
+                            || (name_and_hash_only(s, &x.id) && !any_returns(b))
                     })
             })
     });

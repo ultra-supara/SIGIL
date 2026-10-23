@@ -147,8 +147,8 @@ fn canonical_order_sorts_records_and_imports_but_keeps_file_order() {
 // --- validation B1–B8 -----------------------------------------------------------------------
 
 use sigil_model::{
-    CheckId, Coverage, CoverageState, DeclKind, Ref, Relation, Session, ValidationError,
-    ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY,
+    CheckId, Coverage, CoverageState, DeclKind, ElfType, Format, Ref, Relation, Session,
+    ValidationError, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY,
 };
 
 /// Golden example 12 (one ELF placement under the install root) with valid facts for its slice,
@@ -506,4 +506,20 @@ fn b11_returns_are_sorted_strings_at_their_symbol_and_address_or_unknown() {
     rejected_for(&u, complaint);
     elf(&mut u).returns[0].at.pop();
     assert_eq!(u.validate(), Ok(()));
+    // An unknown value at another function's symbol, or at none.
+    let mut u = s.clone();
+    elf(&mut u).returns[0].value = DataValue::Unknown { why: "x".into() };
+    elf(&mut u).returns[0].at = vec![Loc::Symbol(t("ggml_version"))];
+    rejected_for(&u, complaint);
+    elf(&mut u).returns[0].at = vec![];
+    rejected_for(&u, complaint);
+}
+
+#[test]
+fn b11_a_relocatable_object_has_no_returns() {
+    let mut s = base();
+    elf(&mut s).returns = vec![returned("ggml_version", "0.13.1", 0x2000)];
+    assert_eq!(s.validate(), Ok(()));
+    s.artifacts[0].format = Format::Elf { kind: ElfType::Rel };
+    rejected_for(&s, "a relocatable object has no returns");
 }

@@ -1107,4 +1107,9 @@ fn s2_a_returned_value_not_read_keeps_artifacts_identity_open() {
     );
     let t = with_install_identity(s, CoverageState::Complete);
     assert_eq!(binary_errors(&t), Vec::<String>::new());
+    // An NVIDIA claim does not excuse a slice with returns: they prove it was scanned.
+    let mut u = with_returns(install_session(), vec![not_returned("ggml_version", why)]);
+    u.components[0].component = ComponentKey::new("cuda-runtime").unwrap();
+    let t = with_install_identity(u, CoverageState::Complete);
+    assert_eq!(binary_errors(&t), complaint);
 }
