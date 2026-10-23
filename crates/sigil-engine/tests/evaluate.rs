@@ -607,6 +607,19 @@ fn a_denied_name_of_a_conflicting_claim_is_a_violation_of_that_claim() {
         .policy_violations
         .iter()
         .all(|v| v.subject == s.policy_violations[0].subject));
+    let mut rules: Vec<&str> = s
+        .policy_violations
+        .iter()
+        .map(|v| v.policy_rule.as_str())
+        .collect();
+    rules.sort_unstable();
+    assert_eq!(
+        rules,
+        [
+            "policy:components.deny.ggml",
+            "policy:components.deny.ggml-backend/rpc"
+        ]
+    );
     // A name the database maps to no component matches nothing more.
     let mut s = example("01-complete-pass");
     let artifact = s.components[0].subject.artifact();
@@ -615,6 +628,22 @@ fn a_denied_name_of_a_conflicting_claim_is_a_violation_of_that_claim() {
         IdentityAssertion::SelfName {
             kind: NameKind::Soname,
             value: UntrustedText::new("libunknown.so"),
+            at: EvidenceRef::Artifact { artifact },
+        },
+    );
+    run(&mut s, &deny("ggml-backend/rpc"));
+    assert!(s.policy_violations.is_empty());
+    // An embedded value is not a name: only self-names name a component.
+    let mut s = example("01-complete-pass");
+    let artifact = s.components[0].subject.artifact();
+    s.components[0].assertions.insert(
+        1,
+        IdentityAssertion::Embedded {
+            field: "LLAMA_COMMIT".into(),
+            value: UntrustedText::new("libggml-rpc.so"),
+            method: ExtractMethod::DataSymbolPointer {
+                symbol: UntrustedText::new("LLAMA_COMMIT"),
+            },
             at: EvidenceRef::Artifact { artifact },
         },
     );

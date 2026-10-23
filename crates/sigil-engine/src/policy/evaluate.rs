@@ -13,6 +13,10 @@
 //! because only a new analysis can update the technical conclusions. The same entry point serves
 //! the first evaluation and a later re-evaluation. Findings, open questions, their conditions and
 //! evidence, and `default_severity` are never touched. An ignored finding stays, with its reason.
+//!
+//! A deny entry is matched through the embedded component database of the build that evaluates,
+//! so a session re-evaluated by a build with other names may gain or lose violations (the same
+//! build is deterministic).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -34,9 +38,10 @@ pub enum PolicyWarning {
     OverrideExpired { rule: RuleId, expires: Date },
 }
 
-/// Why a session cannot be evaluated with a policy. The policy would change the analysis itself,
-/// not only the decisions over it, so the session must be analyzed again with this policy.
-/// [`evaluate`] leaves the session unchanged when it returns one of these.
+/// Why a session cannot be evaluated with a policy. [`evaluate`] leaves the session unchanged when
+/// it returns one of these. For `AssumptionsChanged` and `RequiredChecksChanged`, the policy would
+/// change the analysis itself, not only the decisions over it, so the session must be analyzed
+/// again with this policy; `ComponentDatabase` is an internal error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluateError {
     /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
@@ -50,7 +55,7 @@ pub enum EvaluateError {
         policy: Vec<CheckId>,
     },
     /// The embedded component database, which a deny entry is matched through (PR-4c-2b), is
-    /// invalid. Its tests rule this out.
+    /// invalid. Its test `the_embedded_database_parses` rules this out.
     ComponentDatabase(String),
 }
 
@@ -86,6 +91,8 @@ impl std::error::Error for EvaluateError {}
 /// Fails, without changing `session`, when the policy's accepted assumptions or required checks
 /// differ from those recorded in the session ([`EvaluateError`]). Required checks are compared as
 /// sets, so a session saved as canonical JSON and loaded again re-evaluates with the same policy.
+/// It also fails, without changing `session`, when the policy has a deny entry and the embedded
+/// component database is invalid (an internal error that the database's tests rule out).
 pub fn evaluate(
     session: &mut Session,
     policy: &Policy,
@@ -111,7 +118,11 @@ pub fn evaluate(
             policy: required,
         });
     }
-    let db = components().map_err(EvaluateError::ComponentDatabase)?;
+    let db: Option<&ComponentDb> = if policy.deny.is_empty() {
+        None
+    } else {
+        Some(components().map_err(EvaluateError::ComponentDatabase)?)
+    };
 
     // The policy's own entry replaces any earlier one, in place.
     let at = session
@@ -181,7 +192,7 @@ pub fn evaluate(
                 .iter()
                 .filter(move |claim| {
                     claim.status != IdentityStatus::Unidentified
-                        && names(db, claim).contains(&&deny.component)
+                        && db.is_some_and(|db| names(db, claim).contains(&&deny.component))
                 })
                 .map(move |claim| PolicyViolation {
                     policy_rule: deny.source.clone(),
@@ -207,8 +218,8 @@ pub fn evaluate(
 }
 
 /// The components a claim is named as (PR-4c-2b spec §6): its own, and the one each of its
-/// self-names names in `db`. More than one only for a `Conflicting` claim, which a deny entry of
-/// any of them matches; its violation's subject is still the claim, of its own component.
+/// self-names names in `db`. More than one only for a derived `Conflicting` claim, which a deny
+/// entry of any of them matches; its violation's subject is still the claim, of its own component.
 fn names<'c>(db: &'c ComponentDb, claim: &'c ComponentClaim) -> BTreeSet<&'c ComponentKey> {
     let mut keys = BTreeSet::from([&claim.component]);
     for a in &claim.assertions {
