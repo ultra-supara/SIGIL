@@ -536,7 +536,8 @@ fn binary_returned_value_reads_with_pread_only() {
     let on_input = input_reads(&r, &input);
     // `ggml_commit`'s 8 bytes at 0x1110 and 189 bytes of its string from 0x2007 to the end of
     // the read-only segment (0x20c4); `ggml_version`'s 8 bytes at 0x1100 and 196 from 0x2000.
-    // File offsets equal addresses in this fixture (README, facts marked †).
+    // File offsets equal addresses in the executable and read-only segments of this fixture
+    // (README, facts marked †).
     for (len, offset) in [(8, 0x1110), (189, 0x2007), (8, 0x1100), (196, 0x2000)] {
         assert!(
             has_pread(&on_input, len, offset),

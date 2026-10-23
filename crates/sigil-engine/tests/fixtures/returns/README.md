@@ -34,7 +34,7 @@ Every file is a shared object with SONAME `libggml-base.so.0`, as v0.30.6's
 
 | File | Source | Flags | Shape |
 |---|---|---|---|
-| `version-gcc-O2.so` | `version.c` | gcc `-O2` | both functions `lea X(%rip),%rax; ret` (8 bytes); † `ggml_version` at `0x1100` returns `0x2000` (`0.13.1`), `ggml_commit` at `0x1110` returns `0x2007` (`6f3a9f3de`); † the read-only segment's file bytes end at `0x20c4`, the executable segment's at `0x1121`; † file offsets equal addresses (the safety case reads by file offset); † the first `.rela.dyn` entry, at file offset `0x3b0`, is an `R_X86_64_RELATIVE` |
+| `version-gcc-O2.so` | `version.c` | gcc `-O2` | both functions `lea X(%rip),%rax; ret` (8 bytes); † `ggml_version` at `0x1100` returns `0x2000` (`0.13.1`), `ggml_commit` at `0x1110` returns `0x2007` (`6f3a9f3de`); † the read-only segment's file bytes end at `0x20c4`, the executable segment's at `0x1121`; † file offsets equal addresses in the executable and read-only segments (the safety case reads by file offset); † the first `.rela.dyn` entry, at file offset `0x3b0`, is an `R_X86_64_RELATIVE` |
 | `version-1.0.0-gcc-O2.so` | `version.c`, `VERSION` `1.0.0` | gcc `-O2` | as `version-gcc-O2.so`; † `ggml_version` returns `1.0.0` |
 | `version-relr-gcc-O2.so` | `version.c` | gcc `-O2`, `-z pack-relative-relocs` | as `version-gcc-O2.so`, with `DT_RELR`; † `.relr.dyn`'s first entry is an address (even) |
 | `version-long-gcc-O2.so` | `version.c`, `VERSION` 300 `x` | gcc `-O2` | the 300 bytes in `.rodata`; † `ggml_version` returns `0x2000`, file offset `0x2000` |
