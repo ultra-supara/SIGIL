@@ -238,15 +238,17 @@ pub fn add_profile_knowledge(s: &mut Session) {
     add_knowledge(s, KnowledgeKind::Profile, "ggml.backend-loader", "2", 0xa2);
 }
 
-/// libggml at `lib/ollama/libggml.so.0.13.1`, reference-matched against the official manifest:
-/// the claim's `KnownHash` and the row it rests on (PR-4c-1 I1).
+/// libggml at `lib/ollama/libggml.so.0.13.1`, through [`add_ollama_library`].
 pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
     add_ollama_library(s, sha_hex, "libggml.so.0.13.1", "ggml")
 }
 
 /// The library `file` (a `.so.0.13.1`) at `lib/ollama/<file>`, claimed as `component` and
-/// reference-matched against the official manifest, as [`add_ggml`] does for libggml.
+/// reference-matched against the official manifest: the claim's `KnownHash` and the row it rests
+/// on (PR-4c-1 I1).
 pub fn add_ollama_library(s: &mut Session, sha_hex: &str, file: &str, component: &str) -> Placed {
+    // The claim's file-name version is `0.13.1`.
+    assert!(file.ends_with(".so.0.13.1"), "{file}");
     let member = format!("lib/ollama/{file}");
     let g = add_binary(s, sha_hex, &member, Arch::X86_64, 1001);
     add_knowledge(
@@ -1268,7 +1270,7 @@ pub fn conflicting_identity() -> Session {
             files: vec![g.inst.clone()],
         },
     });
-    // The per-placement comparison that the claim and the release rest on is `add_ggml`'s.
+    // The per-placement comparison that the claim and the release rest on is `add_ollama_library`'s.
     pass_complete(&mut s);
     s
 }

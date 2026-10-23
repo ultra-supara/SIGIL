@@ -2495,6 +2495,35 @@ fn a_binary_s_component_is_on_its_summary_line_and_in_its_facts() {
     );
 }
 
+/// `ggml_version()`'s returned value is a version of libggml-base, and F-I2 holds on it (PR-4c-2b).
+#[test]
+fn ggml_version_is_a_version_and_f_i2_holds_on_the_fixtures() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../sigil-engine/tests/fixtures/returns");
+    for (fixture, versions, identity) in [
+        (
+            "version-gcc-O2.so",
+            "0 (SONAME), 0.13.1 (ggml_version), 0.13.1 (file name)",
+            "name only",
+        ),
+        (
+            "version-1.0.0-gcc-O2.so",
+            "0 (SONAME), 0.13.1 (file name), 1.0.0 (ggml_version)",
+            "conflicting",
+        ),
+    ] {
+        let d = TempDir::new().unwrap();
+        let path = d.path().join("libggml-base.so.0.13.1");
+        fs::copy(fixtures.join(fixture), &path).unwrap();
+        let r = binary(&[&path, &"--format", &"md"]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        for (label, value) in [("Versions", versions), ("Identity", identity)] {
+            let row = format!("| {} | {} |", esc_md(label), esc_md(value));
+            assert!(r.stdout.contains(&row), "{fixture}: {row}\n{}", r.stdout);
+        }
+    }
+}
+
 #[test]
 fn the_install_report_shows_each_binary_s_component() {
     let models = store(true);

@@ -1,6 +1,7 @@
 //! Every golden binary inspection carries exactly the component claims the engine derives from
 //! its facts (PR-4c-1 plan P-l), as `example_hints.rs` does for hints. The install examples'
-//! claims are specification examples: they have no binary facts to derive them from.
+//! claims are specification examples: they have no binary facts to derive them from. Example 12's
+//! claim is checked against facts this file supplies (PR-4c-2b).
 
 use std::path::Path;
 
@@ -52,6 +53,7 @@ fn example_12_is_the_claim_the_engine_derives_from_its_facts() {
         slice: session.components[0].subject.clone(),
         container: ContainerFacts::Elf(ElfFacts {
             interp: None,
+            // No SONAME: one would add a self-name the example does not have.
             soname: None,
             needed: vec![],
             rpath: vec![],
@@ -77,5 +79,5 @@ fn example_12_is_the_claim_the_engine_derives_from_its_facts() {
     let mut derived = session.clone();
     derived.components = derive(&session.instances, &[facts], &session.reference_matches).unwrap();
     derived.canonicalize();
-    assert_eq!(derived.components, session.components);
+    assert_eq!(session.components, derived.components);
 }
