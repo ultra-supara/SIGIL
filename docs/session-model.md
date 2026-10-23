@@ -150,8 +150,8 @@ The rule then yields an open question at most.
     install root, and is `Complete` only with a complete discovery and facts for every slice of
     the install's ELF and Mach-O files, none of them a Mach-O, and none a Go ELF without section
     headers, a linked ELF whose loader's dynamic symbols the parse did not read, or one with an
-    `Unknown` return (PR-4c-2b), unless it is an NVIDIA library without returns; or `Partial` with
-    its gaps; or the discovery's state
+    `Unknown` return (PR-4c-2b), unless it is an NVIDIA library that was not scanned (it then has no returns; one with
+    returns was scanned and is not exempt); or `Partial` with its gaps; or the discovery's state
     when discovery did not finish. A session without an install may have it `Skipped` for
     `--install-dir`, scoped to the audit;
   - S3 (PR-4c-2a): a signature hint is of a slice with ELF facts: an `Export` hint at

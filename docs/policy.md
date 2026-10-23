@@ -185,9 +185,9 @@ Evaluation changes only what the policy owns.
 - **Open questions:** the `[open_questions]` treatment applies, with source
   `policy:open_questions.default`.
 - **Denied components:**
-  - Every component claim of a denied component, or one that a self-name names as that
-    component, becomes a `PolicyViolation`. This includes name-only claims and excludes
-    `Unidentified` ones. Claims come from identification
+  - Every component claim of a denied component, or one that any of the claim's
+    names (file name or SONAME) names, becomes a `PolicyViolation`. This includes name-only
+    claims and excludes `Unidentified` ones. Claims come from identification
     ([runtime artifacts](runtime-artifacts.md#components)), so a deny entry must name a
     component of the database; any other key is fatal (below).
   - The violation's evidence is the claim's artifact.

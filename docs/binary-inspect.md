@@ -254,7 +254,7 @@ so its claim reads `name only`, not `reference matched`
 | An ELF without facts | `Partial` (`not parsed`) |
 | Not a supported container, over `binary_bytes`, or changed or removed while read | the `binary.container` status |
 
-The gaps of a scan cut short:
+The gaps of a scan cut short, and of a value not read:
 - `string scan: binary_scan_bytes <limit> exceeded`: the next read would pass the budget, and
   reading stopped there;
 - `string scan: no section headers`: a needle that looks in sections applies (with this database,
@@ -300,9 +300,9 @@ The Capabilities table that follows keeps the import hints. A Mach-O gets no sig
 The scan's walk of the exports also finds the functions the component database reads
 (`read = "function"`): `ggml_version` and `ggml_commit`, which upstream ggml defines in
 `libggml-base` as `return "<constant>";`. What each returns is read first, before the needles,
-without running it (PR-4c-2b). The function is decoded with the code analyzer's decoder and its
-register values followed with its value machine (PR-5a), and the value is a string only when all
-of these hold:
+without running it (PR-4c-2b). The function is decoded with the same x86-64 decoder and
+register tracking that code analysis uses (PR-5a), and the value is a string only when all of
+these hold:
 - the file is x86-64 ELF64 little-endian;
 - the name is defined once among the exports, as a function (`STT_FUNC`; an `STT_GNU_IFUNC` is
   not one) of 1 to 64 bytes, inside an executable segment's file bytes;
@@ -315,21 +315,25 @@ of these hold:
 The shapes compilers give are read: `lea; ret` (gcc and clang at `-O2`), with a frame
 (`push rbp; mov rbp,rsp; …; pop rbp`) at `-O0`, and with `endbr64` first. gcc's usual non-PIE form,
 `mov eax, imm32`, puts an immediate in the register, not a `lea` address, so it is `Unknown` by
-design (`returns no constant string address`). Otherwise the value is `Unknown`, with its
-reason: `not decoded: x86-64 only`, `defined more than once`, `not a function (<type>)`,
-`size not recorded`, `longer than 64 bytes`, `not in an executable segment`,
-`DT_REL relocations are not modeled`, a decoder failure, `not one straight block ending in ret`,
-`returns no constant string address`, `its string is not in read-only data`,
-`its string has no NUL within 256 bytes`,
-`its string has no NUL before the end of read-only data`, `a relocation writes its code`,
-`a relocation writes its string`, `relocations not read: <why>` (for example
-`relocations not read: PT_DYNAMIC not read`, an unread `PT_DYNAMIC`), `a read failed`, or
-`not read: binary_scan_bytes exceeded`.
+design (`returns no constant string address`). Otherwise the value is `Unknown`, with one of
+these reasons:
+- not eligible: `not decoded: x86-64 only`, `defined more than once`, `not a function (<type>)`,
+  `size not recorded`, `longer than 64 bytes`, `not in an executable segment`;
+- the code: `DT_REL relocations are not modeled`, the decoder's own failure,
+  `not one straight block ending in ret`, `returns no constant string address`;
+- the string: `its string is not in read-only data`, `its string has no NUL within 256 bytes`,
+  `its string has no NUL before the end of read-only data`;
+- relocations: `a relocation writes its code`, `a relocation writes its string`,
+  `relocations not read: <why>` (for example `relocations not read: PT_DYNAMIC not read`, when
+  `PT_DYNAMIC` cannot be read);
+- reading: `a read failed`, `not read: binary_scan_bytes exceeded`.
 
 The function's bytes and the string are read with `pread` and charged to `binary_scan_bytes`;
-names go through the parse's cache. Each value is recorded in the file's facts (`returns`), and
-an `Unknown` one is the `binary.identity` gap `returned value: <function>: <why>`, never a
-`binary.container` gap. A file that exports neither function has no return, and no gap. On an
+names go through the parse's cache. A return cut by the budget gives two gaps:
+`returned value: <function>: not read: binary_scan_bytes exceeded` and the scan's
+`string scan: binary_scan_bytes <limit> exceeded`. Each value is recorded in the file's facts
+(`returns`), and an `Unknown` one is the `binary.identity` gap
+`returned value: <function>: <why>`, never a `binary.container` gap. A file that exports neither function has no return, and no gap. On an
 arm64 build of `libggml-base`, both values are `not decoded: x86-64 only`, so `binary.identity` is
 `Partial` and the result `INCOMPLETE`. A file named as an NVIDIA library is not scanned, and a
 relocatable object has no dynamic symbols: neither is read.

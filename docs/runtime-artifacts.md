@@ -273,13 +273,16 @@ slice in the session, read from the file's own bytes. They are observations, not
   ([binary inspection](binary-inspect.md#signatures)): export names (`rpc.code_present` for an
   export named `ggml_backend_rpc_…`), Go function names in `.gopclntab`
   (`ollama.llama_server_launch` and `ollama.device_discovery`), and strings in read-only data
-  (none ship yet). Each needle found is a hint: the name is in the file, which
-  does not show that its code runs. The same walk of the exports finds `ggml_version` and
-  `ggml_commit`, and the strings they return are read first, without running them (PR-4c-2b;
-  [binary inspection](binary-inspect.md#returned-values)): `libggml-base` returns `0.13.1` and
-  `6f3a9f3de` on the official v0.30.6 bundle. Section bytes, and the functions' bytes and strings,
-  are charged to `binary_scan_bytes`. A file whose
-  own file name the database gives to an NVIDIA library is never scanned (ADR-010;
+  (none ship yet). Each needle found is a hint: the name is in the file, which does not show
+  that its code runs. Section bytes are charged to `binary_scan_bytes`.
+
+  The same walk of the exports finds `ggml_version` and `ggml_commit`. These are not needles: the
+  strings they return are read first, without running them (PR-4c-2b;
+  [binary inspection](binary-inspect.md#returned-values)), and charged to `binary_scan_bytes` with
+  the functions' bytes. `libggml-base` returns `0.13.1` and `6f3a9f3de` on the official v0.30.6
+  bundle.
+
+  A file whose own file name the database gives to an NVIDIA library is never scanned (ADR-010;
   [below](#components)), unless the same content is also placed under a name that is scanned. The
   exclusion goes by name, not by content: a Go executable renamed `libcudart.so.12` is not
   scanned either, and its `cuda-runtime` claim reads `name only`, not `reference matched`, since
@@ -320,14 +323,15 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   libraries are identified by name and hash only (plan ADR-010): their entries (`cuda-runtime`,
   `cuda/cublas`, `cuda/cublasLt`) say `scan = false`, so a file whose own file name they name is
   never scanned for signatures. A SONAME or a link's name does not count.
-- **Embedded fields** (PR-4c-2b), in the same database, say what an embedded value is:
+- **Embedded fields** (PR-4c-2b), in the same database, give each embedded value a role: a
+  version, a commit, or none.
 
   | Field | Read from | Role |
   |---|---|---|
   | `LLAMA_BUILD_NUMBER` | a known data symbol | a version of its own kind (it counts builds) |
   | `LLAMA_COMMIT` | a known data symbol | a commit |
   | `ggml_commit` | what the exported function returns | a commit |
-  | `ggml_version` | what the exported function returns | a version, `ggml-base`'s own (F-I2) |
+  | `ggml_version` | what the exported function returns | a version, `ggml-base`'s own |
 
   An embedded value whose field is not listed (`LLAMA_COMPILER`, `LLAMA_BUILD_TARGET`, Go build
   info) has no role.
@@ -360,12 +364,13 @@ database knows one of its names (PR-4c-1). Nothing more is read.
   | `NameOnly` | A name or an embedded value |
 
   **Major keys** (PR-4c-2b). A version's major key is its first number, or, when that is `0`, its
-  first two (semver reads `0.y` as breaking); two keys are compared only where both have a number.
-  So `0` (a SONAME) agrees with `0.13.1`, `0.13.1` with `0.13.2`, and `0.12.0` disagrees with
-  `0.13.1`, as `1` does with `0.13`. The names' versions and those of a field whose role names the
-  component (`ggml_version` for `ggml-base`) are one kind (F-I2); every other version field is its
-  own kind. `libggml-base`'s `0.13.1` (file name), `0` (SONAME), and `0.13.1` (`ggml_version`)
-  agree.
+  first two (semver reads `0.y` as breaking). Two keys are compared over the numbers both have, so
+  `0` (a SONAME) agrees with `0.13` and with `0.12`; `0.13.1` agrees with `0.13.2`; `0.12.0`
+  disagrees with `0.13.1`; `1` disagrees with `0.13`. The names' versions and those of a field
+  whose role names the component (`ggml_version` for `ggml-base`) are one kind: the version a file
+  reports itself is compared with the versions in its names. Every other version field is its own
+  kind, compared with no other version. `libggml-base`'s `0.13.1` (file name), `0` (SONAME), and
+  `0.13.1` (`ggml_version`) agree.
 
   `Unidentified` is never given: a claim exists only when the database knows a name. On the
   official v0.30.6 bundle, each of the 34 files is `ReferenceMatched`, with a matched `KnownHash`
