@@ -150,6 +150,15 @@ pub struct ElfFacts {
     /// The known data symbols present (plan §4.4), sorted by symbol. In a relocatable object
     /// (`ET_REL`) each is `Unknown`, with its gap: its data is not linked yet.
     pub data: Vec<DataSymbol>,
+    /// What the known exported functions return (PR-4c-2b), sorted by function: one entry per
+    /// function the signature scan found among the exports, read without running it. An
+    /// `Unknown` one's gap is in the identity coverage ([`returned_value_gap`]), never in `gaps`.
+    /// Optional on read (empty when missing); written only when non-empty, so facts without one
+    /// keep their bytes.
+    ///
+    /// [`returned_value_gap`]: crate::binary_input::returned_value_gap
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returns: Vec<FunctionReturn>,
 }
 
 /// An undefined symbol: a dynamic import, or for a relocatable object (`ET_REL`) an undefined
@@ -171,6 +180,19 @@ pub struct DataSymbol {
     pub symbol: String,
     pub value: DataValue,
     /// The symbol (`Loc::Symbol`), then, for a string, where it was read (`Loc::VAddr`).
+    pub at: Vec<Loc>,
+}
+
+/// What one known exported function returns (PR-4c-2b): the constant string whose address it
+/// returns, read without running it, or `Unknown` with the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionReturn {
+    /// A function the component database reads (`read = "function"`), e.g. `ggml_version`.
+    pub function: String,
+    /// `Text` or `Unknown`, never `Int`.
+    pub value: DataValue,
+    /// The function (`Loc::Symbol`), then, for a string, where it was read (`Loc::VAddr`).
     pub at: Vec<Loc>,
 }
 

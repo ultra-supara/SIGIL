@@ -1601,6 +1601,7 @@ pub fn binary_inspect() -> Session {
             },
         ],
         data: vec![],
+        returns: vec![],
     };
     for needed in &facts.needed {
         s.relations.push(Relation::Declares {
@@ -1815,6 +1816,7 @@ pub fn binary_code() -> Session {
                 weak: false,
             }],
             data: vec![],
+            returns: vec![],
         }),
         go: None,
         gaps: vec![],

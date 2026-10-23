@@ -92,6 +92,7 @@ mod tests {
                     })
                     .collect(),
                 data: vec![],
+                returns: vec![],
             }),
             go: None,
             gaps: vec![],

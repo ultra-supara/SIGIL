@@ -460,6 +460,7 @@ mod tests {
                 exports: 0,
                 imports: vec![],
                 data,
+                returns: vec![],
             }),
             go: None,
             gaps: vec![],

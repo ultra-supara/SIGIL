@@ -207,6 +207,7 @@ fn empty() -> ElfFacts {
         exports: 0,
         imports: vec![],
         data: vec![],
+        returns: vec![],
     }
 }
 

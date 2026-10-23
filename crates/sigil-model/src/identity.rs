@@ -82,6 +82,9 @@ pub enum ExtractMethod {
     StringScan,
     /// Parsed from Go build info.
     GoBuildInfo,
+    /// The exported function was decoded, not run: it returns the address of this constant
+    /// string (PR-4c-2b).
+    FunctionReturn { function: UntrustedText },
 }
 
 /// Signature verification state.

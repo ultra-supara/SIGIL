@@ -1516,9 +1516,9 @@ impl<'a> Validator<'a> {
         }
     }
 
-    /// B1–B8 (PR-4b-1): binary facts against the session. The facts themselves are the parser's
-    /// observations: `validate` checks that the stored results agree with each other, not that
-    /// the gaps are right (that is the parser's contract).
+    /// B1–B8 (PR-4b-1) and B11 (PR-4c-2b): binary facts against the session. The facts
+    /// themselves are the parser's observations: `validate` checks that the stored results agree
+    /// with each other, not that the gaps are right (that is the parser's contract).
     fn binaries(&mut self) {
         use crate::binary::{
             macho_architecture, ContainerFacts, DataValue, ARTIFACTS_CONTAINER,
@@ -1605,6 +1605,30 @@ impl<'a> Validator<'a> {
                                     d.symbol
                                 ));
                             }
+                        }
+                    }
+                    // B11 (PR-4c-2b): one return per function, sorted; a string with where it
+                    // was read, an unknown value with its function alone; never a number. An
+                    // unknown one's gap is the identity coverage's (S1, S2).
+                    if elf
+                        .returns
+                        .windows(2)
+                        .any(|w| w[0].function >= w[1].function)
+                    {
+                        why.push("returns are not sorted and unique by function".to_string());
+                    }
+                    for r in &elf.returns {
+                        let symbol = Loc::Symbol(crate::text::UntrustedText::new(&r.function));
+                        let shaped = match (&r.value, r.at.as_slice()) {
+                            (DataValue::Text(_), [first, Loc::VAddr(_)]) => *first == symbol,
+                            (DataValue::Unknown { .. }, [first]) => *first == symbol,
+                            _ => false,
+                        };
+                        if !shaped {
+                            why.push(format!(
+                                "the return of {} is not a string at its symbol and address, or an unknown value at its symbol",
+                                r.function
+                            ));
                         }
                     }
                     let sections_gap = facts.gaps.iter().any(|g| g.starts_with("sections: "));
@@ -2193,7 +2217,7 @@ impl<'a> Validator<'a> {
                 CoverageState::Complete => {
                     if !install_scanned(s) {
                         why.push(format!(
-                            "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, or a linked ELF's dynamic symbols were not read"
+                            "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, a linked ELF's dynamic symbols were not read, or a returned value was not read"
                         ));
                     }
                 }
@@ -3199,9 +3223,10 @@ fn c5(value: &ArgValue) -> Vec<String> {
 ///
 /// Discovery is `Complete`, and every install binary is an ELF with slices, each with facts, and
 /// none a Go ELF without a section header table ([`NoSectionsGap::Must`]: its scan lists
-/// [`SCAN_NO_SECTIONS`]) or a linked ELF whose loader's dynamic symbols the parse did not read
-/// (its scan lists [`SCAN_NAME_NOT_READ`]), unless an NVIDIA library (ADR-010), which is never
-/// scanned and adds no gap.
+/// [`SCAN_NO_SECTIONS`]), a linked ELF whose loader's dynamic symbols the parse did not read
+/// (its scan lists [`SCAN_NAME_NOT_READ`]), or one with an `Unknown` return (its scan lists the
+/// [`returned_value_gap`]; PR-4c-2b), unless an NVIDIA library (ADR-010), which is never scanned
+/// and adds no gap.
 ///
 /// That exception holds for any NVIDIA claim on the slice: as for `binary.identity`'s
 /// `OutOfScope` ([`ExpectedIdentity::Scanned`]), the model cannot tell a file the engine
@@ -3212,9 +3237,12 @@ fn c5(value: &ArgValue) -> Vec<String> {
 /// [`NoSectionsGap::Must`]: crate::binary_input::NoSectionsGap::Must
 /// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
 /// [`SCAN_NAME_NOT_READ`]: crate::binary_input::SCAN_NAME_NOT_READ
+/// [`returned_value_gap`]: crate::binary_input::returned_value_gap
 fn install_scanned(s: &Session) -> bool {
     use crate::artifact::Format;
-    use crate::binary_input::{exports_unread, name_and_hash_only, no_sections_gap, NoSectionsGap};
+    use crate::binary_input::{
+        exports_unread, name_and_hash_only, no_sections_gap, unread_returns, NoSectionsGap,
+    };
     let discovery = s
         .coverage
         .iter()
@@ -3246,7 +3274,9 @@ fn install_scanned(s: &Session) -> bool {
                     .iter()
                     .find(|b| b.slice == x.id)
                     .is_some_and(|b| {
-                        (no_sections_gap(b) != NoSectionsGap::Must && !exports_unread(b, kind))
+                        (no_sections_gap(b) != NoSectionsGap::Must
+                            && !exports_unread(b, kind)
+                            && unread_returns(b).is_empty())
                             || name_and_hash_only(s, &x.id)
                     })
             })
