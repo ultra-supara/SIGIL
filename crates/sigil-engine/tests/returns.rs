@@ -290,6 +290,28 @@ fn the_code_must_decode_to_one_block_that_leaves_a_lea_address_in_rax() {
     let rel = 0x4000i32 - (VERSION_FN as i32 + 7);
     bytes[disp..disp + 4].copy_from_slice(&rel.to_le_bytes());
     assert_eq!(version_why(&bytes), "its string is not in read-only data");
+    // The read-only segment cut to 6 bytes, just before the NUL of "0.13.1": the commit's string
+    // lies outside it.
+    let mut bytes = returns_fixture("version-gcc-O2.so");
+    let p = (0..u16::from_le_bytes([bytes[56], bytes[57]]) as usize)
+        .map(|i| u64::from_le_bytes(bytes[32..40].try_into().unwrap()) as usize + i * 56)
+        .find(|&p| {
+            u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) == PT_LOAD
+                && u64::from_le_bytes(bytes[p + 16..p + 24].try_into().unwrap()) == VERSION_AT
+        })
+        .unwrap();
+    bytes[p + 32..p + 40].copy_from_slice(&6u64.to_le_bytes());
+    let (returns, _) = scanned(&bytes);
+    assert_eq!(
+        returns,
+        [
+            unread("ggml_commit", "its string is not in read-only data"),
+            unread(
+                "ggml_version",
+                "its string has no NUL before the end of read-only data"
+            ),
+        ]
+    );
     // `mov eax, 0x2000; ret`: the address as an immediate, never a string.
     let mut bytes = returns_fixture("version-gcc-O2.so");
     let at = VERSION_FN as usize;
@@ -343,6 +365,14 @@ fn a_relocation_on_the_code_or_the_string_makes_it_unknown() {
         .3 as usize;
     bytes[relr..relr + 8].copy_from_slice(&VERSION_FN.to_le_bytes());
     assert_eq!(version_why(&bytes), "a relocation writes its code");
+    // The same word moved onto the version string: its 8 bytes reach the commit's first byte too.
+    bytes[relr..relr + 8].copy_from_slice(&VERSION_AT.to_le_bytes());
+    let (returns, _) = scanned(&bytes);
+    let why = "a relocation writes its string";
+    assert_eq!(
+        returns,
+        [unread("ggml_commit", why), unread("ggml_version", why)]
+    );
 }
 
 #[test]
@@ -361,6 +391,31 @@ fn dt_rel_and_unreadable_relocations_make_it_unknown() {
         [unread("ggml_commit", why), unread("ggml_version", why)]
     );
     assert_eq!(gaps, gaps_of(&returns));
+    // A PT_DYNAMIC the parse cannot read lists no relocation: none can be ruled out.
+    let mut bytes = returns_fixture("version-gcc-O2.so");
+    let p = phdr64(&bytes, PT_DYNAMIC);
+    bytes[p + 16..p + 24].copy_from_slice(&0x10_0000_0000u64.to_le_bytes());
+    let (returns, gaps) = scanned(&bytes);
+    let why = "relocations not read: PT_DYNAMIC not read";
+    assert_eq!(
+        returns,
+        [unread("ggml_commit", why), unread("ggml_version", why)]
+    );
+    for gap in gaps_of(&returns) {
+        assert!(gaps.contains(&gap), "{gap}: {gaps:?}");
+    }
+    // A DT_RELRSZ that is not a whole number of words: the RELR table is not read.
+    let mut bytes = returns_fixture("version-relr-gcc-O2.so");
+    set_dynamic(&mut bytes, DT_RELRSZ, 9);
+    let (returns, _) = scanned(&bytes);
+    assert_eq!(returns.len(), 2);
+    for (function, value) in &returns {
+        let why = value.as_ref().unwrap_err();
+        assert!(
+            why.starts_with("relocations not read: "),
+            "{function}: {why}"
+        );
+    }
     // A DT_RELAENT the loader refuses: the RELA table is not read.
     let mut bytes = returns_fixture("version-gcc-O2.so");
     set_dynamic(&mut bytes, DT_RELAENT, 25);
@@ -434,6 +489,51 @@ fn the_functions_are_read_without_an_export_needle() {
             read("ggml_version", "0.13.1", VERSION_AT),
         ]
     );
+}
+
+/// The returns and the needle search share `binary_scan_bytes`: the returns read 8 + 189 + 8 +
+/// 196 bytes (each function's code, then its string up to the segment's end), the 17-byte
+/// `.rodata` no longer fits in the 10 left, and the scan says so.
+#[test]
+fn the_returns_and_the_needle_search_share_one_budget() {
+    use sigil_engine::binary::needles;
+    let db = "[[needle]]\nfeature = \"s.f\"\nkind = \"string\"\nvalue = \"zzzz\"\n";
+    let needles = needles::parse(db).unwrap();
+    let bytes = returns_fixture("version-gcc-O2.so");
+    let f = file(&bytes);
+    let digest = Sha256Hex::new("0".repeat(64)).unwrap();
+    let functions = ["ggml_commit".to_string(), "ggml_version".to_string()];
+    let budgets = BinaryBudgets {
+        scan_bytes: 401 + 10,
+        ..BinaryBudgets::default()
+    };
+    let parsed = parse_artifact(
+        &f,
+        bytes.len() as u64,
+        &digest,
+        &bytes[..64],
+        budgets,
+        Some(Sought {
+            needles: &needles,
+            functions: &functions,
+        }),
+    )
+    .unwrap();
+    let slice = &parsed.slices[0];
+    let Some(ContainerFacts::Elf(elf)) = &slice.container else {
+        panic!("an ELF");
+    };
+    assert_eq!(
+        shown(&elf.returns),
+        [
+            read("ggml_commit", "6f3a9f3de", COMMIT_AT),
+            read("ggml_version", "0.13.1", VERSION_AT),
+        ]
+    );
+    let Some(ScanOutcome::Scanned { gaps, .. }) = &slice.scan else {
+        panic!("scanned");
+    };
+    assert_eq!(gaps, &[scan_over_gap(411)]);
 }
 
 #[test]

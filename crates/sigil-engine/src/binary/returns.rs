@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 
 use iced_x86::Mnemonic;
 use object::elf;
-use object::read::elf::{FileHeader, SymbolTable};
+use object::read::elf::{FileHeader, ProgramHeader, SymbolTable};
 use object::read::ReadCacheOps;
 use object::{Endian, Endianness};
 use sigil_model::{DataValue, FunctionReturn, Loc, UntrustedText};
@@ -70,7 +70,7 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 /// little-endian file; one definition, a function of 1 to [`MAX_FUNCTION`] bytes inside an
 /// executable segment's file bytes (minus pages two segments share); no `DT_REL`; one block
 /// ending in `ret`, decoded; `rax` at its end an address a `lea` formed; inside a segment neither
-/// writable nor executable; a NUL within [`MAX_STRING`] bytes; and no relocation writing the
+/// writable nor executable (minus pages two segments share); a NUL within [`MAX_STRING`] bytes; and no relocation writing the
 /// function's bytes or the string's.
 fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
@@ -109,6 +109,10 @@ fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     // musl applies DT_REL on x86-64 (glibc does not); SIGIL does not read it, as in PR-5a.
     if dynamic.rel.is_some() || dynamic.jmprel_rel.is_some() {
         return Err("DT_REL relocations are not modeled".to_string());
+    }
+    // The loader applies the relocations PT_DYNAMIC lists; unread, none can be ruled out.
+    if !dynamic.read && e.phdrs.iter().any(|p| p.p_type(endian) == elf::PT_DYNAMIC) {
+        return Err("relocations not read: PT_DYNAMIC not read".to_string());
     }
     let bytes = charged(reader, region.offset_of(d.value), d.size)?;
     let kind = if e.header.e_type(endian) == elf::ET_EXEC {
@@ -157,10 +161,13 @@ fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         .find(|r| r.start <= at && at < r.end)
         .ok_or("its string is not in read-only data")?;
     let bytes = charged(reader, r.offset_of(at), (r.end - at).min(MAX_STRING + 1))?;
-    let nul = bytes
-        .iter()
-        .position(|b| *b == 0)
-        .ok_or(format!("its string has no NUL within {MAX_STRING} bytes"))?;
+    let nul = bytes.iter().position(|b| *b == 0).ok_or_else(|| {
+        if (bytes.len() as u64) < MAX_STRING + 1 {
+            "its string has no NUL before the end of read-only data".to_string()
+        } else {
+            format!("its string has no NUL within {MAX_STRING} bytes")
+        }
+    })?;
     let text = bytes.get(..nul).unwrap_or_default().to_vec();
     let ranges = [(d.value, end), (at, at.saturating_add(nul as u64 + 1))];
     match written(e, symbols, dynamic, &ranges)? {

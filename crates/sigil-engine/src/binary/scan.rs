@@ -153,7 +153,8 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
 /// ([`targets`]). Names are read through the parse's cache, charged to `binary_parse_bytes`;
 /// function, string, and section bytes through `file` (the fd and its `fstat` size), charged to
 /// `limit` (`binary_scan_bytes`). What cannot be read is a gap of the scan, never of the
-/// container: a return not read is the gap [`returned_value_gap`]. A Go ELF whose sections, every
+/// container: a return not read is the gap [`returned_value_gap`], and one over the budget also
+/// adds the scan's budget gap. A Go ELF whose sections, every
 /// name read, have no `.gopclntab` gets the gap [`SCAN_NO_GOPCLNTAB`]: its Go-function needles
 /// were looked for nowhere. The returns go with the container's facts.
 pub(crate) fn run<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
