@@ -333,8 +333,8 @@ names go through the parse's cache. A return cut by the budget gives two gaps:
 `returned value: <function>: not read: binary_scan_bytes exceeded` and the scan's
 `string scan: binary_scan_bytes <limit> exceeded`. Each value is recorded in the file's facts
 (`returns`), and an `Unknown` one is the `binary.identity` gap
-`returned value: <function>: <why>`, never a `binary.container` gap. A file that exports neither function has no return, and no gap. On an
-arm64 build of `libggml-base`, both values are `not decoded: x86-64 only`, so `binary.identity` is
+`returned value: <function>: <why>`, never a `binary.container` gap. A file that exports neither function has no return, and no
+gap. On an arm64 build of `libggml-base`, both values are `not decoded: x86-64 only`, so `binary.identity` is
 `Partial` and the result `INCOMPLETE`. A file named as an NVIDIA library is not scanned, and a
 relocatable object has no dynamic symbols: neither is read.
 
