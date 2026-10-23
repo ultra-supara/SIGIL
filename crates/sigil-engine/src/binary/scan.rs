@@ -63,7 +63,7 @@ pub enum ScanOutcome {
 /// A section `search` reads: the kind of needle looked for in it, its name, and its bytes in
 /// the file (`sh_offset`, `sh_size`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Target {
+pub(crate) struct Target {
     pub kind: NeedleKind,
     pub name: Vec<u8>,
     pub offset: u64,
@@ -72,7 +72,7 @@ pub struct Target {
 
 /// What `search` found, and read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Searched {
+pub(crate) struct Searched {
     /// The first match of each needle found, at its lowest offset in the first target that has it:
     /// in target order, then read order, then database order (the needles found in one read).
     pub found: Vec<Found>,
