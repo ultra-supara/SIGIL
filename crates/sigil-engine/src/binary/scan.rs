@@ -308,6 +308,7 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                     value: sym.st_value(endian).into(),
                     size: sym.st_size(endian).into(),
                     st_type: sym.st_type(),
+                    shndx: sym.st_shndx(endian),
                 });
             }
         }

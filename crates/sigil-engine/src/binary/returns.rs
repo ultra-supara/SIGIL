@@ -35,6 +35,8 @@ pub(crate) struct Definition {
     pub value: u64,
     pub size: u64,
     pub st_type: elf::SymbolType,
+    /// `st_shndx`: the section the symbol is defined in, or a reserved index.
+    pub shndx: elf::SymbolSection,
 }
 
 /// The return of each known function in `defined` (its definitions among the exports, at most
@@ -67,11 +69,12 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 }
 
 /// The string the function `defs` defines returns, and its address. In order: an x86-64 ELF64
-/// little-endian file; one definition, a function of 1 to [`MAX_FUNCTION`] bytes inside an
-/// executable segment's file bytes (minus pages two segments share); no `DT_REL`; one block
-/// ending in `ret`, decoded; `rax` at its end an address a `lea` formed; inside a segment neither
-/// writable nor executable (minus pages two segments share); a NUL within [`MAX_STRING`] bytes;
-/// and no relocation writing the function's bytes or the string's.
+/// little-endian file; one definition, a function in a section (no reserved index such as
+/// `SHN_ABS`) of 1 to [`MAX_FUNCTION`] bytes inside an executable segment's file bytes (minus
+/// pages two segments share); no `DT_REL`; one block ending in `ret`, decoded; `rax` at its end
+/// an address a `lea` formed; inside a segment neither writable nor executable (minus pages two
+/// segments share); a NUL within [`MAX_STRING`] bytes; and no relocation writing the function's
+/// bytes or the string's.
 fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     symbols: &SymbolTable<'d, H, &'d Bounded<R>>,
@@ -91,6 +94,15 @@ fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     };
     if d.st_type != elf::STT_FUNC {
         return Err(format!("not a function ({})", symbol_type(d.st_type)));
+    }
+    // A reserved index is no section the function's code is in. The loader does not add the
+    // load base to an `SHN_ABS` value (PR #98 review P2), so the code at that address in the
+    // file is not what the symbol exports.
+    if d.shndx.is_reserved() {
+        return Err(format!(
+            "not defined in a section ({})",
+            reserved_index(d.shndx)
+        ));
     }
     if d.size == 0 {
         return Err("size not recorded".to_string());
@@ -174,6 +186,16 @@ fn string<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         [true, _] => Err("a relocation writes its code".to_string()),
         [_, true] => Err("a relocation writes its string".to_string()),
         _ => Ok((text, at)),
+    }
+}
+
+/// A reserved section index as the reason shows it: its name, or its number.
+fn reserved_index(shndx: elf::SymbolSection) -> String {
+    match shndx {
+        elf::SHN_ABS => "SHN_ABS".to_string(),
+        elf::SHN_COMMON => "SHN_COMMON".to_string(),
+        elf::SHN_XINDEX => "SHN_XINDEX".to_string(),
+        _ => format!("st_shndx {:#06x}", shndx.0),
     }
 }
 

@@ -250,6 +250,20 @@ fn the_symbol_is_one_function_of_at_most_64_bytes_in_an_executable_segment() {
         let bytes = with_version_symbol(|s| s[4] = info);
         assert_eq!(version_why(&bytes), format!("not a function ({ty})"));
     }
+    // PR #98 review P2: a reserved section index. The loader does not add the load base to an
+    // `SHN_ABS` symbol's value, so the code at that address in the file is not what it exports.
+    for (shndx, shown) in [
+        (0xfff1u16, "SHN_ABS"),
+        (0xfff2, "SHN_COMMON"),
+        (0xffff, "SHN_XINDEX"),
+        (0xff00, "st_shndx 0xff00"),
+    ] {
+        let bytes = with_version_symbol(|s| s[6..8].copy_from_slice(&shndx.to_le_bytes()));
+        assert_eq!(
+            version_why(&bytes),
+            format!("not defined in a section ({shown})")
+        );
+    }
     // In the read-only data segment.
     let bytes = with_version_symbol(|s| s[8..16].copy_from_slice(&VERSION_AT.to_le_bytes()));
     assert_eq!(version_why(&bytes), "not in an executable segment");
@@ -629,4 +643,31 @@ fn a_binary_inspection_records_the_returns_and_their_gaps() {
         s.outcome.completeness,
         Completeness::Incomplete { .. }
     ));
+}
+
+/// PR #98 review P2: an `SHN_ABS` export of `ggml_version`, whose value the loader does not
+/// relocate, is not read as the function in the file: the value is `Unknown`, and the input's
+/// identity stays open.
+#[test]
+fn an_absolute_symbol_is_no_function_and_keeps_the_identity_open() {
+    let bytes = with_version_symbol(|s| s[6..8].copy_from_slice(&0xfff1u16.to_le_bytes()));
+    let (_d, paths) = files(&[("libggml-base.so.0.13.1", &bytes)]);
+    let s = inspect(&paths);
+    let ContainerFacts::Elf(elf) = &s.binaries[0].container else {
+        panic!("an ELF");
+    };
+    let why = "not defined in a section (SHN_ABS)";
+    assert_eq!(
+        shown(&elf.returns),
+        [
+            read("ggml_commit", "6f3a9f3de", COMMIT_AT),
+            unread("ggml_version", why),
+        ]
+    );
+    assert_eq!(
+        identity(&s),
+        [CoverageState::Partial {
+            missing: vec![returned_value_gap("ggml_version", why)],
+        }]
+    );
 }

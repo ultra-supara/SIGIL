@@ -307,6 +307,9 @@ these hold:
 - the file is x86-64 ELF64 little-endian;
 - the name is defined once among the exports, as a function (`STT_FUNC`; an `STT_GNU_IFUNC` is
   not one) of 1 to 64 bytes, inside an executable segment's file bytes;
+- it is defined in a section: a reserved `st_shndx` such as `SHN_ABS` is not one, since the
+  loader does not add the load base to an absolute value, and the code at that address in the
+  file is not what the name exports;
 - no `DT_REL` table is present, and no RELA or RELR relocation writes the function's bytes;
 - its bytes decode to one block that ends in `ret`, and `rax` there holds an address a `lea`
   formed (`lea rax,[rip+…]`), never an immediate or a loaded pointer;
@@ -319,7 +322,9 @@ The shapes compilers give are read: `lea; ret` (gcc and clang at `-O2`), with a 
 design (`returns no constant string address`). Otherwise the value is `Unknown`, with one of
 these reasons:
 - not eligible: `not decoded: x86-64 only`, `defined more than once`, `not a function (<type>)`,
-  `size not recorded`, `longer than 64 bytes`, `not in an executable segment`;
+  `not defined in a section (<index>)` (`SHN_ABS`, `SHN_COMMON`, `SHN_XINDEX`, or another
+  reserved index as `st_shndx 0xff00`), `size not recorded`, `longer than 64 bytes`,
+  `not in an executable segment`;
 - the code: `DT_REL relocations are not modeled`, the decoder's own failure,
   `not one straight block ending in ret`, `returns no constant string address`;
 - the string: `its string is not in read-only data`, `its string has no NUL within 256 bytes`,
