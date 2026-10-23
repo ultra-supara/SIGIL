@@ -452,7 +452,7 @@ fn every_section_lists_what_the_aibom_holds() {
     assert!(md.contains("\n## Releases\n"), "{md}");
     // The status in words, as in the session report (PR-4c-1); the JSON keeps the enum name.
     assert!(
-        md.contains(&shown("ggml on x86_64 (conflicting, 0.12.0, 0.13.1)")),
+        md.contains(&shown("ggml-base on x86_64 (conflicting, 0.12.0, 0.13.1)")),
         "{md}"
     );
 }

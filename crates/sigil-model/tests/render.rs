@@ -275,7 +275,7 @@ fn a_session_with_an_install_shows_its_runtime_artifacts() {
         "{section}"
     );
     let cells: Vec<String> = [
-        "lib/ollama/libggml.so.0.13.1",
+        "lib/ollama/libggml-base.so.0.13.1",
         "File",
         "sha256:111111111111",
         "matches v0.30.6",
@@ -1349,8 +1349,8 @@ fn install_binaries_show_their_component() {
             .to_string()
     };
     assert_eq!(
-        cell("lib/ollama/libggml.so.0.13.1"),
-        md_esc("ggml (conflicting)")
+        cell("lib/ollama/libggml-base.so.0.13.1"),
+        md_esc("ggml-base (conflicting)")
     );
     assert_eq!(cell("lib/ollama/libggml-cpu-x64.so"), md_esc("-"));
 }
@@ -1431,11 +1431,16 @@ fn several_claims_on_one_slice_are_joined_and_their_versions_keyed() {
     let table = &section[section.find(&md_esc("Binaries:")).unwrap()..];
     let row = table
         .lines()
-        .find(|l| l.starts_with(&format!("| {} |", md_esc("lib/ollama/libggml.so.0.13.1"))))
+        .find(|l| {
+            l.starts_with(&format!(
+                "| {} |",
+                md_esc("lib/ollama/libggml-base.so.0.13.1")
+            ))
+        })
         .unwrap_or_else(|| panic!("{table}"));
     assert_eq!(
         row.trim_matches('|').split(" | ").map(str::trim).nth(2),
-        Some(md_esc("ggml (conflicting), llama.cpp/llama (name only)").as_str()),
+        Some(md_esc("ggml-base (conflicting), llama.cpp/llama (name only)").as_str()),
         "{row}"
     );
 }

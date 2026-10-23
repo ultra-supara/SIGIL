@@ -30,7 +30,7 @@ After an intended model change, regenerate them with
 | `09-feature-match-only` | A `FeatureMatch` candidate: recorded, and only an open question at most |
 | `10-target-verified` | Every obligation `Pass` in the target's code, with the C-level code facts |
 | `11-reference-verified` | A hash equal to a ground-truth-verified reference |
-| `12-conflicting-identity` | A file name and an embedded value disagree on the version; both are kept, and the per-file hash still matches |
+| `12-conflicting-identity` | libggml-base's file name says 0.13.1 and its `ggml_version()` returns 0.12.0: under the 0.x rule the majors disagree; both are kept, and the per-file hash still matches |
 | `13-loader-slice-spec-example` | The plan's §5.8 loader slice, corrected to the PR-2 types |
 | `14-store-and-runtime` | A model store and a running runtime, in observe mode with the API probe: one model (config, weights, MIT license), `ollama serve` listening on loopback, and the probe's answer with a version, one `runtime_api.version` entry: PASS + COMPLETE |
 | `15-binary-inspect` | `sigil binary inspect` of two files: a shared object with complete container facts, its `dlopen` and `getenv` imports as hints, the `ggml-base` claim its file name and SONAME give (`NameOnly`, version `0` from the SONAME), and a complete signature scan that found no signature; and a text file, `Unsupported` in both checks. One `binary.container` and one `binary.identity` entry each: PASS + INCOMPLETE |

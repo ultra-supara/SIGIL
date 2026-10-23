@@ -241,13 +241,14 @@ pub fn add_profile_knowledge(s: &mut Session) {
 /// libggml at `lib/ollama/libggml.so.0.13.1`, reference-matched against the official manifest:
 /// the claim's `KnownHash` and the row it rests on (PR-4c-1 I1).
 pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
-    let g = add_binary(
-        s,
-        sha_hex,
-        "lib/ollama/libggml.so.0.13.1",
-        Arch::X86_64,
-        1001,
-    );
+    add_ollama_library(s, sha_hex, "libggml.so.0.13.1", "ggml")
+}
+
+/// The library `file` (a `.so.0.13.1`) at `lib/ollama/<file>`, claimed as `component` and
+/// reference-matched against the official manifest, as [`add_ggml`] does for libggml.
+pub fn add_ollama_library(s: &mut Session, sha_hex: &str, file: &str, component: &str) -> Placed {
+    let member = format!("lib/ollama/{file}");
+    let g = add_binary(s, sha_hex, &member, Arch::X86_64, 1001);
     add_knowledge(
         s,
         KnowledgeKind::ReferenceManifest,
@@ -257,11 +258,11 @@ pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
     );
     s.components.push(ComponentClaim {
         subject: g.slice.clone(),
-        component: id("ggml"),
+        component: id(component),
         assertions: vec![
             IdentityAssertion::SelfName {
                 kind: NameKind::Filename,
-                value: t("libggml.so.0.13.1"),
+                value: t(file),
                 at: EvidenceRef::Instance {
                     instance: g.inst.clone(),
                 },
@@ -269,7 +270,7 @@ pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
             IdentityAssertion::KnownHash {
                 reference: id("ollama-official"),
                 release: "v0.30.6".to_string(),
-                member: "lib/ollama/libggml.so.0.13.1".to_string(),
+                member: member.clone(),
                 matched: true,
             },
             IdentityAssertion::Signature {
@@ -290,7 +291,7 @@ pub fn add_ggml(s: &mut Session, sha_hex: &str) -> Placed {
     s.reference_matches.push(ReferenceMatch {
         reference: id("ollama-official"),
         release: "v0.30.6".to_string(),
-        member: "lib/ollama/libggml.so.0.13.1".to_string(),
+        member,
         instance: Some(g.inst.clone()),
         result: MemberResult::File {
             expected: id(sha_hex),
@@ -1231,36 +1232,32 @@ pub fn reference_verified() -> Session {
     s
 }
 
-/// Example 12: Conflicting identity: a file name and an embedded value disagree on the version; both
-/// stay, and the per-file hash still matches the official release.
+/// Example 12: Conflicting identity: libggml-base's file name says 0.13.1 and its `ggml_version()`
+/// returns 0.12.0 (PR-4c-2b, F-I2): under the 0.x rule the majors 0.13 and 0.12 disagree. Both
+/// stay, and the per-file hash still matches the official release. The engine derives this claim
+/// from these facts (`crates/sigil-engine/tests/example_identity.rs`).
 pub fn conflicting_identity() -> Session {
     let mut s = base(&["artifacts.discovery", "loader.identify"]);
-    let g = add_ggml(&mut s, &hex(0x11));
+    let g = add_ollama_library(&mut s, &hex(0x11), "libggml-base.so.0.13.1", "ggml-base");
     let claim = &mut s.components[0];
+    let at = EvidenceRef::Code {
+        slice: g.slice.clone(),
+        loc: Loc::VAddr(0x9d160),
+    };
     claim.assertions.push(IdentityAssertion::Embedded {
-        field: "GGML_VERSION".to_string(),
+        field: "ggml_version".to_string(),
         value: t("0.12.0"),
-        at: EvidenceRef::Code {
-            slice: g.slice.clone(),
-            loc: Loc::Section {
-                name: t(".rodata"),
-                offset: 0x1f40,
-            },
+        at: at.clone(),
+        method: ExtractMethod::FunctionReturn {
+            function: t("ggml_version"),
         },
-        method: ExtractMethod::StringScan,
     });
     claim.versions.push(VersionAssertion {
         value: t("0.12.0"),
         source: VersionSource::Embedded {
-            field: "GGML_VERSION".to_string(),
+            field: "ggml_version".to_string(),
         },
-        at: EvidenceRef::Code {
-            slice: g.slice.clone(),
-            loc: Loc::Section {
-                name: t(".rodata"),
-                offset: 0x1f40,
-            },
-        },
+        at,
     });
     claim.status = IdentityStatus::Conflicting;
     s.releases.push(ReleaseClaim {

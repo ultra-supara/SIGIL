@@ -517,6 +517,14 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("EvidenceRef", EvidenceRef::Model { model: id(MODEL) }),
         sample("Loc", Loc::FileOffset(64)),
         sample("Loc", Loc::Symbol(t("ggml_backend_load_all"))),
+        // Example 12 had the only string-scan location before PR-4c-2b.
+        sample(
+            "Loc",
+            Loc::Section {
+                name: t(".rodata"),
+                offset: 0x1f40,
+            },
+        ),
         sample(
             "Support",
             Support::Assumed {
@@ -750,6 +758,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
             },
         ),
         sample("ExtractMethod", ExtractMethod::GoBuildInfo),
+        sample("ExtractMethod", ExtractMethod::StringScan),
         sample(
             "ExtractMethod",
             ExtractMethod::FunctionReturn {

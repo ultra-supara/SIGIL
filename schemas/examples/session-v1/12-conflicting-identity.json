@@ -55,9 +55,9 @@
   ],
   "instances": [
     {
-      "id": "inst:lib/ollama/libggml.so.0.13.1",
+      "id": "inst:lib/ollama/libggml-base.so.0.13.1",
       "root": "install",
-      "path": "/usr/local/lib/ollama/libggml.so.0.13.1",
+      "path": "/usr/local/lib/ollama/libggml-base.so.0.13.1",
       "link_chain": [],
       "resolved": null,
       "content": {
@@ -87,34 +87,34 @@
   "components": [
     {
       "subject": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
-      "component": "ggml",
+      "component": "ggml-base",
       "assertions": [
         {
           "Embedded": {
-            "field": "GGML_VERSION",
+            "field": "ggml_version",
             "value": "0.12.0",
             "at": {
               "Code": {
                 "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
-                "loc": {"Section": {"name": ".rodata", "offset": 8000}}
+                "loc": {"VAddr": 643424}
               }
             },
-            "method": "StringScan"
+            "method": {"FunctionReturn": {"function": "ggml_version"}}
           }
         },
         {
           "KnownHash": {
             "reference": "ollama-official",
             "release": "v0.30.6",
-            "member": "lib/ollama/libggml.so.0.13.1",
+            "member": "lib/ollama/libggml-base.so.0.13.1",
             "matched": true
           }
         },
         {
           "SelfName": {
             "kind": "Filename",
-            "value": "libggml.so.0.13.1",
-            "at": {"Instance": {"instance": "inst:lib/ollama/libggml.so.0.13.1"}}
+            "value": "libggml-base.so.0.13.1",
+            "at": {"Instance": {"instance": "inst:lib/ollama/libggml-base.so.0.13.1"}}
           }
         },
         {"Signature": {"state": "NotChecked"}}
@@ -123,18 +123,18 @@
       "versions": [
         {
           "value": "0.12.0",
-          "source": {"Embedded": {"field": "GGML_VERSION"}},
+          "source": {"Embedded": {"field": "ggml_version"}},
           "at": {
             "Code": {
               "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
-              "loc": {"Section": {"name": ".rodata", "offset": 8000}}
+              "loc": {"VAddr": 643424}
             }
           }
         },
         {
           "value": "0.13.1",
           "source": {"SelfName": {"kind": "Filename"}},
-          "at": {"Instance": {"instance": "inst:lib/ollama/libggml.so.0.13.1"}}
+          "at": {"Instance": {"instance": "inst:lib/ollama/libggml-base.so.0.13.1"}}
         }
       ]
     }
@@ -146,7 +146,7 @@
       "basis": {
         "ReferenceMatches": {
           "reference": "ollama-official",
-          "files": ["inst:lib/ollama/libggml.so.0.13.1"]
+          "files": ["inst:lib/ollama/libggml-base.so.0.13.1"]
         }
       }
     }
@@ -155,8 +155,8 @@
     {
       "reference": "ollama-official",
       "release": "v0.30.6",
-      "member": "lib/ollama/libggml.so.0.13.1",
-      "instance": "inst:lib/ollama/libggml.so.0.13.1",
+      "member": "lib/ollama/libggml-base.so.0.13.1",
+      "instance": "inst:lib/ollama/libggml-base.so.0.13.1",
       "result": {
         "File": {
           "expected": "1111111111111111111111111111111111111111111111111111111111111111",

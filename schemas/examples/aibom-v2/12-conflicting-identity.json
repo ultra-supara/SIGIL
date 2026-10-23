@@ -7,7 +7,7 @@
   },
   "session": {
     "schema": "sigil-session/1",
-    "sha256": "167d21c829ddc6bb91869071cbadb30f831eed77d64ee42e9d89d0bcd2611769",
+    "sha256": "8552a00067a5de6060efd8fe5b6b82a7de5692a0013beb11ab0c8e5bc9b0cf03",
     "mode": "Static",
     "started_at": "2026-10-07T07:00:00Z",
     "policy": {
@@ -49,7 +49,7 @@
         }
       },
       "paths": [
-        "/usr/local/lib/ollama/libggml.so.0.13.1"
+        "/usr/local/lib/ollama/libggml-base.so.0.13.1"
       ],
       "slices": [
         {
@@ -58,7 +58,7 @@
           "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
           "components": [
             {
-              "component": "ggml",
+              "component": "ggml-base",
               "status": "Conflicting",
               "versions": [
                 "0.12.0",
