@@ -219,9 +219,10 @@ pub fn components() -> Result<&'static ComponentDb, String> {
 
 /// Parses a database: each key a valid component key, listed once, with at least one name; each
 /// name one of the three forms, with literals that are not empty; `scan` a boolean, if given.
-/// Each field's name is not empty and listed once; a `data` field is a known data symbol
-/// (`binary::data::KNOWN`); `of`, if given, is a version's, not empty, and names components of
-/// the database, each once.
+/// Each field's name is not empty, ASCII graphic (no whitespace or control characters), and listed
+/// once; a `data` field is a known data symbol (`binary::data::KNOWN`); a `function` field's name
+/// is neither a known data symbol nor a Go build info name (`go.*`); `of`, if given, is a
+/// version's, not empty, and names components of the database, each once.
 fn parse(text: &str) -> Result<ComponentDb, String> {
     let raw: RawDb = toml::from_str(text).map_err(|e| format!("components.toml: {e}"))?;
     let mut entries: Vec<(ComponentKey, Vec<NamePattern>)> = vec![];
@@ -697,7 +698,8 @@ mod tests {
             assert_eq!(
                 field(body),
                 Err(format!(
-                    "components.toml: field \"{err}\": a known data symbol's or Go build info's name"
+                    "components.toml: field \"{err}\": a known data symbol's or Go build \
+                     info's name"
                 ))
             );
         }
