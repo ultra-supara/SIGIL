@@ -317,10 +317,11 @@ slice in the session, read from the file's own bytes. They are observations, not
 - **Signatures** (PR-4c-2a). Each ELF slice is also scanned for the signature database's needles,
   on the same fd, after its parse, as a binary inspection scans it
   ([binary inspection](binary-inspect.md#signatures)): export names (`rpc.code_present` for an
-  export named `ggml_backend_rpc_…`), Go function names in `.gopclntab`
-  (`ollama.llama_server_launch` and `ollama.device_discovery`), and strings in read-only data
-  (none ship yet). Each needle found is a hint: the name is in the file, which does not show
-  that its code runs. Section bytes are charged to `binary_scan_bytes`.
+  export named `ggml_backend_rpc_…`), exact Go function names in `.gopclntab`
+  (`ollama.llama_server_launch` and `ollama.device_discovery`, and the Go standard library's
+  `go.*` capabilities, such as `go.process_spawn` for `os/exec.(*Cmd).Start`; PR-4c-3a), and
+  strings in read-only data (none ship yet). Each needle found is a hint: the name is in the file,
+  which does not show that its code runs. Section bytes are charged to `binary_scan_bytes`.
 
   The same walk of the exports finds `ggml_version` and `ggml_commit`. These are not needles: the
   strings they return are read first, without running them (PR-4c-2b;
@@ -342,13 +343,14 @@ slice in the session, read from the file's own bytes. They are observations, not
   | State | When |
   |---|---|
   | `Complete` | Discovery is complete, no binary is a Mach-O, and every ELF slice has facts and a scan without a gap (an NVIDIA library is not scanned, and adds no gap) |
-  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, …; the list is in [binary inspection](binary-inspect.md#signatures)), and for each returned value not read (`returned value: ggml_version: not decoded: x86-64 only`, …; [binary inspection](binary-inspect.md#returned-values)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
+  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, `string scan: .gopclntab header not understood`, …; the list is in [binary inspection](binary-inspect.md#signatures)), and for each returned value not read (`returned value: ggml_version: not decoded: x86-64 only`, …; [binary inspection](binary-inspect.md#returned-values)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
   | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 
   On the official v0.30.6 bundle it is `Complete`: its NVIDIA libraries are not scanned, and
-  `bin/ollama`'s `.gopclntab` (10.9 MiB) is within the budget, with both Go-function hints. On an
-  arm64 installation, `libggml-base`'s two values are not decoded (x86-64 only), so it is
-  `Partial`, and the result `INCOMPLETE`: a value not read is never hidden.
+  the function-name table of `bin/ollama`'s `.gopclntab` (2.0 MiB of 10.9 MiB) is read whole
+  within the budget, with both `ollama.*` hints and 13 `go.*` hints (process spawn, network, file
+  read, file write). On an arm64 installation, `libggml-base`'s two values are not decoded (x86-64
+  only), so it is `Partial`, and the result `INCOMPLETE`: a value not read is never hidden.
 
 ## Components
 

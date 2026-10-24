@@ -1,0 +1,10 @@
+capabilities: go1.25.6
+	path	example.com/capabilities
+	mod	example.com/capabilities	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1

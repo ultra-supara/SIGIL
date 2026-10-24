@@ -1,6 +1,7 @@
-//! The signature scan in sessions (PR-4c-2a): Go functions in `.gopclntab`, the RPC backend by its
-//! exports, NVIDIA libraries never scanned, and the scan's own coverage. The synthetic files are
-//! written to temporary directories and never run.
+//! The signature scan in sessions (PR-4c-2a): Go functions in `.gopclntab` (and the Go standard
+//! library's capabilities, PR-4c-3a), the RPC backend by its exports, NVIDIA libraries never
+//! scanned, and the scan's own coverage. The synthetic files are written to temporary directories
+//! and never run.
 
 mod common;
 
@@ -63,14 +64,19 @@ fn go120_header(names_end: u64) -> Vec<u8> {
 /// in `.go.buildinfo` at 0x4000 (a real piece, `go/go-amd64.buildinfo`), in one writable PT_LOAD.
 fn go_elf(pclntab: &[u8], buildinfo: bool) -> Vec<u8> {
     let piece = fixture("go/go-amd64.buildinfo");
+    go_elf_with(pclntab, buildinfo.then_some(piece.as_slice()))
+}
+
+/// [`go_elf`] with `buildinfo`, if any, as its `.go.buildinfo`.
+fn go_elf_with(pclntab: &[u8], buildinfo: Option<&[u8]>) -> Vec<u8> {
     let mut img = ElfImage::new(2);
-    if buildinfo {
-        img.put(0x4000, &piece);
+    if let Some(piece) = buildinfo {
+        img.put(0x4000, piece);
     }
     img.put(0x8000, pclntab);
     let end = img.body.len() as u64;
     img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end);
-    if buildinfo {
+    if let Some(piece) = buildinfo {
         img.sec(
             ".go.buildinfo",
             SHT_PROGBITS,
@@ -201,6 +207,83 @@ fn a_go_executable_s_gopclntab_gives_both_function_hints() {
         ]
     );
     assert!(s.hints.iter().all(|h| h.subject == s.binaries[0].slice));
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR-4c-3a: a real Go 1.25.6 build of a program that uses `os/exec`, `net.Dial`, `os.Create`, and
+/// `os.Open`, with a function recorded under the file name `syscall.Exec` by a `//line` directive
+/// (`fixtures/go-capabilities/build.sh`): its `.gopclntab` and `.go.buildinfo`, in an executable.
+fn capabilities_elf() -> Vec<u8> {
+    go_elf_with(
+        &fixture("go-capabilities/capabilities.gopclntab"),
+        Some(&fixture("go-capabilities/capabilities.buildinfo")),
+    )
+}
+
+/// The `go.*` hint of `value` at `offset` in `.gopclntab`.
+fn go_hint(feature: &str, value: &str, offset: u64) -> (String, Signal, String, Loc) {
+    (
+        feature.to_string(),
+        Signal::GoFunction,
+        value.to_string(),
+        gopclntab(offset),
+    )
+}
+
+#[test]
+fn a_real_go_build_gives_its_capability_hints() {
+    let (_d, paths) = files(&[("capabilities", &capabilities_elf())]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    let mut got = signatures(&s);
+    got.sort_by(|a, b| (&a.0, &a.2).cmp(&(&b.0, &b.2)));
+    // Each function at its name's entry in the function-name table. The table also has
+    // `os.OpenFile`, `os.Getenv`, `syscall.Syscall`, `os.(*File).Write`, and `os.(*File).Read`,
+    // which are not mapped. `syscall.Exec` is an exact entry of the file table only (the `//line`
+    // file name, at 0x1f101), so it gives no hint (PR-4c-3a plan review P2).
+    assert_eq!(
+        got,
+        [
+            go_hint("go.file_read", "os.Open", 0x1730a),
+            go_hint("go.file_write", "os.Create", 0x1c097),
+            go_hint("go.network", "net.(*Dialer).DialContext", 0x18db9),
+            go_hint("go.process_spawn", "os.StartProcess", 0x16a14),
+            go_hint("go.process_spawn", "os/exec.(*Cmd).Start", 0x1bc4a),
+            go_hint("go.process_spawn", "syscall.StartProcess", 0x16a92),
+        ]
+    );
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR-4c-3a: ambiguous names, the environment, and ptrace are not mapped; nor is a name that only
+/// begins or ends like a mapped one.
+#[test]
+fn unmapped_go_names_give_no_hint() {
+    let mut t = vec![0u8; 0x3000];
+    let header = go120_header(0x3000);
+    t[..header.len()].copy_from_slice(&header);
+    for (k, name) in [
+        "os.OpenFile",
+        "os.(*File).Write",
+        "os.(*File).Read",
+        "syscall.Syscall",
+        "syscall.RawSyscall",
+        "os.Getenv",
+        "syscall.PtraceAttach",
+        "os.Open.func1",
+        "bios.Open",
+        "net.(*ListenConfig).ListenPacketConn",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = 0x100 * (k + 1);
+        t[at..at + name.len()].copy_from_slice(name.as_bytes());
+    }
+    let (_d, paths) = files(&[("unmapped", &go_elf(&t, true))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
