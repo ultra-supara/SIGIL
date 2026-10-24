@@ -49,8 +49,8 @@ pub const SCAN_NO_SECTIONS: &str = "string scan: no section headers";
 /// A scan gap: the name of a section or of an exported symbol could not be read, so a needle may
 /// be there unseen.
 pub const SCAN_NAME_NOT_READ: &str = "string scan: a name not read";
-/// A scan gap: a read of a section failed, and the rest of that section was not read; or the
-/// section passes the end of the file, and its bytes past it could not be read.
+/// A scan gap: a read of a section failed, and the rest of it was not read; or the section passes
+/// the end of the file (for `.gopclntab`, its header or table), and only its bytes in it were read.
 pub const SCAN_READ_FAILED: &str = "string scan: a read failed";
 /// A scan gap: the file has Go build info, so its Go-function needles apply, and none of its
 /// sections, every name read, is `.gopclntab`: they were looked for nowhere (PR #97 review P2).

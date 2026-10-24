@@ -20,7 +20,7 @@ trap 'exit 1' HUP INT TERM
 
 fail() { echo "build.sh: $*" >&2; exit 1; }
 
-export GOENV=off GOTOOLCHAIN=go1.25.6
+export GOENV=off GOWORK=off GOTOOLCHAIN=go1.25.6
 v=$(go env GOVERSION) || fail "go env GOVERSION failed"
 [ "$v" = go1.25.6 ] || fail "needs go1.25.6, found $v"
 GOOS=linux GOARCH=amd64 GOAMD64=v1 GOFLAGS= GOEXPERIMENT= CGO_ENABLED=0 \

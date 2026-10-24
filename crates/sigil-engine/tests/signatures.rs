@@ -238,10 +238,11 @@ fn a_real_go_build_gives_its_capability_hints() {
     // plan-review fix.
     let pcln = fixture("go-capabilities/capabilities.gopclntab");
     assert_eq!(&pcln[0x1f100..0x1f10e], b"\0syscall.Exec\0");
-    // Go 1.20 header, little-endian, 8-byte fields: the fifth pointer-size field is cuOffset.
-    let cu_offset = u64::from_le_bytes(pcln[8 + 4 * 8..8 + 5 * 8].try_into().unwrap());
-    assert_eq!(cu_offset, 0x1c0e0);
-    assert!(0x1f101 >= cu_offset);
+    // Go 1.20 header, little-endian, 8-byte fields: pointer-size fields 4, 5, and 6 are cuOffset,
+    // filetabOffset, and pctabOffset. The name is in the file table, after the function-name table.
+    let field = |k: usize| u64::from_le_bytes(pcln[8 + k * 8..8 + (k + 1) * 8].try_into().unwrap());
+    assert_eq!(field(4), 0x1c0e0);
+    assert!(field(5) <= 0x1f101 && 0x1f101 < field(6));
     let (_d, paths) = files(&[("capabilities", &capabilities_elf())]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
@@ -266,9 +267,10 @@ fn a_real_go_build_gives_its_capability_hints() {
 }
 
 /// PR-4c-3a: ambiguous names, the environment, and ptrace are not mapped; nor is a name that only
-/// begins or ends like a mapped one.
+/// begins or ends like a mapped one. One mapped name in the same table is found, so the table is
+/// searched, and it is the only hint.
 #[test]
-fn unmapped_go_names_give_no_hint() {
+fn unmapped_go_names_give_no_hint_beside_a_mapped_one() {
     let mut t = vec![0u8; 0x3000];
     let header = go120_header(0x3000);
     t[..header.len()].copy_from_slice(&header);
@@ -283,6 +285,7 @@ fn unmapped_go_names_give_no_hint() {
         "os.Open.func1",
         "bios.Open",
         "net.(*ListenConfig).ListenPacketConn",
+        "os.Open",
     ]
     .iter()
     .enumerate()
@@ -293,7 +296,8 @@ fn unmapped_go_names_give_no_hint() {
     let (_d, paths) = files(&[("unmapped", &go_elf(&t, true))]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
-    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    // `os.Open` is the eleventh name, at 0xb00.
+    assert_eq!(signatures(&s), [go_hint("go.file_read", "os.Open", 0xb00)]);
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 

@@ -311,7 +311,8 @@ The gaps of a scan cut short, and of a value not read:
   or the loader's dynamic table could not be read. A needle or a known function may be there
   unseen;
 - `string scan: a read failed`: a read of a section failed, and the rest of that section was not
-  read; or a section passes the end of the file, and only its bytes in the file were read;
+  read; or a section passes the end of the file (for `.gopclntab`, its header or function-name
+  table), and only its bytes in the file were read;
 - `returned value: <function>: <why>`: what an exported function returns was not read
   ([below](#returned-values)).
 
