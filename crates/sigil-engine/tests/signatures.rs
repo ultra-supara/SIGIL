@@ -356,6 +356,30 @@ fn a_gopclntab_header_not_understood_is_partial() {
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
+/// PR #102 review P2: a Go executable whose `.gopclntab` has `sh_size` 0 (its bytes, build info,
+/// and code unchanged; the program still runs) must not read as completely scanned. The section
+/// has no header, so its function names were looked for nowhere: the header gap, and no hint.
+#[test]
+fn a_gopclntab_of_zero_bytes_is_partial() {
+    let mut bytes = capabilities_elf();
+    let header = sections64(&bytes)
+        .into_iter()
+        .find(|s| s.0 == ".gopclntab")
+        .unwrap()
+        .2;
+    bytes[header + 32..header + 40].copy_from_slice(&0u64.to_le_bytes());
+    let (_d, paths) = files(&[("capabilities", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 1),
+        CoverageState::Partial {
+            missing: vec![SCAN_GOPCLNTAB_HEADER.to_string()]
+        }
+    );
+}
+
 #[test]
 fn without_go_build_info_gopclntab_is_not_read() {
     let (_d, paths) = files(&[("ollama", &go_elf(&pclntab(0x3000), false))]);

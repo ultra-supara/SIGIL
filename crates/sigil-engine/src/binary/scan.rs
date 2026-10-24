@@ -435,10 +435,10 @@ fn first(bytes: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Where a Go target's function-name table is ([`pcln_table`]).
 enum Pcln {
-    /// Its file offset and size; for a section without bytes, an empty table at the section's
-    /// offset.
+    /// Its file offset and size.
     Table(u64, u64),
-    /// The header is not one SIGIL reads, or locates no table within the section.
+    /// The header is not one SIGIL reads, or locates no table within the section; or the section
+    /// has no bytes, so no header (PR #102 review P2).
     NotUnderstood,
     /// The header's bytes are not all in the file, or a read failed.
     Unread,
@@ -452,8 +452,10 @@ enum Pcln {
 /// up to 36 bytes are charged twice; over-charging is safe.
 fn pcln_table(reader: &mut Reader<'_>, t: &Target) -> Pcln {
     let size = reader.size();
+    // A `.gopclntab` of 0 bytes holds no header: its function names were looked for nowhere, and
+    // an empty table would read as a complete search (PR #102 review P2).
     if t.size == 0 {
-        return Pcln::Table(t.offset, 0);
+        return Pcln::NotUnderstood;
     }
     let wanted = t.size.min(PCLN_HEADER_MAX);
     let n = wanted.min(size.saturating_sub(t.offset));
@@ -963,13 +965,17 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_section_past_the_end_of_the_file_is_no_gap() {
+    fn an_empty_gopclntab_is_not_understood_and_an_empty_rodata_no_gap() {
         let go = db(&[("g.f", "go-function", "main.f")]);
         let mut b = bytes(1000, &[(0x100, "main.f")]);
         header(&mut b, 0, 1000);
-        // `sh_size` 0: no byte of the section is missing.
+        // `sh_size` 0: a `.gopclntab` without bytes has no header, so its names were looked for
+        // nowhere (PR #102 review P2). Nothing is read.
         let s = run(&b, 1 << 30, &go, &[gopclntab(2000, 0)]);
-        assert_eq!(s, Searched::default());
+        assert!(s.found.is_empty());
+        assert_eq!(s.gaps, [SCAN_GOPCLNTAB_HEADER]);
+        assert_eq!(s.used, 0);
+        // Another `.gopclntab` with a header is still searched.
         let s = run(
             &b,
             1 << 30,
@@ -980,8 +986,12 @@ mod tests {
             places(&s),
             [("g.f".to_string(), ".gopclntab".to_string(), 0x100)]
         );
-        assert!(s.gaps.is_empty());
+        assert_eq!(s.gaps, [SCAN_GOPCLNTAB_HEADER]);
         assert_eq!(s.used, 1000);
+        // A string section of 0 bytes has nothing to look in, and no byte of it is missing.
+        let strings = db(&[("s.f", "string", "main.f")]);
+        let s = run(&b, 1 << 30, &strings, &[rodata(2000, 0)]);
+        assert_eq!(s, Searched::default());
     }
 
     #[test]

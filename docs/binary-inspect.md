@@ -304,8 +304,8 @@ The gaps of a scan cut short, and of a value not read:
   nowhere (a stripped or renamed table, such as `.data.rel.ro.gopclntab` in a `-buildmode=pie`
   build). Its other sections are not searched for them;
 - `string scan: .gopclntab header not understood`: the file has Go build info and a `.gopclntab`,
-  but its header is not one SIGIL reads, or locates no function-name table within the section
-  (PR-4c-3a): the Go-function needles were not looked for there;
+  but its header is not one SIGIL reads, or locates no function-name table within the section, or
+  the section has no bytes at all (PR-4c-3a): the Go-function needles were not looked for there;
 - `string scan: a name not read`: a section's or an export's name could not be read; or the
   loader has dynamic symbols (`DT_SYMTAB`) and the parse has no `.dynsym` that agrees with them,
   or the loader's dynamic table could not be read. A needle or a known function may be there
