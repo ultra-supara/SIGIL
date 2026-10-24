@@ -449,7 +449,7 @@ enum Pcln {
 /// Reads the `pcHeader` of the Go target `t` (at most [`PCLN_HEADER_MAX`] bytes, charged to
 /// `reader`), and returns where its function-name table is ([`function_names`]). When
 /// `funcnameOffset` is below [`PCLN_HEADER_MAX`], the header's read overlaps the table's start, so
-/// up to 32 bytes are charged twice; over-charging is safe.
+/// up to 36 bytes are charged twice; over-charging is safe.
 fn pcln_table(reader: &mut Reader<'_>, t: &Target) -> Pcln {
     let size = reader.size();
     if t.size == 0 {
@@ -476,12 +476,12 @@ fn pcln_table(reader: &mut Reader<'_>, t: &Target) -> Pcln {
 /// The function-name table of a `.gopclntab` of `size` bytes whose first bytes are `header`
 /// (PR-4c-3a plan review P2): `[funcnameOffset, cuOffset)` from the section's start, as Go's
 /// `pcHeader` gives it for Go 1.16 and later (1.16's and 1.18's layouts), in either byte order (the
-/// magic's), returned as `(from, len)`: the table's offset from the section's start and its
-/// length. The header's other bytes are `pad1` and `pad2` (zero), `minLC` (1, 2, or 4), `ptrSize` (4 or 8),
+/// magic's), returned as `(from, len)`: the table's offset from the section's start and its length.
+/// The header's other bytes are `pad1` and `pad2` (zero), `minLC` (1, 2, or 4), `ptrSize` (4 or 8),
 /// then its pointer-size fields: `nfunc`, `nfiles`, from Go 1.18 `textStart`, `funcnameOffset`,
 /// `cuOffset`, `filetabOffset`, `pctabOffset`, and `pclnOffset`. `None` for another magic or
-/// another value, a header shorter than its fields, or a table not after the header and within
-/// the section.
+/// another value, a header shorter than its fields, or a table not after the header and within the
+/// section.
 fn function_names(header: &[u8], size: u64) -> Option<(u64, u64)> {
     let magic: [u8; 4] = header.get(..4)?.try_into().ok()?;
     let known = [GO116_MAGIC, GO118_MAGIC, GO120_MAGIC];
