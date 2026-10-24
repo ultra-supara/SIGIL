@@ -81,8 +81,8 @@ fn the_new_not_read_reasons_are_json_names() {
 // --- validation V1–V11 -------------------------------------------------------------------------
 
 use sigil_model::{
-    CheckId, Coverage, CoverageState, IdentityAssertion, InstanceContent, Ref, ReleaseBasis,
-    ReportedCommit, RootId, Session, Stability, UntrustedText, ARTIFACTS_DISCOVERY,
+    CheckId, Coverage, CoverageState, EvidenceRef, IdentityAssertion, InstanceContent, Ref,
+    ReleaseBasis, ReportedCommit, RootId, Session, Stability, UntrustedText, ARTIFACTS_DISCOVERY,
     ARTIFACTS_RELEASE,
 };
 
@@ -289,7 +289,8 @@ fn commits(s: &mut Session) -> &mut Vec<ReportedCommit> {
 #[test]
 fn v12_one_claim_per_product_with_unique_candidates() {
     let mut s = open();
-    let again = s.releases[0].clone();
+    let mut again = s.releases[0].clone();
+    again.candidates.pop();
     s.releases.push(again);
     rejected_release(&s, "one release claim per product");
     let mut s = open();
@@ -327,6 +328,11 @@ fn v12_an_open_claim_rests_on_the_session_s_own_commits() {
     rejected_release(&s, "an Embedded assertion of a claim");
     let mut s = open();
     commits(&mut s)[0].field = "ggml_commit".to_string();
+    rejected_release(&s, "an Embedded assertion of a claim");
+    // Only the evidence differs from the assertion's.
+    let mut s = open();
+    let artifact = s.artifacts[0].id.clone();
+    commits(&mut s)[0].at = EvidenceRef::Artifact { artifact };
     rejected_release(&s, "an Embedded assertion of a claim");
     // A value that is no commit, even when the claim's assertion has it.
     let mut s = open();

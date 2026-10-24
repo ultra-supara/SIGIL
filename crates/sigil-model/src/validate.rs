@@ -48,7 +48,9 @@ use crate::id::{
     ModelId, ObligationId, OpenQuestionId, PremiseId, ProbeId, ProcessRole, ProfileRef, RefSetId,
     RootId, SliceId,
 };
-use crate::identity::{ComponentClaim, IdentityAssertion, IdentityStatus, ReleaseBasis};
+use crate::identity::{
+    is_commit, ComponentClaim, IdentityAssertion, IdentityStatus, ReleaseBasis, ReportedCommit,
+};
 use crate::load::ValueOrigin;
 use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
@@ -232,8 +234,11 @@ pub enum ValidationError {
     /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
     /// (V11).
     ReleaseCoverage { complete: bool },
-    /// Two release claims for one product, or an open claim (`SelfReportedCommit`) that does not
-    /// rest on the session's own embedded commits (V12; PR-4c-2c).
+    /// A release claim V12 rejects (PR-4c-2c): two claims for one product, a candidate listed
+    /// twice, or an open claim (`SelfReportedCommit`) that is not made for an install with a
+    /// reference set in `knowledge`, is beside a claim by reference matches, or does not rest on
+    /// the session's own embedded commits (none, a duplicate, a value that is not 7 to 40
+    /// lowercase hex digits, or no `Embedded` assertion with its field, value, and evidence).
     Release {
         product: ComponentKey,
         why: &'static str,
@@ -744,7 +749,7 @@ impl<'a> Validator<'a> {
                 }
             }
         }
-        self.open_releases();
+        self.release_claims();
         self.reference_matches();
         self.binaries();
         self.binary_inputs();
@@ -2329,7 +2334,7 @@ impl<'a> Validator<'a> {
     /// verifier recomputes it with; plan review P2), never beside a claim by reference matches,
     /// and rests on commits that are the session's own `Embedded` assertions. `validate` cannot
     /// tell which releases report a commit: the verifier recomputes the candidates.
-    fn open_releases(&mut self) {
+    fn release_claims(&mut self) {
         let s = self.s;
         let install = s
             .request
@@ -2340,7 +2345,7 @@ impl<'a> Validator<'a> {
             .knowledge
             .iter()
             .any(|k| k.kind == KnowledgeKind::ReferenceManifest);
-        let embedded = |c: &crate::identity::ReportedCommit| {
+        let embedded = |c: &ReportedCommit| {
             s.components.iter().flat_map(|x| &x.assertions).any(|a| {
                 matches!(a, IdentityAssertion::Embedded { field, value, at, .. }
                     if *field == c.field && *value == c.value && *at == c.at)
@@ -2363,6 +2368,8 @@ impl<'a> Validator<'a> {
                 if !named {
                     why.push("an open claim needs a reference set in knowledge");
                 }
+                // A closed and an open claim of one product already break "one release claim per
+                // product"; this check names the case.
                 let closed = s.releases.iter().any(|c| {
                     c.product == claim.product
                         && matches!(c.basis, ReleaseBasis::ReferenceMatches { .. })
@@ -2377,7 +2384,7 @@ impl<'a> Validator<'a> {
                     if commits[..k].contains(c) {
                         why.push("each commit is listed once");
                     }
-                    if !crate::identity::is_commit(c.value.as_bytes()) {
+                    if !is_commit(c.value.as_bytes()) {
                         why.push("a commit is 7 to 40 lowercase hex digits");
                     }
                     if !embedded(c) {

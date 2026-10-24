@@ -127,10 +127,9 @@ The rule then yields an open question at most.
   - V12 (PR-4c-2c): one release claim per product, with unique candidates. An open claim (basis
     `SelfReportedCommit`) is made only for an install with a `ReferenceManifest` knowledge entry,
     never beside a claim by reference matches of its product, and lists at least one commit, each
-    once. A commit is an `Embedded`
-    assertion's field, value (7 to 40 lowercase hex digits), and evidence, of a claim in
-    `components`. SIGIL never wrote the basis's earlier shape (`field`, `value`, `at`), so no
-    session written before reads differently.
+    once. A commit is an `Embedded` assertion's field, value (7 to 40 lowercase hex digits), and
+    evidence, of a claim in `components`. SIGIL never wrote the basis's earlier shape (`field`,
+    `value`, `at`), so no session SIGIL wrote is affected.
 
   The rows' expected values, and whether a release lists a member at all, come from the reference
   set, which a session does not hold. The engine's verifier checks them
