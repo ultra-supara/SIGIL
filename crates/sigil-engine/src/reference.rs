@@ -433,7 +433,7 @@ pub fn names(s: &sigil_model::Session, set: &RefSet) -> Result<bool, String> {
 /// This runs only for a session that names `set` ([`names`]; one that does not is made with
 /// another set or another version of it, and is noted by the CLI instead). The closed claim is
 /// recomputed from the session's rows of this set and its placements under the install root
-/// ([`crate::analyze::release::by_rows`]; `validate` (V10) and [`verify_reference_matches`] pin
+/// (`crate::analyze::release::by_rows`; `validate` (V10) and [`verify_reference_matches`] pin
 /// the rows). The component claims are derived from the session's binary facts (not from
 /// `s.components`, which `validate` does not tie to them), and
 /// [`crate::analyze::release::claims`] gives the closed claim, else the open one. Without an

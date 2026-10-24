@@ -579,7 +579,8 @@ fn a_self_reported_commit_gives_an_open_release_claim() {
 }
 
 /// PR-4c-2c: `validate` checks that an open claim rests on the session's own commits; only the
-/// verifier knows which releases report them.
+/// verifier knows which releases report them, and it recomputes every release claim, closed
+/// ones included.
 #[test]
 fn the_verifier_recomputes_the_release_claims() {
     let tree = install_with_a_commit();
