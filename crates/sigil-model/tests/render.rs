@@ -346,10 +346,11 @@ fn an_open_release_claim_is_shown_with_its_commits() {
     // there, and the same content under another root, are not listed.
     let label = t("Self-reported commits:").markdown_inline();
     let commits_line = |s: &Session| {
-        section(s)
+        let section = section(s);
+        section
             .lines()
             .find(|l| l.starts_with(&label))
-            .unwrap_or_else(|| panic!("no commits line"))
+            .unwrap_or_else(|| panic!("no commits line:\n{section}"))
             .to_string()
     };
     let mut other = open_release();

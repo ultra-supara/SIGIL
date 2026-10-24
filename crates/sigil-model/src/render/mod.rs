@@ -175,7 +175,7 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
 }
 
 /// The open release claim the reports show, with its commits (PR-4c-2c): none beside a claim
-/// by reference matches, otherwise the first claim by self-reported commits.
+/// by reference matches of any product, otherwise the first claim by self-reported commits.
 pub fn open_claim(
     s: &crate::session::Session,
 ) -> Option<(
