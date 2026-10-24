@@ -7,6 +7,8 @@
 //! Lists whose order **is** evidence are never sorted: call arguments (register order), the
 //! locations of an obligation, conditions of a rule, atoms of a predicate (profile order), guard
 //! branches, link chains and ancestor chains, unresolved premises, and evidence lists.
+//! An open release claim's commits are a set (each is listed once), so they are sorted
+//! ([`ReleaseClaim::canonicalize`]).
 
 use serde::Serialize;
 

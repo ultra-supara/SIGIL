@@ -111,13 +111,12 @@ path:
   fields whose role is `commit` in the component database (`LLAMA_COMMIT`, `ggml_commit`), each
   7 to 40 lowercase hex digits; a value such as `unknown` is ignored. Its candidates are the
   releases of the set whose own files report, for every field collected, a value that agrees with
-  the install's: one is a prefix of the other, since a commit is abbreviated to a prefix, here of at least 7
-  digits.
-  Without a commit, or without such a release, there is none. It says only that the install is
-  *consistent with* those releases: a custom build, a mixed install, or an unlisted release is not
-  excluded. `artifacts.release` is unchanged by it. The values are those of the linux-amd64
-  archives; an arm64 install that reports the same commit gets the same candidates, which are
-  release tags.
+  the install's: one is a prefix of the other, since a commit is abbreviated to a prefix, here of at
+  least 7 digits. Without a commit, or without such a release, there is none. It says only that the
+  install is *consistent with* those releases: a custom build, a mixed install, or an unlisted
+  release is not excluded. `artifacts.release` is unchanged by it. The values are those of the
+  linux-amd64 archives; an arm64 install that reports the same commit gets the same candidates,
+  which are release tags.
 - **`artifacts.release` is `Complete`** only when there is a closed claim and no candidate has an
   `Absent` row. An installation whose content matches v0.30.6 but which lacks some of its
   libraries is attributed to v0.30.6 and is INCOMPLETE.
