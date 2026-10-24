@@ -6,7 +6,7 @@
 //!   after a complete discovery.
 //! - `artifacts.release` is Complete only when no candidate has an absent member (completeness).
 //! - Without a claim, the install's self-reported commits may give an **open** one (PR-4c-2c):
-//!   the releases whose own files report the same, never closed by it.
+//!   the releases whose own files report the same. It never closes `artifacts.release`.
 
 use std::collections::BTreeSet;
 
@@ -134,22 +134,25 @@ pub fn analyze(facts: &InstallFacts, set: &RefSet) -> Result<ReleaseResult, Stri
 /// one, otherwise the open claim of the install's self-reported commits ([`open`]), if any.
 pub fn claims(
     closed: Option<ReleaseClaim>,
-    claims: &[ComponentClaim],
+    components: &[ComponentClaim],
     set: &RefSet,
 ) -> Result<Vec<ReleaseClaim>, String> {
     match closed {
         Some(claim) => Ok(vec![claim]),
-        None => Ok(open(claims, set)?.into_iter().collect()),
+        None => Ok(open(components, set)?.into_iter().collect()),
     }
 }
 
 /// The open release claim of `claims`, the install's component claims (PR-4c-2c; plan §4.4.3).
 ///
 /// - The commits: each `Embedded` assertion whose field the component database gives the role
-///   `commit` and whose value reads as a commit ([`is_commit`]), once, in claim order.
+///   `commit` and whose value reads as a commit ([`is_commit`]), once.
 /// - The candidates: the releases of `set` that list every field collected, each with a value
-///   that agrees with the install's (one is a prefix of the other: `git` abbreviates a commit to
-///   any length).
+///   that agrees with the install's (one is a prefix of the other: a commit is abbreviated to a
+///   prefix, here of at least 7 digits).
+///
+/// The commits and the candidates are in canonical order ([`ReleaseClaim::canonicalize`]), so the
+/// claim equals the one a saved session holds.
 ///
 /// `None` without a commit, or without a candidate. `Err` only for an invalid database.
 pub fn open(claims: &[ComponentClaim], set: &RefSet) -> Result<Option<ReleaseClaim>, String> {
@@ -162,13 +165,16 @@ pub fn open(claims: &[ComponentClaim], set: &RefSet) -> Result<Option<ReleaseCla
         else {
             continue;
         };
+        if !db.field(field).is_some_and(|f| f.role == Role::Commit) || !is_commit(value.as_bytes())
+        {
+            continue;
+        }
         let commit = ReportedCommit {
             field: field.clone(),
             value: value.clone(),
             at: at.clone(),
         };
-        let role = db.field(field).map(|f| f.role);
-        if role == Some(Role::Commit) && is_commit(value.as_bytes()) && !commits.contains(&commit) {
+        if !commits.contains(&commit) {
             commits.push(commit);
         }
     }
@@ -191,11 +197,13 @@ pub fn open(claims: &[ComponentClaim], set: &RefSet) -> Result<Option<ReleaseCla
     if candidates.is_empty() {
         return Ok(None);
     }
-    Ok(Some(ReleaseClaim {
+    let mut claim = ReleaseClaim {
         product: ComponentKey::new("ollama").map_err(|e| e.to_string())?,
         candidates,
         basis: ReleaseBasis::SelfReportedCommit { commits },
-    }))
+    };
+    claim.canonicalize();
+    Ok(Some(claim))
 }
 
 /// One placement against one member (§6 step 1).
@@ -334,9 +342,10 @@ mod tests {
     const SLICE: &str =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0";
 
-    /// One claim with the embedded values `fields` (field, value, address read at).
-    fn claim(fields: &[(&str, &str, u64)]) -> ComponentClaim {
-        let slice = SliceId::new(SLICE).unwrap();
+    /// One claim of the slice numbered `n` with the embedded values `fields` (field, value,
+    /// address read at).
+    fn claim_of(n: char, fields: &[(&str, &str, u64)]) -> ComponentClaim {
+        let slice = SliceId::new(SLICE.replace('1', &n.to_string())).unwrap();
         let mut assertions: Vec<IdentityAssertion> = fields
             .iter()
             .map(|(field, value, addr)| IdentityAssertion::Embedded {
@@ -361,6 +370,11 @@ mod tests {
             status: IdentityStatus::NameOnly,
             versions: vec![],
         }
+    }
+
+    /// One claim of the first slice.
+    fn claim(fields: &[(&str, &str, u64)]) -> ComponentClaim {
+        claim_of('1', fields)
     }
 
     /// An open claim's candidates, and its commits as (field, value).
@@ -466,8 +480,8 @@ mod tests {
         assert_eq!(open_of(&[mixed], set), None);
         // Two contents report different values of one field.
         let two = [
-            claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]),
-            claim(&[("LLAMA_COMMIT", "1111111", 0x10)]),
+            claim_of('1', &[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]),
+            claim_of('2', &[("LLAMA_COMMIT", "1111111", 0x10)]),
         ];
         assert_eq!(open_of(&two, &llama_only()), None);
         // A field no release lists.
@@ -484,6 +498,7 @@ mod tests {
         for (field, value) in [
             ("LLAMA_COMMIT", "unknown"),
             ("LLAMA_COMMIT", "6F3A9F3DE"),
+            ("LLAMA_COMMIT", "6f3a9f"),
             ("LLAMA_BUILD_NUMBER", "6f3a9f3de"),
             ("LLAMA_COMPILER", "6f3a9f3de"),
             ("go.version", "6f3a9f3de"),
@@ -530,6 +545,29 @@ mod tests {
             ("LLAMA_COMMIT", "6f3a9f3de", 0x30),
         ]);
         assert_eq!(open_of(&[two], set).map(|(_, c)| c.len()), Some(2));
+    }
+
+    #[test]
+    fn the_claim_is_in_canonical_order_whatever_the_claim_order() {
+        let set = official().unwrap();
+        let a = claim_of(
+            '1',
+            &[
+                ("ggml_commit", "6f3a9f3de", 0x20),
+                ("LLAMA_COMMIT", "6f3a9f3de", 0x10),
+            ],
+        );
+        let b = claim_of('2', &[("LLAMA_COMMIT", "6f3a9f3de", 0x30)]);
+        let forward = open(&[a.clone(), b.clone()], set).unwrap().unwrap();
+        let reverse = open(&[b, a], set).unwrap().unwrap();
+        assert_eq!(forward, reverse);
+        let ReleaseBasis::SelfReportedCommit { commits } = &forward.basis else {
+            panic!("an open claim");
+        };
+        assert_eq!(commits.len(), 3);
+        let mut again = forward.clone();
+        again.canonicalize();
+        assert_eq!(again, forward);
     }
 
     #[test]

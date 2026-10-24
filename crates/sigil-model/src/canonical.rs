@@ -10,12 +10,24 @@
 
 use serde::Serialize;
 
+use crate::identity::{ReleaseBasis, ReleaseClaim};
 use crate::session::Session;
 
 /// Sorts by each element's JSON text: a total, deterministic order that needs no `Ord` on the
 /// element types (so `Support`, for one, gets no ranking).
 fn sort_json<T: Serialize>(list: &mut [T]) {
     list.sort_by_cached_key(|item| serde_json::to_string(item).unwrap_or_default());
+}
+
+impl ReleaseClaim {
+    /// Puts the candidates, and an open claim's commits, in canonical order, so that what the
+    /// engine derives and what a saved session holds compare as written.
+    pub fn canonicalize(&mut self) {
+        self.candidates.sort();
+        if let ReleaseBasis::SelfReportedCommit { commits } = &mut self.basis {
+            sort_json(commits);
+        }
+    }
 }
 
 impl Session {
@@ -54,7 +66,7 @@ impl Session {
         }
         sort_json(&mut self.components);
         for release in &mut self.releases {
-            release.candidates.sort();
+            release.canonicalize();
         }
         sort_json(&mut self.releases);
         sort_json(&mut self.reference_matches);

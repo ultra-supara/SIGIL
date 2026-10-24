@@ -286,6 +286,22 @@ fn commits(s: &mut Session) -> &mut Vec<ReportedCommit> {
     }
 }
 
+/// Canonical order (PR-4c-2c): an open claim's commits and candidates are sorted, so what the
+/// engine derives and what a saved session holds compare as written.
+#[test]
+fn canonicalize_sorts_an_open_claim_s_commits_and_candidates() {
+    let mut s = open();
+    let first = commits(&mut s)[0].clone();
+    let mut second = first.clone();
+    second.field = "ggml_commit".to_string();
+    // "LLAMA_COMMIT" sorts before "ggml_commit" in JSON text: list them the other way round.
+    *commits(&mut s) = vec![second.clone(), first.clone()];
+    s.releases[0].candidates = vec!["v0.30.7".into(), "v0.30.5".into(), "v0.30.6".into()];
+    s.canonicalize();
+    assert_eq!(*commits(&mut s), vec![first, second]);
+    assert_eq!(s.releases[0].candidates, ["v0.30.5", "v0.30.6", "v0.30.7"]);
+}
+
 #[test]
 fn v12_one_claim_per_product_with_unique_candidates() {
     let mut s = open();

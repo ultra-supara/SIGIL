@@ -101,7 +101,8 @@ path:
 
 ## Attribution and completeness
 
-- **The candidates** are the releases for which every placement has a matching row.
+- **The candidates** of the closed claim are the releases for which every placement has a matching
+  row.
 - **A release claim** (`releases`, basis `ReferenceMatches`, the placements as its files) is
   recorded only when discovery is `Complete` and there is at least one candidate. Releases with
   identical content are all candidates. It is **closed**.
@@ -110,7 +111,8 @@ path:
   fields whose role is `commit` in the component database (`LLAMA_COMMIT`, `ggml_commit`), each
   7 to 40 lowercase hex digits; a value such as `unknown` is ignored. Its candidates are the
   releases of the set whose own files report, for every field collected, a value that agrees with
-  the install's: one is a prefix of the other, since `git` abbreviates a commit to any length.
+  the install's: one is a prefix of the other, since a commit is abbreviated to a prefix, here of at least 7
+  digits.
   Without a commit, or without such a release, there is none. It says only that the install is
   *consistent with* those releases: a custom build, a mixed install, or an unlisted release is not
   excluded. `artifacts.release` is unchanged by it. The values are those of the linux-amd64
@@ -124,7 +126,7 @@ path:
 |---|---|---|
 | An unmodified v0.30.6 | `[v0.30.6]` | `Complete` |
 | `bin/ollama` of v0.30.6, `lib/ollama/` empty | `[v0.30.6]` | `Partial` (members absent) |
-| A library replaced by any other bytes, ELF or not | open `[v0.30.5, v0.30.6, v0.30.7]` when the libraries report commits and each agrees with `6f3a9f3de` (the official `libllama-common` or `libggml-base` is left); none when one reports another commit, or none reports one | `Partial` (`matches no reference`) |
+| A library replaced by any other bytes, ELF or not | open `[v0.30.5, v0.30.6, v0.30.7]` (the commits of the official `libllama-common` or `libggml-base` left); none when the replacement reports a commit that disagrees with `6f3a9f3de` | `Partial` (`matches no reference`) |
 | `bin/ollama` of v0.30.5 and a library only v0.30.6 has | open `[v0.30.5, v0.30.6, v0.30.7]` (the libraries' commits) | `Partial` (`mixed install`) |
 | A link with the official target text whose target file is missing | `[v0.30.6]` (the link matches by text) | `Partial` (the file is absent) |
 | `lib/ollama` replaced by a symlink to a copy elsewhere | none (discovery `Partial`; no library read) | `Partial` (`discovery incomplete`) |
@@ -159,7 +161,7 @@ Binaries) belong to the scope `runtime_artifacts`, which the default policy audi
 
 | State | When |
 |---|---|
-| `Complete` | A claim, and nothing absent from any candidate |
+| `Complete` | A closed claim, and nothing absent from any candidate |
 | `Partial { missing }` | Otherwise, one entry per reason: `discovery incomplete`; `<release>: <n> files, <m> symlinks, and <k> directories absent from the install`; `<path>: not in any reference`; `<path>: matches no reference`; `<path>: symlink to <t>; <release>: <t'>`; `<path>: <kind> where <release> has a <kind>`; `<path>: not compared`; `mixed install: …` |
 | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 

@@ -8,7 +8,7 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use sigil_engine::analyze::identity::derive;
-use sigil_engine::analyze::release::analyze;
+use sigil_engine::analyze::release::{analyze, claims, open};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::{collect, InstallBudgets};
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
@@ -545,4 +545,98 @@ fn a_self_reported_commit_gives_an_open_release_claim() {
         state(&s, ARTIFACTS_RELEASE),
         CoverageState::Partial { .. }
     ));
+}
+
+/// PR-4c-2c: an install with two reporting libraries gives two commits, and the session's claim is
+/// the one `open` derives from the session's own component claims, as written (canonical order).
+#[test]
+fn an_open_claim_with_two_commits_equals_the_one_derived_from_the_claims() {
+    let tree = install();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    std::fs::copy(
+        fixtures.join("elf/libdata.so"),
+        tree.path().join("lib/ollama/libllama-common.so.0.0.1"),
+    )
+    .unwrap();
+    std::fs::copy(
+        fixtures.join("returns/version-gcc-O2.so"),
+        tree.path().join("lib/ollama/libggml-base.so.0.13.1"),
+    )
+    .unwrap();
+    let s = inspect_with_install(&tree);
+    let [claim] = s.releases.as_slice() else {
+        panic!("one claim: {:?}", s.releases);
+    };
+    let ReleaseBasis::SelfReportedCommit { commits } = &claim.basis else {
+        panic!("an open claim: {:?}", claim.basis);
+    };
+    let shown: Vec<(&str, Option<&str>)> = commits
+        .iter()
+        .map(|c| (c.field.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("LLAMA_COMMIT", Some("6f3a9f3de")),
+            ("ggml_commit", Some("6f3a9f3de"))
+        ]
+    );
+    let derived = open(&s.components, official().unwrap()).unwrap();
+    assert_eq!(s.releases, derived.into_iter().collect::<Vec<_>>());
+}
+
+/// PR-4c-2c: a closed claim comes first. The set describes the install exactly, `libllama-common`
+/// included, and lists the same commit; `claims` gives the closed claim, while `open` alone would
+/// give an open one.
+#[test]
+fn a_closed_claim_comes_before_an_open_one() {
+    use serde_json::json;
+    let tree = install();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so");
+    let lib = "lib/ollama/libllama-common.so.0.0.1";
+    std::fs::copy(&fixture, tree.path().join(lib)).unwrap();
+    let bytes = std::fs::read(&fixture).unwrap();
+    let hex = |b: &[u8]| common::hex(b);
+    let manifest = |tag: &str| {
+        json!({"tag": tag, "entries": [
+            {"name": "bin/ollama", "type": "0", "mode": "0o755", "sha256": hex(&elf(2)), "size": 64},
+            {"name": "lib/ollama/cuda_v12", "type": "5", "mode": "0o755"},
+            {"name": "lib/ollama/cuda_v12/libcudart.so.12.8.90", "type": "0", "mode": "0o644", "sha256": hex(b"weights"), "size": 7},
+            {"name": "lib/ollama/libggml.so.0", "type": "2", "mode": "0o777", "link": "libggml.so.0.13.1"},
+            {"name": "lib/ollama/libggml.so.0.13.1", "type": "0", "mode": "0o644", "sha256": hex(&elf(3)), "size": 64},
+            {"name": lib, "type": "0", "mode": "0o644", "sha256": hex(&bytes), "size": bytes.len()},
+        ]})
+        .to_string()
+    };
+    let (a, b) = (manifest("vA"), manifest("vB"));
+    let commits = format!(
+        "[[release]]\ntag = \"vA\"\ncommits = [{{ field = \"LLAMA_COMMIT\", member = \"{lib}\", \
+         value = \"6f3a9f3de\" }}]\n[[release]]\ntag = \"vB\"\ncommits = [{{ field = \
+         \"LLAMA_COMMIT\", member = \"{lib}\", value = \"6f3a9f3de\" }}]\n"
+    );
+    let refs = parse_set(
+        "ollama-official",
+        "test",
+        &[("a.json", &a), ("b.json", &b), ("commits.toml", &commits)],
+    )
+    .unwrap();
+    let facts = collect(tree.path(), InstallBudgets::default()).unwrap();
+    let r = analyze(&facts, &refs).unwrap();
+    let components = derive(&facts.instances, &facts.binaries, &r.rows).unwrap();
+    let closed = r.claim.clone().unwrap();
+    assert_eq!(closed.candidates, ["vA", "vB"]);
+    assert!(matches!(
+        closed.basis,
+        ReleaseBasis::ReferenceMatches { .. }
+    ));
+    assert_eq!(
+        claims(r.claim, &components, &refs),
+        Ok(vec![closed.clone()])
+    );
+    let open = open(&components, &refs).unwrap().unwrap();
+    assert!(matches!(
+        open.basis,
+        ReleaseBasis::SelfReportedCommit { .. }
+    ));
+    assert_eq!(open.candidates, ["vA", "vB"]);
 }
