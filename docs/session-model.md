@@ -133,7 +133,7 @@ The rule then yields an open question at most.
 
   The rows' expected values, whether a release lists a member at all, and which commit a release
   reports come from the reference set, which a session does not hold. The engine's verifiers
-  check them (`verify_reference_matches`, and `verify_release_claims` for an open claim).
+  check them (`verify_reference_matches`, and `verify_release_claims` for the release claims).
 - **Binary facts agree with the session (PR-4b-1 and PR-4b-2b,
   [`docs/runtime-artifacts.md`](runtime-artifacts.md#binaries)):**
   - B1: a record names a slice of the session, one record per slice;

@@ -69,8 +69,8 @@ separate questions:
   `KnowledgeRef { kind: ReferenceManifest, id: "ollama-official", version: "2026-10-24", sha256 }`.
   The SHA-256 covers the embedded files, `commits.toml` included. A session saved with an earlier
   version of the set is not re-verified by `sigil session render` and `sigil explain`, which say
-  so ("note: reference matches and open release claims were made with another reference set and
-  are not re-verified"). The embedded set's SHA-256 under another id is refused (exit 1).
+  so ("note: reference matches and release claims were made with another reference set and are
+  not re-verified"). The embedded set's SHA-256 under another id is refused (exit 1).
 - **What a match is.** A match is a comparison with the contents of the official archives. **It is
   not a signature check**, and it does not show who built the files.
 - **Adding a release.** [`scripts/refmanifest/`](../scripts/refmanifest/README.md) describes it: a
@@ -200,12 +200,12 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
   requires an open claim's session to have some reference set in `knowledge` (V12), so none
   escapes the verifier by naming none. A session that names another set (or another version of
   this one) is rendered with a note instead, and one with the embedded set's SHA-256 under
-  another id is refused. A session that names the set has no reference row of another set.
+  another id is refused.
 
 | Where | `validate` | Verifier |
 |---|---|---|
 | `sigil inspect` | every session it writes | both, on every session it writes (an internal error otherwise, exit 1) |
-| `sigil session render`, `sigil explain` | every session read | both, when the session names the embedded set by its SHA-256 (a disagreement is exit 1). A session made with another set is rendered with a note |
+| `sigil session render`, `sigil explain` | every session read | both, when the session names the embedded set by its id and SHA-256 (a disagreement is exit 1; so is the SHA-256 under another id). A session made with another set is rendered with a note |
 | The browser viewer | every session read | **never**: it has no reference set |
 
 ## Binaries

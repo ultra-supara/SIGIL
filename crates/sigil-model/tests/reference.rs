@@ -302,6 +302,25 @@ fn canonicalize_sorts_an_open_claim_s_commits_and_candidates() {
     assert_eq!(s.releases[0].candidates, ["v0.30.5", "v0.30.6", "v0.30.7"]);
 }
 
+/// A closed claim's files are in canonical order too.
+#[test]
+fn canonicalize_sorts_a_closed_claim_s_files() {
+    let mut claim = base().releases[0].clone();
+    let ReleaseBasis::ReferenceMatches { files, .. } = &mut claim.basis else {
+        panic!("the base claim is closed");
+    };
+    *files = ["inst:b", "inst:c", "inst:a"]
+        .iter()
+        .map(|f| InstanceId::new(*f).unwrap())
+        .collect();
+    claim.canonicalize();
+    let ReleaseBasis::ReferenceMatches { files, .. } = &claim.basis else {
+        panic!("closed");
+    };
+    let names: Vec<&str> = files.iter().map(|f| f.as_str()).collect();
+    assert_eq!(names, ["inst:a", "inst:b", "inst:c"]);
+}
+
 #[test]
 fn v12_one_claim_per_product_with_unique_candidates() {
     let mut s = open();

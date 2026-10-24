@@ -62,8 +62,8 @@ pub enum InspectError {
     /// The assembled session fails `Session::validate` (a bug, reported rather than returned as
     /// a result).
     Invalid(Vec<String>),
-    /// The session's reference rows or open release claims are not what the embedded set gives
-    /// (a bug).
+    /// The session's reference rows or release claims are not what the embedded set gives (a
+    /// bug).
     Reference(Vec<String>),
     /// An input of `binary inspect` that cannot be inspected (exit 1; plan §4.9).
     Input(String),

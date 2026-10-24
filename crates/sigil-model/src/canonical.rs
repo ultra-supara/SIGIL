@@ -22,12 +22,13 @@ fn sort_json<T: Serialize>(list: &mut [T]) {
 }
 
 impl ReleaseClaim {
-    /// Puts the candidates, and an open claim's commits, in canonical order, so that what the
-    /// engine derives and what a saved session holds compare as written.
+    /// Puts the candidates, an open claim's commits, and a closed claim's files in canonical
+    /// order, so that what the engine derives and what a saved session holds compare as written.
     pub fn canonicalize(&mut self) {
         self.candidates.sort();
-        if let ReleaseBasis::SelfReportedCommit { commits } = &mut self.basis {
-            sort_json(commits);
+        match &mut self.basis {
+            ReleaseBasis::SelfReportedCommit { commits } => sort_json(commits),
+            ReleaseBasis::ReferenceMatches { files, .. } => files.sort(),
         }
     }
 }

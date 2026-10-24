@@ -1235,7 +1235,8 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
         .map_err(|e| failure("the session's reference knowledge disagrees with", vec![e]))?
     {
         eprintln!(
-            "note: reference matches and open release claims were made with another reference set and are not re-verified"
+            "note: reference matches and release claims were made with another reference set and \
+             are not re-verified"
         );
         return Ok(());
     }

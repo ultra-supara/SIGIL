@@ -426,11 +426,12 @@ pub fn names(s: &sigil_model::Session, set: &RefSet) -> Result<bool, String> {
 /// another set or another version of it, and is noted by the CLI instead). The closed claim is
 /// recomputed from the session's rows of this set and its placements under the install root
 /// ([`crate::analyze::release::by_rows`]; `validate` (V10) and [`verify_reference_matches`] pin
-/// the rows), with no install root, no closed claim. The component claims are derived from the
-/// session's binary facts (not from `s.components`, which `validate` does not tie to them), and
-/// [`crate::analyze::release::claims`] gives the closed claim, else the open one. The session's
-/// claims, of any product (plan review P2), must be exactly these: so none is open beside a
-/// closed one, and a closed claim cannot be relabelled or dropped to make room for an open one.
+/// the rows). The component claims are derived from the session's binary facts (not from
+/// `s.components`, which `validate` does not tie to them), and
+/// [`crate::analyze::release::claims`] gives the closed claim, else the open one. Without an
+/// install root the engine makes no claim at all. The session's claims, of any product (plan
+/// review P2), must be exactly these: so none is open beside a closed one, and a closed claim
+/// cannot be relabelled or dropped to make room for an open one.
 /// Both sides are compared in canonical order. `validate` cannot check this: the commit data and
 /// the fields' roles are the engine's. V12 requires some `ReferenceManifest` in a session with
 /// an open claim.
@@ -469,15 +470,16 @@ pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(
     let components =
         crate::analyze::identity::derive(&s.instances, &s.binaries, &s.reference_matches)
             .map_err(|e| vec![e])?;
-    let mut derived =
-        crate::analyze::release::claims(closed, &components, set).map_err(|e| vec![e])?;
+    let mut derived = match root {
+        Some(_) => {
+            crate::analyze::release::claims(closed, &components, set).map_err(|e| vec![e])?
+        }
+        None => vec![],
+    };
     let mut recorded = s.releases.clone();
     let order = |list: &mut Vec<ReleaseClaim>| {
         for c in list.iter_mut() {
             c.canonicalize();
-            if let ReleaseBasis::ReferenceMatches { files, .. } = &mut c.basis {
-                files.sort();
-            }
         }
         list.sort_by_cached_key(|c| {
             (
@@ -518,7 +520,8 @@ pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(
         each.join("; ")
     };
     Err(vec![format!(
-        "the release claims are {}, but the session's reference rows, binary facts and the set give {}",
+        "the release claims are {}, but the session's reference rows, binary facts and the set \
+         give {}",
         shown(&recorded),
         shown(&derived)
     )])
