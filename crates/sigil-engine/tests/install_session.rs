@@ -1,8 +1,8 @@
 //! The assembled session with `--install-dir` (PR-4a): it validates and verifies against the
 //! embedded set, a policy that requires the install's checks without one is incomplete, and the
 //! verifier rejects what `validate` cannot re-derive. Its ELF files carry component claims whose
-//! known hashes are their reference rows (PR-4c-1). Synthetic trees only: no test reads a real
-//! installation.
+//! known hashes are their reference rows (PR-4c-1). A self-reported commit gives an open release
+//! claim (PR-4c-2c). Synthetic trees only: no test reads a real installation.
 
 use std::os::unix::fs::symlink;
 use std::path::Path;
@@ -502,4 +502,47 @@ fn a_matching_reference_set_makes_the_claims_reference_matched() {
             .collect();
         assert_eq!(matched, ["vA", "vB"], "{}", c.component);
     }
+}
+
+/// PR-4c-2c: the fixture `libdata.so` placed as `libllama-common.so.0.0.1` matches no reference,
+/// and reports `LLAMA_COMMIT` `6f3a9f3de`, as the official releases' files do: an open claim for
+/// all three, resting on that commit. `artifacts.release` stays `Partial`.
+#[test]
+fn a_self_reported_commit_gives_an_open_release_claim() {
+    let tree = install();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so");
+    std::fs::copy(
+        fixture,
+        tree.path().join("lib/ollama/libllama-common.so.0.0.1"),
+    )
+    .unwrap();
+    let s = inspect_with_install(&tree);
+    verify_reference_matches(&s, official().unwrap()).unwrap();
+    let [claim] = s.releases.as_slice() else {
+        panic!("one claim: {:?}", s.releases);
+    };
+    assert_eq!(claim.product.as_str(), "ollama");
+    assert_eq!(claim.candidates, ["v0.30.5", "v0.30.6", "v0.30.7"]);
+    let ReleaseBasis::SelfReportedCommit { commits } = &claim.basis else {
+        panic!("an open claim: {:?}", claim.basis);
+    };
+    let common = s
+        .components
+        .iter()
+        .find(|c| c.component.as_str() == "llama.cpp/common")
+        .unwrap();
+    let shown: Vec<(&str, Option<&str>)> = commits
+        .iter()
+        .map(|c| (c.field.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(shown, [("LLAMA_COMMIT", Some("6f3a9f3de"))]);
+    assert!(
+        matches!(&commits[0].at, EvidenceRef::Code { slice, .. } if *slice == common.subject),
+        "{:?}",
+        commits[0].at
+    );
+    assert!(matches!(
+        state(&s, ARTIFACTS_RELEASE),
+        CoverageState::Partial { .. }
+    ));
 }

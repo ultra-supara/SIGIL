@@ -204,7 +204,7 @@ fn assemble(
     }];
     let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
     let mut knowledge = Vec::<KnowledgeRef>::new();
-    let (mut releases, mut reference_matches) = (vec![], vec![]);
+    let (mut closed, mut reference_matches) = (None, vec![]);
     let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
@@ -233,7 +233,7 @@ fn assemble(
         binaries = facts.binaries;
         scans = facts.scans;
         reference_matches = result.rows;
-        releases.extend(result.claim);
+        closed = result.claim;
     } else {
         // A policy that requires the install's checks without one: skipped, so incomplete.
         for check in &required_checks {
@@ -278,6 +278,14 @@ fn assemble(
     // PR-4c-1: from the facts above; nothing more is read.
     let components = identity::derive(&instances, &binaries, &reference_matches)
         .map_err(InspectError::Internal)?;
+    // PR-4c-2c: the closed claim, or else the open claim of the install's self-reported commits.
+    let releases = match &req.install {
+        Some(_) => {
+            let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
+            release::claims(closed, &components, set).map_err(InspectError::Internal)?
+        }
+        None => vec![],
+    };
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,

@@ -104,19 +104,30 @@ path:
 - **The candidates** are the releases for which every placement has a matching row.
 - **A release claim** (`releases`, basis `ReferenceMatches`, the placements as its files) is
   recorded only when discovery is `Complete` and there is at least one candidate. Releases with
-  identical content are all candidates.
-- **`artifacts.release` is `Complete`** only when there is a claim and no candidate has an `Absent`
-  row. An installation whose content matches v0.30.6 but which lacks some of its libraries is
-  attributed to v0.30.6 and is INCOMPLETE.
+  identical content are all candidates. It is **closed**.
+- **An open release claim** (basis `SelfReportedCommit`, PR-4c-2c) is recorded when there is no
+  closed one and the install's files report commits. Its commits are the `Embedded` values of the
+  fields whose role is `commit` in the component database (`LLAMA_COMMIT`, `ggml_commit`), each
+  7 to 40 lowercase hex digits; a value such as `unknown` is ignored. Its candidates are the
+  releases of the set whose own files report, for every field collected, a value that agrees with
+  the install's: one is a prefix of the other, since `git` abbreviates a commit to any length.
+  Without a commit, or without such a release, there is none. It says only that the install is
+  *consistent with* those releases: a custom build, a mixed install, or an unlisted release is not
+  excluded. `artifacts.release` is unchanged by it. The values are those of the linux-amd64
+  archives; an arm64 install that reports the same commit gets the same candidates, which are
+  release tags.
+- **`artifacts.release` is `Complete`** only when there is a closed claim and no candidate has an
+  `Absent` row. An installation whose content matches v0.30.6 but which lacks some of its
+  libraries is attributed to v0.30.6 and is INCOMPLETE.
 
 | Install | Claim | `artifacts.release` |
 |---|---|---|
 | An unmodified v0.30.6 | `[v0.30.6]` | `Complete` |
 | `bin/ollama` of v0.30.6, `lib/ollama/` empty | `[v0.30.6]` | `Partial` (members absent) |
-| A library replaced by any other bytes, ELF or not | none | `Partial` (`matches no reference`) |
-| `bin/ollama` of v0.30.5 and a library only v0.30.6 has | none | `Partial` (`mixed install`) |
+| A library replaced by any other bytes, ELF or not | open `[v0.30.5, v0.30.6, v0.30.7]` when the libraries report commits and each agrees with `6f3a9f3de` (the official `libllama-common` or `libggml-base` is left); none when one reports another commit, or none reports one | `Partial` (`matches no reference`) |
+| `bin/ollama` of v0.30.5 and a library only v0.30.6 has | open `[v0.30.5, v0.30.6, v0.30.7]` (the libraries' commits) | `Partial` (`mixed install`) |
 | A link with the official target text whose target file is missing | `[v0.30.6]` (the link matches by text) | `Partial` (the file is absent) |
-| `lib/ollama` replaced by a symlink to a copy elsewhere | none (discovery `Partial`) | `Partial` (`discovery incomplete`) |
+| `lib/ollama` replaced by a symlink to a copy elsewhere | none (discovery `Partial`; no library read) | `Partial` (`discovery incomplete`) |
 
 The summary line says the same:
 

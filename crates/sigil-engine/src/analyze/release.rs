@@ -5,15 +5,19 @@
 //! - The releases every placement matches are the candidates (attribution); a claim is made only
 //!   after a complete discovery.
 //! - `artifacts.release` is Complete only when no candidate has an absent member (completeness).
+//! - Without a claim, the install's self-reported commits may give an **open** one (PR-4c-2c):
+//!   the releases whose own files report the same, never closed by it.
 
 use std::collections::BTreeSet;
 
 use sigil_model::{
-    CheckId, ComponentKey, Coverage, CoverageState, EntryKind, FileInstance, InstanceContent,
-    MemberKind, MemberResult, ReferenceMatch, ReleaseBasis, ReleaseClaim, Sha256Hex, Stability,
-    UntrustedText, ARTIFACTS_RELEASE,
+    is_commit, CheckId, ComponentClaim, ComponentKey, Coverage, CoverageState, EntryKind,
+    FileInstance, IdentityAssertion, InstanceContent, MemberKind, MemberResult, ReferenceMatch,
+    ReleaseBasis, ReleaseClaim, ReportedCommit, Sha256Hex, Stability, UntrustedText,
+    ARTIFACTS_RELEASE,
 };
 
+use crate::analyze::components::{components, Role};
 use crate::collect::install::InstallFacts;
 use crate::reference::{RefMember, RefSet};
 
@@ -124,6 +128,74 @@ pub fn analyze(facts: &InstallFacts, set: &RefSet) -> Result<ReleaseResult, Stri
             budget: None,
         },
     })
+}
+
+/// The install's release claims (PR-4c-2c): the claim by reference matches when [`analyze`] made
+/// one, otherwise the open claim of the install's self-reported commits ([`open`]), if any.
+pub fn claims(
+    closed: Option<ReleaseClaim>,
+    claims: &[ComponentClaim],
+    set: &RefSet,
+) -> Result<Vec<ReleaseClaim>, String> {
+    match closed {
+        Some(claim) => Ok(vec![claim]),
+        None => Ok(open(claims, set)?.into_iter().collect()),
+    }
+}
+
+/// The open release claim of `claims`, the install's component claims (PR-4c-2c; plan §4.4.3).
+///
+/// - The commits: each `Embedded` assertion whose field the component database gives the role
+///   `commit` and whose value reads as a commit ([`is_commit`]), once, in claim order.
+/// - The candidates: the releases of `set` that list every field collected, each with a value
+///   that agrees with the install's (one is a prefix of the other: `git` abbreviates a commit to
+///   any length).
+///
+/// `None` without a commit, or without a candidate. `Err` only for an invalid database.
+pub fn open(claims: &[ComponentClaim], set: &RefSet) -> Result<Option<ReleaseClaim>, String> {
+    let db = components()?;
+    let mut commits: Vec<ReportedCommit> = vec![];
+    for a in claims.iter().flat_map(|c| &c.assertions) {
+        let IdentityAssertion::Embedded {
+            field, value, at, ..
+        } = a
+        else {
+            continue;
+        };
+        let commit = ReportedCommit {
+            field: field.clone(),
+            value: value.clone(),
+            at: at.clone(),
+        };
+        let role = db.field(field).map(|f| f.role);
+        if role == Some(Role::Commit) && is_commit(value.as_bytes()) && !commits.contains(&commit) {
+            commits.push(commit);
+        }
+    }
+    if commits.is_empty() {
+        return Ok(None);
+    }
+    let agrees = |a: &[u8], b: &[u8]| a.starts_with(b) || b.starts_with(a);
+    let candidates: Vec<String> = set
+        .releases
+        .iter()
+        .filter(|r| {
+            commits.iter().all(|c| {
+                r.commits
+                    .iter()
+                    .any(|x| x.field == c.field && agrees(c.value.as_bytes(), x.value.as_bytes()))
+            })
+        })
+        .map(|r| r.tag.clone())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ReleaseClaim {
+        product: ComponentKey::new("ollama").map_err(|e| e.to_string())?,
+        candidates,
+        basis: ReleaseBasis::SelfReportedCommit { commits },
+    }))
 }
 
 /// One placement against one member (§6 step 1).
@@ -248,4 +320,247 @@ fn reasons(
     out.sort();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use sigil_model::{
+        EvidenceRef, ExtractMethod, IdentityStatus, InstanceId, Loc, RefSetId, SigState, SliceId,
+    };
+
+    use super::*;
+    use crate::reference::{official, RefCommit, RefRelease};
+
+    const SLICE: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0";
+
+    /// One claim with the embedded values `fields` (field, value, address read at).
+    fn claim(fields: &[(&str, &str, u64)]) -> ComponentClaim {
+        let slice = SliceId::new(SLICE).unwrap();
+        let mut assertions: Vec<IdentityAssertion> = fields
+            .iter()
+            .map(|(field, value, addr)| IdentityAssertion::Embedded {
+                field: field.to_string(),
+                value: UntrustedText::new(*value),
+                at: EvidenceRef::Code {
+                    slice: slice.clone(),
+                    loc: Loc::VAddr(*addr),
+                },
+                method: ExtractMethod::DataSymbolPointer {
+                    symbol: UntrustedText::new(*field),
+                },
+            })
+            .collect();
+        assertions.push(IdentityAssertion::Signature {
+            state: SigState::NotChecked,
+        });
+        ComponentClaim {
+            subject: slice,
+            component: ComponentKey::new("llama.cpp/common").unwrap(),
+            assertions,
+            status: IdentityStatus::NameOnly,
+            versions: vec![],
+        }
+    }
+
+    /// An open claim's candidates, and its commits as (field, value).
+    type Open = (Vec<String>, Vec<(String, String)>);
+
+    /// The candidates and the commits (field, value) of the open claim of `claims`.
+    fn open_of(claims: &[ComponentClaim], set: &RefSet) -> Option<Open> {
+        let claim = open(claims, set).unwrap()?;
+        assert_eq!(claim.product.as_str(), "ollama");
+        let ReleaseBasis::SelfReportedCommit { commits } = claim.basis else {
+            panic!("an open claim: {:?}", claim.basis);
+        };
+        let commits = commits
+            .iter()
+            .map(|c| (c.field.clone(), c.value.as_str().unwrap().to_string()))
+            .collect();
+        Some((claim.candidates, commits))
+    }
+
+    fn all() -> Vec<String> {
+        ["v0.30.5", "v0.30.6", "v0.30.7"].map(String::from).to_vec()
+    }
+
+    fn pair(field: &str, value: &str) -> (String, String) {
+        (field.to_string(), value.to_string())
+    }
+
+    /// A set of two releases that report `LLAMA_COMMIT` only: `v1` reports `1111111`, `v2`
+    /// `6f3a9f3de`.
+    fn llama_only() -> RefSet {
+        let mut set = official().unwrap().clone();
+        set.id = RefSetId::new("test").unwrap();
+        set.releases = [("v1", "1111111"), ("v2", "6f3a9f3de")]
+            .map(|(tag, value)| RefRelease {
+                tag: tag.to_string(),
+                members: Default::default(),
+                commits: vec![RefCommit {
+                    field: "LLAMA_COMMIT".to_string(),
+                    member: "lib/ollama/libllama-common.so.0.0.1".to_string(),
+                    value: value.to_string(),
+                }],
+            })
+            .to_vec();
+        set
+    }
+
+    #[test]
+    fn a_reported_commit_gives_the_releases_whose_files_report_it() {
+        let set = official().unwrap();
+        let commit = claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]);
+        assert_eq!(
+            open_of(&[commit], set),
+            Some((all(), vec![pair("LLAMA_COMMIT", "6f3a9f3de")]))
+        );
+        // One value of each field of the official data, from two claims.
+        let both = [
+            claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]),
+            claim(&[("ggml_commit", "6f3a9f3de", 0x20)]),
+        ];
+        assert_eq!(
+            open_of(&both, set),
+            Some((
+                all(),
+                vec![
+                    pair("LLAMA_COMMIT", "6f3a9f3de"),
+                    pair("ggml_commit", "6f3a9f3de")
+                ]
+            ))
+        );
+        // A release reporting another value is no candidate.
+        let commit = claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]);
+        assert_eq!(
+            open_of(&[commit], &llama_only()).map(|(c, _)| c),
+            Some(vec!["v2".to_string()])
+        );
+    }
+
+    #[test]
+    fn values_agree_when_one_abbreviates_the_other() {
+        let set = official().unwrap();
+        for value in ["6f3a9f3", "6f3a9f3de", "6f3a9f3dee3c"] {
+            let commit = claim(&[("LLAMA_COMMIT", value, 0x10)]);
+            assert_eq!(
+                open_of(&[commit], set).map(|(c, _)| c),
+                Some(all()),
+                "{value}"
+            );
+        }
+        for value in ["6f3a9f4", "6f3a9f3df", "7f3a9f3de"] {
+            let commit = claim(&[("LLAMA_COMMIT", value, 0x10)]);
+            assert_eq!(open_of(&[commit], set), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn every_commit_must_agree() {
+        let set = official().unwrap();
+        // The two fields of one install disagree with each other's releases.
+        let mixed = claim(&[
+            ("LLAMA_COMMIT", "6f3a9f3de", 0x10),
+            ("ggml_commit", "abcdef0", 0x20),
+        ]);
+        assert_eq!(open_of(&[mixed], set), None);
+        // Two contents report different values of one field.
+        let two = [
+            claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]),
+            claim(&[("LLAMA_COMMIT", "1111111", 0x10)]),
+        ];
+        assert_eq!(open_of(&two, &llama_only()), None);
+        // A field no release lists.
+        let more = claim(&[
+            ("LLAMA_COMMIT", "6f3a9f3de", 0x10),
+            ("ggml_commit", "6f3a9f3de", 0x20),
+        ]);
+        assert_eq!(open_of(&[more], &llama_only()), None);
+    }
+
+    #[test]
+    fn only_commit_fields_with_a_commit_value_count() {
+        let set = official().unwrap();
+        for (field, value) in [
+            ("LLAMA_COMMIT", "unknown"),
+            ("LLAMA_COMMIT", "6F3A9F3DE"),
+            ("LLAMA_BUILD_NUMBER", "6f3a9f3de"),
+            ("LLAMA_COMPILER", "6f3a9f3de"),
+            ("go.version", "6f3a9f3de"),
+        ] {
+            assert_eq!(
+                open_of(&[claim(&[(field, value, 0x10)])], set),
+                None,
+                "{field}"
+            );
+        }
+        // An ignored value leaves the others: a version field's, even one that reads as a commit,
+        // and a commit field's that does not.
+        let version = claim(&[
+            ("LLAMA_BUILD_NUMBER", "1234567", 0x08),
+            ("LLAMA_COMMIT", "6f3a9f3de", 0x10),
+        ]);
+        assert_eq!(
+            open_of(&[version], set),
+            Some((all(), vec![pair("LLAMA_COMMIT", "6f3a9f3de")]))
+        );
+        let some = claim(&[
+            ("LLAMA_COMMIT", "unknown", 0x10),
+            ("ggml_commit", "6f3a9f3de", 0x20),
+        ]);
+        assert_eq!(
+            open_of(&[some], set),
+            Some((all(), vec![pair("ggml_commit", "6f3a9f3de")]))
+        );
+        assert_eq!(open_of(&[], set), None, "no claim");
+    }
+
+    #[test]
+    fn a_commit_is_listed_once_per_place_read() {
+        let set = official().unwrap();
+        // The same assertion twice (one content, two claims) is one commit; the same value read at
+        // two places is two.
+        let same = [
+            claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]),
+            claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]),
+        ];
+        assert_eq!(open_of(&same, set).map(|(_, c)| c.len()), Some(1));
+        let two = claim(&[
+            ("LLAMA_COMMIT", "6f3a9f3de", 0x10),
+            ("LLAMA_COMMIT", "6f3a9f3de", 0x30),
+        ]);
+        assert_eq!(open_of(&[two], set).map(|(_, c)| c.len()), Some(2));
+    }
+
+    #[test]
+    fn a_set_without_commit_data_gives_no_open_claim() {
+        let mut set = official().unwrap().clone();
+        for r in &mut set.releases {
+            r.commits.clear();
+        }
+        let commit = claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)]);
+        assert_eq!(open_of(&[commit], &set), None);
+    }
+
+    #[test]
+    fn a_closed_claim_leaves_no_open_one() {
+        let set = official().unwrap();
+        let commit = [claim(&[("LLAMA_COMMIT", "6f3a9f3de", 0x10)])];
+        let closed = ReleaseClaim {
+            product: ComponentKey::new("ollama").unwrap(),
+            candidates: vec!["v0.30.6".to_string()],
+            basis: ReleaseBasis::ReferenceMatches {
+                reference: set.id.clone(),
+                files: vec![InstanceId::new("inst:install/bin/ollama").unwrap()],
+            },
+        };
+        assert_eq!(claims(Some(closed.clone()), &commit, set), Ok(vec![closed]));
+        let open = claims(None, &commit, set).unwrap();
+        assert_eq!(open.len(), 1);
+        assert!(matches!(
+            open[0].basis,
+            ReleaseBasis::SelfReportedCommit { .. }
+        ));
+        assert_eq!(claims(None, &[], set), Ok(vec![]));
+    }
 }
