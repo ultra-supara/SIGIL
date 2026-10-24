@@ -138,8 +138,14 @@ The summary line says the same:
 release: ollama v0.30.6 (34/34 files, 17/17 symlinks, 3/3 directories reference-matched; nothing absent)
 release: content matches v0.30.6 (1/34 files, 0/17 symlinks, 0/3 directories present); incomplete
 release: not established (2 reasons; sigil explain --coverage)
+release: not established (1 reason; sigil explain --coverage); consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)
 release: install not found
 ```
+
+The report's **Runtime artifacts** section opens with the same in its `Release:` line. An open
+claim reads `not established (see Coverage); consistent with v0.30.5, v0.30.6, v0.30.7 by a
+self-reported commit (open: …)`, followed by `Self-reported commits:`: each field and value, with
+the install paths of the content that reports it.
 
 ## Coverage
 

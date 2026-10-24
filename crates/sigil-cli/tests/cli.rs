@@ -1506,7 +1506,7 @@ fn install_tree_with_a_commit() -> TempDir {
 }
 
 #[test]
-fn a_saved_open_release_claim_is_reverified_by_render() {
+fn an_open_release_claim_is_reported_and_reverified_by_render() {
     let models = store(true);
     let install = install_tree_with_a_commit();
     let dir = TempDir::new().unwrap();
@@ -1516,7 +1516,18 @@ fn a_saved_open_release_claim_is_reverified_by_render() {
         &[&"--install-dir", &install.path(), &"--out", &path],
     );
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert_eq!(run(&[&"session", &"render", &path]).code, 0);
+    assert!(
+        r.stderr.contains(
+            "; consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de \
+             (open)"
+        ),
+        "{}",
+        r.stderr
+    );
+    let rendered = run(&[&"session", &"render", &path]);
+    assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+    let commits = sigil_model::UntrustedText::new("Self-reported commits:").markdown_inline();
+    assert!(rendered.stdout.contains(&commits), "{}", rendered.stdout);
     // Other candidates: validate still passes, the verifier does not.
     let mut v: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();

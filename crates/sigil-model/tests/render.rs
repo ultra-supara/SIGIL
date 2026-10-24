@@ -298,6 +298,59 @@ fn a_session_with_an_install_shows_its_runtime_artifacts() {
 }
 
 #[test]
+fn an_open_release_claim_is_shown_with_its_commits() {
+    // Example 17 (PR-4c-2c).
+    let mut s = open_release();
+    let section = |s: &Session| {
+        let md = render_session(s);
+        md.split("\n## ")
+            .find(|x| x.starts_with("Runtime artifacts"))
+            .unwrap_or_else(|| panic!("no section:\n{md}"))
+            .to_string()
+    };
+    let release = format!(
+        "{} {}",
+        t("Release:").markdown_inline(),
+        t(
+            "not established (see Coverage); consistent with v0.30.5, v0.30.6, v0.30.7 by a \
+           self-reported commit (open: a custom build, a mixed install, or an unlisted release is \
+           not excluded)"
+        )
+        .markdown_inline()
+    );
+    let commits = |paths: &[&str]| {
+        let paths: Vec<String> = paths.iter().map(|p| t(p).markdown_inline()).collect();
+        format!(
+            "{} {} {} ({})",
+            t("Self-reported commits:").markdown_inline(),
+            t("LLAMA_COMMIT").markdown_inline(),
+            t("6f3a9f3de").markdown_inline(),
+            paths.join(", ")
+        )
+    };
+    let shown = section(&s);
+    assert!(shown.contains(&release), "{release}\n{shown}");
+    let common = "lib/ollama/libllama-common.so.0.0.1";
+    assert!(shown.contains(&commits(&[common])), "{shown}");
+    // The content at a second path: both paths, in path order.
+    let mut copy = s.instances[0].clone();
+    copy.id = InstanceId::new("inst:lib/ollama/a-copy.so").unwrap();
+    copy.path = t("/usr/local/lib/ollama/a-copy.so");
+    s.instances.push(copy);
+    let shown = section(&s);
+    assert!(
+        shown.contains(&commits(&["lib/ollama/a-copy.so", common])),
+        "{shown}"
+    );
+    // A closed claim has no commits line.
+    let shown = section(&conflicting_identity());
+    assert!(
+        !shown.contains(&t("Self-reported commits:").markdown_inline()),
+        "{shown}"
+    );
+}
+
+#[test]
 fn the_absent_members_of_a_candidate_are_listed() {
     let mut s = conflicting_identity();
     let mut row = s.reference_matches[0].clone();

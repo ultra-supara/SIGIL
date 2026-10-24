@@ -6,7 +6,7 @@
 
 use crate::artifact::{FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs};
 use crate::coverage::Coverage;
-use crate::evidence::Observability;
+use crate::evidence::{EvidenceRef, Observability};
 use crate::hint::{FeatureHint, Signal};
 use crate::model::{BlobLookup, Model};
 use crate::reference::{MemberResult, ARTIFACTS_RELEASE, INSTALL_ROOT};
@@ -739,30 +739,61 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
         .releases
         .iter()
         .find(|c| matches!(c.basis, ReleaseBasis::ReferenceMatches { .. }));
+    // PR-4c-2c: an open claim, by the install's self-reported commits.
+    let open = s.releases.iter().find_map(|c| match &c.basis {
+        ReleaseBasis::SelfReportedCommit { commits } => Some((c, commits)),
+        ReleaseBasis::ReferenceMatches { .. } => None,
+    });
     // A comparison always records `artifacts.release`, whatever its result.
     let compared = !s.reference_matches.is_empty()
         || s.coverage
             .iter()
             .any(|c| c.check.as_str() == ARTIFACTS_RELEASE);
-    let release = match claim {
-        Some(c) => format!("content matches {}", c.candidates.join(", ")),
-        None if compared => "not established (see Coverage)".to_string(),
-        None => "not compared with a reference set".to_string(),
+    let release = match (claim, open) {
+        (Some(c), _) => format!("content matches {}", c.candidates.join(", ")),
+        (None, Some((c, _))) => format!(
+            "not established (see Coverage); consistent with {} by a self-reported commit \
+             (open: a custom build, a mixed install, or an unlisted release is not excluded)",
+            c.candidates.join(", ")
+        ),
+        (None, None) if compared => "not established (see Coverage)".to_string(),
+        (None, None) => "not compared with a reference set".to_string(),
     };
     out.push_str(&format!("{} {}\n\n", esc("Release:"), esc(&release)));
     let mut prefix = root.path.as_bytes().to_vec();
     prefix.push(b'/');
+    let member = |i: &FileInstance| match i.path.as_bytes().strip_prefix(prefix.as_slice()) {
+        Some(rest) => UntrustedText::from_bytes(rest.to_vec()),
+        None => i.path.clone(),
+    };
+    if let Some((_, commits)) = open {
+        let shown: Vec<String> = commits
+            .iter()
+            .map(|c| {
+                let paths: Vec<String> = placements_of(s, &root.id, &c.at)
+                    .into_iter()
+                    .map(|i| member(i).markdown_inline())
+                    .collect();
+                let at = match paths.as_slice() {
+                    [] => String::new(),
+                    _ => format!(" ({})", paths.join(", ")),
+                };
+                format!("{} {}{at}", esc(&c.field), c.value.markdown_inline())
+            })
+            .collect();
+        out.push_str(&format!(
+            "{} {}\n\n",
+            esc("Self-reported commits:"),
+            shown.join(", ")
+        ));
+    }
     let rows = s
         .instances
         .iter()
         .filter(|i| i.root == root.id)
         .map(|i| {
-            let member = match i.path.as_bytes().strip_prefix(prefix.as_slice()) {
-                Some(rest) => UntrustedText::from_bytes(rest.to_vec()),
-                None => i.path.clone(),
-            };
             vec![
-                member.markdown_inline(),
+                member(i).markdown_inline(),
                 esc(&format!("{:?}", i.entry_kind())),
                 placement_value(i),
                 esc(&reference_cell(s, i, compared)),
@@ -790,6 +821,29 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
         }
     }
     binaries(out, s, &root.id, &prefix);
+}
+
+/// The placements under `root` of the content that `at` is in, in path order (PR-4c-2c): none
+/// for evidence that is not in a slice's code.
+fn placements_of<'s>(
+    s: &'s Session,
+    root: &crate::id::RootId,
+    at: &EvidenceRef,
+) -> Vec<&'s FileInstance> {
+    let EvidenceRef::Code { slice, .. } = at else {
+        return vec![];
+    };
+    let content = slice.artifact();
+    let mut placed: Vec<&FileInstance> = s
+        .instances
+        .iter()
+        .filter(|i| i.root == *root)
+        .filter(
+            |i| matches!(&i.content, InstanceContent::Read { artifact } if *artifact == content),
+        )
+        .collect();
+    placed.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+    placed
 }
 
 /// The container facts of the install's binaries (PR-4b-1): one row per record, with its

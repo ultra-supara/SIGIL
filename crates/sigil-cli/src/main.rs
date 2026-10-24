@@ -1168,7 +1168,8 @@ fn release_line(s: &Session) -> Option<String> {
             None => "no coverage entry".to_string(),
         };
         return Some(format!(
-            "release: not established ({why}; sigil explain --coverage)"
+            "release: not established ({why}; sigil explain --coverage){}",
+            open_release(s)
         ));
     };
     let tag = claim.candidates.first()?;
@@ -1201,6 +1202,34 @@ fn release_line(s: &Session) -> Option<String> {
         } else {
             format!("release: content matches {candidates} ({counts} present); incomplete")
         },
+    )
+}
+
+/// `; consistent with ollama … by self-reported commit … (open)` for a session with an open
+/// release claim (PR-4c-2c), each distinct value once; empty without one.
+fn open_release(s: &Session) -> String {
+    let open = s.releases.iter().find_map(|c| match &c.basis {
+        ReleaseBasis::SelfReportedCommit { commits } => Some((c, commits)),
+        ReleaseBasis::ReferenceMatches { .. } => None,
+    });
+    let Some((claim, commits)) = open else {
+        return String::new();
+    };
+    let mut values: Vec<String> = vec![];
+    for value in commits.iter().map(|c| c.value.terminal_line()) {
+        if !values.contains(&value) {
+            values.push(value);
+        }
+    }
+    let noun = if values.len() == 1 {
+        "commit"
+    } else {
+        "commits"
+    };
+    format!(
+        "; consistent with ollama {} by self-reported {noun} {} (open)",
+        shown(&claim.candidates.join(", ")),
+        values.join(", ")
     )
 }
 
@@ -1572,5 +1601,37 @@ mod tests {
         );
         s.request.roots.clear();
         assert_eq!(super::release_line(&s), None);
+    }
+
+    #[test]
+    fn the_release_line_names_an_open_claim_and_its_commits() {
+        use sigil_model::{ReleaseBasis, UntrustedText};
+        // Example 17 (PR-4c-2c).
+        let mut s: sigil_model::Session = serde_json::from_str(include_str!(
+            "../../../schemas/examples/session-v1/17-open-release.json"
+        ))
+        .unwrap();
+        let line = |s: &sigil_model::Session| super::release_line(s).unwrap();
+        assert_eq!(
+            line(&s),
+            "release: not established (1 reason; sigil explain --coverage); consistent with \
+             ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)"
+        );
+        let ReleaseBasis::SelfReportedCommit { commits } = &mut s.releases[0].basis else {
+            panic!("example 17's claim is open");
+        };
+        // A value reported twice is shown once; another value, and a control character in it, are
+        // shown escaped.
+        let mut other = commits[0].clone();
+        other.field = "ggml_commit".to_string();
+        commits.push(other.clone());
+        other.value = UntrustedText::new("6f3a9f3\u{1b}");
+        commits.push(other);
+        assert_eq!(
+            line(&s),
+            "release: not established (1 reason; sigil explain --coverage); consistent with \
+             ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commits 6f3a9f3de, 6f3a9f3\\u{001B} \
+             (open)"
+        );
     }
 }
