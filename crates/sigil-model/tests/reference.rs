@@ -321,6 +321,26 @@ fn canonicalize_sorts_a_closed_claim_s_files() {
     assert_eq!(names, ["inst:a", "inst:b", "inst:c"]);
 }
 
+/// V12 names each reason once per claim, however many commits break it.
+#[test]
+fn v12_names_a_reason_once_for_two_bad_commits() {
+    let mut s = open();
+    let mut second = commits(&mut s)[0].clone();
+    second.field = "ggml_commit".to_string();
+    commits(&mut s)[0].value = UntrustedText::new("unknown");
+    second.value = UntrustedText::new("other");
+    commits(&mut s).push(second);
+    let errors = s.validate().unwrap_err();
+    let hex = errors
+        .iter()
+        .filter(|e| {
+            matches!(e, sigil_model::ValidationError::Release { why, .. }
+                if why.contains("a commit is 7 to 40 lowercase hex digits"))
+        })
+        .count();
+    assert_eq!(hex, 1, "{errors:?}");
+}
+
 #[test]
 fn v12_one_claim_per_product_with_unique_candidates() {
     let mut s = open();

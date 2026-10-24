@@ -432,7 +432,6 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 
 ## Not yet
 
-- The open release set of a self-reported commit (PR-4c-2c).
 - Mach-O sections and `__gopclntab`: a Mach-O is not scanned for signatures yet.
 - Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
   it (PR-4d).

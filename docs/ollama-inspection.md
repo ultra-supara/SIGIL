@@ -25,6 +25,8 @@ Static and observe perform no network I/O. The active probe is off by default. T
   ```
 
   The line says `content matches …; incomplete` when members are absent, `not established (…)` when no release matches every file, and `install not found` when the directory has no installation.
+
+  When no release matches every file, the install's self-reported commits (`LLAMA_COMMIT`, `ggml_commit`) can still give an open claim, added to the line: `not established (…); consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)`. It lists the official releases whose own files report the same commits. It is "consistent with" only: a custom build, a mixed install, or an unlisted release is not excluded, and it never closes `artifacts.release`.
 - `sigil session render <SESSION> [--format md|aibom]` renders a saved session again, without inspecting anything.
 
 ## A first run

@@ -340,8 +340,8 @@ fn assemble(
     session.validate().map_err(|errors| {
         InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
     })?;
-    // What `validate` cannot re-derive: the rows are exactly the embedded set's, and an open
-    // release claim is what the set's commit data gives (PR-4c-2c).
+    // What `validate` cannot re-derive: the rows are exactly the embedded set's, and the release
+    // claims are what the rows, the binary facts and the set give (PR-4c-2c).
     if req.install.is_some() {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
         reference::verify_reference_matches(&session, set).map_err(InspectError::Reference)?;

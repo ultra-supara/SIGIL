@@ -279,7 +279,7 @@ fn add_commits(releases: &mut [RefRelease], text: &str) -> Result<(), String> {
 /// the rows, and coverage). A session that neither names the set nor has rows for it passes.
 /// The set's SHA-256 under another id is an error ([`names`]).
 pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
-    use sigil_model::{CoverageState, MemberResult, ARTIFACTS_DISCOVERY, INSTALL_ROOT};
+    use sigil_model::MemberResult;
     let named = names(s, set).map_err(|e| vec![e])?;
     let mine = |r: &&sigil_model::ReferenceMatch| r.reference == set.id;
     if !named && !s.reference_matches.iter().any(|r| mine(&r)) {
@@ -304,12 +304,7 @@ pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Resul
             set.id, set.sha256
         ));
     }
-    let Some(root) = s
-        .request
-        .roots
-        .iter()
-        .find(|r| r.id.as_str() == INSTALL_ROOT)
-    else {
+    let Some(root) = install_root(s) else {
         errors.push("reference rows without an install root".to_string());
         return Err(errors);
     };
@@ -320,10 +315,7 @@ pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Resul
         .filter(|i| i.root == root.id)
         .filter_map(|i| crate::analyze::release::member_of(&root_text, i).map(|m| (m, i)))
         .collect();
-    let complete = s
-        .coverage
-        .iter()
-        .any(|c| c.check.as_str() == ARTIFACTS_DISCOVERY && c.state == CoverageState::Complete);
+    let complete = discovery_complete(s);
     for release in &set.releases {
         for (member, expected) in &release.members {
             let rows: Vec<&sigil_model::ReferenceMatch> = s
@@ -395,6 +387,22 @@ pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Resul
     }
 }
 
+/// The session's install root, if it has one.
+fn install_root(s: &sigil_model::Session) -> Option<&sigil_model::ScanRoot> {
+    s.request
+        .roots
+        .iter()
+        .find(|r| r.id.as_str() == sigil_model::INSTALL_ROOT)
+}
+
+/// Whether the session's `artifacts.discovery` is `Complete`.
+fn discovery_complete(s: &sigil_model::Session) -> bool {
+    s.coverage.iter().any(|c| {
+        c.check.as_str() == sigil_model::ARTIFACTS_DISCOVERY
+            && c.state == sigil_model::CoverageState::Complete
+    })
+}
+
 /// Whether `s` names `set` as a reference set it was made with (PR-4c-2c).
 ///
 /// - `Ok(true)`: some `ReferenceManifest` knowledge entry has the set's id and SHA-256.
@@ -436,21 +444,12 @@ pub fn names(s: &sigil_model::Session, set: &RefSet) -> Result<bool, String> {
 /// the fields' roles are the engine's. V12 requires some `ReferenceManifest` in a session with
 /// an open claim.
 pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
-    use sigil_model::{
-        CoverageState, ReleaseBasis, ReleaseClaim, ARTIFACTS_DISCOVERY, INSTALL_ROOT,
-    };
+    use sigil_model::{ReleaseBasis, ReleaseClaim};
     if !names(s, set).map_err(|e| vec![e])? {
         return Ok(());
     }
-    let root = s
-        .request
-        .roots
-        .iter()
-        .find(|r| r.id.as_str() == INSTALL_ROOT);
-    let complete = s
-        .coverage
-        .iter()
-        .any(|c| c.check.as_str() == ARTIFACTS_DISCOVERY && c.state == CoverageState::Complete);
+    let root = install_root(s);
+    let complete = discovery_complete(s);
     let closed = match root {
         Some(root) => {
             let placements: Vec<&sigil_model::FileInstance> =

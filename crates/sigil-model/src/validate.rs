@@ -2392,6 +2392,9 @@ impl<'a> Validator<'a> {
                     }
                 }
             }
+            // Each reason once, in the order found.
+            let mut once = BTreeSet::new();
+            why.retain(|w| once.insert(*w));
             for why in why {
                 self.errors.push(ValidationError::Release {
                     product: claim.product.clone(),

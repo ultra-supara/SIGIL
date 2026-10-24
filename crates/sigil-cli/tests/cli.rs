@@ -1581,6 +1581,61 @@ fn the_embedded_set_under_another_id_is_refused_by_render() {
     );
 }
 
+/// A saved session with an open claim, made by `inspect` over `install_tree_with_a_commit()`.
+fn saved_open_claim_session() -> (TempDir, std::path::PathBuf) {
+    let models = store(true);
+    let install = install_tree_with_a_commit();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    (dir, path)
+}
+
+#[test]
+fn an_open_claim_of_an_older_set_version_is_noted_not_reverified() {
+    let (_dir, path) = saved_open_claim_session();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for k in v["knowledge"].as_array_mut().unwrap() {
+        if k["kind"] == "ReferenceManifest" {
+            k["sha256"] = serde_json::Value::from("0".repeat(64));
+        }
+    }
+    // Not re-verified, so even other candidates render.
+    v["releases"][0]["candidates"] = serde_json::json!(["v0.30.6"]);
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("reference matches and release claims were made with another reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn explain_refuses_a_session_with_changed_release_claims() {
+    let (_dir, path) = saved_open_claim_session();
+    assert_eq!(run(&[&"explain", &path, &"--coverage"]).code, 0);
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    v["releases"][0]["candidates"] = serde_json::json!(["v0.30.6"]);
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"explain", &path, &"--coverage"]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("release claims disagree with the embedded reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
 #[test]
 fn a_session_made_with_another_reference_set_is_rendered_with_a_note() {
     let models = store(true);

@@ -581,7 +581,7 @@ fn a_self_reported_commit_gives_an_open_release_claim() {
 /// PR-4c-2c: `validate` checks that an open claim rests on the session's own commits; only the
 /// verifier knows which releases report them.
 #[test]
-fn the_verifier_recomputes_the_open_release_claim() {
+fn the_verifier_recomputes_the_release_claims() {
     let tree = install_with_a_commit();
     let s = inspect_with_install(&tree);
     let set = official().unwrap();
@@ -696,13 +696,10 @@ fn a_closed_claim_against_another_set_is_refused() {
     assert!(verify_release_claims(&s, set).is_err());
 }
 
-/// A session as a run writes it with a set that lists `libllama-common` and its commit, so that
-/// the closed claim is `[vA, vB]` and the open claim `open` gives is the same two releases.
-fn closed_session_with_commits() -> (Session, RefSet) {
-    let tree = install_with_a_commit();
-    let mut s = inspect_with_install(&tree);
-    let lib = std::fs::read(tree.path().join("lib/ollama/libllama-common.so.0.0.1")).unwrap();
+/// A set of two identical releases that also lists `libllama-common` of `tree` and its commit.
+fn refs_with_the_libllama_commit(tree: &TempDir) -> RefSet {
     let member = "lib/ollama/libllama-common.so.0.0.1";
+    let lib = std::fs::read(tree.path().join(member)).unwrap();
     let commits: String = ["vA", "vB"]
         .iter()
         .map(|tag| {
@@ -712,13 +709,21 @@ fn closed_session_with_commits() -> (Session, RefSet) {
             )
         })
         .collect();
-    let refs = identical_pair_with_commits(
+    identical_pair_with_commits(
         &[serde_json::json!({
             "name": member, "type": "0", "mode": "0o644",
             "sha256": common::hex(&lib), "size": lib.len(),
         })],
         Some(&commits),
-    );
+    )
+}
+
+/// A session as a run writes it with a set that lists `libllama-common` and its commit, so that
+/// the closed claim is `[vA, vB]` and the open claim `open` gives is the same two releases.
+fn closed_session_with_commits() -> (Session, RefSet) {
+    let tree = install_with_a_commit();
+    let mut s = inspect_with_install(&tree);
+    let refs = refs_with_the_libllama_commit(&tree);
     install_as_a_run_with(&mut s, &tree, &refs);
     (s, refs)
 }
@@ -1042,36 +1047,8 @@ fn an_open_claim_with_two_commits_equals_the_one_derived_from_the_claims() {
 /// give an open one.
 #[test]
 fn a_closed_claim_comes_before_an_open_one() {
-    use serde_json::json;
-    let tree = install();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so");
-    let lib = "lib/ollama/libllama-common.so.0.0.1";
-    std::fs::copy(&fixture, tree.path().join(lib)).unwrap();
-    let bytes = std::fs::read(&fixture).unwrap();
-    let hex = |b: &[u8]| common::hex(b);
-    let manifest = |tag: &str| {
-        json!({"tag": tag, "entries": [
-            {"name": "bin/ollama", "type": "0", "mode": "0o755", "sha256": hex(&elf(2)), "size": 64},
-            {"name": "lib/ollama/cuda_v12", "type": "5", "mode": "0o755"},
-            {"name": "lib/ollama/cuda_v12/libcudart.so.12.8.90", "type": "0", "mode": "0o644", "sha256": hex(b"weights"), "size": 7},
-            {"name": "lib/ollama/libggml.so.0", "type": "2", "mode": "0o777", "link": "libggml.so.0.13.1"},
-            {"name": "lib/ollama/libggml.so.0.13.1", "type": "0", "mode": "0o644", "sha256": hex(&elf(3)), "size": 64},
-            {"name": lib, "type": "0", "mode": "0o644", "sha256": hex(&bytes), "size": bytes.len()},
-        ]})
-        .to_string()
-    };
-    let (a, b) = (manifest("vA"), manifest("vB"));
-    let commits = format!(
-        "[[release]]\ntag = \"vA\"\ncommits = [{{ field = \"LLAMA_COMMIT\", member = \"{lib}\", \
-         value = \"6f3a9f3de\" }}]\n[[release]]\ntag = \"vB\"\ncommits = [{{ field = \
-         \"LLAMA_COMMIT\", member = \"{lib}\", value = \"6f3a9f3de\" }}]\n"
-    );
-    let refs = parse_set(
-        "ollama-official",
-        "test",
-        &[("a.json", &a), ("b.json", &b), ("commits.toml", &commits)],
-    )
-    .unwrap();
+    let tree = install_with_a_commit();
+    let refs = refs_with_the_libllama_commit(&tree);
     let facts = collect(tree.path(), InstallBudgets::default()).unwrap();
     let r = analyze(&facts, &refs).unwrap();
     let components = derive(&facts.instances, &facts.binaries, &r.rows).unwrap();
