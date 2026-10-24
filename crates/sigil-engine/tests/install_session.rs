@@ -618,14 +618,14 @@ fn the_verifier_recomputes_the_open_release_claim() {
     t.releases[0].candidates = vec!["v0.30.6".to_string()];
     assert_eq!(t.validate(), Ok(()), "an older set version is legitimate");
     assert!(verify_release_claims(&t, set).is_ok());
-    // A closed claim alone passes: beside it the engine makes no open claim (an open claim beside
-    // one fails, `an_open_claim_of_another_product_beside_a_closed_one_fails_the_verifier`).
+    // A closed claim the rows do not give is refused (a genuine one passes:
+    // `a_closed_claim_relabelled_to_another_product_is_refused`).
     let mut t = s.clone();
     t.releases[0].basis = ReleaseBasis::ReferenceMatches {
         reference: set.id.clone(),
         files: vec![],
     };
-    assert!(verify_release_claims(&t, set).is_ok());
+    assert!(verify_release_claims(&t, set).is_err());
 }
 
 /// PR-4c-2c: `names` tells a session that names the set, one made with another version of it
@@ -689,11 +689,9 @@ fn a_closed_claim_against_another_set_does_not_replace_the_open_one() {
     );
 }
 
-/// PR-4c-2c: V10 does not look at the product of a closed claim, so a closed claim of another
-/// product that rests on this set passes `validate`. It is not the closed claim the engine makes
-/// (`ollama`), so beside it the open claim of `ollama` is still the one the verifier expects.
-#[test]
-fn a_closed_claim_of_another_product_does_not_replace_the_open_one() {
+/// A session as a run writes it with a set that lists `libllama-common` and its commit, so that
+/// the closed claim is `[vA, vB]` and the open claim `open` gives is the same two releases.
+fn closed_session_with_commits() -> (Session, RefSet) {
     let tree = install_with_a_commit();
     let mut s = inspect_with_install(&tree);
     let lib = std::fs::read(tree.path().join("lib/ollama/libllama-common.so.0.0.1")).unwrap();
@@ -710,14 +708,58 @@ fn a_closed_claim_of_another_product_does_not_replace_the_open_one() {
         Some(&commits),
     );
     install_as_a_run_with(&mut s, &tree, &refs);
-    // The closed claim is of another product; the open one is what the set's data gives.
-    s.releases[0].product = ComponentKey::new("another-product").unwrap();
-    s.releases.extend(open(&s.components, &refs).unwrap());
-    s.canonicalize();
-    assert_eq!(s.releases.len(), 2);
-    assert_eq!(s.validate(), Ok(()), "V10 does not check the product");
+    (s, refs)
+}
+
+/// PR-4c-2c: the verifier recomputes the closed claim too. A genuine closed claim passes; V10
+/// does not look at the product of a closed claim, so one relabelled to another product, with the
+/// open claim the commits give beside it, passes `validate` and is refused by the verifier.
+#[test]
+fn a_closed_claim_relabelled_to_another_product_is_refused() {
+    let (s, refs) = closed_session_with_commits();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(s.releases[0].candidates, ["vA", "vB"]);
     verify_reference_matches(&s, &refs).unwrap();
-    assert_eq!(verify_release_claims(&s, &refs), Ok(()));
+    assert_eq!(
+        verify_release_claims(&s, &refs),
+        Ok(()),
+        "a genuine closed claim"
+    );
+    let mut t = s.clone();
+    t.releases[0].product = ComponentKey::new("another-product").unwrap();
+    t.releases.extend(open(&t.components, &refs).unwrap());
+    t.canonicalize();
+    assert_eq!(t.releases.len(), 2);
+    assert_eq!(t.validate(), Ok(()), "V10 does not check the product");
+    verify_reference_matches(&t, &refs).unwrap();
+    assert!(verify_release_claims(&t, &refs).is_err());
+}
+
+/// PR-4c-2c: a closed claim dropped, `artifacts.release` set to `Partial` (V11 ties only
+/// `Complete` to a closed claim), and the open claim the commits give added: `validate` passes,
+/// the verifier recomputes the closed claim from the rows and refuses it.
+#[test]
+fn a_closed_claim_downgraded_to_an_open_one_is_refused() {
+    let (s, refs) = closed_session_with_commits();
+    let mut t = s.clone();
+    t.releases.clear();
+    for c in &mut t.coverage {
+        if c.check.as_str() == ARTIFACTS_RELEASE {
+            c.state = CoverageState::Partial {
+                missing: vec!["a reason".to_string()],
+            };
+        }
+    }
+    t.releases.extend(open(&t.components, &refs).unwrap());
+    // The policy requires `artifacts.release`: the outcome follows the coverage.
+    let policy = Policy::builtin_default().unwrap();
+    let time = t.outcome.policy_time.clone();
+    evaluate(&mut t, &policy, time).unwrap();
+    t.canonicalize();
+    assert_eq!(t.releases.len(), 1);
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    verify_reference_matches(&t, &refs).unwrap();
+    assert!(verify_release_claims(&t, &refs).is_err());
 }
 
 /// PR-4c-2c: `validate` does not tie `components` to the binary facts, so the verifier derives

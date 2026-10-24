@@ -1206,7 +1206,7 @@ fn release_line(s: &Session) -> Option<String> {
 
 // --- session render, explain, rules -----------------------------------------------------------
 
-/// Re-verifies the reference rows and the open release claims of a saved session that names the
+/// Re-verifies the reference rows and the release claims of a saved session that names the
 /// embedded set: `validate` cannot re-derive them (PR-4a §3.3, PR-4c-2c). A session made with
 /// another set (or another version of it) is noted on stderr; one that has the embedded set's
 /// SHA-256 under another id is refused.
@@ -1241,9 +1241,9 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
     }
     reference::verify_reference_matches(session, set)
         .map_err(|e| failure("the session's reference matches disagree with", e))?;
-    // PR-4c-2c: an open release claim is recomputed from the binary facts and the set's data.
+    // PR-4c-2c: the release claims are recomputed from the rows, the binary facts, and the set.
     reference::verify_release_claims(session, set)
-        .map_err(|e| failure("the session's open release claims disagree with", e))
+        .map_err(|e| failure("the session's release claims disagree with", e))
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {

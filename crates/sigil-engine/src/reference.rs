@@ -420,47 +420,74 @@ pub fn names(s: &sigil_model::Session, set: &RefSet) -> Result<bool, String> {
     Ok(named)
 }
 
-/// Whether `s`'s open release claims are the ones the engine derives (PR-4c-2c).
+/// Whether `s`'s release claims are exactly the ones the engine derives (PR-4c-2c).
 ///
 /// This runs only for a session that names `set` ([`names`]; one that does not is made with
-/// another set or another version of it, and is noted by the CLI instead). A closed claim is a
-/// `ReferenceMatches` claim for `ollama` that rests on this set. The session's claims with the
-/// basis `SelfReportedCommit`, of any product, must then be exactly what the engine makes (plan
-/// review P2): none beside a closed claim, otherwise [`crate::analyze::release::open`] of the
-/// component claims derived from the session's binary facts (not `s.components`, which
-/// `validate` does not tie to them), or none when that gives none. Both sides are compared in
-/// canonical order. `validate` cannot check this: the commit data and the fields' roles are the
-/// engine's. V12 requires some `ReferenceManifest` in a session with an open claim.
+/// another set or another version of it, and is noted by the CLI instead). The closed claim is
+/// recomputed from the session's rows of this set and its placements under the install root
+/// ([`crate::analyze::release::by_rows`]; `validate` (V10) and [`verify_reference_matches`] pin
+/// the rows), with no install root, no closed claim. The component claims are derived from the
+/// session's binary facts (not from `s.components`, which `validate` does not tie to them), and
+/// [`crate::analyze::release::claims`] gives the closed claim, else the open one. The session's
+/// claims, of any product (plan review P2), must be exactly these: so none is open beside a
+/// closed one, and a closed claim cannot be relabelled or dropped to make room for an open one.
+/// Both sides are compared in canonical order. `validate` cannot check this: the commit data and
+/// the fields' roles are the engine's. V12 requires some `ReferenceManifest` in a session with
+/// an open claim.
 pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
-    use sigil_model::{ReleaseBasis, ReleaseClaim};
+    use sigil_model::{
+        CoverageState, ReleaseBasis, ReleaseClaim, ARTIFACTS_DISCOVERY, INSTALL_ROOT,
+    };
     if !names(s, set).map_err(|e| vec![e])? {
         return Ok(());
     }
-    let closed = s.releases.iter().any(|c| {
-        c.product.as_str() == "ollama"
-            && matches!(&c.basis, ReleaseBasis::ReferenceMatches { reference, .. }
-                if *reference == set.id)
-    });
-    let mut derived: Vec<ReleaseClaim> = if closed {
-        vec![]
-    } else {
-        let components =
-            crate::analyze::identity::derive(&s.instances, &s.binaries, &s.reference_matches)
-                .map_err(|e| vec![e])?;
-        crate::analyze::release::open(&components, set)
-            .map_err(|e| vec![e])?
-            .into_iter()
-            .collect()
-    };
-    let mut recorded: Vec<ReleaseClaim> = s
-        .releases
+    let root = s
+        .request
+        .roots
         .iter()
-        .filter(|c| matches!(c.basis, ReleaseBasis::SelfReportedCommit { .. }))
-        .cloned()
-        .collect();
-    for c in derived.iter_mut().chain(recorded.iter_mut()) {
-        c.canonicalize();
-    }
+        .find(|r| r.id.as_str() == INSTALL_ROOT);
+    let complete = s
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == ARTIFACTS_DISCOVERY && c.state == CoverageState::Complete);
+    let closed = match root {
+        Some(root) => {
+            let placements: Vec<&sigil_model::FileInstance> =
+                s.instances.iter().filter(|i| i.root == root.id).collect();
+            let rows: Vec<sigil_model::ReferenceMatch> = s
+                .reference_matches
+                .iter()
+                .filter(|r| r.reference == set.id)
+                .cloned()
+                .collect();
+            crate::analyze::release::by_rows(set, &rows, &placements, complete)
+                .map_err(|e| vec![e])?
+                .1
+        }
+        None => None,
+    };
+    let components =
+        crate::analyze::identity::derive(&s.instances, &s.binaries, &s.reference_matches)
+            .map_err(|e| vec![e])?;
+    let mut derived =
+        crate::analyze::release::claims(closed, &components, set).map_err(|e| vec![e])?;
+    let mut recorded = s.releases.clone();
+    let order = |list: &mut Vec<ReleaseClaim>| {
+        for c in list.iter_mut() {
+            c.canonicalize();
+            if let ReleaseBasis::ReferenceMatches { files, .. } = &mut c.basis {
+                files.sort();
+            }
+        }
+        list.sort_by_cached_key(|c| {
+            (
+                c.product.clone(),
+                serde_json::to_string(c).unwrap_or_default(),
+            )
+        });
+    };
+    order(&mut derived);
+    order(&mut recorded);
     if recorded == derived {
         return Ok(());
     }
@@ -470,26 +497,28 @@ pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(
         }
         let each: Vec<String> = claims
             .iter()
-            .filter_map(|c| {
-                let ReleaseBasis::SelfReportedCommit { commits } = &c.basis else {
-                    return None;
-                };
-                let commits: Vec<String> = commits
-                    .iter()
-                    .map(|x| format!("{} {}", x.field, x.value.terminal_line()))
-                    .collect();
-                Some(format!(
-                    "{} {:?} from {}",
-                    c.product,
-                    c.candidates,
-                    commits.join(", ")
-                ))
+            .map(|c| match &c.basis {
+                ReleaseBasis::ReferenceMatches { .. } => {
+                    format!("{} {:?} by reference matches", c.product, c.candidates)
+                }
+                ReleaseBasis::SelfReportedCommit { commits } => {
+                    let commits: Vec<String> = commits
+                        .iter()
+                        .map(|x| format!("{} {}", x.field, x.value.terminal_line()))
+                        .collect();
+                    format!(
+                        "{} {:?} from {}",
+                        c.product,
+                        c.candidates,
+                        commits.join(", ")
+                    )
+                }
             })
             .collect();
         each.join("; ")
     };
     Err(vec![format!(
-        "the open release claims are {}, but the component claims and the set's commit data give {}",
+        "the release claims are {}, but the session's reference rows, binary facts and the set give {}",
         shown(&recorded),
         shown(&derived)
     )])

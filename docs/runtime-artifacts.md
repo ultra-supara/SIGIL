@@ -189,15 +189,18 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
   - the session names the set by its id and SHA-256;
   - no row names another reference set.
 
-  `verify_release_claims` (PR-4c-2c) recomputes the open claims of a session that names the set,
-  of any product: there is none beside a closed claim (a claim by reference matches for `ollama`
-  that rests on this set), and otherwise exactly the one the set's commit data gives for the
-  component claims derived from the session's binary facts, or none when they give none. The
-  comparison is up to canonical order. `validate` requires an open claim's session to have some
-  reference set in `knowledge` (V12), so none escapes the verifier by naming none. A session that
-  names another set (or another version of this one) is rendered with a note instead, and one
-  with the embedded set's SHA-256 under another id is refused. A session that names the set has
-  no reference row of another set.
+  `verify_release_claims` (PR-4c-2c) recomputes the release claims of a session that names the
+  set. The closed claim comes from the session's rows of this set and its placements under the
+  install root (V10 and the checks above pin the rows): the releases every placement matches,
+  and a claim for `ollama` after a complete discovery, none without an install root. The open
+  claim comes from the component claims derived from the session's binary facts and the set's
+  commit data, and only when there is no closed claim. The session's claims, of any product,
+  must be exactly these, up to canonical order: so there is no open claim beside a closed one,
+  and a closed claim cannot be relabelled or dropped to make room for an open one. `validate`
+  requires an open claim's session to have some reference set in `knowledge` (V12), so none
+  escapes the verifier by naming none. A session that names another set (or another version of
+  this one) is rendered with a note instead, and one with the embedded set's SHA-256 under
+  another id is refused. A session that names the set has no reference row of another set.
 
 | Where | `validate` | Verifier |
 |---|---|---|

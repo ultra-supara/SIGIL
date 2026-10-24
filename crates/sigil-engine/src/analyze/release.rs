@@ -79,32 +79,8 @@ pub fn analyze(facts: &InstallFacts, set: &RefSet) -> Result<ReleaseResult, Stri
             }
         }
     }
-    let matched = |tag: &str, i: &FileInstance| {
-        rows.iter()
-            .any(|r| r.release == tag && r.instance.as_ref() == Some(&i.id) && r.result.matches())
-    };
-    let candidates: Vec<String> = set
-        .releases
-        .iter()
-        .map(|r| r.tag.clone())
-        .filter(|tag| {
-            !facts.instances.is_empty() && facts.instances.iter().all(|i| matched(tag, i))
-        })
-        .collect();
-    let claim = if complete && !candidates.is_empty() {
-        let mut files: Vec<_> = facts.instances.iter().map(|i| i.id.clone()).collect();
-        files.sort();
-        Some(ReleaseClaim {
-            product: ComponentKey::new("ollama").map_err(|e| e.to_string())?,
-            candidates: candidates.clone(),
-            basis: ReleaseBasis::ReferenceMatches {
-                reference: set.id.clone(),
-                files,
-            },
-        })
-    } else {
-        None
-    };
+    let placements: Vec<&FileInstance> = facts.instances.iter().collect();
+    let (candidates, claim) = by_rows(set, &rows, &placements, complete)?;
     let state = match &facts.discovery.state {
         s @ (CoverageState::Unavailable { .. }
         | CoverageState::BudgetExceeded { .. }
@@ -128,6 +104,43 @@ pub fn analyze(facts: &InstallFacts, set: &RefSet) -> Result<ReleaseResult, Stri
             budget: None,
         },
     })
+}
+
+/// The candidates and the claim by reference matches (PR-4c-2c: also what the verifier
+/// recomputes from a session's rows): the releases whose rows every placement matches, and, after
+/// a complete discovery with a candidate, the claim for `ollama` over the placements. `rows` are
+/// the set's.
+pub(crate) fn by_rows(
+    set: &RefSet,
+    rows: &[ReferenceMatch],
+    instances: &[&FileInstance],
+    complete: bool,
+) -> Result<(Vec<String>, Option<ReleaseClaim>), String> {
+    let matched = |tag: &str, i: &FileInstance| {
+        rows.iter()
+            .any(|r| r.release == tag && r.instance.as_ref() == Some(&i.id) && r.result.matches())
+    };
+    let candidates: Vec<String> = set
+        .releases
+        .iter()
+        .map(|r| r.tag.clone())
+        .filter(|tag| !instances.is_empty() && instances.iter().all(|i| matched(tag, i)))
+        .collect();
+    let claim = if complete && !candidates.is_empty() {
+        let mut files: Vec<_> = instances.iter().map(|i| i.id.clone()).collect();
+        files.sort();
+        Some(ReleaseClaim {
+            product: ComponentKey::new("ollama").map_err(|e| e.to_string())?,
+            candidates: candidates.clone(),
+            basis: ReleaseBasis::ReferenceMatches {
+                reference: set.id.clone(),
+                files,
+            },
+        })
+    } else {
+        None
+    };
+    Ok((candidates, claim))
 }
 
 /// The install's release claims (PR-4c-2c): the claim by reference matches when [`analyze`] made

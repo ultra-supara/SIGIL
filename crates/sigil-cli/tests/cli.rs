@@ -1526,7 +1526,7 @@ fn a_saved_open_release_claim_is_reverified_by_render() {
     assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(
         r.stderr
-            .contains("open release claims disagree with the embedded reference set"),
+            .contains("release claims disagree with the embedded reference set"),
         "{}",
         r.stderr
     );
