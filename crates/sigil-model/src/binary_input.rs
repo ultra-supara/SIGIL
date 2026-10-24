@@ -56,9 +56,9 @@ pub const SCAN_READ_FAILED: &str = "string scan: a read failed";
 /// sections, every name read, is `.gopclntab`: they were looked for nowhere (PR #97 review P2).
 pub const SCAN_NO_GOPCLNTAB: &str = "string scan: no .gopclntab section";
 /// A scan gap: the file has Go build info and a `.gopclntab`, but the section's header is not
-/// one of the layouts SIGIL reads (Go 1.16, and Go 1.18 and later), or locates no function-name
-/// table within the section: the Go-function needles, which look only in that table, were not
-/// looked for there (PR-4c-3a plan review P2).
+/// one of the layouts SIGIL reads (Go 1.16 and later), or locates no function-name table within
+/// the section: the Go-function needles, which look only in that table, were not looked for there
+/// (PR-4c-3a plan review P2).
 pub const SCAN_GOPCLNTAB_HEADER: &str = "string scan: .gopclntab header not understood";
 
 /// `binary.identity`'s `Unsupported` reason for a Mach-O input, and the gap of a Mach-O artifact

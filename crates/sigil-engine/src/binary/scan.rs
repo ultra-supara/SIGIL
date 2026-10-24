@@ -109,7 +109,7 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
     let mut out = Searched::default();
     // The gaps: bytes of a target not read (past the end of the file, or a failed read), a Go
     // target's header not understood, and the budget.
-    let (mut unread, mut header, mut over) = (false, false, false);
+    let (mut unread, mut not_understood, mut over) = (false, false, false);
     'kinds: for kind in [NeedleKind::GoFunction, NeedleKind::String] {
         let mut open = needles.of(kind);
         let overlap = needles.overlap(kind);
@@ -121,10 +121,10 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
             // table, which the section's header locates (PR-4c-3a plan review P2: the file table
             // also holds NUL-terminated names).
             let (from, len) = match kind {
-                NeedleKind::GoFunction => match pcln_table(reader, t, size) {
+                NeedleKind::GoFunction => match pcln_table(reader, t) {
                     Pcln::Table(from, len) => (from, len),
                     Pcln::NotUnderstood => {
-                        header = true;
+                        not_understood = true;
                         continue;
                     }
                     Pcln::Unread => {
@@ -184,7 +184,7 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
     if unread {
         out.gaps.push(SCAN_READ_FAILED.to_string());
     }
-    if header {
+    if not_understood {
         out.gaps.push(SCAN_GOPCLNTAB_HEADER.to_string());
     }
     if over {
@@ -373,9 +373,8 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 
 /// The sections of `kinds` in `table`, in table order: `.gopclntab` for the Go-function needles
 /// (whose header [`search`] reads first); `.rodata`, `.rodata.*`, and `.lrodata` for the string
-/// needles. A section without file bytes
-/// (`SHT_NOBITS`) is none of them. A section name that cannot be read is the gap
-/// [`SCAN_NAME_NOT_READ`], given once: it could be one of them.
+/// needles. A section without file bytes (`SHT_NOBITS`) is none of them. A section name that
+/// cannot be read is the gap [`SCAN_NAME_NOT_READ`], given once: it could be one of them.
 fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     table: &SectionTable<'d, H, &'d Bounded<R>>,
@@ -436,19 +435,23 @@ fn first(bytes: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Where a Go target's function-name table is ([`pcln_table`]).
 enum Pcln {
-    /// Its file offset and size; none for a section without bytes.
+    /// Its file offset and size; for a section without bytes, an empty table at the section's
+    /// offset.
     Table(u64, u64),
     /// The header is not one SIGIL reads, or locates no table within the section.
     NotUnderstood,
     /// The header's bytes are not all in the file, or a read failed.
     Unread,
+    /// The header's read would pass `binary_scan_bytes`.
     OverBudget,
 }
 
 /// Reads the `pcHeader` of the Go target `t` (at most [`PCLN_HEADER_MAX`] bytes, charged to
-/// `reader`), and returns where its function-name table is ([`function_names`]). `size` is the
-/// file's.
-fn pcln_table(reader: &mut Reader<'_>, t: &Target, size: u64) -> Pcln {
+/// `reader`), and returns where its function-name table is ([`function_names`]). When
+/// `funcnameOffset` is below [`PCLN_HEADER_MAX`], the header's read overlaps the table's start, so
+/// up to 32 bytes are charged twice; over-charging is safe.
+fn pcln_table(reader: &mut Reader<'_>, t: &Target) -> Pcln {
+    let size = reader.size();
     if t.size == 0 {
         return Pcln::Table(t.offset, 0);
     }
@@ -463,7 +466,7 @@ fn pcln_table(reader: &mut Reader<'_>, t: &Target, size: u64) -> Pcln {
         Err(_) => return Pcln::Unread,
     };
     match function_names(&bytes, t.size) {
-        Some((from, to)) => Pcln::Table(t.offset.saturating_add(from), to - from),
+        Some((from, len)) => Pcln::Table(t.offset.saturating_add(from), len),
         // A header cut by the end of the file was not read whole.
         None if n < wanted => Pcln::Unread,
         None => Pcln::NotUnderstood,
@@ -472,8 +475,9 @@ fn pcln_table(reader: &mut Reader<'_>, t: &Target, size: u64) -> Pcln {
 
 /// The function-name table of a `.gopclntab` of `size` bytes whose first bytes are `header`
 /// (PR-4c-3a plan review P2): `[funcnameOffset, cuOffset)` from the section's start, as Go's
-/// `pcHeader` gives it for Go 1.16 and Go 1.18 and later, in either byte order (the magic's). The
-/// header's other bytes are `pad1` and `pad2` (zero), `minLC` (1, 2, or 4), `ptrSize` (4 or 8),
+/// `pcHeader` gives it for Go 1.16 and later (1.16's and 1.18's layouts), in either byte order (the
+/// magic's), returned as `(from, len)`: the table's offset from the section's start and its
+/// length. The header's other bytes are `pad1` and `pad2` (zero), `minLC` (1, 2, or 4), `ptrSize` (4 or 8),
 /// then its pointer-size fields: `nfunc`, `nfiles`, from Go 1.18 `textStart`, `funcnameOffset`,
 /// `cuOffset`, `filetabOffset`, `pctabOffset`, and `pclnOffset`. `None` for another magic or
 /// another value, a header shorter than its fields, or a table not after the header and within
@@ -487,7 +491,7 @@ fn function_names(header: &[u8], size: u64) -> Option<(u64, u64)> {
         (true, u32::from_be_bytes(magic))
     };
     // The pointer-size fields before `funcnameOffset`.
-    let before = match magic {
+    let leading = match magic {
         GO116_MAGIC => 2,
         GO118_MAGIC | GO120_MAGIC => 3,
         _ => return None,
@@ -507,10 +511,11 @@ fn function_names(header: &[u8], size: u64) -> Option<(u64, u64)> {
         })
     };
     // The header ends with `pclnOffset`, the fifth field from `funcnameOffset`.
-    field(before + 4)?;
-    let own = (8 + (before + 5) * ptr) as u64;
-    let (from, to) = (field(before)?, field(before + 1)?);
-    (own <= from && from <= to && to <= size).then_some((from, to))
+    field(leading + 4)?;
+    let own = (8 + (leading + 5) * ptr) as u64;
+    let (from, to) = (field(leading)?, field(leading + 1)?);
+    // `from <= to`, so the subtraction is safe.
+    (own <= from && from <= to && to <= size).then(|| (from, to - from))
 }
 
 /// The first offset in `bytes` of the Go function name `name` as an entry of `.gopclntab`'s
@@ -795,6 +800,14 @@ mod tests {
         assert!(s.found.is_empty());
         assert_eq!(s.gaps, ["string scan: binary_scan_bytes 10 exceeded"]);
         assert_eq!(s.used, 0);
+        // The header's read refused while a later string target would fit: reading stops for
+        // every kind (`break 'kinds`).
+        let mut b = bytes(2000, &[(1500, "first-needle")]);
+        header(&mut b, 0, 1000);
+        let s = run(&b, 50, &go, &[gopclntab(0, 1000), rodata(1500, 20)]);
+        assert!(s.found.is_empty());
+        assert_eq!(s.gaps, ["string scan: binary_scan_bytes 50 exceeded"]);
+        assert_eq!(s.used, 0);
     }
 
     #[test]
@@ -1029,22 +1042,65 @@ mod tests {
     #[test]
     fn a_go_function_name_outside_the_function_name_table_is_not_found() {
         let needles = db(&[("g.start", "go-function", "os/exec.(*Cmd).Start")]);
-        let mut b = bytes(
-            4096,
-            &[(0x100, "main.main"), (0x900, "os/exec.(*Cmd).Start")],
-        );
-        header(&mut b, 0, 0x800);
-        let s = run(&b, 1 << 30, &needles, &[gopclntab(0, 4096)]);
-        assert!(s.found.is_empty());
-        assert!(s.gaps.is_empty());
-        // The header and the table, nothing past it.
-        assert_eq!(s.used, 0x800);
-        header(&mut b, 0, 0xa00);
+        let name = "os/exec.(*Cmd).Start";
+        // A realistic header: the table ends at cuOffset (0x800), not at filetabOffset (0x880).
+        let layout = |cu: u64, filetab: u64| {
+            raw_header(
+                0xffff_fff1,
+                false,
+                8,
+                &[1, 1, 0, TABLE as u64, cu, filetab, 0x900, 0x900],
+            )
+        };
+        let build = |at: usize, cu: u64, filetab: u64| {
+            let mut b = bytes(4096, &[(0x100, "main.main"), (at, name)]);
+            let h = layout(cu, filetab);
+            b[..h.len()].copy_from_slice(&h);
+            b
+        };
+        // In the file table (between filetabOffset and pctabOffset), and between cuOffset and
+        // filetabOffset: not found. The header and the table are read, nothing past it.
+        for at in [0x8a0, 0x840] {
+            let b = build(at, 0x800, 0x880);
+            let s = run(&b, 1 << 30, &needles, &[gopclntab(0, 4096)]);
+            assert!(s.found.is_empty(), "{at:#x}");
+            assert!(s.gaps.is_empty());
+            assert_eq!(s.used, 0x800);
+        }
+        // With cuOffset past the name, it is an entry of the table.
+        let b = build(0x8a0, 0x8c0, 0x900);
         let s = run(&b, 1 << 30, &needles, &[gopclntab(0, 4096)]);
         assert_eq!(
             places(&s),
-            [("g.start".to_string(), ".gopclntab".to_string(), 0x900)]
+            [("g.start".to_string(), ".gopclntab".to_string(), 0x8a0)]
         );
+    }
+
+    /// The table's bound is the section's size, not the file's.
+    #[test]
+    fn a_table_past_the_section_but_inside_the_file_is_not_understood() {
+        let needles = db(&[("g.f", "go-function", "main.f")]);
+        let mut b = bytes(0x400, &[(0x100, "main.f")]);
+        header(&mut b, 0, 0x300);
+        let s = run(&b, 1 << 30, &needles, &[gopclntab(0, 0x200)]);
+        assert!(s.found.is_empty());
+        assert_eq!(s.gaps, [SCAN_GOPCLNTAB_HEADER]);
+        assert_eq!(s.used, 72);
+    }
+
+    /// The read-failed gap is judged on the table's end, not the section's.
+    #[test]
+    fn a_section_past_the_file_with_its_table_inside_it_is_no_gap() {
+        let needles = db(&[("g.f", "go-function", "main.f")]);
+        let mut b = bytes(0x1000, &[(0x100, "main.f")]);
+        header(&mut b, 0, 0x800);
+        let s = run(&b, 1 << 30, &needles, &[gopclntab(0, 0x10_0000)]);
+        assert_eq!(
+            places(&s),
+            [("g.f".to_string(), ".gopclntab".to_string(), 0x100)]
+        );
+        assert!(s.gaps.is_empty());
+        assert_eq!(s.used, 0x800);
     }
 
     #[test]
@@ -1079,7 +1135,23 @@ mod tests {
             )]
         );
         assert_eq!(s.used, TABLE as u64 + 2 * (CHUNK + 6));
+        // It starts at the first chunk's last byte, after a NUL: its NUL is the last byte of the
+        // first read, which holds the whole name.
+        let mut b = bytes(len, &[(TABLE + MIB - 1, "main.f")]);
+        header(&mut b, 0, len as u64);
+        let s = run(&b, 1 << 30, &needles, &[gopclntab(0, len as u64)]);
+        assert_eq!(
+            places(&s),
+            [(
+                "g.f".to_string(),
+                ".gopclntab".to_string(),
+                (TABLE + MIB - 1) as u64
+            )]
+        );
+        assert_eq!(s.used, TABLE as u64 + CHUNK + 6);
         // The same after another byte: no name, and every byte is read.
+        let mut b = bytes(len, &[(TABLE + MIB, "main.f")]);
+        header(&mut b, 0, len as u64);
         b[TABLE + MIB - 1] = b'x';
         let s = run(&b, 1 << 30, &needles, &[gopclntab(0, len as u64)]);
         assert!(s.found.is_empty());
@@ -1114,19 +1186,39 @@ mod tests {
             8,
             &[1, 1, 0, 0x48, 0x100, 0x100, 0x100, 0x100],
         );
-        assert_eq!(function_names(&go120, 0x200), Some((0x48, 0x100)));
+        assert_eq!(function_names(&go120, 0x200), Some((0x48, 0xb8)));
+        // Go 1.20, little-endian, 4-byte pointers (a 40-byte header).
+        let ptr4 = raw_header(
+            0xffff_fff1,
+            false,
+            4,
+            &[1, 1, 0, 0x28, 0x100, 0x100, 0x100, 0x100],
+        );
+        assert_eq!(function_names(&ptr4, 0x200), Some((0x28, 0xd8)));
+        // Go 1.20, big-endian, 8-byte pointers.
+        let be8 = raw_header(
+            0xffff_fff1,
+            true,
+            8,
+            &[1, 1, 0, 0x48, 0x100, 0x100, 0x100, 0x100],
+        );
+        assert_eq!(function_names(&be8, 0x200), Some((0x48, 0xb8)));
+        // A minLC of 2 is accepted.
+        let mut min_lc2 = go120.clone();
+        min_lc2[6] = 2;
+        assert_eq!(function_names(&min_lc2, 0x200), Some((0x48, 0xb8)));
         let go118 = raw_header(
             0xffff_fff0,
             true,
             4,
             &[1, 1, 0, 0x28, 0x100, 0x100, 0x100, 0x100],
         );
-        assert_eq!(function_names(&go118, 0x200), Some((0x28, 0x100)));
+        assert_eq!(function_names(&go118, 0x200), Some((0x28, 0xd8)));
         // Go 1.16: no textStart.
         let go116 = raw_header(0xffff_fffa, false, 8, &[1, 1, 0x40, 0x80, 0x80, 0x80, 0x80]);
-        assert_eq!(function_names(&go116, 0x200), Some((0x40, 0x80)));
+        assert_eq!(function_names(&go116, 0x200), Some((0x40, 0x40)));
         let go116 = raw_header(0xffff_fffa, true, 4, &[1, 1, 0x24, 0x80, 0x80, 0x80, 0x80]);
-        assert_eq!(function_names(&go116, 0x200), Some((0x24, 0x80)));
+        assert_eq!(function_names(&go116, 0x200), Some((0x24, 0x5c)));
         // An empty table is a table.
         let empty = raw_header(
             0xffff_fff1,
@@ -1134,7 +1226,7 @@ mod tests {
             8,
             &[1, 1, 0, 0x48, 0x48, 0x48, 0x48, 0x48],
         );
-        assert_eq!(function_names(&empty, 0x48), Some((0x48, 0x48)));
+        assert_eq!(function_names(&empty, 0x48), Some((0x48, 0)));
     }
 
     #[test]
@@ -1171,6 +1263,9 @@ mod tests {
         let mut padded = raw_header(0xffff_fff1, false, 8, &ok);
         padded[4] = 1;
         bad.push(padded);
+        let mut pad2 = raw_header(0xffff_fff1, false, 8, &ok);
+        pad2[5] = 1;
+        bad.push(pad2);
         let mut min_lc = raw_header(0xffff_fff1, false, 8, &ok);
         min_lc[6] = 3;
         bad.push(min_lc);
