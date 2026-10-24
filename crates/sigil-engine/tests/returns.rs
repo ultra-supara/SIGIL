@@ -475,7 +475,8 @@ fn the_reads_are_charged_to_binary_scan_bytes() {
 #[test]
 fn the_functions_are_read_without_an_export_needle() {
     use sigil_engine::binary::needles;
-    let go = "[[needle]]\nfeature = \"g.f\"\nkind = \"go-function\"\nvalue = \"main.f\"\n";
+    let go = "[[needle]]\nfeature = \"g.f\"\nkind = \"go-function\"\nvalue = \"main.f\"\n\
+              source = \"t\"\n";
     let needles = needles::parse(go).unwrap();
     let bytes = returns_fixture("version-gcc-O2.so");
     let f = file(&bytes);
@@ -511,7 +512,7 @@ fn the_functions_are_read_without_an_export_needle() {
 #[test]
 fn the_returns_and_the_needle_search_share_one_budget() {
     use sigil_engine::binary::needles;
-    let db = "[[needle]]\nfeature = \"s.f\"\nkind = \"string\"\nvalue = \"zzzz\"\n";
+    let db = "[[needle]]\nfeature = \"s.f\"\nkind = \"string\"\nvalue = \"zzzz\"\nsource = \"t\"\n";
     let needles = needles::parse(db).unwrap();
     let bytes = returns_fixture("version-gcc-O2.so");
     let f = file(&bytes);

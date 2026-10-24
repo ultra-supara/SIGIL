@@ -528,7 +528,8 @@ fn string_needles_are_looked_for_in_read_only_data_sections() {
     for (k, (_, _, needle)) in sections.iter().enumerate() {
         img.put(0x1000 + 0x100 * k as u64, needle.as_bytes());
         db.push_str(&format!(
-            "[[needle]]\nfeature = \"s.{needle}\"\nkind = \"string\"\nvalue = \"{needle}\"\n"
+            "[[needle]]\nfeature = \"s.{needle}\"\nkind = \"string\"\nvalue = \"{needle}\"\n\
+             source = \"t\"\n"
         ));
     }
     let end = img.body.len() as u64;
@@ -892,7 +893,8 @@ fn a_dynsym_the_parse_does_not_read_is_a_gap() {
     let gap = found_nothing(&[sigil_model::SCAN_NAME_NOT_READ]);
     assert_eq!(scan_of("libggml-rpc.so", &bytes), gap);
     // Without an export needle, nothing is missing.
-    let go = "[[needle]]\nfeature = \"g.f\"\nkind = \"go-function\"\nvalue = \"main.f\"\n";
+    let go = "[[needle]]\nfeature = \"g.f\"\nkind = \"go-function\"\nvalue = \"main.f\"\n\
+              source = \"t\"\n";
     assert_eq!(scan_with(&bytes, go), found_nothing(&[]));
 }
 
@@ -1011,7 +1013,7 @@ fn exports_not_checked_against_the_loader_s_table_are_a_gap_unless_found() {
         assert_eq!(gaps, [sigil_model::SCAN_NAME_NOT_READ], "{how}");
         // Looking for the RPC export alone, the one found leaves nothing missing.
         let rpc = "[[needle]]\nfeature = \"rpc.code_present\"\nkind = \"export\"\n\
-                   value = \"ggml_backend_rpc_\"\n";
+                   value = \"ggml_backend_rpc_\"\nsource = \"t\"\n";
         let ScanOutcome::Scanned { found, gaps } = scan_with(&patch(&rpc_library()), rpc) else {
             panic!("{how}: not scanned");
         };

@@ -4,24 +4,137 @@
 #
 #   feature  the hint's feature key
 #   kind     export       a prefix of the name of an exported dynamic symbol (.dynsym)
-#            go-function  exact bytes in .gopclntab, in an ELF file with Go build info
+#            go-function  an exact function name in .gopclntab's function-name table, which the
+#                         section's header locates, in an ELF file with Go build info (PR-4c-3a);
+#                         the value has no NUL
 #            string       exact bytes in .rodata, .rodata.*, or .lrodata
 #   value    not empty, at most 4096 bytes
+#   source   where the name comes from (required)
 #
 # The RPC backend is decided by its exports, not by a string: libllama-common's .rodata holds the
 # string ggml_backend_rpc_add_server, but it exports no ggml_backend_rpc_* symbol.
+#
+# The go.* needles (PR-4c-3a) are exported functions of the Go standard library, one capability
+# each. Go's linker keeps only the functions a program can reach, inlined ones keep their names,
+# and the standard library reaches some for its own use (a net/http client has os.Open), so a hint
+# says the function is in the file, never that the program calls it. Higher-level APIs reach
+# these: exec.Command(…).Run, Output, and CombinedOutput call (*Cmd).Start; net.Dial and
+# http.Client dial through (*Dialer).DialContext; net.Listen listens through
+# (*ListenConfig).Listen. Ambiguous names are not listed: os.OpenFile (its flags decide read or
+# write), os.(*File).Write and Read (standard output is a file too), and syscall.Syscall and its
+# kin. Nor is the environment (os.Getenv: the standard library reads it in nearly every program)
+# or ptrace.
 
 [[needle]]
 feature = "rpc.code_present"
 kind = "export"
 value = "ggml_backend_rpc_"
+source = "llama.cpp b9509 ggml/include/ggml-rpc.h: the RPC backend's functions, ggml_backend_rpc_*"
 
 [[needle]]
 feature = "ollama.llama_server_launch"
 kind = "go-function"
 value = "github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv"
+source = "Ollama v0.30.6 llm/llama_server.go: func SetupLlamaServerCommandEnv (plan §0.4)"
 
 [[needle]]
 feature = "ollama.device_discovery"
 kind = "go-function"
 value = "github.com/ollama/ollama/discover.discoverNativeDevices"
+source = "Ollama v0.30.6 package discover: func discoverNativeDevices (plan §0.4)"
+
+[[needle]]
+feature = "go.process_spawn"
+kind = "go-function"
+value = "os/exec.(*Cmd).Start"
+source = "Go 1.25 src/os/exec/exec.go: func (c *Cmd) Start() error"
+
+[[needle]]
+feature = "go.process_spawn"
+kind = "go-function"
+value = "os.StartProcess"
+source = "Go 1.25 src/os/exec.go: func StartProcess(name string, argv []string, attr *ProcAttr) (*Process, error)"
+
+[[needle]]
+feature = "go.process_spawn"
+kind = "go-function"
+value = "syscall.StartProcess"
+source = "Go 1.25 src/syscall/exec_unix.go: func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error)"
+
+[[needle]]
+feature = "go.process_spawn"
+kind = "go-function"
+value = "syscall.ForkExec"
+source = "Go 1.25 src/syscall/exec_unix.go: func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error)"
+
+[[needle]]
+feature = "go.process_spawn"
+kind = "go-function"
+value = "syscall.Exec"
+source = "Go 1.25 src/syscall/exec_unix.go: func Exec(argv0 string, argv []string, envv []string) (err error)"
+
+[[needle]]
+feature = "go.network"
+kind = "go-function"
+value = "net.(*Dialer).DialContext"
+source = "Go 1.25 src/net/dial.go: func (d *Dialer) DialContext(ctx context.Context, network, address string) (Conn, error)"
+
+[[needle]]
+feature = "go.network"
+kind = "go-function"
+value = "net.(*ListenConfig).Listen"
+source = "Go 1.25 src/net/dial.go: func (lc *ListenConfig) Listen(ctx context.Context, network, address string) (Listener, error)"
+
+[[needle]]
+feature = "go.network"
+kind = "go-function"
+value = "net.(*ListenConfig).ListenPacket"
+source = "Go 1.25 src/net/dial.go: func (lc *ListenConfig) ListenPacket(ctx context.Context, network, address string) (PacketConn, error)"
+
+[[needle]]
+feature = "go.file_read"
+kind = "go-function"
+value = "os.Open"
+source = "Go 1.25 src/os/file.go: func Open(name string) (*File, error)"
+
+[[needle]]
+feature = "go.file_read"
+kind = "go-function"
+value = "os.ReadFile"
+source = "Go 1.25 src/os/file.go: func ReadFile(name string) ([]byte, error)"
+
+[[needle]]
+feature = "go.file_write"
+kind = "go-function"
+value = "os.Create"
+source = "Go 1.25 src/os/file.go: func Create(name string) (*File, error)"
+
+[[needle]]
+feature = "go.file_write"
+kind = "go-function"
+value = "os.WriteFile"
+source = "Go 1.25 src/os/file.go: func WriteFile(name string, data []byte, perm FileMode) error"
+
+[[needle]]
+feature = "go.file_write"
+kind = "go-function"
+value = "os.Remove"
+source = "Go 1.25 src/os/file_unix.go: func Remove(name string) error"
+
+[[needle]]
+feature = "go.file_write"
+kind = "go-function"
+value = "os.RemoveAll"
+source = "Go 1.25 src/os/path.go: func RemoveAll(path string) error"
+
+[[needle]]
+feature = "go.file_write"
+kind = "go-function"
+value = "os.Rename"
+source = "Go 1.25 src/os/file.go: func Rename(oldpath, newpath string) error"
+
+[[needle]]
+feature = "go.dynamic_loading"
+kind = "go-function"
+value = "plugin.Open"
+source = "Go 1.25 src/plugin/plugin.go: func Open(path string) (*Plugin, error)"

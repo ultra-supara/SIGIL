@@ -571,7 +571,10 @@ mod tests {
         let text: String = needles
             .iter()
             .map(|(f, k, v)| {
-                format!("[[needle]]\nfeature = \"{f}\"\nkind = \"{k}\"\nvalue = \"{v}\"\n")
+                format!(
+                    "[[needle]]\nfeature = \"{f}\"\nkind = \"{k}\"\nvalue = \"{v}\"\n\
+                     source = \"t\"\n"
+                )
             })
             .collect();
         parse(&text).unwrap()
