@@ -1275,6 +1275,128 @@ pub fn conflicting_identity() -> Session {
     s
 }
 
+/// The official releases whose files report `LLAMA_COMMIT` `6f3a9f3de` (PR-4c-2c).
+pub const OPEN_RELEASES: [&str; 3] = ["v0.30.5", "v0.30.6", "v0.30.7"];
+
+/// Example 17: An open release set (PR-4c-2c). `lib/ollama/libllama-common.so.0.0.1` matches no
+/// reference (a rebuilt library, say) and reports `LLAMA_COMMIT` `6f3a9f3de`, which the official
+/// v0.30.5, v0.30.6, and v0.30.7 files report: the release set is open, "consistent with" those
+/// three, and `artifacts.release` stays `Partial`: PASS + INCOMPLETE. The engine derives this
+/// release claim from this component claim (`crates/sigil-engine/tests/example_identity.rs`).
+pub fn open_release() -> Session {
+    let mut s = base(&["artifacts.discovery", "artifacts.release"]);
+    s.request.audit = ids(&["runtime_artifacts"]);
+    let file = "libllama-common.so.0.0.1";
+    let member = format!("lib/ollama/{file}");
+    let g = add_binary(&mut s, &hex(0x17), &member, Arch::X86_64, 1017);
+    add_knowledge(
+        &mut s,
+        KnowledgeKind::ReferenceManifest,
+        "ollama-official",
+        "2026-10-24",
+        0xa1,
+    );
+    let named = EvidenceRef::Instance {
+        instance: g.inst.clone(),
+    };
+    let content = EvidenceRef::Artifact {
+        artifact: g.artifact.clone(),
+    };
+    let at = EvidenceRef::Code {
+        slice: g.slice.clone(),
+        loc: Loc::VAddr(0x2d0c8),
+    };
+    let mut assertions = vec![
+        IdentityAssertion::SelfName {
+            kind: NameKind::Filename,
+            value: t(file),
+            at: named.clone(),
+        },
+        IdentityAssertion::SelfName {
+            kind: NameKind::Soname,
+            value: t("libllama-common.so.0"),
+            at: content.clone(),
+        },
+        IdentityAssertion::Embedded {
+            field: "LLAMA_COMMIT".to_string(),
+            value: t("6f3a9f3de"),
+            at: at.clone(),
+            method: ExtractMethod::DataSymbolPointer {
+                symbol: t("LLAMA_COMMIT"),
+            },
+        },
+    ];
+    for release in OPEN_RELEASES {
+        assertions.push(IdentityAssertion::KnownHash {
+            reference: id("ollama-official"),
+            release: release.to_string(),
+            member: member.clone(),
+            matched: false,
+        });
+        s.reference_matches.push(ReferenceMatch {
+            reference: id("ollama-official"),
+            release: release.to_string(),
+            member: member.clone(),
+            instance: Some(g.inst.clone()),
+            result: MemberResult::File {
+                expected: id(&hex(0x18)),
+                observed: id(&hex(0x17)),
+            },
+        });
+    }
+    assertions.push(IdentityAssertion::Signature {
+        state: SigState::NotChecked,
+    });
+    s.components.push(ComponentClaim {
+        subject: g.slice.clone(),
+        component: id("llama.cpp/common"),
+        assertions,
+        status: IdentityStatus::NameOnly,
+        versions: vec![
+            VersionAssertion {
+                value: t("0.0.1"),
+                source: VersionSource::SelfName {
+                    kind: NameKind::Filename,
+                },
+                at: named,
+            },
+            VersionAssertion {
+                value: t("0"),
+                source: VersionSource::SelfName {
+                    kind: NameKind::Soname,
+                },
+                at: content,
+            },
+        ],
+    });
+    s.releases.push(ReleaseClaim {
+        product: id("ollama"),
+        candidates: OPEN_RELEASES.iter().map(|r| r.to_string()).collect(),
+        basis: ReleaseBasis::SelfReportedCommit {
+            commits: vec![ReportedCommit {
+                field: "LLAMA_COMMIT".to_string(),
+                value: t("6f3a9f3de"),
+                at,
+            }],
+        },
+    });
+    s.coverage.extend([
+        complete("artifacts.discovery"),
+        coverage(
+            "artifacts.release",
+            Ref::Audit,
+            CoverageState::Partial {
+                missing: vec![format!("{member}: matches no reference")],
+            },
+        ),
+    ]);
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: ids(&["artifacts.release"]),
+        gaps: vec![],
+    };
+    s
+}
+
 /// Example 13: The loader vertical slice of plan §5.8, corrected to the PR-2 types. Specification example
 /// (the plan's values), not a SIGIL measurement.
 pub fn loader_slice_spec_example() -> Session {
@@ -1334,6 +1456,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("14-store-and-runtime", store_and_runtime()),
         ("15-binary-inspect", binary_inspect()),
         ("16-binary-code", binary_code()),
+        ("17-open-release", open_release()),
     ]
 }
 

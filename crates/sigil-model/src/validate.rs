@@ -232,6 +232,12 @@ pub enum ValidationError {
     /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
     /// (V11).
     ReleaseCoverage { complete: bool },
+    /// Two release claims for one product, or an open claim (`SelfReportedCommit`) that does not
+    /// rest on the session's own embedded commits (V12; PR-4c-2c).
+    Release {
+        product: ComponentKey,
+        why: &'static str,
+    },
     /// A `BinaryFacts` record, a `Declares` relation, or `artifacts.identity` disagrees with the
     /// session (B1–B8, B11; S2, PR-4c-2a).
     Binary { slice: String, why: String },
@@ -371,6 +377,7 @@ impl fmt::Display for ValidationError {
                 f,
                 "releases[{product}]: the basis must list every install placement, after a complete discovery"
             ),
+            Release { product, why } => write!(f, "releases[{product}]: {why}"),
             Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
             BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
             Code { at, why } => write!(f, "{at}: {why}"),
@@ -730,11 +737,14 @@ impl<'a> Validator<'a> {
                         self.instance(file, &at);
                     }
                 }
-                ReleaseBasis::SelfReportedCommit { at: evidence, .. } => {
-                    self.evidence(evidence, &at)
+                ReleaseBasis::SelfReportedCommit { commits } => {
+                    for c in commits {
+                        self.evidence(&c.at, &at);
+                    }
                 }
             }
         }
+        self.open_releases();
         self.reference_matches();
         self.binaries();
         self.binary_inputs();
@@ -2310,6 +2320,76 @@ impl<'a> Validator<'a> {
             };
             if let Some(why) = why {
                 self.code_error(&at, why);
+            }
+        }
+    }
+
+    /// V12 (PR-4c-2c): one release claim per product, with unique candidates. An open claim is
+    /// made only for an install, with a reference set in `knowledge` (the set the engine's
+    /// verifier recomputes it with; plan review P2), never beside a claim by reference matches,
+    /// and rests on commits that are the session's own `Embedded` assertions. `validate` cannot
+    /// tell which releases report a commit: the verifier recomputes the candidates.
+    fn open_releases(&mut self) {
+        let s = self.s;
+        let install = s
+            .request
+            .roots
+            .iter()
+            .any(|r| r.id.as_str() == INSTALL_ROOT);
+        let named = s
+            .knowledge
+            .iter()
+            .any(|k| k.kind == KnowledgeKind::ReferenceManifest);
+        let embedded = |c: &crate::identity::ReportedCommit| {
+            s.components.iter().flat_map(|x| &x.assertions).any(|a| {
+                matches!(a, IdentityAssertion::Embedded { field, value, at, .. }
+                    if *field == c.field && *value == c.value && *at == c.at)
+            })
+        };
+        let mut products = BTreeSet::new();
+        for claim in &s.releases {
+            let mut why = vec![];
+            if !products.insert(&claim.product) {
+                why.push("one release claim per product");
+            }
+            let mut seen = BTreeSet::new();
+            if !claim.candidates.iter().all(|c| seen.insert(c)) {
+                why.push("the candidates are unique");
+            }
+            if let ReleaseBasis::SelfReportedCommit { commits } = &claim.basis {
+                if !install {
+                    why.push("an open claim is made only for an install");
+                }
+                if !named {
+                    why.push("an open claim needs a reference set in knowledge");
+                }
+                let closed = s.releases.iter().any(|c| {
+                    c.product == claim.product
+                        && matches!(c.basis, ReleaseBasis::ReferenceMatches { .. })
+                });
+                if closed {
+                    why.push("an open claim is never beside a claim by reference matches");
+                }
+                if commits.is_empty() {
+                    why.push("an open claim rests on at least one commit");
+                }
+                for (k, c) in commits.iter().enumerate() {
+                    if commits[..k].contains(c) {
+                        why.push("each commit is listed once");
+                    }
+                    if !crate::identity::is_commit(c.value.as_bytes()) {
+                        why.push("a commit is 7 to 40 lowercase hex digits");
+                    }
+                    if !embedded(c) {
+                        why.push("a commit is an Embedded assertion of a claim");
+                    }
+                }
+            }
+            for why in why {
+                self.errors.push(ValidationError::Release {
+                    product: claim.product.clone(),
+                    why,
+                });
             }
         }
     }

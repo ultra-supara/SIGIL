@@ -14,7 +14,7 @@ fn every_session_example_carries_the_hints_the_engine_derives() {
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect();
     names.sort();
-    assert_eq!(names.len(), 16, "{names:?}");
+    assert_eq!(names.len(), 17, "{names:?}");
     for path in names {
         let session: Session =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

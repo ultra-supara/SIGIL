@@ -1,0 +1,257 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    },
+    {
+      "kind": "ReferenceManifest",
+      "id": "ollama-official",
+      "version": "2026-10-24",
+      "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [{"id": "install", "path": "/usr/local"}],
+    "audit": ["runtime_artifacts"],
+    "required_checks": ["artifacts.discovery", "artifacts.release"],
+    "budgets": {"files": 4096},
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": false
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:1717171717171717171717171717171717171717171717171717171717171717",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:1717171717171717171717171717171717171717171717171717171717171717#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "1717171717171717171717171717171717171717171717171717171717171717"
+        }
+      ]
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:lib/ollama/libllama-common.so.0.0.1",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libllama-common.so.0.0.1",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:1717171717171717171717171717171717171717171717171717171717171717"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1017,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [
+    {
+      "subject": "sha256:1717171717171717171717171717171717171717171717171717171717171717#x86_64@0",
+      "component": "llama.cpp/common",
+      "assertions": [
+        {
+          "Embedded": {
+            "field": "LLAMA_COMMIT",
+            "value": "6f3a9f3de",
+            "at": {
+              "Code": {
+                "slice": "sha256:1717171717171717171717171717171717171717171717171717171717171717#x86_64@0",
+                "loc": {"VAddr": 184520}
+              }
+            },
+            "method": {"DataSymbolPointer": {"symbol": "LLAMA_COMMIT"}}
+          }
+        },
+        {
+          "KnownHash": {
+            "reference": "ollama-official",
+            "release": "v0.30.5",
+            "member": "lib/ollama/libllama-common.so.0.0.1",
+            "matched": false
+          }
+        },
+        {
+          "KnownHash": {
+            "reference": "ollama-official",
+            "release": "v0.30.6",
+            "member": "lib/ollama/libllama-common.so.0.0.1",
+            "matched": false
+          }
+        },
+        {
+          "KnownHash": {
+            "reference": "ollama-official",
+            "release": "v0.30.7",
+            "member": "lib/ollama/libllama-common.so.0.0.1",
+            "matched": false
+          }
+        },
+        {
+          "SelfName": {
+            "kind": "Filename",
+            "value": "libllama-common.so.0.0.1",
+            "at": {"Instance": {"instance": "inst:lib/ollama/libllama-common.so.0.0.1"}}
+          }
+        },
+        {
+          "SelfName": {
+            "kind": "Soname",
+            "value": "libllama-common.so.0",
+            "at": {
+              "Artifact": {
+                "artifact": "sha256:1717171717171717171717171717171717171717171717171717171717171717"
+              }
+            }
+          }
+        },
+        {"Signature": {"state": "NotChecked"}}
+      ],
+      "status": "NameOnly",
+      "versions": [
+        {
+          "value": "0",
+          "source": {"SelfName": {"kind": "Soname"}},
+          "at": {
+            "Artifact": {
+              "artifact": "sha256:1717171717171717171717171717171717171717171717171717171717171717"
+            }
+          }
+        },
+        {
+          "value": "0.0.1",
+          "source": {"SelfName": {"kind": "Filename"}},
+          "at": {"Instance": {"instance": "inst:lib/ollama/libllama-common.so.0.0.1"}}
+        }
+      ]
+    }
+  ],
+  "releases": [
+    {
+      "product": "ollama",
+      "candidates": ["v0.30.5", "v0.30.6", "v0.30.7"],
+      "basis": {
+        "SelfReportedCommit": {
+          "commits": [
+            {
+              "field": "LLAMA_COMMIT",
+              "value": "6f3a9f3de",
+              "at": {
+                "Code": {
+                  "slice": "sha256:1717171717171717171717171717171717171717171717171717171717171717#x86_64@0",
+                  "loc": {"VAddr": 184520}
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "reference_matches": [
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama-common.so.0.0.1",
+      "instance": "inst:lib/ollama/libllama-common.so.0.0.1",
+      "result": {
+        "File": {
+          "expected": "1818181818181818181818181818181818181818181818181818181818181818",
+          "observed": "1717171717171717171717171717171717171717171717171717171717171717"
+        }
+      }
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama-common.so.0.0.1",
+      "instance": "inst:lib/ollama/libllama-common.so.0.0.1",
+      "result": {
+        "File": {
+          "expected": "1818181818181818181818181818181818181818181818181818181818181818",
+          "observed": "1717171717171717171717171717171717171717171717171717171717171717"
+        }
+      }
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama-common.so.0.0.1",
+      "instance": "inst:lib/ollama/libllama-common.so.0.0.1",
+      "result": {
+        "File": {
+          "expected": "1818181818181818181818181818181818181818181818181818181818181818",
+          "observed": "1717171717171717171717171717171717171717171717171717171717171717"
+        }
+      }
+    }
+  ],
+  "hints": [],
+  "code": [],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {"check": "artifacts.discovery", "scope": "Audit", "state": "Complete", "budget": null},
+    {
+      "check": "artifacts.release",
+      "scope": "Audit",
+      "state": {
+        "Partial": {"missing": ["lib/ollama/libllama-common.so.0.0.1: matches no reference"]}
+      },
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {"Incomplete": {"missing_required": ["artifacts.release"], "gaps": []}},
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}

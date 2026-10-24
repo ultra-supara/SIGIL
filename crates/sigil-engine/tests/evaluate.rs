@@ -113,7 +113,7 @@ fn re_evaluating_every_golden_example_reproduces_it() {
         assert_eq!(s, expected, "{}", path.display());
         seen += 1;
     }
-    assert_eq!(seen, 16);
+    assert_eq!(seen, 17);
 }
 
 #[test]

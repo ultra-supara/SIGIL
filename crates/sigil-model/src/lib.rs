@@ -95,8 +95,8 @@ pub use id::{
     Timestamp, ValueId,
 };
 pub use identity::{
-    ComponentClaim, ExtractMethod, IdentityAssertion, IdentityStatus, NameKind, ReleaseBasis,
-    ReleaseClaim, SigState, VersionAssertion, VersionSource,
+    is_commit, ComponentClaim, ExtractMethod, IdentityAssertion, IdentityStatus, NameKind,
+    ReleaseBasis, ReleaseClaim, ReportedCommit, SigState, VersionAssertion, VersionSource,
 };
 pub use listener::{Listener, ListenerOwner, Protocol};
 pub use load::{

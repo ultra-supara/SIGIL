@@ -59,7 +59,7 @@ fn every_session_example_projects_to_its_committed_aibom() {
         fs::create_dir_all(&dir).unwrap();
     }
     let examples = session_examples();
-    assert_eq!(examples.len(), 16);
+    assert_eq!(examples.len(), 17);
     for (name, s) in &examples {
         let bom = project(s, sha(s));
         let text = json(&bom);
@@ -136,14 +136,17 @@ fn the_runtime_is_carried_as_observed() {
     assert_eq!(bom.runtime.processes[0].roles, s.processes[0].roles);
     assert_eq!(bom.runtime.listeners, s.listeners);
     assert_eq!(bom.runtime.api, s.probes);
-    // Releases keep their kind of basis only.
-    let s = conflicting_identity();
-    let bom = project(&s, sha(&s));
-    assert_eq!(bom.runtime.releases.len(), s.releases.len());
-    assert!(bom.runtime.releases.iter().all(|r| matches!(
-        r.basis,
-        ReleaseBasisKind::ReferenceMatches | ReleaseBasisKind::SelfReportedCommit
-    )));
+    // Releases keep their candidates and their kind of basis only: closed (example 12) or open
+    // (example 17, PR-4c-2c).
+    for (s, kind) in [
+        (conflicting_identity(), ReleaseBasisKind::ReferenceMatches),
+        (open_release(), ReleaseBasisKind::SelfReportedCommit),
+    ] {
+        let bom = project(&s, sha(&s));
+        assert_eq!(bom.runtime.releases.len(), 1);
+        assert_eq!(bom.runtime.releases[0].candidates, s.releases[0].candidates);
+        assert_eq!(bom.runtime.releases[0].basis, kind);
+    }
 }
 
 #[test]
