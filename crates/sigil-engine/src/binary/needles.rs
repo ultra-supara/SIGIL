@@ -52,7 +52,7 @@ pub struct Needle {
     pub kind: NeedleKind,
     /// Not empty, at most [`MAX_NEEDLE`] bytes; for `go-function`, no NUL.
     pub value: Vec<u8>,
-    /// Where the name comes from (PR-4c-3a): not empty. Documentation only, never in a session.
+    /// Where the value comes from (PR-4c-3a): not blank. Documentation only, never in a session.
     pub source: String,
 }
 
@@ -129,7 +129,9 @@ pub fn parse(text: &str) -> Result<Needles, String> {
             ));
         }
         if n.source.trim().is_empty() {
-            return Err(format!("needles.toml: {feature}: a source is required"));
+            return Err(format!(
+                "needles.toml: {feature}: a source is required and not blank"
+            ));
         }
         let needle = Needle {
             feature,
@@ -211,6 +213,16 @@ mod tests {
             db.of(NeedleKind::String).is_empty(),
             "no string needle ships"
         );
+        // The three older needles' sources, exactly.
+        let sources: Vec<&str> = db.needles[..3].iter().map(|n| n.source.as_str()).collect();
+        assert_eq!(
+            sources,
+            [
+                "llama.cpp b9509 ggml/include/ggml-rpc.h: the RPC backend's functions, ggml_backend_rpc_*",
+                "Ollama v0.30.6 llm/llama_server.go: func SetupLlamaServerCommandEnv (plan \u{a7}0.4)",
+                "Ollama v0.30.6 package discover: func discoverNativeDevices (plan \u{a7}0.4)",
+            ]
+        );
         // Each go.* needle names the Go 1.25 source file and the function's declaration.
         for n in db
             .needles
@@ -218,13 +230,23 @@ mod tests {
             .filter(|n| n.feature.as_str().starts_with("go."))
         {
             let name = std::str::from_utf8(&n.value).unwrap();
-            let function = name.rsplit(['.', ')']).next().unwrap();
-            assert!(n.source.starts_with("Go 1.25 src/"), "{name}: {}", n.source);
+            let base = name.rfind('/').map_or(0, |i| i + 1);
+            let dot = base + name[base..].find('.').unwrap();
+            let (package, member) = (&name[..dot], &name[dot + 1..]);
+            let declaration = match member.strip_prefix("(*").and_then(|m| m.split_once(").")) {
+                Some((receiver, method)) => format!(" *{receiver}) {method}("),
+                None => format!(": func {member}("),
+            };
+            let file = n
+                .source
+                .strip_prefix(&format!("Go 1.25 src/{package}/"))
+                .unwrap_or_else(|| panic!("{name}: {}", n.source));
             assert!(
-                n.source.contains(&format!(" {function}(")),
+                !file.split(':').next().unwrap().contains('/'),
                 "{name}: {}",
                 n.source
             );
+            assert!(n.source.contains(&declaration), "{name}: {}", n.source);
         }
     }
 
@@ -313,7 +335,7 @@ mod tests {
                 one(&format!(
                     "feature = \"a.x\"\nkind = \"string\"\nvalue = \"v\"\nsource = \"{blank}\""
                 )),
-                Err("needles.toml: a.x: a source is required".to_string())
+                Err("needles.toml: a.x: a source is required and not blank".to_string())
             );
         }
         // A go-function value with a NUL: the scan puts the name between NULs itself. Another
