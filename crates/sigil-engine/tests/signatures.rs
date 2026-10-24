@@ -19,7 +19,8 @@ use sigil_engine::policy::Policy;
 use sigil_model::{
     binary_root, scan_over_gap, BinaryFacts, Completeness, CoverageState, FeatureHint,
     FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY, BINARY_IDENTITY,
-    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
+    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_GOPCLNTAB_HEADER,
+    SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
 };
 use tempfile::TempDir;
 
@@ -32,17 +33,30 @@ fn pclntab(len: usize) -> Vec<u8> {
 }
 
 /// A `.gopclntab` of `len` bytes with the launch needle at 0x100, and the discovery needle at
-/// `discover`.
+/// `discover`: a Go 1.20 header whose function-name table is `[0x48, len)` (PR-4c-3a plan review
+/// P2), and the names in it.
 fn pclntab_with(len: usize, discover: usize) -> Vec<u8> {
     let mut t = vec![0u8; len];
+    let header = go120_header(len as u64);
+    t[..header.len()].copy_from_slice(&header);
     for (at, name) in [
-        (0x10, "runtime.main"),
+        (0x60, "runtime.main"),
         (0x100, LAUNCH),
         (discover, DISCOVER),
     ] {
         t[at..at + name.len()].copy_from_slice(name.as_bytes());
     }
     t
+}
+
+/// A Go 1.20 `pcHeader` (little-endian, 8-byte pointers, 0x48 bytes) whose function-name table is
+/// `[0x48, names_end)`.
+fn go120_header(names_end: u64) -> Vec<u8> {
+    let mut header = vec![0xf1, 0xff, 0xff, 0xff, 0, 0, 1, 8];
+    for field in [1, 1, 0, 0x48, names_end, names_end, names_end, names_end] {
+        header.extend_from_slice(&u64::to_le_bytes(field));
+    }
+    header
 }
 
 /// An executable with `pclntab` as `.gopclntab` at 0x8000, and with `buildinfo` Go's build info
@@ -219,6 +233,29 @@ fn a_go_executable_without_a_gopclntab_section_is_partial() {
     let (_d, paths) = files(&[("ollama", &bytes)]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(s.binaries[0].go.is_none());
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR-4c-3a plan review P2: Go-function needles look only in `.gopclntab`'s function-name table,
+/// which its header locates. A header SIGIL does not read is a gap, and the needles were not
+/// looked for there; the session still validates.
+#[test]
+fn a_gopclntab_header_not_understood_is_partial() {
+    let mut t = pclntab(0x3000);
+    t[..4].copy_from_slice(&0xffff_fffbu32.to_le_bytes());
+    let (_d, paths) = files(&[("ollama", &go_elf(&t, true))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 1),
+        CoverageState::Partial {
+            missing: vec![SCAN_GOPCLNTAB_HEADER.to_string()]
+        }
+    );
+    // Without Go build info, no Go-function needle applies: the header is never read.
+    let (_d, paths) = files(&[("ollama", &go_elf(&t, false))]);
+    let s = inspect(&paths, NamedBudgets::default());
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
@@ -665,7 +702,8 @@ fn a_scan_over_its_budget_keeps_what_it_found_and_is_partial() {
         "ollama",
         &go_elf(&pclntab_with(2 * mib + 0x1000, mib + 0x100), true),
     )]);
-    let limit = mib as u64 + 100;
+    // The header (0x48 bytes) and the table's first read fit; its second read does not.
+    let limit = 0x48 + mib as u64 + 100;
     let s = inspect(
         &paths,
         NamedBudgets {
@@ -761,12 +799,13 @@ fn a_gopclntab_over_binary_scan_bytes_stops_at_the_limit() {
     let d = TempDir::new().unwrap();
     let path = d.path().join("ollama");
     std::fs::write(&path, &bytes).unwrap();
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_len(at + size)
-        .unwrap();
+    let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    f.set_len(at + size).unwrap();
+    // A header whose function-name table is the whole section, after it.
+    use std::io::{Seek, Write};
+    f.seek(std::io::SeekFrom::Start(at)).unwrap();
+    f.write_all(&go120_header(size)).unwrap();
+    drop(f);
     let s = inspect(&[path], NamedBudgets::default());
     assert!(signatures(&s).is_empty());
     assert_eq!(

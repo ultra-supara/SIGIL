@@ -18,7 +18,8 @@ pub const MAX_NEEDLE: usize = 4096;
 pub enum NeedleKind {
     /// A prefix of the name of an exported dynamic symbol.
     Export,
-    /// Exact bytes in `.gopclntab`, in an ELF file with Go build info.
+    /// An exact function name in `.gopclntab`'s function-name table, which the section's header
+    /// locates (PR-4c-3a), in an ELF file with Go build info.
     GoFunction,
     /// Exact bytes in `.rodata`, `.rodata.*`, or `.lrodata`.
     String,
@@ -66,14 +67,17 @@ impl Needles {
         self.needles.iter().filter(|n| n.kind == kind).collect()
     }
 
-    /// The bytes two consecutive chunks of a scan for `kind` share: one less than its longest
-    /// needle, so that a needle across their boundary is in one of them whole. 0 without one.
+    /// The bytes two consecutive chunks of a scan for `kind` share, so that a match across their
+    /// boundary is in one of them whole: one less than its longest needle, or for `go-function`
+    /// the longest needle, since a match is the name and the NUL after it (PR-4c-3a). 0 without
+    /// one.
     pub fn overlap(&self, kind: NeedleKind) -> u64 {
-        self.of(kind)
-            .iter()
-            .map(|n| n.value.len() as u64)
-            .max()
-            .map_or(0, |longest| longest.saturating_sub(1))
+        let longest = self.of(kind).iter().map(|n| n.value.len() as u64).max();
+        match (kind, longest) {
+            (_, None) => 0,
+            (NeedleKind::GoFunction, Some(longest)) => longest,
+            (_, Some(longest)) => longest.saturating_sub(1),
+        }
     }
 }
 
@@ -199,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn the_overlap_is_the_longest_needle_of_the_kind_minus_one() {
+    fn the_overlap_holds_the_longest_match_of_the_kind() {
         let db = parse(
             "[[needle]]\nfeature = \"a.x\"\nkind = \"string\"\nvalue = \"abcd\"\n\
              [[needle]]\nfeature = \"a.y\"\nkind = \"string\"\nvalue = \"abcdefghi\"\n\
@@ -207,12 +211,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.overlap(NeedleKind::String), 8);
-        assert_eq!(db.overlap(NeedleKind::GoFunction), 19);
+        // A Go function's match is its name and the NUL after it.
+        assert_eq!(db.overlap(NeedleKind::GoFunction), 20);
         assert_eq!(db.overlap(NeedleKind::Export), 0);
         let embedded = needles().unwrap();
         assert_eq!(
             embedded.overlap(NeedleKind::GoFunction),
-            "github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv".len() as u64 - 1
+            "github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv".len() as u64
         );
     }
 

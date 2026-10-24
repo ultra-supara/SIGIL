@@ -55,6 +55,11 @@ pub const SCAN_READ_FAILED: &str = "string scan: a read failed";
 /// A scan gap: the file has Go build info, so its Go-function needles apply, and none of its
 /// sections, every name read, is `.gopclntab`: they were looked for nowhere (PR #97 review P2).
 pub const SCAN_NO_GOPCLNTAB: &str = "string scan: no .gopclntab section";
+/// A scan gap: the file has Go build info and a `.gopclntab`, but the section's header is not
+/// one of the layouts SIGIL reads (Go 1.16, and Go 1.18 and later), or locates no function-name
+/// table within the section: the Go-function needles, which look only in that table, were not
+/// looked for there (PR-4c-3a plan review P2).
+pub const SCAN_GOPCLNTAB_HEADER: &str = "string scan: .gopclntab header not understood";
 
 /// `binary.identity`'s `Unsupported` reason for a Mach-O input, and the gap of a Mach-O artifact
 /// in `artifacts.identity`: SIGIL reads no Mach-O section yet.
@@ -84,6 +89,7 @@ pub fn is_scan_gap(gap: &str, limit: u64) -> bool {
     [
         SCAN_NO_SECTIONS,
         SCAN_NO_GOPCLNTAB,
+        SCAN_GOPCLNTAB_HEADER,
         SCAN_NAME_NOT_READ,
         SCAN_READ_FAILED,
     ]
@@ -379,11 +385,11 @@ pub enum ExpectedIdentity {
     /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says, and
     /// [`SCAN_NAME_NOT_READ`] among them when `exports_unread`: a linked ELF whose facts carry one
     /// of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required.
-    /// [`SCAN_NO_GOPCLNTAB`] only when `no_gopclntab_admitted`: a slice is a Go ELF whose section
-    /// header table was read. The model sees no section names, so it admits the gap there, and
-    /// `Complete` too. Also `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when
-    /// `name_and_hash_only`: a claim on a slice of the input names one of
-    /// [`NAME_AND_HASH_ONLY`].
+    /// [`SCAN_NO_GOPCLNTAB`] and [`SCAN_GOPCLNTAB_HEADER`] only when `no_gopclntab_admitted`: a
+    /// slice is a Go ELF whose section header table was read. The model sees no section names or
+    /// bytes, so it admits the gaps there, and `Complete` too. Also `OutOfScope {`
+    /// [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a slice of the input
+    /// names one of [`NAME_AND_HASH_ONLY`].
     ///
     /// The engine excludes a file by its placement's own file name (ADR-010), and scans one whose
     /// SONAME alone is NVIDIA's. The model has no name database, so it cannot tell the two
@@ -443,9 +449,10 @@ pub(crate) fn exports_unread(b: &BinaryFacts, kind: ElfType) -> bool {
             .any(|g| DYNSYM_UNREAD_GAPS.contains(&g.as_str()))
 }
 
-/// Whether `b`, a slice's facts, admit the scan's gap [`SCAN_NO_GOPCLNTAB`]: a Go ELF (its
-/// Go-function needles apply) whose section header table was read (`stripped` is set; B8), so
-/// that the scan could find no section named `.gopclntab`.
+/// Whether `b`, a slice's facts, admit the scan's gaps [`SCAN_NO_GOPCLNTAB`] and
+/// [`SCAN_GOPCLNTAB_HEADER`]: a Go ELF (its Go-function needles apply) whose section header table
+/// was read (`stripped` is set; B8), so that the scan could find no section named `.gopclntab`,
+/// or one whose header it does not read.
 pub(crate) fn no_gopclntab_admitted(b: &BinaryFacts) -> bool {
     b.go.is_some() && matches!(&b.container, ContainerFacts::Elf(elf) if elf.stripped.is_some())
 }
@@ -530,7 +537,9 @@ impl ExpectedIdentity {
                             }
                             && (!*exports_unread || missing.iter().any(|g| g == SCAN_NAME_NOT_READ))
                             && (*no_gopclntab_admitted
-                                || !missing.iter().any(|g| g == SCAN_NO_GOPCLNTAB))
+                                || !missing
+                                    .iter()
+                                    .any(|g| g == SCAN_NO_GOPCLNTAB || g == SCAN_GOPCLNTAB_HEADER))
                     }
                     CoverageState::OutOfScope { why } => {
                         *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY && !*any_returns
@@ -559,6 +568,7 @@ impl ExpectedIdentity {
                 }
                 if !*no_gopclntab_admitted {
                     refused.push(format!("{SCAN_NO_GOPCLNTAB:?}"));
+                    refused.push(format!("{SCAN_GOPCLNTAB_HEADER:?}"));
                 }
                 if !refused.is_empty() {
                     gaps.push_str(&format!(" other than {}", refused.join(" and ")));

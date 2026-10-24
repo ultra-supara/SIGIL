@@ -318,12 +318,18 @@ fn binary_code_inspection_reads_only_its_inputs() {
 }
 
 /// A Go executable as SIGIL reads one: Go's build info in `.go.buildinfo` (the engine's fixture
-/// `go/go-amd64.buildinfo`) at 0x4000, and a 12 KiB `.gopclntab` at 0x8000 that holds both
+/// `go/go-amd64.buildinfo`) at 0x4000, and a 12 KiB `.gopclntab` at 0x8000: a Go 1.20 header whose
+/// function-name table is the rest of the section (PR-4c-3a plan review P2), holding both
 /// Go-function needles. Never run.
 fn go_executable() -> Vec<u8> {
     use crate::elf::{ElfImage, PF_R, PF_W, PT_LOAD, SHT_PROGBITS};
     let piece = include_bytes!("../../../sigil-engine/tests/fixtures/go/go-amd64.buildinfo");
     let mut pclntab = vec![0u8; 0x3000];
+    let mut header = vec![0xf1, 0xff, 0xff, 0xff, 0, 0, 1, 8];
+    for field in [1u64, 1, 0, 0x48, 0x3000, 0x3000, 0x3000, 0x3000] {
+        header.extend_from_slice(&field.to_le_bytes());
+    }
+    pclntab[..header.len()].copy_from_slice(&header);
     for (at, name) in [
         (
             0x100,
@@ -399,13 +405,16 @@ fn binary_signature_scan_reads_with_pread_only() {
     assert_never_opened_under(&r, &fx.target.join("private"));
     assert_opened_only(&r, &fx.target, &[&input]);
     let on_input = input_reads(&r, &input);
-    // The section, 12288 bytes at 0x8000 (32768), in one pread.
-    assert!(
-        has_pread(&on_input, 12288, 32768),
-        "case `{}`: no pread64 of .gopclntab (trace: {})",
-        r.case,
-        r.trace_dir.display()
-    );
+    // The section's header, 72 bytes at 0x8000 (32768), then its function-name table, the 12216
+    // bytes after it (at 32840), each in one pread.
+    for (len, at) in [(72, 32768), (12216, 32840)] {
+        assert!(
+            has_pread(&on_input, len, at),
+            "case `{}`: no pread64 of {len} bytes at {at} (trace: {})",
+            r.case,
+            r.trace_dir.display()
+        );
+    }
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
 }
 

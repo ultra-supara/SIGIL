@@ -158,6 +158,7 @@ fn the_scan_gaps_are_the_scan_s_own() {
     for gap in [
         SCAN_NO_SECTIONS,
         SCAN_NO_GOPCLNTAB,
+        SCAN_GOPCLNTAB_HEADER,
         SCAN_NAME_NOT_READ,
         SCAN_READ_FAILED,
     ] {
@@ -412,13 +413,21 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
             CoverageState::Complete,
             partial(&[SCAN_NO_GOPCLNTAB]),
             partial(&[SCAN_READ_FAILED, SCAN_NO_GOPCLNTAB]),
+            // PR-4c-3a plan review P2: a `.gopclntab` whose header is not understood.
+            partial(&[SCAN_GOPCLNTAB_HEADER]),
+            partial(&[SCAN_GOPCLNTAB_HEADER, SCAN_READ_FAILED]),
         ] {
             assert_eq!(admits(&go, &state), Ok(()), "{state:?}");
         }
         for e in [&e, &may] {
             assert!(admits(e, &partial(&[SCAN_NO_GOPCLNTAB])).is_err(), "{e:?}");
+            assert!(
+                admits(e, &partial(&[SCAN_GOPCLNTAB_HEADER])).is_err(),
+                "{e:?}"
+            );
         }
         assert!(admits(&must, &partial(&[SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS])).is_err());
+        assert!(admits(&must, &partial(&[SCAN_GOPCLNTAB_HEADER, SCAN_NO_SECTIONS])).is_err());
     }
     assert_eq!(
         admits(&scanned(true, NoSectionsGap::Never), &out_of_scope()),
@@ -427,13 +436,13 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
     assert_eq!(
         admits(&scanned(false, NoSectionsGap::Never), &out_of_scope()),
         Err(format!(
-            "binary.identity is out of scope: {NAME_AND_HASH_ONLY_WHY}, but the input implies complete, or partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) other than {SCAN_NO_SECTIONS:?} and {SCAN_NO_GOPCLNTAB:?}"
+            "binary.identity is out of scope: {NAME_AND_HASH_ONLY_WHY}, but the input implies complete, or partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) other than {SCAN_NO_SECTIONS:?} and {SCAN_NO_GOPCLNTAB:?} and {SCAN_GOPCLNTAB_HEADER:?}"
         ))
     );
     assert_eq!(
         admits(&scanned(true, NoSectionsGap::Must), &CoverageState::Complete),
         Err(format!(
-            "binary.identity is complete, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} other than {SCAN_NO_GOPCLNTAB:?}, or out of scope (ADR-010)"
+            "binary.identity is complete, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} other than {SCAN_NO_GOPCLNTAB:?} and {SCAN_GOPCLNTAB_HEADER:?}, or out of scope (ADR-010)"
         ))
     );
     let both = ExpectedIdentity::Scanned {
@@ -448,7 +457,7 @@ fn a_scanned_input_admits_complete_scan_gaps_and_for_nvidia_out_of_scope() {
     assert_eq!(
         admits(&both, &partial(&[SCAN_NO_SECTIONS])),
         Err(format!(
-            "binary.identity is partial: {SCAN_NO_SECTIONS}, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} and {SCAN_NAME_NOT_READ:?} other than {SCAN_NO_GOPCLNTAB:?}"
+            "binary.identity is partial: {SCAN_NO_SECTIONS}, but the input implies partial with sorted, unique scan gaps ({BINARY_SCAN_BYTES} {LIMIT}) among them {SCAN_NO_SECTIONS:?} and {SCAN_NAME_NOT_READ:?} other than {SCAN_NO_GOPCLNTAB:?} and {SCAN_GOPCLNTAB_HEADER:?}"
         ))
     );
     assert_eq!(
@@ -592,6 +601,14 @@ fn s1_an_input_has_at_most_one_entry_in_a_state_it_implies() {
     let t = with_identity(elf_session(), partial(&[SCAN_NO_GOPCLNTAB]));
     assert_eq!(identity_errors(&t).len(), 1, "{:?}", input_errors(&t));
     assert!(identity_errors(&t)[0].contains(SCAN_NO_GOPCLNTAB));
+    // Its `.gopclntab` header may not be understood (PR-4c-3a plan review P2); no other ELF's.
+    let mut go = elf_session();
+    go.binaries[0].go = Some(go_info());
+    let t = with_identity(go, partial(&[SCAN_GOPCLNTAB_HEADER]));
+    assert_eq!(input_errors(&t), Vec::<String>::new());
+    let t = with_identity(elf_session(), partial(&[SCAN_GOPCLNTAB_HEADER]));
+    assert_eq!(identity_errors(&t).len(), 1, "{:?}", input_errors(&t));
+    assert!(identity_errors(&t)[0].contains(SCAN_GOPCLNTAB_HEADER));
     // An ELF without slices was not parsed.
     let mut t = elf_session();
     t.artifacts[0].slices.clear();
