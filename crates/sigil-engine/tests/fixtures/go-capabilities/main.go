@@ -23,6 +23,7 @@ func main() {
 
 // recorded's code is recorded under a file named like a mapped function (PR-4c-3a plan review
 // P2): that name is in .gopclntab's file table, not in its function-name table, and gives no hint.
+// main calls it because the linker drops an unreachable function, and its file name with it.
 //
 //line syscall.Exec:1
 func recorded() int { return len(os.Args) - 1 }
