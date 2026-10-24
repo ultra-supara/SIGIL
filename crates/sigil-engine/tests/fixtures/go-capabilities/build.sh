@@ -4,7 +4,8 @@
 # linux/amd64. Only its .gopclntab and .go.buildinfo section bytes, `go version -m`, and their
 # SHA-256s are committed. The tests never run go or the program. Go 1.25.6 gives the committed
 # bytes (the build is reproducible: -trimpath, no VCS stamp, no cgo; the caller's GOAMD64,
-# GOFLAGS, and GOEXPERIMENT are pinned below, and GOTOOLCHAIN is fixed).
+# GOFLAGS, and GOEXPERIMENT are pinned below, also against `go env -w`, because GOENV is off, and
+# GOTOOLCHAIN is fixed).
 #
 # The tests pin offsets in these bytes (tests/signatures.rs). After changing main.go, re-read them,
 # and keep syscall.Exec out of the function-name table: it must stay only a file name there.
@@ -19,7 +20,7 @@ trap 'exit 1' HUP INT TERM
 
 fail() { echo "build.sh: $*" >&2; exit 1; }
 
-export GOTOOLCHAIN=go1.25.6
+export GOENV=off GOTOOLCHAIN=go1.25.6
 v=$(go env GOVERSION) || fail "go env GOVERSION failed"
 [ "$v" = go1.25.6 ] || fail "needs go1.25.6, found $v"
 GOOS=linux GOARCH=amd64 GOAMD64=v1 GOFLAGS= GOEXPERIMENT= CGO_ENABLED=0 \

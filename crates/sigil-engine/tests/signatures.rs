@@ -233,8 +233,9 @@ fn go_hint(feature: &str, value: &str, offset: u64) -> (String, Signal, String, 
 #[test]
 fn a_real_go_build_gives_its_capability_hints() {
     // The `//line syscall.Exec:1` coverage rests on these bytes: the exact entry `\0syscall.Exec\0`
-    // is in the file table, past `cuOffset` (the end of the function-name table). If a rebuild moved
-    // `syscall.Exec` into the function-name table, this test would stop proving the plan-review fix.
+    // is in the file table, past `cuOffset` (the end of the function-name table). If a rebuild
+    // moved `syscall.Exec` into the function-name table, this test would stop proving the
+    // plan-review fix.
     let pcln = fixture("go-capabilities/capabilities.gopclntab");
     assert_eq!(&pcln[0x1f100..0x1f10e], b"\0syscall.Exec\0");
     // Go 1.20 header, little-endian, 8-byte fields: the fifth pointer-size field is cuOffset.

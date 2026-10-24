@@ -218,8 +218,8 @@ The database's needles each name their source (`source`, required):
 - `ollama.llama_server_launch` and `ollama.device_discovery`: Ollama's Go functions
   `github.com/ollama/ollama/llm.SetupLlamaServerCommandEnv` and
   `github.com/ollama/ollama/discover.discoverNativeDevices`;
-- the Go standard library's capabilities (PR-4c-3a): exported functions of the Go standard
-  library, one capability each, from the Go 1.25 sources:
+- the Go standard library's capabilities (PR-4c-3a): exported functions, one capability each,
+  from the Go 1.25 sources:
 
   | Feature | Functions |
   |---|---|
