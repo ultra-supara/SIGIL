@@ -267,26 +267,37 @@ fn add_commits(releases: &mut [RefRelease], text: &str) -> Result<(), String> {
 
 /// Whether `s`'s reference rows are exactly what `set` gives for its placements (PR-4a §3.3).
 ///
-/// - The session names this set (its `KnowledgeRef` SHA-256).
+/// - The session names this set ([`names`]: its `KnowledgeRef` id and SHA-256).
 /// - For **every release of the set**, whether or not the session has rows for it, every file,
 ///   symlink, and directory member has exactly one row when a placement is at its path, an
 ///   `Absent` row when there is none and discovery is complete, and no row otherwise.
 /// - Every row's expected value is the set's, and every row names a release and member of it.
+/// - A session that names the set has no row of another reference (PR-4c-2c: a closed claim
+///   against another set then has no rows, and `validate` refuses its candidates).
 ///
 /// `Session::validate` checks the rest (observed values against placements, the claim against
 /// the rows, and coverage). A session that neither names the set nor has rows for it passes.
+/// The set's SHA-256 under another id is an error ([`names`]).
 pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
     use sigil_model::{CoverageState, MemberResult, ARTIFACTS_DISCOVERY, INSTALL_ROOT};
-    let named = s.knowledge.iter().any(|k| {
-        k.kind == KnowledgeKind::ReferenceManifest
-            && k.id == set.id.as_str()
-            && k.sha256 == set.sha256
-    });
+    let named = names(s, set).map_err(|e| vec![e])?;
     let mine = |r: &&sigil_model::ReferenceMatch| r.reference == set.id;
     if !named && !s.reference_matches.iter().any(|r| mine(&r)) {
         return Ok(());
     }
     let mut errors = vec![];
+    if named {
+        let mut others: Vec<String> = vec![];
+        for r in s.reference_matches.iter().filter(|r| r.reference != set.id) {
+            let other = r.reference.to_string();
+            if !others.contains(&other) {
+                others.push(other);
+            }
+        }
+        for other in others {
+            errors.push(format!("a row names reference set {other}, not {}", set.id));
+        }
+    }
     if !named {
         errors.push(format!(
             "the session does not name reference set {} with SHA-256 {}",
@@ -384,60 +395,101 @@ pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Resul
     }
 }
 
-/// Whether `s`'s open release claims are the ones the engine derives (PR-4c-2c). For a session
-/// that names `set`, its claims with the basis `SelfReportedCommit`, of any product, are exactly
-/// what the engine makes: none beside a claim by reference matches for `ollama`, otherwise
-/// [`crate::analyze::release::open`] of its component claims (none when that gives none; plan
-/// review P2). `validate` cannot check this: the commit data and the fields' roles are the
-/// engine's. A session that does not name the set passes; V12 requires an open claim to name one.
+/// Whether `s` names `set` as a reference set it was made with (PR-4c-2c).
+///
+/// - `Ok(true)`: some `ReferenceManifest` knowledge entry has the set's id and SHA-256.
+/// - `Err`: some entry has the set's SHA-256 under another id. An honest SIGIL never writes
+///   this, so the verifiers fail closed instead of skipping the session.
+/// - `Ok(false)`: otherwise, including the set's id with another SHA-256, which is a session
+///   made with an older version of the set.
+pub fn names(s: &sigil_model::Session, set: &RefSet) -> Result<bool, String> {
+    let mut named = false;
+    for k in s
+        .knowledge
+        .iter()
+        .filter(|k| k.kind == KnowledgeKind::ReferenceManifest && k.sha256 == set.sha256)
+    {
+        if k.id != set.id.as_str() {
+            return Err(format!(
+                "the session names the embedded reference set's SHA-256 {} under the id {}, not {}",
+                set.sha256, k.id, set.id
+            ));
+        }
+        named = true;
+    }
+    Ok(named)
+}
+
+/// Whether `s`'s open release claims are the ones the engine derives (PR-4c-2c).
+///
+/// This runs only for a session that names `set` ([`names`]; one that does not is made with
+/// another set or another version of it, and is noted by the CLI instead). A closed claim is a
+/// `ReferenceMatches` claim for `ollama` that rests on this set. The session's claims with the
+/// basis `SelfReportedCommit`, of any product, must then be exactly what the engine makes (plan
+/// review P2): none beside a closed claim, otherwise [`crate::analyze::release::open`] of the
+/// component claims derived from the session's binary facts (not `s.components`, which
+/// `validate` does not tie to them), or none when that gives none. Both sides are compared in
+/// canonical order. `validate` cannot check this: the commit data and the fields' roles are the
+/// engine's. V12 requires some `ReferenceManifest` in a session with an open claim.
 pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
-    use sigil_model::ReleaseBasis;
-    let named = s.knowledge.iter().any(|k| {
-        k.kind == KnowledgeKind::ReferenceManifest
-            && k.id == set.id.as_str()
-            && k.sha256 == set.sha256
-    });
-    if !named {
+    use sigil_model::{ReleaseBasis, ReleaseClaim};
+    if !names(s, set).map_err(|e| vec![e])? {
         return Ok(());
     }
     let closed = s.releases.iter().any(|c| {
-        c.product.as_str() == "ollama" && matches!(c.basis, ReleaseBasis::ReferenceMatches { .. })
+        c.product.as_str() == "ollama"
+            && matches!(&c.basis, ReleaseBasis::ReferenceMatches { reference, .. }
+                if *reference == set.id)
     });
-    let derived = if closed {
-        None
+    let mut derived: Vec<ReleaseClaim> = if closed {
+        vec![]
     } else {
-        crate::analyze::release::open(&s.components, set).map_err(|e| vec![e])?
+        let components =
+            crate::analyze::identity::derive(&s.instances, &s.binaries, &s.reference_matches)
+                .map_err(|e| vec![e])?;
+        crate::analyze::release::open(&components, set)
+            .map_err(|e| vec![e])?
+            .into_iter()
+            .collect()
     };
-    let derived: Vec<&sigil_model::ReleaseClaim> = derived.iter().collect();
-    let recorded: Vec<&sigil_model::ReleaseClaim> = s
+    let mut recorded: Vec<ReleaseClaim> = s
         .releases
         .iter()
         .filter(|c| matches!(c.basis, ReleaseBasis::SelfReportedCommit { .. }))
+        .cloned()
         .collect();
+    for c in derived.iter_mut().chain(recorded.iter_mut()) {
+        c.canonicalize();
+    }
     if recorded == derived {
         return Ok(());
     }
-    let shown = |claims: &[&sigil_model::ReleaseClaim]| -> String {
+    let shown = |claims: &[ReleaseClaim]| -> String {
         if claims.is_empty() {
             return "none".to_string();
         }
         let each: Vec<String> = claims
             .iter()
-            .map(|c| match &c.basis {
-                ReleaseBasis::SelfReportedCommit { commits } => {
-                    let n = commits.len();
-                    let noun = if n == 1 { "commit" } else { "commits" };
-                    format!("{} {:?} from {n} {noun}", c.product, c.candidates)
-                }
-                ReleaseBasis::ReferenceMatches { .. } => {
-                    format!("{} {:?}", c.product, c.candidates)
-                }
+            .filter_map(|c| {
+                let ReleaseBasis::SelfReportedCommit { commits } = &c.basis else {
+                    return None;
+                };
+                let commits: Vec<String> = commits
+                    .iter()
+                    .map(|x| format!("{} {}", x.field, x.value.terminal_line()))
+                    .collect();
+                Some(format!(
+                    "{} {:?} from {}",
+                    c.product,
+                    c.candidates,
+                    commits.join(", ")
+                ))
             })
             .collect();
         each.join("; ")
     };
     Err(vec![format!(
-        "the open release claims are {}, but the claims and the set give {}",
+        "the open release claims are {}, but the component claims and the set's commit data give {}",
         shown(&recorded),
         shown(&derived)
     )])

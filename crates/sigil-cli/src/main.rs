@@ -1206,25 +1206,19 @@ fn release_line(s: &Session) -> Option<String> {
 
 // --- session render, explain, rules -----------------------------------------------------------
 
-/// Re-verifies the reference rows and the open release claim of a saved session that names the
+/// Re-verifies the reference rows and the open release claims of a saved session that names the
 /// embedded set: `validate` cannot re-derive them (PR-4a §3.3, PR-4c-2c). A session made with
-/// another set is noted on stderr.
+/// another set (or another version of it) is noted on stderr; one that has the embedded set's
+/// SHA-256 under another id is refused.
 fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
-    let refs: Vec<_> = session
+    if !session
         .knowledge
         .iter()
-        .filter(|k| k.kind == KnowledgeKind::ReferenceManifest)
-        .collect();
-    if refs.is_empty() {
+        .any(|k| k.kind == KnowledgeKind::ReferenceManifest)
+    {
         return Ok(());
     }
     let set = reference::official().map_err(|e| Failure::Run(format!("the embedded set: {e}")))?;
-    if !refs.iter().any(|k| k.sha256 == set.sha256) {
-        eprintln!(
-            "note: reference matches were made with another reference set and are not re-verified"
-        );
-        return Ok(());
-    }
     let failure = |what: &str, errors: Vec<String>| {
         let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
         let more = match errors.len().saturating_sub(5) {
@@ -1237,11 +1231,19 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
             first.join("; ")
         ))
     };
+    if !reference::names(session, set)
+        .map_err(|e| failure("the session's reference knowledge disagrees with", vec![e]))?
+    {
+        eprintln!(
+            "note: reference matches and open release claims were made with another reference set and are not re-verified"
+        );
+        return Ok(());
+    }
     reference::verify_reference_matches(session, set)
         .map_err(|e| failure("the session's reference matches disagree with", e))?;
-    // PR-4c-2c: an open release claim is recomputed from the claims and the set's commit data.
+    // PR-4c-2c: an open release claim is recomputed from the binary facts and the set's data.
     reference::verify_release_claims(session, set)
-        .map_err(|e| failure("the session's open release claim disagrees with", e))
+        .map_err(|e| failure("the session's open release claims disagree with", e))
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {

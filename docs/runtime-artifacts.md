@@ -68,7 +68,9 @@ separate questions:
 - **In the session.** A session that compared names the set in `knowledge`:
   `KnowledgeRef { kind: ReferenceManifest, id: "ollama-official", version: "2026-10-24", sha256 }`.
   The SHA-256 covers the embedded files, `commits.toml` included. A session saved with an earlier
-  version of the set is not re-verified by `sigil session render` and `sigil explain`, which say so.
+  version of the set is not re-verified by `sigil session render` and `sigil explain`, which say
+  so ("note: reference matches and open release claims were made with another reference set and
+  are not re-verified"). The embedded set's SHA-256 under another id is refused (exit 1).
 - **What a match is.** A match is a comparison with the contents of the official archives. **It is
   not a signature check**, and it does not show who built the files.
 - **Adding a release.** [`scripts/refmanifest/`](../scripts/refmanifest/README.md) describes it: a
@@ -184,12 +186,18 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
   - every member has exactly one row when a placement is at its path, an `Absent` row when there
     is none and discovery is complete, and no row otherwise;
   - every expected value is the set's;
-  - the session names the set by its SHA-256.
+  - the session names the set by its id and SHA-256;
+  - no row names another reference set.
 
   `verify_release_claims` (PR-4c-2c) recomputes the open claims of a session that names the set,
-  of any product: there is none beside a closed claim, and otherwise exactly the one its component
-  claims and the set's commit data give, or none when they give none. `validate` requires an open
-  claim's session to name a reference set (V12), so none escapes the verifier by naming none.
+  of any product: there is none beside a closed claim (a claim by reference matches for `ollama`
+  that rests on this set), and otherwise exactly the one the set's commit data gives for the
+  component claims derived from the session's binary facts, or none when they give none. The
+  comparison is up to canonical order. `validate` requires an open claim's session to have some
+  reference set in `knowledge` (V12), so none escapes the verifier by naming none. A session that
+  names another set (or another version of this one) is rendered with a note instead, and one
+  with the embedded set's SHA-256 under another id is refused. A session that names the set has
+  no reference row of another set.
 
 | Where | `validate` | Verifier |
 |---|---|---|

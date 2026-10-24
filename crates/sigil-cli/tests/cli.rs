@@ -1526,7 +1526,33 @@ fn a_saved_open_release_claim_is_reverified_by_render() {
     assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(
         r.stderr
-            .contains("open release claim disagrees with the embedded reference set"),
+            .contains("open release claims disagree with the embedded reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn the_embedded_set_under_another_id_is_refused_by_render() {
+    let models = store(true);
+    let install = install_tree_with_a_commit();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    // The set renamed in the knowledge entry, the rows, and the claims.
+    let text = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"ollama-official\"", "\"x\"");
+    assert!(!text.contains("ollama-official"));
+    fs::write(&path, text).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("reference knowledge disagrees with"),
         "{}",
         r.stderr
     );
