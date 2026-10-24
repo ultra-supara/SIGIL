@@ -1,6 +1,7 @@
 //! Reference manifests: the per-member contents of official release archives (plan §0.5.1,
 //! §4.4.2; PR-4a). Embedded unchanged as produced in PR-0 (`scripts/refmanifest/`). A match is a
-//! comparison with those archives' contents, not a signature check.
+//! comparison with those archives' contents, not a signature check. With them, `commits.toml`:
+//! what each release's own files report (PR-4c-2c).
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -26,6 +27,18 @@ pub struct RefRelease {
     pub tag: String,
     /// By archive path.
     pub members: BTreeMap<String, RefMember>,
+    /// What the release's own files report, from `commits.toml` (PR-4c-2c). Empty without an
+    /// entry: such a release is never a candidate of an open claim.
+    pub commits: Vec<RefCommit>,
+}
+
+/// The value one of a release's files reports for an embedded field (PR-4c-2c): SIGIL reads
+/// `value` for `field` from the release's member `member`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefCommit {
+    pub field: String,
+    pub member: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,13 +83,17 @@ const OFFICIAL: &[(&str, &str)] = &[
         "ollama-v0.30.7-linux-amd64.json",
         include_str!("../refs/ollama-official/ollama-v0.30.7-linux-amd64.json"),
     ),
+    (
+        "commits.toml",
+        include_str!("../refs/ollama-official/commits.toml"),
+    ),
 ];
 
 /// The official Ollama release manifests embedded in this build. An error only if the embedded
 /// files are malformed, which `tests/refset.rs` rules out.
 pub fn official() -> Result<&'static RefSet, String> {
     static SET: OnceLock<Result<RefSet, String>> = OnceLock::new();
-    SET.get_or_init(|| parse_set("ollama-official", "2026-10-07", OFFICIAL))
+    SET.get_or_init(|| parse_set("ollama-official", "2026-10-24", OFFICIAL))
         .as_ref()
         .map_err(Clone::clone)
 }
@@ -100,19 +117,53 @@ struct RawEntry {
     link: Option<String>,
 }
 
-/// Parses manifest files into a set. Every entry must be a well-formed file, symlink, or
-/// directory with a relative, normalized name, listed once.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCommits {
+    release: Vec<RawReleaseCommits>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawReleaseCommits {
+    tag: String,
+    commits: Vec<RawCommit>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCommit {
+    field: String,
+    member: String,
+    value: String,
+}
+
+/// The name of the commit data among a set's files (PR-4c-2c).
+pub const COMMITS: &str = "commits.toml";
+
+/// Parses a set's files: manifests (`*.json`) and, optionally, [`COMMITS`]. Every entry must be a
+/// well-formed file, symlink, or directory with a relative, normalized name, listed once. Every
+/// commit names a release of the set once, a file of that release, a field once per release, and
+/// a value of 7 to 40 lowercase hex digits.
 pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefSet, String> {
     let mut sorted: Vec<&(&str, &str)> = files.iter().collect();
     sorted.sort_by_key(|(name, _)| *name);
     let mut hasher = Sha256::new();
     let mut releases = vec![];
+    let mut commits = None;
     for (name, text) in sorted {
         hasher.update(name.as_bytes());
         hasher.update([0]);
         hasher.update(text.len().to_string().as_bytes());
         hasher.update([0]);
         hasher.update(text.as_bytes());
+        if *name == COMMITS {
+            commits = Some(*text);
+            continue;
+        }
+        if !name.ends_with(".json") {
+            return Err(format!("{name}: neither a manifest (.json) nor {COMMITS}"));
+        }
         let raw: RawManifest = serde_json::from_str(text).map_err(|e| format!("{name}: {e}"))?;
         let mut members = BTreeMap::new();
         for e in raw.entries {
@@ -151,7 +202,11 @@ pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefS
         releases.push(RefRelease {
             tag: raw.tag,
             members,
+            commits: vec![],
         });
+    }
+    if let Some(text) = commits {
+        add_commits(&mut releases, text)?;
     }
     Ok(RefSet {
         id: RefSetId::new(id).map_err(|e| e.to_string())?,
@@ -159,6 +214,48 @@ pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefS
         sha256: Sha256Hex::new(format!("{:x}", hasher.finalize())).map_err(|e| e.to_string())?,
         releases,
     })
+}
+
+/// Adds [`COMMITS`] to the releases it names.
+fn add_commits(releases: &mut [RefRelease], text: &str) -> Result<(), String> {
+    let raw: RawCommits = toml::from_str(text).map_err(|e| format!("{COMMITS}: {e}"))?;
+    for entry in raw.release {
+        let tag = entry.tag;
+        let release = releases
+            .iter_mut()
+            .find(|r| r.tag == tag)
+            .ok_or_else(|| format!("{COMMITS}: release {tag} is not in the set"))?;
+        if !release.commits.is_empty() {
+            return Err(format!("{COMMITS}: release {tag} is listed twice"));
+        }
+        if entry.commits.is_empty() {
+            return Err(format!("{COMMITS}: release {tag} lists no commit"));
+        }
+        for c in entry.commits {
+            let at = format!("{COMMITS}: {tag} {}", c.field);
+            if c.field.is_empty() || !c.field.bytes().all(|b| b.is_ascii_graphic()) {
+                return Err(format!("{at}: the field is not ASCII graphic text"));
+            }
+            if release.commits.iter().any(|x| x.field == c.field) {
+                return Err(format!("{at}: the field is listed twice"));
+            }
+            if !matches!(release.members.get(&c.member), Some(RefMember::File { .. })) {
+                return Err(format!("{at}: {} is not a file of the release", c.member));
+            }
+            if !sigil_model::is_commit(c.value.as_bytes()) {
+                return Err(format!(
+                    "{at}: {:?} is not 7 to 40 lowercase hex digits",
+                    c.value
+                ));
+            }
+            release.commits.push(RefCommit {
+                field: c.field,
+                member: c.member,
+                value: c.value,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Whether `s`'s reference rows are exactly what `set` gives for its placements (PR-4a §3.3).

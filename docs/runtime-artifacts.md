@@ -51,19 +51,28 @@ separate questions:
 
 | Set | Releases | Members per release |
 |---|---|---|
-| `ollama-official`, version `2026-10-07` | v0.30.5, v0.30.6, v0.30.7 (linux-amd64) | 34 files, 17 symlinks, 3 directories |
+| `ollama-official`, version `2026-10-24` | v0.30.5, v0.30.6, v0.30.7 (linux-amd64) | 34 files, 17 symlinks, 3 directories |
 
 - **Where it comes from.** Each official archive was streamed, without extraction, in PR-0, and
   its SHA-256 equals the digest published with the release. Every member was recorded with its type
   and mode, a file with its size and SHA-256, and a symlink with its target. The files are embedded
   unchanged (`crates/sigil-engine/refs/ollama-official/`).
+- **What each release reports (PR-4c-2c).** `commits.toml` lists, for each release, the value one
+  of its files reports for an embedded commit field: `LLAMA_COMMIT` of
+  `lib/ollama/libllama-common.so.0.0.1` and `ggml_commit()` of `lib/ollama/libggml-base.so.0.13.1`,
+  `6f3a9f3de` in all three releases. Each member's SHA-256 is in the release's manifest, and SIGIL
+  read these values from files with those SHA-256s (the official v0.30.6 install): the two members
+  are byte-identical in the three releases. An open release claim compares an install's commits
+  with these values.
 - **In the session.** A session that compared names the set in `knowledge`:
-  `KnowledgeRef { kind: ReferenceManifest, id: "ollama-official", version: "2026-10-07", sha256 }`.
-  The SHA-256 covers the embedded files.
+  `KnowledgeRef { kind: ReferenceManifest, id: "ollama-official", version: "2026-10-24", sha256 }`.
+  The SHA-256 covers the embedded files, `commits.toml` included. A session saved with an earlier
+  version of the set is not re-verified by `sigil session render`, which says so.
 - **What a match is.** A match is a comparison with the contents of the official archives. **It is
   not a signature check**, and it does not show who built the files.
 - **Adding a release.** [`scripts/refmanifest/`](../scripts/refmanifest/README.md) describes it: a
-  new manifest, a new pinned set SHA-256, and a new SIGIL version.
+  new manifest, its `commits.toml` entry, a new set version and pinned SHA-256, and a new SIGIL
+  version.
 
 ## Rows
 

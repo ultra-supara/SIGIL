@@ -6,10 +6,14 @@
 - `ollama-<tag>-linux-amd64.json`: every archive member with its type (`"0"` file, `"2"` symlink,
   `"5"` directory), mode, and, for a file, its size and SHA-256, for a symlink its target;
 - `ollama-<tag>-linux-amd64.tar.zst.sha256`: the archive's SHA-256, equal to the digest published
-  with the release.
+  with the release;
 
-They were produced in PR-0 by `tar_manifest.py`, which hashes every member of the tar stream
-without extracting anything. SIGIL embeds them unchanged and never runs the script. To add a
+and, for all of them, `commits.toml` (PR-4c-2c): the value each release's own files report for
+each embedded commit field (`role = "commit"` in `crates/sigil-engine/signatures/components.toml`),
+with the member it is read from.
+
+The manifests were produced in PR-0 by `tar_manifest.py`, which hashes every member of the tar
+stream without extracting anything. SIGIL embeds them unchanged and never runs the script. To add a
 release:
 
 ```bash
@@ -18,7 +22,10 @@ zstd -dc ollama-linux-amd64.tar.zst | python3 -I tar_manifest.py ollama-<tag>-li
 ```
 
 Add both files to `crates/sigil-engine/refs/ollama-official/` and to `OFFICIAL` in
-`crates/sigil-engine/src/reference.rs`, update the pinned set SHA-256 in
+`crates/sigil-engine/src/reference.rs`. Add the release's `commits.toml` entry: run
+`sigil inspect ollama --install-dir` on an unmodified install of it, and take each commit field's
+value from the claim of the member, whose SHA-256 must be the manifest's. Then update the set's
+version and pinned SHA-256 in `crates/sigil-engine/src/reference.rs` and
 `crates/sigil-engine/tests/refset.rs`, and release a new SIGIL version.
 
 Matching a file against these is a comparison with the official archives' contents. It is not a
