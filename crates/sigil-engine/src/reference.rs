@@ -383,3 +383,62 @@ pub fn verify_reference_matches(s: &sigil_model::Session, set: &RefSet) -> Resul
         Err(errors)
     }
 }
+
+/// Whether `s`'s open release claims are the ones the engine derives (PR-4c-2c). For a session
+/// that names `set`, its claims with the basis `SelfReportedCommit`, of any product, are exactly
+/// what the engine makes: none beside a claim by reference matches for `ollama`, otherwise
+/// [`crate::analyze::release::open`] of its component claims (none when that gives none; plan
+/// review P2). `validate` cannot check this: the commit data and the fields' roles are the
+/// engine's. A session that does not name the set passes; V12 requires an open claim to name one.
+pub fn verify_release_claims(s: &sigil_model::Session, set: &RefSet) -> Result<(), Vec<String>> {
+    use sigil_model::ReleaseBasis;
+    let named = s.knowledge.iter().any(|k| {
+        k.kind == KnowledgeKind::ReferenceManifest
+            && k.id == set.id.as_str()
+            && k.sha256 == set.sha256
+    });
+    if !named {
+        return Ok(());
+    }
+    let closed = s.releases.iter().any(|c| {
+        c.product.as_str() == "ollama" && matches!(c.basis, ReleaseBasis::ReferenceMatches { .. })
+    });
+    let derived = if closed {
+        None
+    } else {
+        crate::analyze::release::open(&s.components, set).map_err(|e| vec![e])?
+    };
+    let derived: Vec<&sigil_model::ReleaseClaim> = derived.iter().collect();
+    let recorded: Vec<&sigil_model::ReleaseClaim> = s
+        .releases
+        .iter()
+        .filter(|c| matches!(c.basis, ReleaseBasis::SelfReportedCommit { .. }))
+        .collect();
+    if recorded == derived {
+        return Ok(());
+    }
+    let shown = |claims: &[&sigil_model::ReleaseClaim]| -> String {
+        if claims.is_empty() {
+            return "none".to_string();
+        }
+        let each: Vec<String> = claims
+            .iter()
+            .map(|c| match &c.basis {
+                ReleaseBasis::SelfReportedCommit { commits } => {
+                    let n = commits.len();
+                    let noun = if n == 1 { "commit" } else { "commits" };
+                    format!("{} {:?} from {n} {noun}", c.product, c.candidates)
+                }
+                ReleaseBasis::ReferenceMatches { .. } => {
+                    format!("{} {:?}", c.product, c.candidates)
+                }
+            })
+            .collect();
+        each.join("; ")
+    };
+    Err(vec![format!(
+        "the open release claims are {}, but the claims and the set give {}",
+        shown(&recorded),
+        shown(&derived)
+    )])
+}

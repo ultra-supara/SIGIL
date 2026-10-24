@@ -1493,6 +1493,45 @@ fn a_saved_install_session_is_reverified_by_render_and_explain() {
     assert_eq!(run(&[&"explain", &path, &"--verdict"]).code, 1);
 }
 
+/// PR-4c-2c: `install_tree()` with the fixture `libdata.so`, which reports `LLAMA_COMMIT`
+/// `6f3a9f3de`, as `lib/ollama/libllama-common.so.0.0.1`.
+fn install_tree_with_a_commit() -> TempDir {
+    let d = install_tree();
+    fs::copy(
+        elf_fixture("libdata.so"),
+        d.path().join("lib/ollama/libllama-common.so.0.0.1"),
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn a_saved_open_release_claim_is_reverified_by_render() {
+    let models = store(true);
+    let install = install_tree_with_a_commit();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(run(&[&"session", &"render", &path]).code, 0);
+    // Other candidates: validate still passes, the verifier does not.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    v["releases"][0]["candidates"] = serde_json::json!(["v0.30.6"]);
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("open release claim disagrees with the embedded reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
 #[test]
 fn a_session_made_with_another_reference_set_is_rendered_with_a_note() {
     let models = store(true);

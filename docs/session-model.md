@@ -131,9 +131,9 @@ The rule then yields an open question at most.
     evidence, of a claim in `components`. SIGIL never wrote the basis's earlier shape (`field`,
     `value`, `at`), so no session SIGIL wrote is affected.
 
-  The rows' expected values, and whether a release lists a member at all, come from the reference
-  set, which a session does not hold. The engine's verifier checks them
-  (`verify_reference_matches`).
+  The rows' expected values, whether a release lists a member at all, and which commit a release
+  reports come from the reference set, which a session does not hold. The engine's verifiers
+  check them (`verify_reference_matches`, and `verify_release_claims` for an open claim).
 - **Binary facts agree with the session (PR-4b-1 and PR-4b-2b,
   [`docs/runtime-artifacts.md`](runtime-artifacts.md#binaries)):**
   - B1: a record names a slice of the session, one record per slice;

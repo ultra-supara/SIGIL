@@ -169,14 +169,16 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
 
 ## Verification
 
-- **`Session::validate`** checks the rows against the session itself (V1–V11 in
+- **`Session::validate`** checks the rows and the claims against the session itself (V1–V12 in
   [`docs/session-model.md`](session-model.md#what-sessionvalidate-checks)). Each row's observed
   value must be the placement's own fact. A match needs a stable read. `Absent` needs a complete
   discovery. The candidates are recomputed from the rows, and `artifacts.release` is `Complete`
-  exactly when the claim, the discovery, and the absent members allow it.
-- **`validate` cannot know the set.** It cannot tell that a release lists a member, or that a
-  release exists. A session with every row of one release removed, and that release dropped from
-  the candidates, is still self-consistent.
+  exactly when the claim, the discovery, and the absent members allow it. An open claim rests on
+  commits that are the claims' own `Embedded` assertions.
+- **`validate` cannot know the set.** It cannot tell that a release lists a member, that a
+  release exists, or which commit a release reports. A session with every row of one release
+  removed, and that release dropped from the candidates, is still self-consistent; so is an open
+  claim with other candidates.
 - **The engine's verifier** (`sigil_engine::reference::verify_reference_matches`) closes that gap.
   For every release of the embedded set, whether the session has rows for it or not:
   - every member has exactly one row when a placement is at its path, an `Absent` row when there
@@ -184,10 +186,15 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
   - every expected value is the set's;
   - the session names the set by its SHA-256.
 
+  `verify_release_claims` (PR-4c-2c) recomputes the open claims of a session that names the set,
+  of any product: there is none beside a closed claim, and otherwise exactly the one its component
+  claims and the set's commit data give, or none when they give none. `validate` requires an open
+  claim's session to name a reference set (V12), so none escapes the verifier by naming none.
+
 | Where | `validate` | Verifier |
 |---|---|---|
-| `sigil inspect` | every session it writes | every session it writes (an internal error otherwise, exit 1) |
-| `sigil session render`, `sigil explain` | every session read | when the session names the embedded set by its SHA-256 (a disagreement is exit 1). A session made with another set is rendered with a note |
+| `sigil inspect` | every session it writes | both, on every session it writes (an internal error otherwise, exit 1) |
+| `sigil session render`, `sigil explain` | every session read | both, when the session names the embedded set by its SHA-256 (a disagreement is exit 1). A session made with another set is rendered with a note |
 | The browser viewer | every session read | **never**: it has no reference set |
 
 ## Binaries

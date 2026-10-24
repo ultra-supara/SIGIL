@@ -1206,8 +1206,9 @@ fn release_line(s: &Session) -> Option<String> {
 
 // --- session render, explain, rules -----------------------------------------------------------
 
-/// Re-verifies the reference rows of a saved session that names the embedded set: `validate`
-/// cannot re-derive them (PR-4a §3.3). A session made with another set is noted on stderr.
+/// Re-verifies the reference rows and the open release claim of a saved session that names the
+/// embedded set: `validate` cannot re-derive them (PR-4a §3.3, PR-4c-2c). A session made with
+/// another set is noted on stderr.
 fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
     let refs: Vec<_> = session
         .knowledge
@@ -1224,18 +1225,23 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
         );
         return Ok(());
     }
-    reference::verify_reference_matches(session, set).map_err(|errors| {
+    let failure = |what: &str, errors: Vec<String>| {
         let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
         let more = match errors.len().saturating_sub(5) {
             0 => String::new(),
             n => format!(" (and {n} more)"),
         };
         Failure::Run(format!(
-            "{}: the session's reference matches disagree with the embedded reference set: {}{more}",
+            "{}: {what} the embedded reference set: {}{more}",
             shown_path(path),
             first.join("; ")
         ))
-    })
+    };
+    reference::verify_reference_matches(session, set)
+        .map_err(|e| failure("the session's reference matches disagree with", e))?;
+    // PR-4c-2c: an open release claim is recomputed from the claims and the set's commit data.
+    reference::verify_release_claims(session, set)
+        .map_err(|e| failure("the session's open release claim disagrees with", e))
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
