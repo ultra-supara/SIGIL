@@ -62,7 +62,8 @@ pub enum InspectError {
     /// The assembled session fails `Session::validate` (a bug, reported rather than returned as
     /// a result).
     Invalid(Vec<String>),
-    /// The session's reference rows are not what the embedded set gives (a bug).
+    /// The session's reference rows or release claims are not what the embedded set gives (a
+    /// bug).
     Reference(Vec<String>),
     /// An input of `binary inspect` that cannot be inspected (exit 1; plan §4.9).
     Input(String),
@@ -81,7 +82,7 @@ impl fmt::Display for InspectError {
             }
             InspectError::Reference(errors) => write!(
                 f,
-                "the session's reference matches disagree with the embedded set: {}",
+                "the session disagrees with the embedded reference set: {}",
                 errors.join("; ")
             ),
             InspectError::Input(e) => write!(f, "{e}"),
@@ -204,7 +205,8 @@ fn assemble(
     }];
     let (mut artifacts, mut instances) = (facts.artifacts, facts.instances);
     let mut knowledge = Vec::<KnowledgeRef>::new();
-    let (mut releases, mut reference_matches) = (vec![], vec![]);
+    let (mut closed, mut reference_matches) = (None, vec![]);
+    let mut install_set = None;
     let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
@@ -224,6 +226,7 @@ fn assemble(
             }
         }
         knowledge.push(set.knowledge());
+        install_set = Some(set);
         budgets.extend(install_budgets(r.budgets));
         coverage.push(facts.discovery);
         coverage.push(result.coverage);
@@ -233,7 +236,7 @@ fn assemble(
         binaries = facts.binaries;
         scans = facts.scans;
         reference_matches = result.rows;
-        releases.extend(result.claim);
+        closed = result.claim;
     } else {
         // A policy that requires the install's checks without one: skipped, so incomplete.
         for check in &required_checks {
@@ -278,6 +281,11 @@ fn assemble(
     // PR-4c-1: from the facts above; nothing more is read.
     let components = identity::derive(&instances, &binaries, &reference_matches)
         .map_err(InspectError::Internal)?;
+    // PR-4c-2c: the closed claim, or else the open claim of the install's self-reported commits.
+    let releases = match install_set {
+        Some(set) => release::claims(closed, &components, set).map_err(InspectError::Internal)?,
+        None => vec![],
+    };
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
@@ -332,10 +340,12 @@ fn assemble(
     session.validate().map_err(|errors| {
         InspectError::Invalid(errors.iter().map(ToString::to_string).collect())
     })?;
-    // What `validate` cannot re-derive: the rows are exactly the embedded set's.
+    // What `validate` cannot re-derive: the rows are exactly the embedded set's, and the release
+    // claims are what the rows, the binary facts and the set give (PR-4c-2c).
     if req.install.is_some() {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
         reference::verify_reference_matches(&session, set).map_err(InspectError::Reference)?;
+        reference::verify_release_claims(&session, set).map_err(InspectError::Reference)?;
     }
     Ok(session)
 }

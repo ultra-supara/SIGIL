@@ -174,6 +174,27 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
         .collect()
 }
 
+/// The open release claim the reports show, with its commits (PR-4c-2c): none beside a claim
+/// by reference matches of any product, otherwise the first claim by self-reported commits.
+pub fn open_claim(
+    s: &crate::session::Session,
+) -> Option<(
+    &crate::identity::ReleaseClaim,
+    &[crate::identity::ReportedCommit],
+)> {
+    use crate::identity::ReleaseBasis;
+    if s.releases
+        .iter()
+        .any(|c| matches!(c.basis, ReleaseBasis::ReferenceMatches { .. }))
+    {
+        return None;
+    }
+    s.releases.iter().find_map(|c| match &c.basis {
+        ReleaseBasis::SelfReportedCommit { commits } => Some((c, commits.as_slice())),
+        ReleaseBasis::ReferenceMatches { .. } => None,
+    })
+}
+
 /// The component claims of a slice, in session order (PR-4c-1).
 pub fn claims_of<'s>(
     s: &'s crate::session::Session,

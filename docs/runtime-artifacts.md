@@ -51,19 +51,31 @@ separate questions:
 
 | Set | Releases | Members per release |
 |---|---|---|
-| `ollama-official`, version `2026-10-07` | v0.30.5, v0.30.6, v0.30.7 (linux-amd64) | 34 files, 17 symlinks, 3 directories |
+| `ollama-official`, version `2026-10-24` | v0.30.5, v0.30.6, v0.30.7 (linux-amd64) | 34 files, 17 symlinks, 3 directories |
 
 - **Where it comes from.** Each official archive was streamed, without extraction, in PR-0, and
   its SHA-256 equals the digest published with the release. Every member was recorded with its type
   and mode, a file with its size and SHA-256, and a symlink with its target. The files are embedded
   unchanged (`crates/sigil-engine/refs/ollama-official/`).
+- **What each release reports (PR-4c-2c).** `commits.toml` lists, for each release, the value one
+  of its files reports for an embedded commit field: `LLAMA_COMMIT` of
+  `lib/ollama/libllama-common.so.0.0.1` and `ggml_commit` (what `ggml_commit()` returns) of
+  `lib/ollama/libggml-base.so.0.13.1`,
+  `6f3a9f3de` in all three releases. Each member's SHA-256 is in the release's manifest, and SIGIL
+  read these values from files with those SHA-256s (the official v0.30.6 install): the two members
+  are byte-identical in the three releases. An open release claim compares an install's commits
+  with these values.
 - **In the session.** A session that compared names the set in `knowledge`:
-  `KnowledgeRef { kind: ReferenceManifest, id: "ollama-official", version: "2026-10-07", sha256 }`.
-  The SHA-256 covers the embedded files.
+  `KnowledgeRef { kind: ReferenceManifest, id: "ollama-official", version: "2026-10-24", sha256 }`.
+  The SHA-256 covers the embedded files, `commits.toml` included. A session saved with an earlier
+  version of the set is not re-verified by `sigil session render` and `sigil explain`, which say
+  so ("note: reference matches and release claims were made with another reference set and are
+  not re-verified"). The embedded set's SHA-256 under another id is refused (exit 1).
 - **What a match is.** A match is a comparison with the contents of the official archives. **It is
   not a signature check**, and it does not show who built the files.
 - **Adding a release.** [`scripts/refmanifest/`](../scripts/refmanifest/README.md) describes it: a
-  new manifest, a new pinned set SHA-256, and a new SIGIL version.
+  new manifest, its `commits.toml` entry, a new set version and pinned SHA-256, and a new SIGIL
+  version.
 
 ## Rows
 
@@ -91,22 +103,34 @@ path:
 
 ## Attribution and completeness
 
-- **The candidates** are the releases for which every placement has a matching row.
+- **The candidates** of the closed claim are the releases for which every placement has a matching
+  row.
 - **A release claim** (`releases`, basis `ReferenceMatches`, the placements as its files) is
   recorded only when discovery is `Complete` and there is at least one candidate. Releases with
-  identical content are all candidates.
-- **`artifacts.release` is `Complete`** only when there is a claim and no candidate has an `Absent`
-  row. An installation whose content matches v0.30.6 but which lacks some of its libraries is
-  attributed to v0.30.6 and is INCOMPLETE.
+  identical content are all candidates. It is **closed**.
+- **An open release claim** (basis `SelfReportedCommit`, PR-4c-2c) is recorded when there is no
+  closed one and the install's files report commits. Its commits are the `Embedded` values of the
+  fields whose role is `commit` in the component database (`LLAMA_COMMIT`, `ggml_commit`), each
+  7 to 40 lowercase hex digits; a value such as `unknown` is ignored. Its candidates are the
+  releases of the set whose own files report, for every field collected, a value that agrees with
+  the install's: one is a prefix of the other, since a commit is abbreviated to a prefix, here of at
+  least 7 digits. Without a commit, or without such a release, there is none. It says only that the
+  install is *consistent with* those releases: a custom build, a mixed install, or an unlisted
+  release is not excluded. `artifacts.release` is unchanged by it. The values are those of the
+  linux-amd64 archives; an arm64 install that reports the same commit gets the same candidates,
+  which are release tags.
+- **`artifacts.release` is `Complete`** only when there is a closed claim and no candidate has an
+  `Absent` row. An installation whose content matches v0.30.6 but which lacks some of its
+  libraries is attributed to v0.30.6 and is INCOMPLETE.
 
 | Install | Claim | `artifacts.release` |
 |---|---|---|
 | An unmodified v0.30.6 | `[v0.30.6]` | `Complete` |
 | `bin/ollama` of v0.30.6, `lib/ollama/` empty | `[v0.30.6]` | `Partial` (members absent) |
-| A library replaced by any other bytes, ELF or not | none | `Partial` (`matches no reference`) |
-| `bin/ollama` of v0.30.5 and a library only v0.30.6 has | none | `Partial` (`mixed install`) |
+| A library replaced by any other bytes, ELF or not | open `[v0.30.5, v0.30.6, v0.30.7]` (the commits of the official `libllama-common` or `libggml-base` left); none when the replacement reports a commit that disagrees with `6f3a9f3de` | `Partial` (`matches no reference`) |
+| `bin/ollama` of v0.30.5 and a library only v0.30.6 has | open `[v0.30.5, v0.30.6, v0.30.7]` (the libraries' commits) | `Partial` (`mixed install`) |
 | A link with the official target text whose target file is missing | `[v0.30.6]` (the link matches by text) | `Partial` (the file is absent) |
-| `lib/ollama` replaced by a symlink to a copy elsewhere | none (discovery `Partial`) | `Partial` (`discovery incomplete`) |
+| `lib/ollama` replaced by a symlink to a copy elsewhere | none (discovery `Partial`; no library read) | `Partial` (`discovery incomplete`) |
 
 The summary line says the same:
 
@@ -114,8 +138,14 @@ The summary line says the same:
 release: ollama v0.30.6 (34/34 files, 17/17 symlinks, 3/3 directories reference-matched; nothing absent)
 release: content matches v0.30.6 (1/34 files, 0/17 symlinks, 0/3 directories present); incomplete
 release: not established (2 reasons; sigil explain --coverage)
+release: not established (1 reason; sigil explain --coverage); consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)
 release: install not found
 ```
+
+The report's **Runtime artifacts** section opens with a `Release:` line to the same effect. An
+open claim reads `not established (see Coverage); consistent with v0.30.5, v0.30.6, v0.30.7 by a
+self-reported commit (open: …)`, followed by `Self-reported commits:`: each field and value, with
+the install paths of the content that reports it, in path order.
 
 ## Coverage
 
@@ -138,7 +168,7 @@ Binaries) belong to the scope `runtime_artifacts`, which the default policy audi
 
 | State | When |
 |---|---|
-| `Complete` | A claim, and nothing absent from any candidate |
+| `Complete` | A closed claim, and nothing absent from any candidate |
 | `Partial { missing }` | Otherwise, one entry per reason: `discovery incomplete`; `<release>: <n> files, <m> symlinks, and <k> directories absent from the install`; `<path>: not in any reference`; `<path>: matches no reference`; `<path>: symlink to <t>; <release>: <t'>`; `<path>: <kind> where <release> has a <kind>`; `<path>: not compared`; `mixed install: …` |
 | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 
@@ -147,25 +177,41 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
 
 ## Verification
 
-- **`Session::validate`** checks the rows against the session itself (V1–V11 in
+- **`Session::validate`** checks the rows and the claims against the session itself (V1–V12 in
   [`docs/session-model.md`](session-model.md#what-sessionvalidate-checks)). Each row's observed
   value must be the placement's own fact. A match needs a stable read. `Absent` needs a complete
   discovery. The candidates are recomputed from the rows, and `artifacts.release` is `Complete`
-  exactly when the claim, the discovery, and the absent members allow it.
-- **`validate` cannot know the set.** It cannot tell that a release lists a member, or that a
-  release exists. A session with every row of one release removed, and that release dropped from
-  the candidates, is still self-consistent.
+  exactly when the claim, the discovery, and the absent members allow it. An open claim rests on
+  commits that are the claims' own `Embedded` assertions.
+- **`validate` cannot know the set.** It cannot tell that a release lists a member, that a
+  release exists, or which commit a release reports. A session with every row of one release
+  removed, and that release dropped from the candidates, is still self-consistent; so is an open
+  claim with other candidates.
 - **The engine's verifier** (`sigil_engine::reference::verify_reference_matches`) closes that gap.
   For every release of the embedded set, whether the session has rows for it or not:
   - every member has exactly one row when a placement is at its path, an `Absent` row when there
     is none and discovery is complete, and no row otherwise;
   - every expected value is the set's;
-  - the session names the set by its SHA-256.
+  - the session names the set by its id and SHA-256;
+  - no row names another reference set.
+
+  `verify_release_claims` (PR-4c-2c) recomputes the release claims of a session that names the
+  set. The closed claim comes from the session's rows of this set and its placements under the
+  install root (V10 and the checks above pin the rows): the releases every placement matches,
+  and a claim for `ollama` after a complete discovery, none without an install root. The open
+  claim comes from the component claims derived from the session's binary facts and the set's
+  commit data, and only when there is no closed claim. The session's claims, of any product,
+  must be exactly these, up to canonical order: so there is no open claim beside a closed one,
+  and a closed claim cannot be relabelled or dropped to make room for an open one. `validate`
+  requires an open claim's session to have some reference set in `knowledge` (V12), so none
+  escapes the verifier by naming none. A session that names another set (or another version of
+  this one) is rendered with a note instead, and one with the embedded set's SHA-256 under
+  another id is refused.
 
 | Where | `validate` | Verifier |
 |---|---|---|
-| `sigil inspect` | every session it writes | every session it writes (an internal error otherwise, exit 1) |
-| `sigil session render`, `sigil explain` | every session read | when the session names the embedded set by its SHA-256 (a disagreement is exit 1). A session made with another set is rendered with a note |
+| `sigil inspect` | every session it writes | both, on every session it writes (an internal error otherwise, exit 1) |
+| `sigil session render`, `sigil explain` | every session read | both, when the session names the embedded set by its id and SHA-256 (a disagreement is exit 1; so is the SHA-256 under another id). A session made with another set is rendered with a note |
 | The browser viewer | every session read | **never**: it has no reference set |
 
 ## Binaries
@@ -386,7 +432,6 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 
 ## Not yet
 
-- The open release set of a self-reported commit (PR-4c-2c).
 - Mach-O sections and `__gopclntab`: a Mach-O is not scanned for signatures yet.
 - Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
   it (PR-4d).

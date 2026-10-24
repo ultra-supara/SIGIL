@@ -1,0 +1,102 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "85c71e5ec33bde2edd0d4ec82fa697f1d3823e8119c0388bf2903f980ce2e568",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "artifacts.release"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": [
+      {
+        "product": "ollama",
+        "candidates": [
+          "v0.30.5",
+          "v0.30.6",
+          "v0.30.7"
+        ],
+        "basis": "SelfReportedCommit"
+      }
+    ]
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:1717171717171717171717171717171717171717171717171717171717171717",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libllama-common.so.0.0.1"
+      ],
+      "slices": [
+        {
+          "id": "sha256:1717171717171717171717171717171717171717171717171717171717171717#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "1717171717171717171717171717171717171717171717171717171717171717",
+          "components": [
+            {
+              "component": "llama.cpp/common",
+              "status": "NameOnly",
+              "versions": [
+                "0",
+                "0.0.1"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "artifacts.release",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 1
+      }
+    }
+  ]
+}

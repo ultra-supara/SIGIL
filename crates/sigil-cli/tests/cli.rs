@@ -1493,6 +1493,149 @@ fn a_saved_install_session_is_reverified_by_render_and_explain() {
     assert_eq!(run(&[&"explain", &path, &"--verdict"]).code, 1);
 }
 
+/// PR-4c-2c: `install_tree()` with the fixture `libdata.so`, which reports `LLAMA_COMMIT`
+/// `6f3a9f3de`, as `lib/ollama/libllama-common.so.0.0.1`.
+fn install_tree_with_a_commit() -> TempDir {
+    let d = install_tree();
+    fs::copy(
+        elf_fixture("libdata.so"),
+        d.path().join("lib/ollama/libllama-common.so.0.0.1"),
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn an_open_release_claim_is_reported_and_reverified_by_render() {
+    let models = store(true);
+    let install = install_tree_with_a_commit();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stderr.contains(
+            "; consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de \
+             (open)"
+        ),
+        "{}",
+        r.stderr
+    );
+    let rendered = run(&[&"session", &"render", &path]);
+    assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+    let piece = |text: &str| sigil_model::UntrustedText::new(text).markdown_inline();
+    let commits = format!(
+        "{} {} {} ({})",
+        piece("Self-reported commits:"),
+        piece("LLAMA_COMMIT"),
+        piece("6f3a9f3de"),
+        piece("lib/ollama/libllama-common.so.0.0.1")
+    );
+    // The one commit the tree reports, and nothing after it on the line.
+    assert!(
+        rendered.stdout.lines().any(|l| l == commits),
+        "{}",
+        rendered.stdout
+    );
+    // Other candidates: validate still passes, the verifier does not.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    v["releases"][0]["candidates"] = serde_json::json!(["v0.30.6"]);
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("release claims disagree with the embedded reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn the_embedded_set_under_another_id_is_refused_by_render() {
+    let models = store(true);
+    let install = install_tree_with_a_commit();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    // The set renamed in the knowledge entry, the rows, and the claims.
+    let text = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"ollama-official\"", "\"x\"");
+    assert!(!text.contains("ollama-official"));
+    fs::write(&path, text).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("reference knowledge disagrees with"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A saved session with an open claim, made by `inspect` over `install_tree_with_a_commit()`.
+fn saved_open_claim_session() -> (TempDir, std::path::PathBuf) {
+    let models = store(true);
+    let install = install_tree_with_a_commit();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("s.json");
+    let r = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--out", &path],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    (dir, path)
+}
+
+#[test]
+fn an_open_claim_of_an_older_set_version_is_noted_not_reverified() {
+    let (_dir, path) = saved_open_claim_session();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for k in v["knowledge"].as_array_mut().unwrap() {
+        if k["kind"] == "ReferenceManifest" {
+            k["sha256"] = serde_json::Value::from("0".repeat(64));
+        }
+    }
+    // Not re-verified, so even other candidates render.
+    v["releases"][0]["candidates"] = serde_json::json!(["v0.30.6"]);
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"session", &"render", &path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("reference matches and release claims were made with another reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn explain_refuses_a_session_with_changed_release_claims() {
+    let (_dir, path) = saved_open_claim_session();
+    assert_eq!(run(&[&"explain", &path, &"--coverage"]).code, 0);
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    v["releases"][0]["candidates"] = serde_json::json!(["v0.30.6"]);
+    fs::write(&path, v.to_string()).unwrap();
+    let r = run(&[&"explain", &path, &"--coverage"]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("release claims disagree with the embedded reference set"),
+        "{}",
+        r.stderr
+    );
+}
+
 #[test]
 fn a_session_made_with_another_reference_set_is_rendered_with_a_note() {
     let models = store(true);

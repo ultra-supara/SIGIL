@@ -123,11 +123,17 @@ The rule then yields an open question at most.
     discovery, and its candidates are exactly the releases every placement matches, recomputed
     from the rows;
   - V11: `artifacts.release` is `Complete` exactly when there is such a claim, discovery is
-    complete, and no candidate has an `Absent` row.
+    complete, and no candidate has an `Absent` row;
+  - V12 (PR-4c-2c): one release claim per product, with unique candidates. An open claim (basis
+    `SelfReportedCommit`) is made only for an install with a `ReferenceManifest` knowledge entry,
+    never beside a claim by reference matches of its product, and lists at least one commit, each
+    once. A commit is an `Embedded` assertion's field, value (7 to 40 lowercase hex digits), and
+    evidence, of a claim in `components`. SIGIL never wrote the basis's earlier shape (`field`,
+    `value`, `at`), so no session SIGIL wrote is affected.
 
-  The rows' expected values, and whether a release lists a member at all, come from the reference
-  set, which a session does not hold. The engine's verifier checks them
-  (`verify_reference_matches`).
+  The rows' expected values, whether a release lists a member at all, and which commit a release
+  reports come from the reference set, which a session does not hold. The engine's verifiers
+  check them (`verify_reference_matches`, and `verify_release_claims` for the release claims).
 - **Binary facts agree with the session (PR-4b-1 and PR-4b-2b,
   [`docs/runtime-artifacts.md`](runtime-artifacts.md#binaries)):**
   - B1: a record names a slice of the session, one record per slice;

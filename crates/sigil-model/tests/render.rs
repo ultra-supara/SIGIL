@@ -61,7 +61,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 16);
+    assert_eq!(all.len(), 17);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -295,6 +295,140 @@ fn a_session_with_an_install_shows_its_runtime_artifacts() {
     s.request.roots.retain(|r| r.id.as_str() != INSTALL_ROOT);
     s.instances.retain(|i| i.root.as_str() != INSTALL_ROOT);
     assert!(!render_session(&s).contains("## Runtime artifacts"));
+}
+
+#[test]
+fn an_open_release_claim_is_shown_with_its_commits() {
+    // Example 17 (PR-4c-2c).
+    let mut s = open_release();
+    let section = |s: &Session| {
+        let md = render_session(s);
+        md.split("\n## ")
+            .find(|x| x.starts_with("Runtime artifacts"))
+            .unwrap_or_else(|| panic!("no section:\n{md}"))
+            .to_string()
+    };
+    let release = format!(
+        "{} {}",
+        t("Release:").markdown_inline(),
+        t(
+            "not established (see Coverage); consistent with v0.30.5, v0.30.6, v0.30.7 by a \
+           self-reported commit (open: a custom build, a mixed install, or an unlisted release is \
+           not excluded)"
+        )
+        .markdown_inline()
+    );
+    let commits = |paths: &[&str]| {
+        let paths: Vec<String> = paths.iter().map(|p| t(p).markdown_inline()).collect();
+        format!(
+            "{} {} {} ({})",
+            t("Self-reported commits:").markdown_inline(),
+            t("LLAMA_COMMIT").markdown_inline(),
+            t("6f3a9f3de").markdown_inline(),
+            paths.join(", ")
+        )
+    };
+    let shown = section(&s);
+    assert!(shown.contains(&release), "{release}\n{shown}");
+    let common = "lib/ollama/libllama-common.so.0.0.1";
+    assert!(shown.contains(&commits(&[common])), "{shown}");
+    // The content at a second path: both paths, in path order.
+    let mut copy = s.instances[0].clone();
+    copy.id = InstanceId::new("inst:lib/ollama/a-copy.so").unwrap();
+    copy.path = t("/usr/local/lib/ollama/a-copy.so");
+    s.instances.push(copy);
+    let shown = section(&s);
+    assert!(
+        shown.contains(&commits(&["lib/ollama/a-copy.so", common])),
+        "{shown}"
+    );
+    // Only the same content under the install root is a placement of a commit: other content
+    // there, and the same content under another root, are not listed.
+    let label = t("Self-reported commits:").markdown_inline();
+    let commits_line = |s: &Session| {
+        let section = section(s);
+        section
+            .lines()
+            .find(|l| l.starts_with(&label))
+            .unwrap_or_else(|| panic!("no commits line:\n{section}"))
+            .to_string()
+    };
+    let mut other = open_release();
+    let mut different = other.instances[0].clone();
+    different.id = InstanceId::new("inst:lib/ollama/different.so").unwrap();
+    different.path = t("/usr/local/lib/ollama/different.so");
+    different.content = InstanceContent::Read {
+        artifact: id(&format!("sha256:{}", hex(0x1a))),
+    };
+    other.instances.push(different);
+    other.request.roots.push(ScanRoot {
+        id: id("elsewhere"),
+        path: t("/opt/elsewhere"),
+    });
+    let mut elsewhere = other.instances[0].clone();
+    elsewhere.id = InstanceId::new("inst:lib/ollama/elsewhere.so").unwrap();
+    elsewhere.root = id("elsewhere");
+    elsewhere.path = t("/opt/elsewhere/lib/ollama/elsewhere.so");
+    other.instances.push(elsewhere);
+    assert_eq!(commits_line(&other), commits_line(&open_release()));
+    assert!(
+        section(&other).contains(&commits(&[common])),
+        "{}",
+        section(&other)
+    );
+    // A commit whose evidence is in a slice of content that has no placement lists no path.
+    let unplaced = SliceId::from_parts(&id(&format!("sha256:{}", hex(0x19))), Arch::X86_64, 0);
+    let ReleaseBasis::SelfReportedCommit { commits: reported } = &mut other.releases[0].basis
+    else {
+        panic!("example 17's claim is open");
+    };
+    let mut second = reported[0].clone();
+    second.field = "ggml_commit".to_string();
+    second.at = EvidenceRef::Code {
+        slice: unplaced,
+        loc: Loc::VAddr(0x10),
+    };
+    reported.push(second);
+    assert_eq!(
+        commits_line(&other),
+        format!(
+            "{}, {} {}",
+            commits_line(&open_release()),
+            t("ggml_commit").markdown_inline(),
+            t("6f3a9f3de").markdown_inline()
+        )
+    );
+    // A closed claim has no commits line, even beside an open claim of another product.
+    let mut closed = conflicting_identity();
+    let shown = section(&closed);
+    assert!(!shown.contains(&label), "{shown}");
+    let slice = closed.components[0].subject.clone();
+    closed.releases.push(ReleaseClaim {
+        product: id("llama.cpp"),
+        candidates: vec!["b1".to_string()],
+        basis: ReleaseBasis::SelfReportedCommit {
+            commits: vec![ReportedCommit {
+                field: "LLAMA_COMMIT".to_string(),
+                value: t("6f3a9f3de"),
+                at: EvidenceRef::Code {
+                    slice,
+                    loc: Loc::VAddr(0x10),
+                },
+            }],
+        },
+    });
+    let shown = section(&closed);
+    assert!(!shown.contains(&label), "{shown}");
+    let closed_release = format!(
+        "{} {}",
+        t("Release:").markdown_inline(),
+        t(&format!(
+            "content matches {}",
+            closed.releases[0].candidates.join(", ")
+        ))
+        .markdown_inline()
+    );
+    assert!(shown.contains(&closed_release), "{closed_release}\n{shown}");
 }
 
 #[test]

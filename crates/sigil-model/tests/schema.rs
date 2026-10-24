@@ -65,7 +65,8 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         ComponentClaim => "ComponentClaim", IdentityAssertion => "IdentityAssertion", NameKind => "NameKind",
         ExtractMethod => "ExtractMethod", SigState => "SigState", IdentityStatus => "IdentityStatus",
         VersionAssertion => "VersionAssertion", VersionSource => "VersionSource", ReleaseClaim => "ReleaseClaim",
-        ReleaseBasis => "ReleaseBasis", FeatureHint => "FeatureHint", Signal => "Signal",
+        ReleaseBasis => "ReleaseBasis", ReportedCommit => "ReportedCommit",
+        FeatureHint => "FeatureHint", Signal => "Signal",
         ReferenceMatch => "ReferenceMatch", MemberResult => "MemberResult", MemberKind => "MemberKind",
         EntryKind => "EntryKind",
         BinaryFacts => "BinaryFacts", ContainerFacts => "ContainerFacts", ElfFacts => "ElfFacts",
@@ -770,11 +771,13 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample(
             "ReleaseBasis",
             ReleaseBasis::SelfReportedCommit {
-                field: "LLAMA_COMMIT".to_string(),
-                value: t("6f3a9f3"),
-                at: EvidenceRef::Artifact {
-                    artifact: artifact.clone(),
-                },
+                commits: vec![ReportedCommit {
+                    field: "LLAMA_COMMIT".to_string(),
+                    value: t("6f3a9f3"),
+                    at: EvidenceRef::Artifact {
+                        artifact: artifact.clone(),
+                    },
+                }],
             },
         ),
         sample("Signal", Signal::Export),

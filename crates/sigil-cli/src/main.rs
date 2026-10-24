@@ -44,7 +44,7 @@ use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
     action, artifact_type, binary_inputs, completeness, component_labels, coverage_state,
-    mode as mode_name, probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
+    mode as mode_name, open_claim, probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
@@ -1168,7 +1168,8 @@ fn release_line(s: &Session) -> Option<String> {
             None => "no coverage entry".to_string(),
         };
         return Some(format!(
-            "release: not established ({why}; sigil explain --coverage)"
+            "release: not established ({why}; sigil explain --coverage){}",
+            open_release(s)
         ));
     };
     let tag = claim.candidates.first()?;
@@ -1194,7 +1195,7 @@ fn release_line(s: &Session) -> Option<String> {
         part(MemberKind::Symlink, "symlinks"),
         part(MemberKind::Directory, "directories")
     );
-    let candidates = claim.candidates.join(", ");
+    let candidates = shown(&claim.candidates.join(", "));
     Some(
         if matches!(state(ARTIFACTS_RELEASE), Some(CoverageState::Complete)) {
             format!("release: ollama {candidates} ({counts} reference-matched; nothing absent)")
@@ -1204,38 +1205,72 @@ fn release_line(s: &Session) -> Option<String> {
     )
 }
 
+/// `; consistent with <product> … by self-reported commit … (open)` for a session with an open
+/// release claim (PR-4c-2c), each distinct value once; empty without one.
+fn open_release(s: &Session) -> String {
+    let Some((claim, commits)) = open_claim(s) else {
+        return String::new();
+    };
+    let mut values: Vec<String> = vec![];
+    for value in commits.iter().map(|c| c.value.terminal_line()) {
+        if !values.contains(&value) {
+            values.push(value);
+        }
+    }
+    let noun = if values.len() == 1 {
+        "commit"
+    } else {
+        "commits"
+    };
+    format!(
+        "; consistent with {} {} by self-reported {noun} {} (open)",
+        shown(claim.product.as_str()),
+        shown(&claim.candidates.join(", ")),
+        values.join(", ")
+    )
+}
+
 // --- session render, explain, rules -----------------------------------------------------------
 
-/// Re-verifies the reference rows of a saved session that names the embedded set: `validate`
-/// cannot re-derive them (PR-4a §3.3). A session made with another set is noted on stderr.
+/// Re-verifies the reference rows and the release claims of a saved session that names the
+/// embedded set: `validate` cannot re-derive them (PR-4a §3.3, PR-4c-2c). A session made with
+/// another set (or another version of it) is noted on stderr; one that has the embedded set's
+/// SHA-256 under another id is refused.
 fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
-    let refs: Vec<_> = session
+    if !session
         .knowledge
         .iter()
-        .filter(|k| k.kind == KnowledgeKind::ReferenceManifest)
-        .collect();
-    if refs.is_empty() {
+        .any(|k| k.kind == KnowledgeKind::ReferenceManifest)
+    {
         return Ok(());
     }
     let set = reference::official().map_err(|e| Failure::Run(format!("the embedded set: {e}")))?;
-    if !refs.iter().any(|k| k.sha256 == set.sha256) {
-        eprintln!(
-            "note: reference matches were made with another reference set and are not re-verified"
-        );
-        return Ok(());
-    }
-    reference::verify_reference_matches(session, set).map_err(|errors| {
+    let failure = |what: &str, errors: Vec<String>| {
         let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
         let more = match errors.len().saturating_sub(5) {
             0 => String::new(),
             n => format!(" (and {n} more)"),
         };
         Failure::Run(format!(
-            "{}: the session's reference matches disagree with the embedded reference set: {}{more}",
+            "{}: {what} the embedded reference set: {}{more}",
             shown_path(path),
             first.join("; ")
         ))
-    })
+    };
+    if !reference::names(session, set)
+        .map_err(|e| failure("the session's reference knowledge disagrees with", vec![e]))?
+    {
+        eprintln!(
+            "note: reference matches and release claims were made with another reference set and \
+             are not re-verified"
+        );
+        return Ok(());
+    }
+    reference::verify_reference_matches(session, set)
+        .map_err(|e| failure("the session's reference matches disagree with", e))?;
+    // PR-4c-2c: the release claims are recomputed from the rows, the binary facts, and the set.
+    reference::verify_release_claims(session, set)
+        .map_err(|e| failure("the session's release claims disagree with", e))
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
@@ -1563,5 +1598,52 @@ mod tests {
         );
         s.request.roots.clear();
         assert_eq!(super::release_line(&s), None);
+    }
+
+    #[test]
+    fn the_release_line_names_an_open_claim_and_its_commits() {
+        use sigil_model::{ReleaseBasis, UntrustedText};
+        // Example 17 (PR-4c-2c).
+        let mut s: sigil_model::Session = serde_json::from_str(include_str!(
+            "../../../schemas/examples/session-v1/17-open-release.json"
+        ))
+        .unwrap();
+        let line = |s: &sigil_model::Session| super::release_line(s).unwrap();
+        assert_eq!(
+            line(&s),
+            "release: not established (1 reason; sigil explain --coverage); consistent with \
+             ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)"
+        );
+        let ReleaseBasis::SelfReportedCommit { commits } = &mut s.releases[0].basis else {
+            panic!("example 17's claim is open");
+        };
+        // A value reported twice is shown once; another value, and a control character in it, are
+        // shown escaped.
+        let mut other = commits[0].clone();
+        other.field = "ggml_commit".to_string();
+        commits.push(other.clone());
+        assert_eq!(
+            line(&s),
+            "release: not established (1 reason; sigil explain --coverage); consistent with \
+             ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)"
+        );
+        let ReleaseBasis::SelfReportedCommit { commits } = &mut s.releases[0].basis else {
+            panic!("example 17's claim is open");
+        };
+        other.value = UntrustedText::new("6f3a9f3\u{1b}");
+        commits.push(other);
+        assert_eq!(
+            line(&s),
+            "release: not established (1 reason; sigil explain --coverage); consistent with \
+             ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commits 6f3a9f3de, 6f3a9f3\\u{001B} \
+             (open)"
+        );
+        // The product is the claim's own.
+        s.releases[0].product = sigil_model::ComponentKey::new("llama.cpp").unwrap();
+        assert!(
+            line(&s).contains("; consistent with llama.cpp v0.30.5, v0.30.6, v0.30.7 by "),
+            "{}",
+            line(&s)
+        );
     }
 }

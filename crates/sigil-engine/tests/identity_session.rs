@@ -198,3 +198,24 @@ fn a_denied_component_is_a_policy_violation() {
     );
     assert_eq!(s.outcome.verdict, Verdict::Warn);
 }
+
+/// PR-4c-2c: a file that reports a commit gives a component claim with the `Embedded` value, but
+/// `binary inspect` makes no release claim and names no reference set: an open claim is made for
+/// an install.
+#[test]
+fn a_binary_inspection_makes_no_release_claim_from_a_commit() {
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("libllama-common.so.0.0.1");
+    std::fs::copy(fixture("libdata.so"), &path).unwrap();
+    let s = session(&[path]);
+    let commit = only_claim(&s).assertions.iter().any(|a| {
+        matches!(a, IdentityAssertion::Embedded { field, value, .. }
+            if field == "LLAMA_COMMIT" && value.as_str() == Some("6f3a9f3de"))
+    });
+    assert!(commit, "{:?}", s.components);
+    assert!(s.releases.is_empty(), "{:?}", s.releases);
+    assert!(s
+        .knowledge
+        .iter()
+        .all(|k| k.kind != KnowledgeKind::ReferenceManifest));
+}

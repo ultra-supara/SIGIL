@@ -7,15 +7,30 @@
 //! Lists whose order **is** evidence are never sorted: call arguments (register order), the
 //! locations of an obligation, conditions of a rule, atoms of a predicate (profile order), guard
 //! branches, link chains and ancestor chains, unresolved premises, and evidence lists.
+//! An open release claim's commits are a set (each is listed once), so they are sorted
+//! ([`ReleaseClaim::canonicalize`]).
 
 use serde::Serialize;
 
+use crate::identity::{ReleaseBasis, ReleaseClaim};
 use crate::session::Session;
 
 /// Sorts by each element's JSON text: a total, deterministic order that needs no `Ord` on the
 /// element types (so `Support`, for one, gets no ranking).
 fn sort_json<T: Serialize>(list: &mut [T]) {
     list.sort_by_cached_key(|item| serde_json::to_string(item).unwrap_or_default());
+}
+
+impl ReleaseClaim {
+    /// Puts the candidates, an open claim's commits, and a closed claim's files in canonical
+    /// order, so that what the engine derives and what a saved session holds compare as written.
+    pub fn canonicalize(&mut self) {
+        self.candidates.sort();
+        match &mut self.basis {
+            ReleaseBasis::SelfReportedCommit { commits } => sort_json(commits),
+            ReleaseBasis::ReferenceMatches { files, .. } => files.sort(),
+        }
+    }
 }
 
 impl Session {
@@ -54,7 +69,7 @@ impl Session {
         }
         sort_json(&mut self.components);
         for release in &mut self.releases {
-            release.candidates.sort();
+            release.canonicalize();
         }
         sort_json(&mut self.releases);
         sort_json(&mut self.reference_matches);

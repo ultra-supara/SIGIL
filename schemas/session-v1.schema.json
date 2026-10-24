@@ -1939,16 +1939,25 @@
             "SelfReportedCommit": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["field", "value", "at"],
+              "required": ["commits"],
               "properties": {
-                "field": {"type": "string"},
-                "value": {"$ref": "#/$defs/UntrustedText"},
-                "at": {"$ref": "#/$defs/EvidenceRef"}
+                "commits": {"type": "array", "items": {"$ref": "#/$defs/ReportedCommit"}}
               }
             }
           }
         }
       ]
+    },
+    "ReportedCommit": {
+      "description": "A self-reported commit an open release claim rests on: an Embedded assertion's field, value, and evidence (PR-4c-2c).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "value", "at"],
+      "properties": {
+        "field": {"type": "string"},
+        "value": {"$ref": "#/$defs/UntrustedText"},
+        "at": {"$ref": "#/$defs/EvidenceRef"}
+      }
     },
     "FeatureHint": {
       "description": "Level B: a feature signal exists. Never 'it is called'.",

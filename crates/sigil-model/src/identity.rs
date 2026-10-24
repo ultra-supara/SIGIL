@@ -145,11 +145,25 @@ pub enum ReleaseBasis {
         reference: RefSetId,
         files: Vec<InstanceId>,
     },
-    /// **Open**: only "consistent with the releases checked", from a self-reported value. A
-    /// custom build, a mixed install, or an unlisted release is not excluded.
-    SelfReportedCommit {
-        field: String,
-        value: UntrustedText,
-        at: EvidenceRef,
-    },
+    /// **Open**: only "consistent with the releases checked", from self-reported values. A
+    /// custom build, a mixed install, or an unlisted release is not excluded (PR-4c-2c).
+    SelfReportedCommit { commits: Vec<ReportedCommit> },
+}
+
+/// One self-reported commit an open release claim rests on: an `Embedded` assertion's field,
+/// value, and evidence (PR-4c-2c).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportedCommit {
+    pub field: String,
+    pub value: UntrustedText,
+    pub at: EvidenceRef,
+}
+
+/// Whether `text` reads as a commit: 7 to 40 lowercase hex digits, as `git` abbreviates one.
+pub fn is_commit(text: &[u8]) -> bool {
+    (7..=40).contains(&text.len())
+        && text
+            .iter()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
 }

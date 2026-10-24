@@ -1,11 +1,14 @@
 //! Every golden binary inspection carries exactly the component claims the engine derives from
 //! its facts (PR-4c-1 plan P-l), as `example_hints.rs` does for hints. The install examples'
 //! claims are specification examples: they have no binary facts to derive them from. Example 12's
-//! claim is checked against facts this file supplies (PR-4c-2b).
+//! claim is checked against facts this file supplies (PR-4c-2b), and example 17's release claim
+//! against its component claim (PR-4c-2c).
 
 use std::path::Path;
 
 use sigil_engine::analyze::identity::derive;
+use sigil_engine::analyze::release::open;
+use sigil_engine::reference::official;
 use sigil_model::{
     is_binary_inspection, BinaryFacts, ContainerFacts, DataValue, ElfFacts, FunctionReturn, Loc,
     Session, UntrustedText,
@@ -80,4 +83,16 @@ fn example_12_is_the_claim_the_engine_derives_from_its_facts() {
     derived.components = derive(&session.instances, &[facts], &session.reference_matches).unwrap();
     derived.canonicalize();
     assert_eq!(session.components, derived.components);
+}
+
+/// Example 17's open release claim is the one the engine derives from its component claim with
+/// the embedded commit data (PR-4c-2c).
+#[test]
+fn example_17_is_the_open_claim_the_engine_derives_from_its_claims() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas/examples/session-v1/17-open-release.json");
+    let session: Session = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let derived = open(&session.components, official().unwrap()).unwrap();
+    assert_eq!(derived.as_ref(), session.releases.first());
+    assert_eq!(session.releases.len(), 1);
 }

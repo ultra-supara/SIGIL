@@ -81,8 +81,9 @@ fn the_new_not_read_reasons_are_json_names() {
 // --- validation V1–V11 -------------------------------------------------------------------------
 
 use sigil_model::{
-    CheckId, Coverage, CoverageState, InstanceContent, Ref, ReleaseBasis, Session, Stability,
-    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
+    CheckId, Coverage, CoverageState, EvidenceRef, IdentityAssertion, InstanceContent, Ref,
+    ReleaseBasis, ReportedCommit, RootId, Session, Stability, UntrustedText, ARTIFACTS_DISCOVERY,
+    ARTIFACTS_RELEASE,
 };
 
 /// Golden example 12 (one placement, one row, a closed claim for v0.30.6), with a valid
@@ -255,6 +256,165 @@ fn v11_release_complete_needs_a_claim_and_a_complete_discovery() {
         },
     );
     rejected(&s, "release Partial although everything holds");
+}
+
+// --- validation V12 (PR-4c-2c) -----------------------------------------------------------------
+
+/// Golden example 17: an open claim.
+fn open() -> Session {
+    let s = common::open_release();
+    assert_eq!(s.validate(), Ok(()), "the open base must be valid");
+    s
+}
+
+/// Rejected by a V12 error whose reason contains `why`, whatever else is also reported.
+fn rejected_release(s: &Session, why: &str) {
+    let errors = s.validate().unwrap_err();
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, sigil_model::ValidationError::Release { why: w, .. } if w.contains(why))
+        ),
+        "{why}: {errors:?}"
+    );
+}
+
+/// The commits of example 17's open claim.
+fn commits(s: &mut Session) -> &mut Vec<ReportedCommit> {
+    match &mut s.releases[0].basis {
+        ReleaseBasis::SelfReportedCommit { commits } => commits,
+        ReleaseBasis::ReferenceMatches { .. } => panic!("example 17's claim is open"),
+    }
+}
+
+/// Canonical order (PR-4c-2c): an open claim's commits and candidates are sorted, so what the
+/// engine derives and what a saved session holds compare as written.
+#[test]
+fn canonicalize_sorts_an_open_claim_s_commits_and_candidates() {
+    let mut s = open();
+    let first = commits(&mut s)[0].clone();
+    let mut second = first.clone();
+    second.field = "ggml_commit".to_string();
+    // "LLAMA_COMMIT" sorts before "ggml_commit" in JSON text: list them the other way round.
+    *commits(&mut s) = vec![second.clone(), first.clone()];
+    s.releases[0].candidates = vec!["v0.30.7".into(), "v0.30.5".into(), "v0.30.6".into()];
+    s.canonicalize();
+    assert_eq!(*commits(&mut s), vec![first, second]);
+    assert_eq!(s.releases[0].candidates, ["v0.30.5", "v0.30.6", "v0.30.7"]);
+}
+
+/// A closed claim's files are in canonical order too.
+#[test]
+fn canonicalize_sorts_a_closed_claim_s_files() {
+    let mut claim = base().releases[0].clone();
+    let ReleaseBasis::ReferenceMatches { files, .. } = &mut claim.basis else {
+        panic!("the base claim is closed");
+    };
+    *files = ["inst:b", "inst:c", "inst:a"]
+        .iter()
+        .map(|f| InstanceId::new(*f).unwrap())
+        .collect();
+    claim.canonicalize();
+    let ReleaseBasis::ReferenceMatches { files, .. } = &claim.basis else {
+        panic!("closed");
+    };
+    let names: Vec<&str> = files.iter().map(|f| f.as_str()).collect();
+    assert_eq!(names, ["inst:a", "inst:b", "inst:c"]);
+}
+
+/// V12 names each reason once per claim, however many commits break it.
+#[test]
+fn v12_names_a_reason_once_for_two_bad_commits() {
+    let mut s = open();
+    let mut second = commits(&mut s)[0].clone();
+    second.field = "ggml_commit".to_string();
+    commits(&mut s)[0].value = UntrustedText::new("unknown");
+    second.value = UntrustedText::new("other");
+    commits(&mut s).push(second);
+    let errors = s.validate().unwrap_err();
+    let hex = errors
+        .iter()
+        .filter(|e| {
+            matches!(e, sigil_model::ValidationError::Release { why, .. }
+                if why.contains("a commit is 7 to 40 lowercase hex digits"))
+        })
+        .count();
+    assert_eq!(hex, 1, "{errors:?}");
+}
+
+#[test]
+fn v12_one_claim_per_product_with_unique_candidates() {
+    let mut s = open();
+    let mut again = s.releases[0].clone();
+    again.candidates.pop();
+    s.releases.push(again);
+    rejected_release(&s, "one release claim per product");
+    let mut s = open();
+    s.releases[0].candidates.push("v0.30.5".into());
+    rejected_release(&s, "the candidates are unique");
+}
+
+#[test]
+fn v12_an_open_claim_is_for_an_install_and_never_beside_a_closed_one() {
+    let mut s = open();
+    let closed = base().releases[0].clone();
+    s.releases.insert(0, closed);
+    rejected_release(&s, "never beside a claim by reference matches");
+    let mut s = open();
+    s.request.roots[0].id = RootId::new("models").unwrap();
+    rejected_release(&s, "only for an install");
+    // Plan review P2: without a reference set, no verifier would ever recompute it.
+    let mut s = open();
+    s.knowledge
+        .retain(|k| k.kind != sigil_model::KnowledgeKind::ReferenceManifest);
+    rejected_release(&s, "needs a reference set in knowledge");
+}
+
+#[test]
+fn v12_an_open_claim_rests_on_the_session_s_own_commits() {
+    let mut s = open();
+    commits(&mut s).clear();
+    rejected_release(&s, "at least one commit");
+    let mut s = open();
+    let again = commits(&mut s)[0].clone();
+    commits(&mut s).push(again);
+    rejected_release(&s, "each commit is listed once");
+    let mut s = open();
+    commits(&mut s)[0].value = UntrustedText::new("6f3a9f3");
+    rejected_release(&s, "an Embedded assertion of a claim");
+    let mut s = open();
+    commits(&mut s)[0].field = "ggml_commit".to_string();
+    rejected_release(&s, "an Embedded assertion of a claim");
+    // Only the evidence differs from the assertion's.
+    let mut s = open();
+    let artifact = s.artifacts[0].id.clone();
+    commits(&mut s)[0].at = EvidenceRef::Artifact { artifact };
+    rejected_release(&s, "an Embedded assertion of a claim");
+    // A value that is no commit, even when the claim's assertion has it.
+    let mut s = open();
+    commits(&mut s)[0].value = UntrustedText::new("unknown");
+    for a in &mut s.components[0].assertions {
+        if let IdentityAssertion::Embedded { value, .. } = a {
+            *value = UntrustedText::new("unknown");
+        }
+    }
+    rejected_release(&s, "7 to 40 lowercase hex digits");
+}
+
+#[test]
+fn a_commit_is_7_to_40_lowercase_hex_digits() {
+    for (text, commit) in [
+        ("6f3a9f3", true),
+        ("6f3a9f3de", true),
+        ("6f3a9f3dee3c27545371044a3a38005721ac8a8e", true),
+        ("6f3a9f", false),
+        ("6f3a9f3dee3c27545371044a3a38005721ac8a8e0", false),
+        ("6F3A9F3DE", false),
+        ("6f3a9f3dg", false),
+        ("unknown", false),
+        ("", false),
+    ] {
+        assert_eq!(sigil_model::is_commit(text.as_bytes()), commit, "{text:?}");
+    }
 }
 
 #[test]

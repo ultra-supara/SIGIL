@@ -1,20 +1,22 @@
 //! The assembled session with `--install-dir` (PR-4a): it validates and verifies against the
 //! embedded set, a policy that requires the install's checks without one is incomplete, and the
 //! verifier rejects what `validate` cannot re-derive. Its ELF files carry component claims whose
-//! known hashes are their reference rows (PR-4c-1). Synthetic trees only: no test reads a real
-//! installation.
+//! known hashes are their reference rows (PR-4c-1). A self-reported commit gives an open release
+//! claim (PR-4c-2c). Synthetic trees only: no test reads a real installation.
 
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use sigil_engine::analyze::identity::derive;
-use sigil_engine::analyze::release::analyze;
+use sigil_engine::analyze::release::{analyze, claims, open};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::{collect, InstallBudgets};
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::inspect::{store_session, ActiveInput, InstallRequest, StoreRequest};
 use sigil_engine::policy::{evaluate, Policy};
-use sigil_engine::reference::{official, parse_set, verify_reference_matches, RefSet};
+use sigil_engine::reference::{
+    names, official, parse_set, verify_reference_matches, verify_release_claims, RefSet,
+};
 use sigil_model::*;
 use tempfile::TempDir;
 
@@ -125,6 +127,7 @@ fn a_session_with_an_install_validates_and_verifies() {
     let tree = install();
     let s = inspect_with_install(&tree);
     verify_reference_matches(&s, official().unwrap()).unwrap();
+    verify_release_claims(&s, official().unwrap()).unwrap();
     assert!(s
         .request
         .audit
@@ -360,20 +363,40 @@ fn drop_known_hashes(s: &mut Session, release: &str) {
 
 /// Two releases whose manifests both describe `install()` exactly.
 fn identical_pair() -> RefSet {
+    identical_pair_with(&[])
+}
+
+/// Two releases whose manifests both describe `install()` and the `extra` entries exactly.
+fn identical_pair_with(extra: &[serde_json::Value]) -> RefSet {
+    identical_pair_with_commits(extra, None)
+}
+
+/// [`identical_pair_with`], with the `commits.toml` given.
+fn identical_pair_with_commits(extra: &[serde_json::Value], commits: Option<&str>) -> RefSet {
+    pair_named("ollama-official", extra, commits)
+}
+
+/// [`identical_pair_with_commits`] for the set `id`.
+fn pair_named(id: &str, extra: &[serde_json::Value], commits: Option<&str>) -> RefSet {
     use serde_json::json;
     let hex = |b: &[u8]| common::hex(b);
     let manifest = |tag: &str| {
-        json!({"tag": tag, "entries": [
-            {"name": "bin/ollama", "type": "0", "mode": "0o755", "sha256": hex(&elf(2)), "size": 64},
-            {"name": "lib/ollama/cuda_v12", "type": "5", "mode": "0o755"},
-            {"name": "lib/ollama/cuda_v12/libcudart.so.12.8.90", "type": "0", "mode": "0o644", "sha256": hex(b"weights"), "size": 7},
-            {"name": "lib/ollama/libggml.so.0", "type": "2", "mode": "0o777", "link": "libggml.so.0.13.1"},
-            {"name": "lib/ollama/libggml.so.0.13.1", "type": "0", "mode": "0o644", "sha256": hex(&elf(3)), "size": 64},
-        ]})
-        .to_string()
+        let mut entries = vec![
+            json!({"name": "bin/ollama", "type": "0", "mode": "0o755", "sha256": hex(&elf(2)), "size": 64}),
+            json!({"name": "lib/ollama/cuda_v12", "type": "5", "mode": "0o755"}),
+            json!({"name": "lib/ollama/cuda_v12/libcudart.so.12.8.90", "type": "0", "mode": "0o644", "sha256": hex(b"weights"), "size": 7}),
+            json!({"name": "lib/ollama/libggml.so.0", "type": "2", "mode": "0o777", "link": "libggml.so.0.13.1"}),
+            json!({"name": "lib/ollama/libggml.so.0.13.1", "type": "0", "mode": "0o644", "sha256": hex(&elf(3)), "size": 64}),
+        ];
+        entries.extend(extra.iter().cloned());
+        json!({"tag": tag, "entries": entries}).to_string()
     };
     let (a, b) = (manifest("vA"), manifest("vB"));
-    parse_set("ollama-official", "test", &[("a.json", &a), ("b.json", &b)]).unwrap()
+    let mut files = vec![("a.json", a.as_str()), ("b.json", b.as_str())];
+    if let Some(toml) = commits {
+        files.push(("commits.toml", toml));
+    }
+    parse_set(id, "test", &files).unwrap()
 }
 
 /// The review's case: two identical releases, a claim for both; with every vB row removed and the
@@ -502,4 +525,548 @@ fn a_matching_reference_set_makes_the_claims_reference_matched() {
             .collect();
         assert_eq!(matched, ["vA", "vB"], "{}", c.component);
     }
+}
+
+/// `install()` with the fixture `libdata.so`, which reports `LLAMA_COMMIT` `6f3a9f3de`, as
+/// `lib/ollama/libllama-common.so.0.0.1`.
+fn install_with_a_commit() -> TempDir {
+    let tree = install();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so");
+    std::fs::copy(
+        fixture,
+        tree.path().join("lib/ollama/libllama-common.so.0.0.1"),
+    )
+    .unwrap();
+    tree
+}
+
+/// PR-4c-2c: the fixture `libdata.so` placed as `libllama-common.so.0.0.1` matches no reference,
+/// and reports `LLAMA_COMMIT` `6f3a9f3de`, as the official releases' files do: an open claim for
+/// all three, resting on that commit. `artifacts.release` stays `Partial`.
+#[test]
+fn a_self_reported_commit_gives_an_open_release_claim() {
+    let tree = install_with_a_commit();
+    let s = inspect_with_install(&tree);
+    verify_reference_matches(&s, official().unwrap()).unwrap();
+    verify_release_claims(&s, official().unwrap()).unwrap();
+    let [claim] = s.releases.as_slice() else {
+        panic!("one claim: {:?}", s.releases);
+    };
+    assert_eq!(claim.product.as_str(), "ollama");
+    assert_eq!(claim.candidates, ["v0.30.5", "v0.30.6", "v0.30.7"]);
+    let ReleaseBasis::SelfReportedCommit { commits } = &claim.basis else {
+        panic!("an open claim: {:?}", claim.basis);
+    };
+    let common = s
+        .components
+        .iter()
+        .find(|c| c.component.as_str() == "llama.cpp/common")
+        .unwrap();
+    let shown: Vec<(&str, Option<&str>)> = commits
+        .iter()
+        .map(|c| (c.field.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(shown, [("LLAMA_COMMIT", Some("6f3a9f3de"))]);
+    assert!(
+        matches!(&commits[0].at, EvidenceRef::Code { slice, .. } if *slice == common.subject),
+        "{:?}",
+        commits[0].at
+    );
+    assert!(matches!(
+        state(&s, ARTIFACTS_RELEASE),
+        CoverageState::Partial { .. }
+    ));
+}
+
+/// PR-4c-2c: `validate` checks that an open claim rests on the session's own commits; only the
+/// verifier knows which releases report them, and it recomputes every release claim, closed
+/// ones included.
+#[test]
+fn the_verifier_recomputes_the_release_claims() {
+    let tree = install_with_a_commit();
+    let s = inspect_with_install(&tree);
+    let set = official().unwrap();
+    // Other candidates.
+    let mut t = s.clone();
+    t.releases[0].candidates = vec!["v0.30.6".to_string()];
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    assert!(verify_release_claims(&t, set).is_err());
+    // The claim dropped.
+    let mut t = s.clone();
+    t.releases.clear();
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    assert!(verify_release_claims(&t, set).is_err());
+    // A commit no release reports, in the claim and in the assertion it rests on.
+    let mut t = s.clone();
+    let other = UntrustedText::new("1111111");
+    for c in &mut t.components {
+        for a in &mut c.assertions {
+            if let IdentityAssertion::Embedded { field, value, .. } = a {
+                if field == "LLAMA_COMMIT" {
+                    *value = other.clone();
+                }
+            }
+        }
+    }
+    if let ReleaseBasis::SelfReportedCommit { commits } = &mut t.releases[0].basis {
+        commits[0].value = other;
+    }
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    assert!(verify_release_claims(&t, set).is_err());
+    // A session made with another version of the set (its id, another SHA-256) is not checked,
+    // whatever its claim; it passes `validate`.
+    let mut t = s.clone();
+    for k in &mut t.knowledge {
+        if k.kind == KnowledgeKind::ReferenceManifest {
+            k.sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+        }
+    }
+    t.releases[0].candidates = vec!["v0.30.6".to_string()];
+    assert_eq!(t.validate(), Ok(()), "an older set version is legitimate");
+    assert!(verify_release_claims(&t, set).is_ok());
+    // A closed claim the rows do not give is refused (a genuine one passes:
+    // `a_closed_claim_relabelled_to_another_product_is_refused`).
+    let mut t = s.clone();
+    t.releases[0].basis = ReleaseBasis::ReferenceMatches {
+        reference: set.id.clone(),
+        files: vec![],
+    };
+    assert!(verify_release_claims(&t, set).is_err());
+}
+
+/// PR-4c-2c: `names` tells a session that names the set, one made with another version of it
+/// (not checked), and one that has the set's SHA-256 under another id (refused).
+#[test]
+fn names_tells_the_set_another_version_and_another_id() {
+    let tree = install_with_a_commit();
+    let s = inspect_with_install(&tree);
+    let set = official().unwrap();
+    assert_eq!(names(&s, set), Ok(true));
+    let mut t = s.clone();
+    for k in &mut t.knowledge {
+        if k.kind == KnowledgeKind::ReferenceManifest {
+            k.sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+        }
+    }
+    assert_eq!(names(&t, set), Ok(false));
+    assert_eq!(verify_release_claims(&t, set), Ok(()));
+    let mut t = s.clone();
+    for k in &mut t.knowledge {
+        if k.kind == KnowledgeKind::ReferenceManifest {
+            k.id = "x".to_string();
+        }
+    }
+    assert!(names(&t, set).is_err());
+    assert!(verify_release_claims(&t, set).is_err());
+    assert!(verify_reference_matches(&t, set).is_err());
+    let mut t = s.clone();
+    t.knowledge
+        .retain(|k| k.kind != KnowledgeKind::ReferenceManifest);
+    assert_eq!(names(&t, set), Ok(false));
+}
+
+/// PR-4c-2c: a closed claim counts only when it rests on this set, and a session that names the
+/// set has no row of another reference. A session as a run with `another-set` writes it, with the
+/// embedded set's knowledge entry added: it validates, and both verifiers refuse it.
+#[test]
+fn a_closed_claim_against_another_set_is_refused() {
+    let tree = install_with_a_commit();
+    let mut s = inspect_with_install(&tree);
+    let lib = std::fs::read(tree.path().join("lib/ollama/libllama-common.so.0.0.1")).unwrap();
+    let other = pair_named(
+        "another-set",
+        &[serde_json::json!({
+            "name": "lib/ollama/libllama-common.so.0.0.1", "type": "0", "mode": "0o644",
+            "sha256": common::hex(&lib), "size": lib.len(),
+        })],
+        None,
+    );
+    install_as_a_run_with(&mut s, &tree, &other);
+    assert_eq!(s.releases[0].candidates, ["vA", "vB"]);
+    let set = official().unwrap();
+    s.knowledge.push(set.knowledge());
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()));
+    let errors = verify_reference_matches(&s, set).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("a row names reference set another-set")),
+        "{errors:?}"
+    );
+    assert!(verify_release_claims(&s, set).is_err());
+}
+
+/// A set of two identical releases that also lists `libllama-common` of `tree` and its commit.
+fn refs_with_the_libllama_commit(tree: &TempDir) -> RefSet {
+    let member = "lib/ollama/libllama-common.so.0.0.1";
+    let lib = std::fs::read(tree.path().join(member)).unwrap();
+    let commits: String = ["vA", "vB"]
+        .iter()
+        .map(|tag| {
+            format!(
+                "[[release]]\ntag = \"{tag}\"\ncommits = [{{ field = \"LLAMA_COMMIT\", \
+             member = \"{member}\", value = \"6f3a9f3de\" }}]\n"
+            )
+        })
+        .collect();
+    identical_pair_with_commits(
+        &[serde_json::json!({
+            "name": member, "type": "0", "mode": "0o644",
+            "sha256": common::hex(&lib), "size": lib.len(),
+        })],
+        Some(&commits),
+    )
+}
+
+/// A session as a run writes it with a set that lists `libllama-common` and its commit, so that
+/// the closed claim is `[vA, vB]` and the open claim `open` gives is the same two releases.
+fn closed_session_with_commits() -> (Session, RefSet) {
+    let tree = install_with_a_commit();
+    let mut s = inspect_with_install(&tree);
+    let refs = refs_with_the_libllama_commit(&tree);
+    install_as_a_run_with(&mut s, &tree, &refs);
+    (s, refs)
+}
+
+/// PR-4c-2c: the verifier recomputes the closed claim too. A genuine closed claim passes; V10
+/// does not look at the product of a closed claim, so one relabelled to another product, with the
+/// open claim the commits give beside it, passes `validate` and is refused by the verifier.
+#[test]
+fn a_closed_claim_relabelled_to_another_product_is_refused() {
+    let (s, refs) = closed_session_with_commits();
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(s.releases[0].candidates, ["vA", "vB"]);
+    verify_reference_matches(&s, &refs).unwrap();
+    assert_eq!(
+        verify_release_claims(&s, &refs),
+        Ok(()),
+        "a genuine closed claim"
+    );
+    let mut t = s.clone();
+    t.releases[0].product = ComponentKey::new("another-product").unwrap();
+    t.releases.extend(open(&t.components, &refs).unwrap());
+    t.canonicalize();
+    assert_eq!(t.releases.len(), 2);
+    assert_eq!(t.validate(), Ok(()), "V10 does not check the product");
+    verify_reference_matches(&t, &refs).unwrap();
+    assert!(verify_release_claims(&t, &refs).is_err());
+}
+
+/// PR-4c-2c: a closed claim dropped, `artifacts.release` set to `Partial` (V11 ties only
+/// `Complete` to a closed claim), and the open claim the commits give added: `validate` passes,
+/// the verifier recomputes the closed claim from the rows and refuses it.
+#[test]
+fn a_closed_claim_downgraded_to_an_open_one_is_refused() {
+    let (s, refs) = closed_session_with_commits();
+    let mut t = s.clone();
+    t.releases.clear();
+    for c in &mut t.coverage {
+        if c.check.as_str() == ARTIFACTS_RELEASE {
+            c.state = CoverageState::Partial {
+                missing: vec!["a reason".to_string()],
+            };
+        }
+    }
+    t.releases.extend(open(&t.components, &refs).unwrap());
+    // The policy requires `artifacts.release`: the outcome follows the coverage.
+    let policy = Policy::builtin_default().unwrap();
+    let time = t.outcome.policy_time.clone();
+    evaluate(&mut t, &policy, time).unwrap();
+    t.canonicalize();
+    assert_eq!(t.releases.len(), 1);
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    verify_reference_matches(&t, &refs).unwrap();
+    assert!(verify_release_claims(&t, &refs).is_err());
+}
+
+/// PR-4c-2c: a closed claim's `files` are compared in canonical order, as a saved session may
+/// list them.
+#[test]
+fn a_closed_claim_with_its_files_reversed_is_accepted() {
+    let (s, refs) = closed_session_with_commits();
+    let mut t = s.clone();
+    let ReleaseBasis::ReferenceMatches { files, .. } = &mut t.releases[0].basis else {
+        panic!("a closed claim: {:?}", t.releases);
+    };
+    assert!(files.len() > 1);
+    files.reverse();
+    assert_ne!(t.releases, s.releases);
+    assert_eq!(t.validate(), Ok(()));
+    assert_eq!(verify_release_claims(&t, &refs), Ok(()));
+}
+
+/// PR-4c-2c: the engine makes no release claim without an install root (and V12 forbids an open
+/// one), so the verifier refuses a session that has one. `validate` need not accept it.
+#[test]
+fn a_release_claim_without_an_install_root_is_refused() {
+    let tree = install_with_a_commit();
+    let s = inspect_with_install(&tree);
+    let set = official().unwrap();
+    assert_eq!(verify_release_claims(&s, set), Ok(()));
+    let mut t = s.clone();
+    t.request.roots.retain(|r| r.id.as_str() != INSTALL_ROOT);
+    assert_eq!(t.releases.len(), 1);
+    assert!(verify_release_claims(&t, set).is_err());
+}
+
+/// PR-4c-2c: after a discovery that ran out of budget the engine makes no closed claim, even when
+/// every placement found matches a release, and the open claim of the commits stands. The
+/// verifier takes `complete` from the discovery coverage.
+#[test]
+fn an_open_claim_after_a_partial_discovery_verifies() {
+    let tree = install_with_a_commit();
+    let (_, refs) = closed_session_with_commits();
+    let models = TempDir::new().unwrap();
+    let mut found = None;
+    for n in (1..=6).rev() {
+        let mut req = request(models.path(), Some(tree.path()));
+        let budgets = InstallBudgets {
+            files: n,
+            ..InstallBudgets::default()
+        };
+        req.install.as_mut().unwrap().budgets = budgets;
+        let s = session(&req, &Policy::builtin_default().unwrap());
+        let partial = matches!(
+            state(&s, ARTIFACTS_DISCOVERY),
+            CoverageState::BudgetExceeded { .. }
+        );
+        let has_lib = s
+            .instances
+            .iter()
+            .any(|i| i.path.as_bytes().ends_with(b"libllama-common.so.0.0.1"));
+        if partial && has_lib {
+            found = Some((s, budgets));
+            break;
+        }
+    }
+    let (mut s, budgets) = found.expect("a budget that cuts the discovery short, past the library");
+    // The engine's own session: an open claim, no closed one.
+    let [claim] = s.releases.as_slice() else {
+        panic!("one claim: {:?}", s.releases);
+    };
+    assert!(matches!(
+        claim.basis,
+        ReleaseBasis::SelfReportedCommit { .. }
+    ));
+    // The same run against a set that lists every file found: all of them match, and no claim
+    // is closed.
+    install_as_a_run_with_budgets(&mut s, &tree, &refs, budgets);
+    assert!(s.releases.is_empty(), "{:?}", s.releases);
+    s.releases = claims(None, &s.components, &refs).unwrap();
+    s.canonicalize();
+    let [claim] = s.releases.as_slice() else {
+        panic!("an open claim: {:?}", s.releases);
+    };
+    assert!(matches!(
+        claim.basis,
+        ReleaseBasis::SelfReportedCommit { .. }
+    ));
+    assert_eq!(s.validate(), Ok(()));
+    verify_reference_matches(&s, &refs).unwrap();
+    assert_eq!(verify_release_claims(&s, &refs), Ok(()));
+}
+
+/// PR-4c-2c: `validate` does not tie `components` to the binary facts, so the verifier derives
+/// the claims again. An assertion that no binary fact gives, with the open claim it supports,
+/// passes `validate` and fails the verifier.
+#[test]
+fn a_fabricated_commit_assertion_fails_the_verifier() {
+    let tree = install_with_a_commit();
+    let s = inspect_with_install(&tree);
+    let set = official().unwrap();
+    // `ggml_commit` is reported by no placement of this install.
+    let (at, method) = s
+        .components
+        .iter()
+        .flat_map(|c| &c.assertions)
+        .find_map(|a| match a {
+            IdentityAssertion::Embedded { at, method, .. } => Some((at.clone(), method.clone())),
+            _ => None,
+        })
+        .unwrap();
+    let mut t = s.clone();
+    let i = t
+        .components
+        .iter()
+        .position(|c| {
+            !c.assertions
+                .iter()
+                .any(|a| matches!(a, IdentityAssertion::Embedded { .. }))
+        })
+        .unwrap();
+    t.components[i]
+        .assertions
+        .push(IdentityAssertion::Embedded {
+            field: "ggml_commit".to_string(),
+            value: UntrustedText::new("6f3a9f3de"),
+            at,
+            method,
+        });
+    t.releases = open(&t.components, set).unwrap().into_iter().collect();
+    t.canonicalize();
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    assert!(verify_release_claims(&t, set).is_err());
+}
+
+/// Makes `s` the session of a run with `refs` over `tree`: its rows, a closed claim, and what
+/// rests on them.
+fn install_as_a_run_with(s: &mut Session, tree: &TempDir, refs: &RefSet) {
+    install_as_a_run_with_budgets(s, tree, refs, InstallBudgets::default());
+}
+
+/// [`install_as_a_run_with`] for a run with these discovery budgets.
+fn install_as_a_run_with_budgets(
+    s: &mut Session,
+    tree: &TempDir,
+    refs: &RefSet,
+    budgets: InstallBudgets,
+) {
+    // The session as a run with `refs` writes it: a closed claim for both releases.
+    let r = analyze(&collect(tree.path(), budgets).unwrap(), refs).unwrap();
+    for k in &mut s.knowledge {
+        if k.kind == KnowledgeKind::ReferenceManifest {
+            *k = refs.knowledge();
+        }
+    }
+    s.reference_matches = r.rows;
+    s.releases = r.claim.into_iter().collect();
+    s.components = derive(&s.instances, &s.binaries, &s.reference_matches).unwrap();
+    for c in &mut s.coverage {
+        if c.check.as_str() == ARTIFACTS_RELEASE {
+            *c = r.coverage.clone();
+        }
+    }
+    let policy = Policy::builtin_default().unwrap();
+    let time = s.outcome.policy_time.clone();
+    evaluate(s, &policy, time).unwrap();
+    s.canonicalize();
+}
+
+/// Plan review P2: beside a closed claim, an open claim of another product that rests on the
+/// session's own commit passes `validate` (V12 checks claims per product) and fails the
+/// verifier, which admits no open claim beside a closed one.
+#[test]
+fn an_open_claim_of_another_product_beside_a_closed_one_fails_the_verifier() {
+    let tree = install_with_a_commit();
+    let mut s = inspect_with_install(&tree);
+    let lib = std::fs::read(tree.path().join("lib/ollama/libllama-common.so.0.0.1")).unwrap();
+    let refs = identical_pair_with(&[serde_json::json!({
+        "name": "lib/ollama/libllama-common.so.0.0.1", "type": "0", "mode": "0o644",
+        "sha256": common::hex(&lib), "size": lib.len(),
+    })]);
+    install_as_a_run_with(&mut s, &tree, &refs);
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(s.releases[0].candidates, ["vA", "vB"]);
+    verify_reference_matches(&s, &refs).unwrap();
+    verify_release_claims(&s, &refs).unwrap();
+    // Another product's open claim, on the session's own LLAMA_COMMIT.
+    let commit = s
+        .components
+        .iter()
+        .flat_map(|c| &c.assertions)
+        .find_map(|a| match a {
+            IdentityAssertion::Embedded {
+                field, value, at, ..
+            } if field == "LLAMA_COMMIT" => Some(ReportedCommit {
+                field: field.clone(),
+                value: value.clone(),
+                at: at.clone(),
+            }),
+            _ => None,
+        })
+        .unwrap();
+    s.releases.push(ReleaseClaim {
+        product: ComponentKey::new("another-product").unwrap(),
+        candidates: vec!["v999".to_string()],
+        basis: ReleaseBasis::SelfReportedCommit {
+            commits: vec![commit],
+        },
+    });
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()), "V12 checks claims per product");
+    assert!(verify_release_claims(&s, &refs).is_err());
+}
+
+/// PR-4c-2c: an install with two reporting libraries gives two commits, and the session's claim is
+/// the one `open` derives from the session's own component claims, as written (canonical order).
+#[test]
+fn an_open_claim_with_two_commits_equals_the_one_derived_from_the_claims() {
+    let tree = install();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    std::fs::copy(
+        fixtures.join("elf/libdata.so"),
+        tree.path().join("lib/ollama/libllama-common.so.0.0.1"),
+    )
+    .unwrap();
+    std::fs::copy(
+        fixtures.join("returns/version-gcc-O2.so"),
+        tree.path().join("lib/ollama/libggml-base.so.0.13.1"),
+    )
+    .unwrap();
+    let s = inspect_with_install(&tree);
+    let [claim] = s.releases.as_slice() else {
+        panic!("one claim: {:?}", s.releases);
+    };
+    let ReleaseBasis::SelfReportedCommit { commits } = &claim.basis else {
+        panic!("an open claim: {:?}", claim.basis);
+    };
+    let shown: Vec<(&str, Option<&str>)> = commits
+        .iter()
+        .map(|c| (c.field.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("LLAMA_COMMIT", Some("6f3a9f3de")),
+            ("ggml_commit", Some("6f3a9f3de"))
+        ]
+    );
+    let derived = open(&s.components, official().unwrap()).unwrap();
+    assert_eq!(s.releases, derived.into_iter().collect::<Vec<_>>());
+    let set = official().unwrap();
+    verify_release_claims(&s, set).unwrap();
+    // The commits in another order are the same claim.
+    let mut t = s.clone();
+    if let ReleaseBasis::SelfReportedCommit { commits } = &mut t.releases[0].basis {
+        commits.reverse();
+    }
+    assert_eq!(verify_release_claims(&t, set), Ok(()));
+    // A commit dropped from the claim: `validate` cannot see it, the verifier does.
+    let mut t = s.clone();
+    if let ReleaseBasis::SelfReportedCommit { commits } = &mut t.releases[0].basis {
+        commits.retain(|c| c.field != "ggml_commit");
+        assert_eq!(commits.len(), 1);
+    }
+    assert_eq!(t.validate(), Ok(()), "validate cannot see it");
+    let errors = verify_release_claims(&t, set).unwrap_err();
+    assert!(errors[0].contains("ggml_commit"), "{errors:?}");
+}
+
+/// PR-4c-2c: a closed claim comes first. The set describes the install exactly, `libllama-common`
+/// included, and lists the same commit; `claims` gives the closed claim, while `open` alone would
+/// give an open one.
+#[test]
+fn a_closed_claim_comes_before_an_open_one() {
+    let tree = install_with_a_commit();
+    let refs = refs_with_the_libllama_commit(&tree);
+    let facts = collect(tree.path(), InstallBudgets::default()).unwrap();
+    let r = analyze(&facts, &refs).unwrap();
+    let components = derive(&facts.instances, &facts.binaries, &r.rows).unwrap();
+    let closed = r.claim.clone().unwrap();
+    assert_eq!(closed.candidates, ["vA", "vB"]);
+    assert!(matches!(
+        closed.basis,
+        ReleaseBasis::ReferenceMatches { .. }
+    ));
+    assert_eq!(
+        claims(r.claim, &components, &refs),
+        Ok(vec![closed.clone()])
+    );
+    let open = open(&components, &refs).unwrap().unwrap();
+    assert!(matches!(
+        open.basis,
+        ReleaseBasis::SelfReportedCommit { .. }
+    ));
+    assert_eq!(open.candidates, ["vA", "vB"]);
 }
