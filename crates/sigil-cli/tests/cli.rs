@@ -1526,8 +1526,20 @@ fn an_open_release_claim_is_reported_and_reverified_by_render() {
     );
     let rendered = run(&[&"session", &"render", &path]);
     assert_eq!(rendered.code, 0, "{}", rendered.stderr);
-    let commits = sigil_model::UntrustedText::new("Self-reported commits:").markdown_inline();
-    assert!(rendered.stdout.contains(&commits), "{}", rendered.stdout);
+    let piece = |text: &str| sigil_model::UntrustedText::new(text).markdown_inline();
+    let commits = format!(
+        "{} {} {} ({})",
+        piece("Self-reported commits:"),
+        piece("LLAMA_COMMIT"),
+        piece("6f3a9f3de"),
+        piece("lib/ollama/libllama-common.so.0.0.1")
+    );
+    // The one commit the tree reports, and nothing after it on the line.
+    assert!(
+        rendered.stdout.lines().any(|l| l == commits),
+        "{}",
+        rendered.stdout
+    );
     // Other candidates: validate still passes, the verifier does not.
     let mut v: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();

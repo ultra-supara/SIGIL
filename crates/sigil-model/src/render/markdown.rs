@@ -20,7 +20,8 @@ use super::code::{
 };
 use super::md::{self, esc, joined, section, table};
 use super::{
-    action, active_feature, coverage_state, kind, mode, not_observable, subject, treatment,
+    action, active_feature, coverage_state, kind, mode, not_observable, open_claim, subject,
+    treatment,
 };
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
@@ -740,10 +741,7 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
         .iter()
         .find(|c| matches!(c.basis, ReleaseBasis::ReferenceMatches { .. }));
     // PR-4c-2c: an open claim, by the install's self-reported commits.
-    let open = s.releases.iter().find_map(|c| match &c.basis {
-        ReleaseBasis::SelfReportedCommit { commits } => Some((c, commits)),
-        ReleaseBasis::ReferenceMatches { .. } => None,
-    });
+    let open = open_claim(s);
     // A comparison always records `artifacts.release`, whatever its result.
     let compared = !s.reference_matches.is_empty()
         || s.coverage

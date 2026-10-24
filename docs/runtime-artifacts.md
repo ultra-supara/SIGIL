@@ -142,10 +142,10 @@ release: not established (1 reason; sigil explain --coverage); consistent with o
 release: install not found
 ```
 
-The report's **Runtime artifacts** section opens with the same in its `Release:` line. An open
-claim reads `not established (see Coverage); consistent with v0.30.5, v0.30.6, v0.30.7 by a
+The report's **Runtime artifacts** section opens with a `Release:` line to the same effect. An
+open claim reads `not established (see Coverage); consistent with v0.30.5, v0.30.6, v0.30.7 by a
 self-reported commit (open: …)`, followed by `Self-reported commits:`: each field and value, with
-the install paths of the content that reports it.
+the install paths of the content that reports it, in path order.
 
 ## Coverage
 

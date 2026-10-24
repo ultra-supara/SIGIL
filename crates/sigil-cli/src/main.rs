@@ -44,7 +44,7 @@ use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
     action, artifact_type, binary_inputs, completeness, component_labels, coverage_state,
-    mode as mode_name, probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
+    mode as mode_name, open_claim, probe_result, severity, subject, verdict, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
@@ -1195,7 +1195,7 @@ fn release_line(s: &Session) -> Option<String> {
         part(MemberKind::Symlink, "symlinks"),
         part(MemberKind::Directory, "directories")
     );
-    let candidates = claim.candidates.join(", ");
+    let candidates = shown(&claim.candidates.join(", "));
     Some(
         if matches!(state(ARTIFACTS_RELEASE), Some(CoverageState::Complete)) {
             format!("release: ollama {candidates} ({counts} reference-matched; nothing absent)")
@@ -1205,14 +1205,10 @@ fn release_line(s: &Session) -> Option<String> {
     )
 }
 
-/// `; consistent with ollama … by self-reported commit … (open)` for a session with an open
+/// `; consistent with <product> … by self-reported commit … (open)` for a session with an open
 /// release claim (PR-4c-2c), each distinct value once; empty without one.
 fn open_release(s: &Session) -> String {
-    let open = s.releases.iter().find_map(|c| match &c.basis {
-        ReleaseBasis::SelfReportedCommit { commits } => Some((c, commits)),
-        ReleaseBasis::ReferenceMatches { .. } => None,
-    });
-    let Some((claim, commits)) = open else {
+    let Some((claim, commits)) = open_claim(s) else {
         return String::new();
     };
     let mut values: Vec<String> = vec![];
@@ -1227,7 +1223,8 @@ fn open_release(s: &Session) -> String {
         "commits"
     };
     format!(
-        "; consistent with ollama {} by self-reported {noun} {} (open)",
+        "; consistent with {} {} by self-reported {noun} {} (open)",
+        shown(claim.product.as_str()),
         shown(&claim.candidates.join(", ")),
         values.join(", ")
     )
@@ -1625,6 +1622,14 @@ mod tests {
         let mut other = commits[0].clone();
         other.field = "ggml_commit".to_string();
         commits.push(other.clone());
+        assert_eq!(
+            line(&s),
+            "release: not established (1 reason; sigil explain --coverage); consistent with \
+             ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)"
+        );
+        let ReleaseBasis::SelfReportedCommit { commits } = &mut s.releases[0].basis else {
+            panic!("example 17's claim is open");
+        };
         other.value = UntrustedText::new("6f3a9f3\u{1b}");
         commits.push(other);
         assert_eq!(
@@ -1632,6 +1637,13 @@ mod tests {
             "release: not established (1 reason; sigil explain --coverage); consistent with \
              ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commits 6f3a9f3de, 6f3a9f3\\u{001B} \
              (open)"
+        );
+        // The product is the claim's own.
+        s.releases[0].product = sigil_model::ComponentKey::new("llama.cpp").unwrap();
+        assert!(
+            line(&s).contains("; consistent with llama.cpp v0.30.5, v0.30.6, v0.30.7 by "),
+            "{}",
+            line(&s)
         );
     }
 }
