@@ -84,13 +84,13 @@ const OFFICIAL: &[(&str, &str)] = &[
         include_str!("../refs/ollama-official/ollama-v0.30.7-linux-amd64.json"),
     ),
     (
-        "commits.toml",
+        COMMITS,
         include_str!("../refs/ollama-official/commits.toml"),
     ),
 ];
 
-/// The official Ollama release manifests embedded in this build. An error only if the embedded
-/// files are malformed, which `tests/refset.rs` rules out.
+/// The official Ollama release manifests and their `commits.toml` embedded in this build. An
+/// error only if the embedded files are malformed, which `tests/refset.rs` rules out.
 pub fn official() -> Result<&'static RefSet, String> {
     static SET: OnceLock<Result<RefSet, String>> = OnceLock::new();
     SET.get_or_init(|| parse_set("ollama-official", "2026-10-24", OFFICIAL))
@@ -141,10 +141,12 @@ struct RawCommit {
 /// The name of the commit data among a set's files (PR-4c-2c).
 pub const COMMITS: &str = "commits.toml";
 
-/// Parses a set's files: manifests (`*.json`) and, optionally, [`COMMITS`]. Every entry must be a
-/// well-formed file, symlink, or directory with a relative, normalized name, listed once. Every
-/// commit names a release of the set once, a file of that release, a field once per release, and
-/// a value of 7 to 40 lowercase hex digits.
+/// Parses a set's files: manifests (`*.json`) and, optionally, one [`COMMITS`]. Any other file
+/// name is an error. Every manifest entry must be a well-formed file, symlink, or directory with
+/// a relative, normalized name, listed once, and every manifest has its own tag. In [`COMMITS`],
+/// each release of the set has at most one entry, with at least one commit. A commit's field is
+/// non-empty ASCII graphic text, once per release; its member is a file of that release; its
+/// value is 7 to 40 lowercase hex digits.
 pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefSet, String> {
     let mut sorted: Vec<&(&str, &str)> = files.iter().collect();
     sorted.sort_by_key(|(name, _)| *name);
@@ -158,7 +160,9 @@ pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefS
         hasher.update([0]);
         hasher.update(text.as_bytes());
         if *name == COMMITS {
-            commits = Some(*text);
+            if commits.replace(*text).is_some() {
+                return Err(format!("{COMMITS}: listed twice"));
+            }
             continue;
         }
         if !name.ends_with(".json") {
@@ -199,6 +203,9 @@ pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefS
                 return Err(format!("{name}: member {path} appears twice"));
             }
         }
+        if releases.iter().any(|r: &RefRelease| r.tag == raw.tag) {
+            return Err(format!("{name}: release {} is listed twice", raw.tag));
+        }
         releases.push(RefRelease {
             tag: raw.tag,
             members,
@@ -232,7 +239,7 @@ fn add_commits(releases: &mut [RefRelease], text: &str) -> Result<(), String> {
             return Err(format!("{COMMITS}: release {tag} lists no commit"));
         }
         for c in entry.commits {
-            let at = format!("{COMMITS}: {tag} {}", c.field);
+            let at = format!("{COMMITS}: {tag} {:?}", c.field);
             if c.field.is_empty() || !c.field.bytes().all(|b| b.is_ascii_graphic()) {
                 return Err(format!("{at}: the field is not ASCII graphic text"));
             }
@@ -240,7 +247,7 @@ fn add_commits(releases: &mut [RefRelease], text: &str) -> Result<(), String> {
                 return Err(format!("{at}: the field is listed twice"));
             }
             if !matches!(release.members.get(&c.member), Some(RefMember::File { .. })) {
-                return Err(format!("{at}: {} is not a file of the release", c.member));
+                return Err(format!("{at}: {:?} is not a file of the release", c.member));
             }
             if !sigil_model::is_commit(c.value.as_bytes()) {
                 return Err(format!(

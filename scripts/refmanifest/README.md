@@ -21,12 +21,17 @@ sha256sum ollama-linux-amd64.tar.zst            # must equal the digest publishe
 zstd -dc ollama-linux-amd64.tar.zst | python3 -I tar_manifest.py ollama-<tag>-linux-amd64.json <tag>
 ```
 
-Add both files to `crates/sigil-engine/refs/ollama-official/` and to `OFFICIAL` in
-`crates/sigil-engine/src/reference.rs`. Add the release's `commits.toml` entry: run
-`sigil inspect ollama --install-dir` on an unmodified install of it, and take each commit field's
-value from the claim of the member, whose SHA-256 must be the manifest's. Then update the set's
-version and pinned SHA-256 in `crates/sigil-engine/src/reference.rs` and
-`crates/sigil-engine/tests/refset.rs`, and release a new SIGIL version.
+Add the `.json` manifest to `crates/sigil-engine/refs/ollama-official/` and to `OFFICIAL` in
+`crates/sigil-engine/src/reference.rs`; keep the `.tar.zst.sha256` file beside it (it is not in
+`OFFICIAL`). Add the release's `commits.toml` entry: run
+`sigil inspect ollama --install-dir <DIR>` on an unmodified install of it, and take each commit
+field's value from the session JSON, in the claim whose subject slice has the member's SHA-256
+(its `Embedded` assertions); the member's SHA-256 must be the manifest's. A release whose files
+report no commit gets no entry (an empty entry is refused). Then update the set's version and
+pinned SHA-256 in `crates/sigil-engine/src/reference.rs` and `crates/sigil-engine/tests/refset.rs`,
+and the tests `every_release_reports_llama_commit_and_ggml_commit` and
+`the_official_set_has_three_releases_of_34_files_17_symlinks_3_directories` there, and the set
+table in `docs/runtime-artifacts.md`. Release a new SIGIL version.
 
 Matching a file against these is a comparison with the official archives' contents. It is not a
 signature check.

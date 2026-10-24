@@ -1,13 +1,16 @@
 # What each official release's own files report (PR-4c-2c): for each release, the value SIGIL
-# reads for an embedded field (`role = "commit"` in signatures/components.toml) from one of the
-# release's members. Each member's SHA-256 is in the release's manifest, and SIGIL read these
-# values from files with those SHA-256s (R-1, the official v0.30.6 install): the two members are
-# byte-identical in v0.30.5, v0.30.6, and v0.30.7.
+# reads for an embedded field (`role = "commit"` in the component database,
+# `crates/sigil-engine/signatures/components.toml`) from one of the release's members. Each
+# member's SHA-256 is in the release's manifest, and SIGIL read these values from the official
+# v0.30.6 install, whose files have those SHA-256s: the two members are byte-identical in
+# v0.30.5, v0.30.6, and v0.30.7.
 #
 # An open release claim lists the releases whose values agree with the commits an install reports
-# (crates/sigil-engine/src/analyze/release.rs, `open`). For reference only, never compared:
+# (`open` in crates/sigil-engine/src/analyze/release.rs). For reference only, never compared:
 # llama.cpp 6f3a9f3dee3c27545371044a3a38005721ac8a8e is its tag b9509, which Ollama v0.30.5,
 # v0.30.6, and v0.30.7 pin in LLAMA_CPP_VERSION (v2 plan §0.3).
+#
+# This file, comments included, is part of the set's SHA-256: editing a comment changes the set.
 
 [[release]]
 tag = "v0.30.5"

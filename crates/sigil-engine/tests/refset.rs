@@ -34,7 +34,7 @@ fn the_set_sha256_is_pinned() {
     assert_eq!(official().unwrap().sha256.as_str(), PINNED);
 }
 
-const PINNED: &str = "a0338548f18923f59acf33064967f512b92ac9b872bb848424fda5665dc080de";
+const PINNED: &str = "f8c41578a78b985bb5f4006578fd9011478783f8ed993e025ce3a32d7c80589d";
 
 #[test]
 fn the_knowledge_entry_names_the_set() {
@@ -98,6 +98,7 @@ fn every_commit_field_is_a_commit_field_of_the_component_database() {
 #[test]
 fn malformed_commit_data_is_rejected() {
     let manifest = r#"{"tag":"v1","entries":[{"name":"lib","type":"5","mode":"0o755"},
+        {"name":"lib/l","type":"2","mode":"0o777","link":"a.so"},
         {"name":"lib/a.so","type":"0","mode":"0o644","size":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#;
     let set =
         |commits: &str| parse_set("t", "1", &[("a.json", manifest), ("commits.toml", commits)]);
@@ -127,11 +128,15 @@ fn malformed_commit_data_is_rejected() {
         (twice.to_string(), "the field is listed twice"),
         (
             entry("v1", "F", "lib", "6f3a9f3"),
-            "lib is not a file of the release",
+            "\"lib\" is not a file of the release",
+        ),
+        (
+            entry("v1", "F", "lib/l", "6f3a9f3"),
+            "\"lib/l\" is not a file of the release",
         ),
         (
             entry("v1", "F", "lib/b.so", "6f3a9f3"),
-            "lib/b.so is not a file of the release",
+            "\"lib/b.so\" is not a file of the release",
         ),
         (
             entry("v1", "F", "lib/a.so", "6f3a9f"),
@@ -141,11 +146,34 @@ fn malformed_commit_data_is_rejected() {
             entry("v1", "F", "lib/a.so", "6F3A9F3"),
             "not 7 to 40 lowercase hex digits",
         ),
-        (good.replace("value", "value2"), "unknown field"),
+        (
+            good.replace(
+                r#"value = "6f3a9f3" }"#,
+                r#"value = "6f3a9f3", note = "x" }"#,
+            ),
+            "unknown field",
+        ),
+        (
+            good.replace("tag = \"v1\"\n", "tag = \"v1\"\nnote = \"x\"\n"),
+            "unknown field",
+        ),
+        (format!("note = \"x\"\n{good}"), "unknown field"),
     ] {
         let error = set(&commits).unwrap_err();
         assert!(error.contains(why), "{why}: {error}");
     }
     let error = parse_set("t", "1", &[("a.json", manifest), ("notes.txt", "")]).unwrap_err();
     assert!(error.contains("neither a manifest"), "{error}");
+    let files = [
+        ("a.json", manifest),
+        ("commits.toml", good.as_str()),
+        ("commits.toml", good.as_str()),
+    ];
+    let error = parse_set("t", "1", &files).unwrap_err();
+    assert!(error.contains("commits.toml: listed twice"), "{error}");
+    let error = parse_set("t", "1", &[("a.json", manifest), ("b.json", manifest)]).unwrap_err();
+    assert!(
+        error.contains("b.json: release v1 is listed twice"),
+        "{error}"
+    );
 }
