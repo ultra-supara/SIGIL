@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
   fs::rename(argv[1], argv[2]);
   fs::create_directories(argv[2]);
   fs::copy_file(argv[1], argv[2], fs::copy_options::overwrite_existing);
-  // Unmapped: the mode decides read or write, or nothing is written.
+  // Unmapped (spec §3): the mode decides read or write, metadata, or nothing changes.
   std::fstream both(argv[1], std::ios::in | std::ios::out);
   std::filebuf buf;
   buf.open(argv[2], std::ios::in);
