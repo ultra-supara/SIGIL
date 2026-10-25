@@ -369,6 +369,96 @@ mod tests {
         assert_eq!(cxx, 88);
     }
 
+    /// The rule of the PR-4c-3c spec's §2, applied to the exports list rather than written out:
+    /// the std::filesystem operations that create, remove, rename, copy, or resize, and the
+    /// ifstream and ofstream constructors and `open` that take a file name. Each arity is the
+    /// demangled form's parameters, plus `this` for a stream, plus the VTT for a C2 constructor.
+    #[test]
+    fn the_cxx_names_are_the_exports_the_rule_selects_with_their_arities() {
+        const WRITES: [&str; 12] = [
+            "remove",
+            "remove_all",
+            "rename",
+            "create_directory",
+            "create_directories",
+            "create_symlink",
+            "create_hard_link",
+            "create_directory_symlink",
+            "copy",
+            "copy_file",
+            "copy_symlink",
+            "resize_file",
+        ];
+        // A file name: a `const char*`, or a string of either ABI.
+        const FILE_NAMES: [&str; 3] = [
+            "char const*",
+            "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&",
+            "std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&",
+        ];
+        // The parameters of a demangled function, split at the commas outside brackets.
+        fn params(list: &str) -> Vec<&str> {
+            let (mut depth, mut start, mut out) = (0, 0, vec![]);
+            for (i, c) in list.char_indices() {
+                match c {
+                    '<' | '(' => depth += 1,
+                    '>' | ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        out.push(list[start..i].trim());
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            if !list.trim().is_empty() {
+                out.push(list[start..].trim());
+            }
+            out
+        }
+        let mut want = BTreeMap::new();
+        for (name, (_, demangled)) in exports() {
+            let Some((head, rest)) = demangled.split_once('(') else {
+                continue;
+            };
+            let Some(list) = rest.strip_suffix(')') else {
+                continue;
+            };
+            let params = params(list);
+            let fs = head.strip_prefix("std::filesystem::");
+            if fs.is_some_and(|f| WRITES.contains(&f)) {
+                want.insert(name, ("cxx.file_write", params.len()));
+                continue;
+            }
+            for (class, feature) in [
+                ("ifstream", "cxx.file_read"),
+                ("ofstream", "cxx.file_write"),
+            ] {
+                for char in ["char", "wchar_t"] {
+                    let stream = format!("std::basic_{class}<{char}, std::char_traits<{char}> >::");
+                    let Some(member) = head.strip_prefix(&stream) else {
+                        continue;
+                    };
+                    let opens = member == "open" || member == format!("basic_{class}");
+                    if opens && params.first().is_some_and(|p| FILE_NAMES.contains(p)) {
+                        let vtt = usize::from(name.contains("EEC2E"));
+                        want.insert(name, (feature, params.len() + 1 + vtt));
+                    }
+                }
+            }
+        }
+        let s = signatures().unwrap();
+        let got: BTreeMap<&str, (&str, usize)> = s
+            .capabilities
+            .iter()
+            .filter(|(_, c)| c.feature.as_str().starts_with("cxx."))
+            .map(|(n, c)| {
+                let name = std::str::from_utf8(n).unwrap();
+                (name, (c.feature.as_str(), usize::from(c.arity)))
+            })
+            .collect();
+        assert_eq!(got, want);
+        assert_eq!(got.len(), 88);
+    }
+
     #[test]
     fn the_unmapped_cxx_names_are_exports_not_in_the_table() {
         let s = signatures().unwrap();

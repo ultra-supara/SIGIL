@@ -1,5 +1,5 @@
-# Capability imports (PR-5a spec §4.3): v0.1's capability_for_symbol, unchanged in its names,
-# and libstdc++'s file operations (PR-4c-3c, below). A hint says that the file imports the
+# Capability imports (PR-5a spec §4.3): v0.1's capability_for_symbol (its 28 names unchanged)
+# and, below, libstdc++'s file operations (PR-4c-3c). A hint says that the file imports the
 # function: presence, never a call. The table is not a complete list of how a program reaches a
 # capability.
 # Exact names only; a version (connect@GLIBC_2.2.5) is not part of the name.
@@ -69,20 +69,23 @@ symbols = [
 ]
 
 # libstdc++'s names (PR-4c-3c): exact mangled names that libstdc++.so.6.0.35 exports, matched
-# without demangling. Each std::filesystem operation for both path ABIs (std::filesystem::__cxx11::
-# path and the old std::filesystem::path), each with and without std::error_code&; the streams for
+# without demangling: the std::filesystem operations that create, remove, rename, copy, or
+# resize, for both path ABIs (the __cxx11 path and the old one), each with and without
+# std::error_code&; and the ifstream and ofstream constructors and open that take a file name, for
 # char and wchar_t, with the three string forms (const char*, the __cxx11 string, the old string).
 # source: "libstdc++ <version>: <demangled form>", with [C1] (complete object) or [C2] (base
 # object; it takes the VTT as its second argument, so its arity is one more) after a constructor.
 # One feature per name: copy and copy_file read too, but writing is what they are for. An
-# ifstream's mode always includes in, and an ofstream's always out.
+# ifstream's mode always includes in, and an ofstream's always out. cxx.file_write is broader
+# than posix.file_write: it includes creating directories and links and resizing a file, which
+# the 28 names do not (no mkdir, symlink, link, or truncate).
 # A missing hint is not absence: a stream constructor that the compiler inlines leaves only
 # basic_filebuf::open in the imports, and a statically linked libstdc++ (GCC 8's libstdc++fs.a,
 # std::experimental::filesystem) leaves none of these names.
 # Not mapped: basic_fstream and basic_filebuf::open (the mode decides read or write); permissions
-# and last_write_time (metadata); status, exists, and the directory iterators (they change
-# nothing); the default and move constructors of the streams (they open no file); libc++
-# (std::__1) and other C++ libraries.
+# and last_write_time (metadata); status (exists is inline over it) and the directory iterators
+# (they change nothing); the default and move constructors of the streams (they open no file);
+# libc++ (std::__1) and other C++ libraries.
 
 [[capability]]
 feature = "cxx.file_read"
