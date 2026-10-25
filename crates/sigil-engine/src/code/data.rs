@@ -17,7 +17,7 @@ pub struct Capability {
     /// The SysV argument registers a call can read.
     pub arity: u8,
     /// Where the name and its meaning come from: a standard, or the library that exports it
-    /// (PR-4c-3c). Not written to sessions.
+    /// (PR-4c-3c). Not blank, and not written to sessions.
     pub source: String,
 }
 
@@ -176,7 +176,7 @@ mod tests {
     /// The PR-4c-3c spec's Appendix B: every name but `ptrace` is in POSIX.1-2024.
     fn posix_source(name: &str) -> String {
         if name == "ptrace" {
-            "Linux man-pages ptrace(2); not in POSIX".to_string()
+            "Linux and macOS ptrace(2); not in POSIX".to_string()
         } else {
             format!("POSIX.1-2024 (IEEE Std 1003.1-2024): {name}()")
         }
@@ -250,6 +250,7 @@ mod tests {
             one("{ name = \"connect\", arity = 3 }"),
             Err("capabilities.toml: \"connect\": no source".to_string())
         );
+        // "\\t\\n" is TOML's escapes: a tab and a newline.
         for blank in ["", " ", "\\t\\n"] {
             assert_eq!(
                 one(&format!(
@@ -259,7 +260,18 @@ mod tests {
                 "{blank:?}"
             );
         }
-        assert!(one("{ name = \"connect\", arity = 3, source = \"s\", sources = \"s\" }").is_err());
+        // A source with blanks around it is not blank.
+        assert_eq!(
+            one("{ name = \"connect\", arity = 3, source = \" s \" }"),
+            Ok(())
+        );
+        let unknown = one("{ name = \"connect\", arity = 3, source = \"s\", sources = \"s\" }");
+        assert!(
+            unknown
+                .as_ref()
+                .is_err_and(|e| e.contains("unknown field `sources`")),
+            "{unknown:?}"
+        );
         assert!(parse(CAPABILITIES, "prefixes = []").is_err());
         assert!(parse(CAPABILITIES, "prefixes = [\"\"]\nnames = []").is_err());
     }

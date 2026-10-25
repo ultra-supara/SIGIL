@@ -62,5 +62,5 @@ symbols = [
 [[capability]]
 feature = "posix.anti_debug"
 symbols = [
-  { name = "ptrace", arity = 4, source = "Linux man-pages ptrace(2); not in POSIX" },
+  { name = "ptrace", arity = 4, source = "Linux and macOS ptrace(2); not in POSIX" },
 ]
