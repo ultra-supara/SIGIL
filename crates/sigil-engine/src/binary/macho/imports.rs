@@ -407,8 +407,8 @@ fn opcodes<R: ReadCacheOps>(
     streams: [(u32, u32); 2],
     out: &mut Imports<'_>,
 ) {
-    let [bind, lazy] = streams;
-    for ((offset, len), lazy) in [(bind, false), (lazy, true)] {
+    let [bind, lazy_bind] = streams;
+    for ((offset, len), lazy) in [(bind, false), (lazy_bind, true)] {
         if len == 0 {
             continue;
         }

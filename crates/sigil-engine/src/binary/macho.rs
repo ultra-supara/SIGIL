@@ -356,7 +356,8 @@ fn record_name(
     }
 }
 
-/// The 32-bit word at `at` of a load command at least `at + 4` bytes long.
+/// The 32-bit word at `at` of `command` (a load command, or an nlist entry), at least `at + 4`
+/// bytes long.
 /// The slice is four bytes long, so the conversion never fails: the default is never taken.
 fn word_at(command: &[u8], at: usize, order: ByteOrder) -> u32 {
     let bytes: [u8; 4] = command[at..at + 4].try_into().unwrap_or_default();
