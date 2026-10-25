@@ -605,6 +605,17 @@ fn c6_a_mach_o_import_hint_names_an_import_looked_up() {
             errors(&s)
         );
     }
+    // An object file's undefined symbol is looked up (its library is the linker's).
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.file_type = MH_OBJECT;
+    for i in &mut facts.imports {
+        i.library = MachOLibrary::Unbound;
+    }
+    s.hints = vec![import_hint(&s, "posix.network", "_socket")];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
 }
 
 #[test]

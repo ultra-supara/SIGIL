@@ -811,16 +811,17 @@ A field added after sessions without it were written is optional on read, so tho
 | `binaries` | PR-4b-1 | `[]` (no binary parsed) |
 | `request.code` | PR-5a | `false` (no code analyzed) |
 | `binaries[].container.Elf.returns` | PR-4c-2b | `[]` (no returned value read) |
+| `binaries[].container.MachO.imports` | PR-4c-3b | `[]` (no import read) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
-`reference_matches`, `binaries`, and an ELF's `returns` are the exceptions to "always writes it":
-SIGIL writes them only when they have entries, so a session without `--install-dir` keeps its
-bytes, and an earlier SIGIL still reads it.
+`reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` are the exceptions to
+"always writes it": SIGIL writes them only when they have entries, so a session without
+`--install-dir` keeps its bytes, and an earlier SIGIL still reads it.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, and one from before PR-4c-2b a session with an ELF's `returns`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet
