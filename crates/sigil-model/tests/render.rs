@@ -1027,7 +1027,59 @@ fn a_cut_short_import_list_with_capability_imports_says_so() {
 }
 
 #[test]
-fn a_macho_content_gets_no_capabilities() {
+fn a_macho_content_with_imports_under_code_is_not_analyzed() {
+    let mut s = binary_code();
+    s.artifacts[0].format = Format::MachO;
+    s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        is_64: true,
+        cpu_type: 0x0100_0007,
+        cpu_subtype: 3,
+        fat_cpu_type: None,
+        fat_cpu_subtype: None,
+        fat_alignment: None,
+        file_type: 2,
+        flags: 0,
+        uuid: None,
+        id_dylib: None,
+        load_dylibs: vec![t(LIBSYSTEM)],
+        rpaths: vec![],
+        dylinker: None,
+        imports: vec![MachOImport {
+            name: t("_connect"),
+            library: MachOLibrary::Dylib {
+                ordinal: 1,
+                name: Some(t(LIBSYSTEM)),
+            },
+            weak: false,
+        }],
+    });
+    s.hints[0].value = t("_connect");
+    s.hints[0].at = Loc::Symbol(t("_connect"));
+    s.code.clear();
+    let entry = s
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap();
+    entry.state = CoverageState::Unsupported {
+        what: CODE_UNSUPPORTED.to_string(),
+    };
+    entry.budget = None;
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: ids(&[BINARY_CODE]),
+        gaps: vec![],
+    };
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        row_of(section, "posix.network").ends_with(&format!("| {} |", md_esc(NOT_SEARCHED))),
+        "{section}"
+    );
+    assert!(section.contains(&md_esc("binary.code: ")), "{section}");
+}
+
+#[test]
+fn a_macho_content_without_imports_gets_no_capabilities() {
     let mut s = binary_code();
     s.artifacts[0].format = Format::MachO;
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
@@ -1161,6 +1213,22 @@ fn a_macho_content_with_imports_lists_them_and_gets_capability_rows() {
         section.contains(&format!("\n{}\n", md_esc("_dlopen"))),
         "{section}"
     );
+    // A hostile library name renders escaped.
+    s.binaries[0].container = facts(
+        2,
+        vec![import(
+            "_y",
+            MachOLibrary::Dylib {
+                ordinal: 1,
+                name: Some(t("<x>|y")),
+            },
+            false,
+        )],
+    );
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(!section.contains("<x>"), "{section}");
+    assert!(section.contains(&md_esc("<x>|y")), "{section}");
     // Every import cut at `binary_imports`: the row and the cut-short line, as for an ELF.
     s.binaries[0].container = facts(2, vec![]);
     s.binaries[0].gaps.push(imports_over_gap(0));

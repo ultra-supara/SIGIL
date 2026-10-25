@@ -302,7 +302,7 @@ fn binary_facts(
     a: &crate::artifact::Artifact,
     b: &crate::binary::BinaryFacts,
 ) {
-    use crate::binary::DataValue;
+    use crate::binary::{DataValue, MachOLibrary};
     if let crate::binary::ContainerFacts::MachO(macho) = &b.container {
         let opt = |value: &Option<UntrustedText>| {
             value
@@ -362,7 +362,7 @@ fn binary_facts(
         if let Some(alignment) = macho.fat_alignment {
             rows.push(vec![esc("Fat alignment"), esc(&alignment.to_string())]);
         }
-        // PR-4c-3b. Facts without imports (a session written before, or nothing bound) and with
+        // PR-4c-3b: facts without imports (a session written before, or nothing bound) and with
         // no cut show neither the row nor the list.
         let object = macho.file_type == crate::binary::MH_OBJECT;
         let label = if object {
@@ -370,7 +370,7 @@ fn binary_facts(
         } else {
             "Imports (dyld)"
         };
-        if !macho.imports.is_empty() || b.imports_cut_short() {
+        if macho_imports_shown(macho, b) {
             rows.push(vec![esc(label), esc(&macho.imports.len().to_string())]);
         }
         rows.extend(identity_rows(s, &b.slice));
@@ -388,18 +388,18 @@ fn binary_facts(
                 .map(|i| {
                     let mut n = i.name.markdown_inline();
                     let library = match &i.library {
-                        crate::binary::MachOLibrary::Dylib {
+                        MachOLibrary::Dylib {
                             name: Some(name), ..
                         } => Some(name.markdown_inline()),
-                        crate::binary::MachOLibrary::Dylib {
+                        MachOLibrary::Dylib {
                             ordinal,
                             name: None,
                         } => Some(esc(&format!("ordinal {ordinal}"))),
-                        crate::binary::MachOLibrary::SelfImage => Some(esc("self")),
-                        crate::binary::MachOLibrary::MainExecutable => Some(esc("main executable")),
-                        crate::binary::MachOLibrary::FlatLookup => Some(esc("flat lookup")),
-                        crate::binary::MachOLibrary::WeakLookup => Some(esc("weak lookup")),
-                        crate::binary::MachOLibrary::Unbound => None,
+                        MachOLibrary::SelfImage => Some(esc("self")),
+                        MachOLibrary::MainExecutable => Some(esc("main executable")),
+                        MachOLibrary::FlatLookup => Some(esc("flat lookup")),
+                        MachOLibrary::WeakLookup => Some(esc("weak lookup")),
+                        MachOLibrary::Unbound => None,
                     };
                     if let Some(library) = library {
                         n.push_str(&esc(" ("));
@@ -664,8 +664,8 @@ fn signature_hints<'a>(
         .filter(move |h| h.subject == *slice && h.signal != Signal::Import)
 }
 
-/// The capability imports of an ELF or Mach-O content (PR-5a-2 spec §3.1): one row per import hint of its
-/// slice, in (feature, import) order, or the line `No capability imports.` when it has none.
+/// The capability imports of an ELF or Mach-O content (PR-5a-2 spec §3.1): one row per import hint
+/// of its slice, in (feature, import) order, or the line `No capability imports.` when it has none.
 /// Hints come only from the imports kept within `binary_imports` (plan P-r): when the list was
 /// cut short, the line counts the imports kept instead, and a table is followed by a line that
 /// says so. Then, with code analysis, the line of its input's `binary.code` entry (`code`).
@@ -686,9 +686,7 @@ fn capabilities(
 ) {
     let imports = match &b.container {
         crate::binary::ContainerFacts::Elf(elf) => elf.imports.len(),
-        crate::binary::ContainerFacts::MachO(macho)
-            if !macho.imports.is_empty() || b.imports_cut_short() =>
-        {
+        crate::binary::ContainerFacts::MachO(macho) if macho_imports_shown(macho, b) => {
             macho.imports.len()
         }
         crate::binary::ContainerFacts::MachO(_) => return,
@@ -732,6 +730,12 @@ fn capabilities(
         out.push_str(&coverage_line(code).markdown());
         out.push_str("\n\n");
     }
+}
+
+/// Whether a Mach-O's imports are shown (PR-4c-3b): it has some, or its list was cut at
+/// `binary_imports`. Facts without (a session written before, or nothing bound) render as before.
+fn macho_imports_shown(macho: &crate::binary::MachOFacts, b: &crate::binary::BinaryFacts) -> bool {
+    !macho.imports.is_empty() || b.imports_cut_short()
 }
 
 /// A slice's import hints (plan P-a): the capability rows of the binary report and the keys of

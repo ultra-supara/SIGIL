@@ -34,12 +34,13 @@ pub const NONE_FOUND_PARTIAL: &str =
 /// it has none (plan P-p).
 pub const NOT_SEARCHED: &str = "not analyzed (see binary.code)";
 
-/// What an ELF or Mach-O content without a capability import gets instead of its Capabilities table.
+/// What an ELF or Mach-O content without a capability import gets instead of its Capabilities
+/// table.
 pub const NO_CAPABILITY_IMPORTS: &str = "No capability imports.";
 
-/// What an ELF or Mach-O content gets instead of [`NO_CAPABILITY_IMPORTS`] when its import list was
-/// cut short at `binary_imports` (plan P-r): none of the `kept` imports is a capability import, and
-/// those past the cut are not known.
+/// What an ELF or Mach-O content gets instead of [`NO_CAPABILITY_IMPORTS`] when its import list
+/// was cut short at `binary_imports` (plan P-r): none of the `kept` imports is a capability import,
+/// and those past the cut are not known.
 pub fn no_capability_imports_kept(kept: usize) -> String {
     let imports = if kept == 1 { "import" } else { "imports" };
     format!("No capability imports among the {kept} {imports} kept (binary_imports; see Coverage).")

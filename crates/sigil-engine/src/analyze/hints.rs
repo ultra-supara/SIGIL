@@ -274,7 +274,12 @@ mod tests {
         .unwrap();
         assert!(hints.is_empty(), "{hints:?}");
         // The names elsewhere in the facts are not imports.
-        assert!(derive(&[macho(&[])]).unwrap().is_empty());
+        let mut elsewhere = macho(&[]);
+        if let ContainerFacts::MachO(f) = &mut elsewhere.container {
+            f.id_dylib = Some(UntrustedText::new("_connect"));
+            f.rpaths = vec![UntrustedText::new("_connect")];
+        }
+        assert!(derive(&[elsewhere]).unwrap().is_empty());
     }
 
     #[test]
@@ -285,5 +290,7 @@ mod tests {
         ])])
         .unwrap();
         assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].feature.as_str(), "posix.network");
+        assert_eq!(hints[0].value.as_str(), Some("_connect"));
     }
 }
