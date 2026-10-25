@@ -30,14 +30,15 @@ symlink, is one input. For each input, the session records:
   - what `ggml_version` and `ggml_commit` return, when the file exports them
     ([below](#returned-values)).
   Mach-O facts include the header CPU type, subtype, file type and flags; UUID, dylib ID, loaded
-  dylibs, RPATHs, and dynamic linker. A fat file records each architecture slice's offset, size,
-  digest, table CPU type/subtype, and alignment.
+  dylibs, RPATHs, and dynamic linker; and its imports, each with its library
+  ([below](#mach-o-imports)). A fat file records each architecture slice's offset, size, digest,
+  table CPU type/subtype, and alignment.
 - **One `binary.container` coverage entry:** the input's status.
 - **One `binary.identity` coverage entry:** whether every scan the signature database asks for
   was done within its budget ([below](#signatures)).
 - **Its signature hints,** for an ELF slice: the database's needles found in it, export names and
   Go function names ([below](#signatures)).
-- **Its capability hints,** for each ELF slice, with or without `--code`
+- **Its capability hints,** for each ELF and Mach-O slice, with or without `--code`
   ([below](#capabilities-and-code---code)).
 - **Its component claim,** for an ELF slice whose file name or SONAME the component database
   knows ([below](#components)).
@@ -81,13 +82,16 @@ with `component: <component> (<status>)`, the status in words, for example
 - For an executable or a shared object, imports are the dynamic symbols its loader resolves.
 - For a relocatable object, they are the undefined symbols left for the linker. They are not the
   final program's imports.
-- Mach-O loaded dylibs are declared dependencies, not symbol-level imports.
+- For a Mach-O, imports are what dyld binds, each from its library, or, for an object file, the
+  undefined symbols left for the linker ([below](#mach-o-imports)). Its loaded dylibs are
+  declared dependencies.
 - Neither shows that the code calls them. Without `--code`, no code is analyzed and no call site
   is recorded; with it, the call sites are the direct ones found in the code.
 
 ## Capabilities and code (`--code`)
 
-**Capability hints.** A binary inspection records the capability imports of each ELF slice: 28
+**Capability hints.** A binary inspection records the capability imports of each ELF and Mach-O
+slice: 28
 libc/POSIX functions in 7 groups. Each is a feature hint in the session (its `feature`, `signal:
 Import`, and the import's name as `value`), with or without `--code`. `inspect ollama
 --install-dir` records them too ([runtime artifacts](runtime-artifacts.md#binaries)). A hint is
@@ -108,7 +112,11 @@ not imports.
 
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
 imports kept within `binary_imports` give hints: when a file has more, the report says that the
-capability imports past the cut are not known (below). Mach-O imports are not mapped yet.
+capability imports past the cut are not known (below). A Mach-O import is matched by its name with
+one leading `_` stripped (`_connect` is `connect`), and only when it is bound to
+`/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object file's: `_connect` from another
+dylib is that dylib's function, not POSIX `connect`. Its hint's value is the name as the file has
+it (`_connect`) ([below](#mach-o-imports)).
 
 **`--code`** also finds where each capability import is called directly, and records each call
 site:
@@ -158,7 +166,9 @@ once rendered:
 - With `--code`, a line under the table (or under the line that replaces it) gives the input's
   `binary.code` status and, when its code was searched, the code bytes read:
   `binary.code: complete; 78 of 268435456 code bytes read.`
-- A Mach-O gets neither the table nor the line.
+- A Mach-O gets the table, or the line, when its facts have imports (PR-4c-3b); one without (a
+  session written before, or a file that binds nothing) gets neither. Its code is not analyzed:
+  with `--code`, its cells say `not analyzed (see binary.code)`.
 
 **Scope.** Only direct calls are found:
 - A call through a function pointer, a function linked statically into the file, and a raw
@@ -198,6 +208,35 @@ result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
   most 256 distinct gaps are listed; the others are counted. These limits are not recorded in
   the session. The [session model](session-model.md#code-analysis-pr-5a) lists each one with its
   gap.
+
+## Mach-O imports
+
+A Mach-O slice's imports (PR-4c-3b) are what dyld binds, never the symbol table of a linked image,
+which can be edited without changing what dyld binds:
+- with `LC_DYLD_CHAINED_FIXUPS`, every import of its imports table (dyld resolves each one,
+  whether or not a fixup chain uses it);
+- otherwise, with `LC_DYLD_INFO` or `LC_DYLD_INFO_ONLY`, the name of each bind of its bind and
+  lazy-bind opcodes. The weak-bind opcodes coalesce weak definitions by name, with no library, and
+  are not read;
+- for an object file (`MH_OBJECT`), which no loader reads, the undefined external symbols of its
+  `LC_SYMTAB`, left for the linker.
+
+Each import records its name as the file has it (`_connect`), its library, and whether it is weak.
+A library is a dylib, by its ordinal: the dylib-loading commands, in order. Or it is this image,
+the main executable, flat lookup (every loaded image, in order), weak lookup, or, in an object
+file, the linker. The [capability table](#capabilities-and-code---code) looks up the imports bound
+to `/usr/lib/libSystem.B.dylib`, the ones found by flat lookup, and an object file's, by their
+names with one leading `_` stripped. In the Markdown, a Mach-O's facts table gains an
+`Imports (dyld)` row (`Undefined symbols (link time)` for an object file), followed by the
+imports, each with its library: the dylib's name, `self`, `main executable`, `flat lookup`,
+`weak lookup`, or `ordinal <n>` when the dylib's name was not read.
+
+What is not read is a `binary.container` gap (`imports: …`): both dyld commands, or two of one;
+neither while a dylib is loaded (the `LC_DYSYMTAB` binding of macOS 10.5 and earlier is not read);
+a blob or stream out of the file; a chained-fixups format SIGIL does not read, or a compressed
+symbol table; an unknown opcode or a malformed one; an ordinal past the dylibs, which binds nowhere
+(dyld refuses the image); and the import limits of ELF (`binary_imports`, 65,536 bytes per name).
+The list is in [runtime artifacts](runtime-artifacts.md#binaries).
 
 ## Signatures
 

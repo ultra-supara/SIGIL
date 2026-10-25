@@ -1049,12 +1049,118 @@ fn a_macho_content_gets_no_capabilities() {
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(section.contains(&md_esc("Mach-O 64-bit")), "{section}");
+    // PR-4c-3b: facts without imports (a session written before) render as before.
+    assert!(!section.contains(&md_esc("Imports (dyld)")), "{section}");
     assert!(!section.contains(&md_esc("Capabilities of")), "{section}");
     assert!(
         !section.contains(&md_esc(NO_CAPABILITY_IMPORTS)),
         "{section}"
     );
     assert!(!section.contains(&md_esc("binary.code: ")), "{section}");
+}
+
+/// PR-4c-3b: a Mach-O with imports lists them, each with its library, and gets its capability rows;
+/// one without (above) gets neither. An object file's are its undefined symbols, without a library.
+#[test]
+fn a_macho_content_with_imports_lists_them_and_gets_capability_rows() {
+    let mut s = binary_no_code();
+    s.artifacts[0].format = Format::MachO;
+    let slice = s.binaries[0].slice.clone();
+    let import = |name: &str, library: MachOLibrary, weak: bool| MachOImport {
+        name: t(name),
+        library,
+        weak,
+    };
+    let facts = |file_type: u32, imports: Vec<MachOImport>| {
+        ContainerFacts::MachO(MachOFacts {
+            is_64: true,
+            cpu_type: 0x0100_0007,
+            cpu_subtype: 3,
+            fat_cpu_type: None,
+            fat_cpu_subtype: None,
+            fat_alignment: None,
+            file_type,
+            flags: 0,
+            uuid: None,
+            id_dylib: None,
+            load_dylibs: vec![t(LIBSYSTEM)],
+            rpaths: vec![],
+            dylinker: None,
+            imports,
+        })
+    };
+    s.binaries[0].container = facts(
+        2,
+        vec![
+            import(
+                "_connect",
+                MachOLibrary::Dylib {
+                    ordinal: 1,
+                    name: Some(t(LIBSYSTEM)),
+                },
+                false,
+            ),
+            import("_getenv", MachOLibrary::FlatLookup, true),
+            import(
+                "_x",
+                MachOLibrary::Dylib {
+                    ordinal: 2,
+                    name: None,
+                },
+                false,
+            ),
+            import("_own", MachOLibrary::SelfImage, false),
+            import("_m", MachOLibrary::MainExecutable, false),
+            import("_w", MachOLibrary::WeakLookup, false),
+        ],
+    );
+    s.hints = vec![FeatureHint {
+        subject: slice,
+        feature: id("posix.network"),
+        signal: Signal::Import,
+        value: t("_connect"),
+        at: Loc::Symbol(t("_connect")),
+    }];
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Imports (dyld)"),
+        fact_row("Imports (dyld)", "6")
+    );
+    let list = [
+        format!(
+            "{}{}{}",
+            md_esc("_connect ("),
+            md_esc(LIBSYSTEM),
+            md_esc(")")
+        ),
+        format!("{}{}", md_esc("_getenv (flat lookup)"), md_esc(" (weak)")),
+        md_esc("_x (ordinal 2)"),
+        md_esc("_own (self)"),
+        md_esc("_m (main executable)"),
+        md_esc("_w (weak lookup)"),
+    ]
+    .join(", ");
+    assert!(section.contains(&md_esc("Imports (dyld) of")), "{section}");
+    assert!(section.contains(&format!("\n{list}\n")), "{section}");
+    assert!(section.contains(&md_esc("Capabilities of")), "{section}");
+    assert!(row_of(section, "posix.network").contains(&md_esc("_connect")));
+    // Without a hint: the line, as for an ELF.
+    s.hints.clear();
+    let md = render_session(&s);
+    assert!(binaries_section(&md).contains(&md_esc(NO_CAPABILITY_IMPORTS)));
+    // An object file's undefined symbols.
+    s.binaries[0].container = facts(1, vec![import("_dlopen", MachOLibrary::Unbound, false)]);
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Undefined symbols (link time)"),
+        fact_row("Undefined symbols (link time)", "1")
+    );
+    assert!(
+        section.contains(&format!("\n{}\n", md_esc("_dlopen"))),
+        "{section}"
+    );
 }
 
 #[test]

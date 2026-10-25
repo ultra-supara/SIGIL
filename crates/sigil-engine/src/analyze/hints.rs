@@ -1,31 +1,48 @@
-//! Level B hints. Capability hints (PR-5a spec §4.9): one per capability import of an ELF slice.
-//! They say the import exists, never that it is called; code analysis (`binary inspect --code`,
-//! PR-5a) adds the call sites. Signature hints (PR-4c-2a): one per needle the scan found.
+//! Level B hints. Capability hints (PR-5a spec §4.9): one per capability import of an ELF slice,
+//! and of a Mach-O slice (PR-4c-3b). They say the import exists, never that it is called; code
+//! analysis (`binary inspect --code`, PR-5a) adds the call sites. Signature hints (PR-4c-2a): one
+//! per needle the scan found.
 
-use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal, SliceId};
+use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal, SliceId, UntrustedText};
 
 use crate::binary::scan::ScanOutcome;
 use crate::code::data::signatures;
 
-/// The hints of `binaries`, sorted by (slice, feature, name). A Mach-O slice has none: its facts
-/// record no imports. `Err` only if the embedded signatures are invalid.
+/// The hints of `binaries`, sorted by (slice, feature, name). An ELF import is looked up in the
+/// capability table by its name. A Mach-O import (PR-4c-3b) is looked up only when its library is
+/// ([`MachOLibrary::looked_up`]: libSystem, flat lookup, or an object file's), by its name with one
+/// leading `_` stripped; a name without one is not looked up. Either hint's value is the name as
+/// the file has it. `Err` only if the embedded signatures are invalid.
+///
+/// [`MachOLibrary::looked_up`]: sigil_model::MachOLibrary::looked_up
 pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
     let sig = signatures()?;
     let mut out = vec![];
     for b in binaries {
-        let ContainerFacts::Elf(elf) = &b.container else {
-            continue;
+        // Each import: its name, and the name the table is looked up by.
+        let imports: Vec<(&UntrustedText, &[u8])> = match &b.container {
+            ContainerFacts::Elf(elf) => elf
+                .imports
+                .iter()
+                .map(|i| (&i.name, i.name.as_bytes()))
+                .collect(),
+            ContainerFacts::MachO(macho) => macho
+                .imports
+                .iter()
+                .filter(|i| i.library.looked_up())
+                .filter_map(|i| Some((&i.name, i.name.as_bytes().strip_prefix(b"_")?)))
+                .collect(),
         };
-        for import in &elf.imports {
-            let Some(cap) = sig.capability(import.name.as_bytes()) else {
+        for (name, key) in imports {
+            let Some(cap) = sig.capability(key) else {
                 continue;
             };
             out.push(FeatureHint {
                 subject: b.slice.clone(),
                 feature: cap.feature.clone(),
                 signal: Signal::Import,
-                value: import.name.clone(),
-                at: Loc::Symbol(import.name.clone()),
+                value: name.clone(),
+                at: Loc::Symbol(name.clone()),
             });
         }
     }
@@ -36,7 +53,7 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
             b.value.as_bytes(),
         ))
     });
-    // An import needed at two versions is one hint.
+    // An import needed at two versions, or from two libraries looked up, is one hint.
     out.dedup();
     Ok(out)
 }
@@ -67,7 +84,8 @@ pub fn from_scans(scans: &[(SliceId, ScanOutcome)]) -> Vec<FeatureHint> {
 mod tests {
     use super::*;
     use sigil_model::{
-        BinaryFacts, ContainerFacts, ElfFacts, ElfImport, MachOFacts, SliceId, UntrustedText,
+        BinaryFacts, ContainerFacts, ElfFacts, ElfImport, MachOFacts, MachOImport, MachOLibrary,
+        SliceId, UntrustedText, LIBSYSTEM,
     };
 
     fn facts(slice: &str, imports: &[(&str, Option<&str>)]) -> BinaryFacts {
@@ -170,10 +188,8 @@ mod tests {
         assert_eq!(got, [(SLICE, "connect"), (OTHER, "connect")]);
     }
 
-    #[test]
-    fn a_macho_slice_gives_no_hints() {
-        // Mach-O facts record no imports; the names elsewhere in them are not imports.
-        let macho = BinaryFacts {
+    fn macho(imports: &[(&str, MachOLibrary)]) -> BinaryFacts {
+        BinaryFacts {
             slice: SliceId::new(MACHO).unwrap(),
             container: ContainerFacts::MachO(MachOFacts {
                 is_64: true,
@@ -186,14 +202,88 @@ mod tests {
                 flags: 0,
                 uuid: None,
                 id_dylib: Some(UntrustedText::new("connect")),
-                load_dylibs: vec![UntrustedText::new("_connect")],
+                load_dylibs: vec![UntrustedText::new(LIBSYSTEM)],
                 rpaths: vec![],
                 dylinker: None,
-                imports: vec![],
+                imports: imports
+                    .iter()
+                    .map(|(name, library)| MachOImport {
+                        name: UntrustedText::new(*name),
+                        library: library.clone(),
+                        weak: false,
+                    })
+                    .collect(),
             }),
             go: None,
             gaps: vec![],
+        }
+    }
+
+    fn libsystem() -> MachOLibrary {
+        MachOLibrary::Dylib {
+            ordinal: 1,
+            name: Some(UntrustedText::new(LIBSYSTEM)),
+        }
+    }
+
+    #[test]
+    fn a_macho_import_of_a_library_looked_up_is_a_hint_by_its_name_without_its_underscore() {
+        let hints = derive(&[macho(&[
+            ("_connect", libsystem()),
+            ("_getenv", MachOLibrary::FlatLookup),
+            ("_dlopen", MachOLibrary::Unbound),
+            ("_puts", libsystem()),
+        ])])
+        .unwrap();
+        let got: Vec<(&str, &str)> = hints
+            .iter()
+            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("posix.dynamic_loading", "_dlopen"),
+                ("posix.environment_access", "_getenv"),
+                ("posix.network", "_connect"),
+            ]
+        );
+        assert!(hints.iter().all(|h| h.subject.as_str() == MACHO
+            && h.signal == Signal::Import
+            && h.at == Loc::Symbol(h.value.clone())));
+    }
+
+    #[test]
+    fn a_macho_import_of_another_library_or_without_its_underscore_is_no_hint() {
+        let libfoo = MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new("@rpath/libfoo.dylib")),
         };
-        assert!(derive(&[macho]).unwrap().is_empty());
+        let unread = MachOLibrary::Dylib {
+            ordinal: 1,
+            name: None,
+        };
+        let hints = derive(&[macho(&[
+            ("_connect", libfoo),
+            ("_socket", unread),
+            ("_send", MachOLibrary::SelfImage),
+            ("_recv", MachOLibrary::MainExecutable),
+            ("_fork", MachOLibrary::WeakLookup),
+            ("connect", libsystem()),
+            ("__connect", libsystem()),
+        ])])
+        .unwrap();
+        assert!(hints.is_empty(), "{hints:?}");
+        // The names elsewhere in the facts are not imports.
+        assert!(derive(&[macho(&[])]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_macho_import_from_libsystem_and_by_flat_lookup_is_one_hint() {
+        let hints = derive(&[macho(&[
+            ("_connect", libsystem()),
+            ("_connect", MachOLibrary::FlatLookup),
+        ])])
+        .unwrap();
+        assert_eq!(hints.len(), 1);
     }
 }

@@ -362,8 +362,59 @@ fn binary_facts(
         if let Some(alignment) = macho.fat_alignment {
             rows.push(vec![esc("Fat alignment"), esc(&alignment.to_string())]);
         }
+        // PR-4c-3b. Facts without imports (a session written before, or nothing bound) show
+        // neither the row nor the list.
+        let object = macho.file_type == crate::binary::MH_OBJECT;
+        let label = if object {
+            "Undefined symbols (link time)"
+        } else {
+            "Imports (dyld)"
+        };
+        if !macho.imports.is_empty() {
+            rows.push(vec![esc(label), esc(&macho.imports.len().to_string())]);
+        }
         rows.extend(identity_rows(s, &b.slice));
         table(out, &["Fact", "Value"], rows);
+        if !macho.imports.is_empty() {
+            out.push_str(&format!(
+                "{} {}{}\n\n",
+                esc(&format!("{label} of")),
+                path.markdown_inline(),
+                esc(&format!(" ({}):", macho.imports.len()))
+            ));
+            let names: Vec<String> = macho
+                .imports
+                .iter()
+                .map(|i| {
+                    let mut n = i.name.markdown_inline();
+                    let library = match &i.library {
+                        crate::binary::MachOLibrary::Dylib {
+                            name: Some(name), ..
+                        } => Some(name.markdown_inline()),
+                        crate::binary::MachOLibrary::Dylib {
+                            ordinal,
+                            name: None,
+                        } => Some(esc(&format!("ordinal {ordinal}"))),
+                        crate::binary::MachOLibrary::SelfImage => Some(esc("self")),
+                        crate::binary::MachOLibrary::MainExecutable => Some(esc("main executable")),
+                        crate::binary::MachOLibrary::FlatLookup => Some(esc("flat lookup")),
+                        crate::binary::MachOLibrary::WeakLookup => Some(esc("weak lookup")),
+                        crate::binary::MachOLibrary::Unbound => None,
+                    };
+                    if let Some(library) = library {
+                        n.push_str(&esc(" ("));
+                        n.push_str(&library);
+                        n.push_str(&esc(")"));
+                    }
+                    if i.weak {
+                        n.push_str(&esc(" (weak)"));
+                    }
+                    n
+                })
+                .collect();
+            out.push_str(&names.join(", "));
+            out.push_str("\n\n");
+        }
         return;
     }
     let crate::binary::ContainerFacts::Elf(elf) = &b.container else {
@@ -623,8 +674,8 @@ fn signature_hints<'a>(
 /// sites, or, without one, `none found (see binary.code)` when the input's code was searched in
 /// full (complete) and `none found in the code searched; binary.code is partial (see Coverage)`
 /// when partial (plans P-p, P-q); `not analyzed (see binary.code)` when it was not searched; and
-/// `not analyzed (use --code)` without code analysis. A Mach-O gets nothing: 5a maps no Mach-O
-/// import.
+/// `not analyzed (use --code)` without code analysis. A Mach-O gets them when its facts have imports
+/// (PR-4c-3b); one without (a session written before, or nothing bound) gets nothing.
 fn capabilities(
     out: &mut String,
     s: &Session,
@@ -632,18 +683,21 @@ fn capabilities(
     b: &crate::binary::BinaryFacts,
     code: Option<&Coverage>,
 ) {
-    if !matches!(b.container, crate::binary::ContainerFacts::Elf(_)) {
-        return;
-    }
+    let imports = match &b.container {
+        crate::binary::ContainerFacts::Elf(elf) => elf.imports.len(),
+        crate::binary::ContainerFacts::MachO(macho) if !macho.imports.is_empty() => {
+            macho.imports.len()
+        }
+        crate::binary::ContainerFacts::MachO(_) => return,
+    };
     let mut hints: Vec<&FeatureHint> = import_hints(s, &b.slice).collect();
     hints.sort_by(|x, y| hint_key(x).cmp(&hint_key(y)));
     let cut_short = b.imports_cut_short();
     if hints.is_empty() {
-        let line = match &b.container {
-            crate::binary::ContainerFacts::Elf(elf) if cut_short => {
-                no_capability_imports_kept(elf.imports.len())
-            }
-            _ => NO_CAPABILITY_IMPORTS.to_string(),
+        let line = if cut_short {
+            no_capability_imports_kept(imports)
+        } else {
+            NO_CAPABILITY_IMPORTS.to_string()
         };
         out.push_str(&esc(&line));
         out.push_str("\n\n");
