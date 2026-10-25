@@ -362,15 +362,15 @@ fn binary_facts(
         if let Some(alignment) = macho.fat_alignment {
             rows.push(vec![esc("Fat alignment"), esc(&alignment.to_string())]);
         }
-        // PR-4c-3b. Facts without imports (a session written before, or nothing bound) show
-        // neither the row nor the list.
+        // PR-4c-3b. Facts without imports (a session written before, or nothing bound) and with
+        // no cut show neither the row nor the list.
         let object = macho.file_type == crate::binary::MH_OBJECT;
         let label = if object {
             "Undefined symbols (link time)"
         } else {
             "Imports (dyld)"
         };
-        if !macho.imports.is_empty() {
+        if !macho.imports.is_empty() || b.imports_cut_short() {
             rows.push(vec![esc(label), esc(&macho.imports.len().to_string())]);
         }
         rows.extend(identity_rows(s, &b.slice));
@@ -664,7 +664,7 @@ fn signature_hints<'a>(
         .filter(move |h| h.subject == *slice && h.signal != Signal::Import)
 }
 
-/// The capability imports of an ELF content (PR-5a-2 spec §3.1): one row per import hint of its
+/// The capability imports of an ELF or Mach-O content (PR-5a-2 spec §3.1): one row per import hint of its
 /// slice, in (feature, import) order, or the line `No capability imports.` when it has none.
 /// Hints come only from the imports kept within `binary_imports` (plan P-r): when the list was
 /// cut short, the line counts the imports kept instead, and a table is followed by a line that
@@ -674,8 +674,9 @@ fn signature_hints<'a>(
 /// sites, or, without one, `none found (see binary.code)` when the input's code was searched in
 /// full (complete) and `none found in the code searched; binary.code is partial (see Coverage)`
 /// when partial (plans P-p, P-q); `not analyzed (see binary.code)` when it was not searched; and
-/// `not analyzed (use --code)` without code analysis. A Mach-O gets them when its facts have imports
-/// (PR-4c-3b); one without (a session written before, or nothing bound) gets nothing.
+/// `not analyzed (use --code)` without code analysis. A Mach-O gets them when its facts have
+/// imports, or its list was cut (PR-4c-3b); one without (a session written before, or nothing
+/// bound) gets nothing.
 fn capabilities(
     out: &mut String,
     s: &Session,
@@ -685,7 +686,9 @@ fn capabilities(
 ) {
     let imports = match &b.container {
         crate::binary::ContainerFacts::Elf(elf) => elf.imports.len(),
-        crate::binary::ContainerFacts::MachO(macho) if !macho.imports.is_empty() => {
+        crate::binary::ContainerFacts::MachO(macho)
+            if !macho.imports.is_empty() || b.imports_cut_short() =>
+        {
             macho.imports.len()
         }
         crate::binary::ContainerFacts::MachO(_) => return,

@@ -1161,6 +1161,36 @@ fn a_macho_content_with_imports_lists_them_and_gets_capability_rows() {
         section.contains(&format!("\n{}\n", md_esc("_dlopen"))),
         "{section}"
     );
+    // Every import cut at `binary_imports`: the row and the cut-short line, as for an ELF.
+    s.binaries[0].container = facts(2, vec![]);
+    s.binaries[0].gaps.push(imports_over_gap(0));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Imports (dyld)"),
+        fact_row("Imports (dyld)", "0")
+    );
+    assert!(
+        section.contains(&md_esc(&no_capability_imports_kept(0))),
+        "{section}"
+    );
+    // A hostile import name renders escaped.
+    s.binaries[0].gaps.clear();
+    s.binaries[0].container = facts(
+        2,
+        vec![import(
+            "_x|<script>",
+            MachOLibrary::Dylib {
+                ordinal: 1,
+                name: Some(t(LIBSYSTEM)),
+            },
+            false,
+        )],
+    );
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(!section.contains("<script>"), "{section}");
+    assert!(section.contains(&md_esc("_x|<script>")), "{section}");
 }
 
 #[test]
