@@ -646,8 +646,8 @@ fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
     assert_eq!(
         gaps,
         [
-            "imports: ordinal 3 past the 2 dylibs",
-            "imports: unknown special ordinal -11",
+            "imports: an ordinal past the 2 dylibs",
+            "imports: an unknown special ordinal",
             "load dylib: string offset outside load command",
         ]
     );
@@ -730,7 +730,8 @@ fn bind_opcodes_bind_each_name() {
         vec![0xb1, 0x00, 0xff],
     ]
     .concat();
-    // Each lazy entry ends with DONE; the next starts afresh (ordinal 0, this image).
+    // Each lazy entry ends with DONE; the ordinal carries over to the next (as dyld4 and LLVM
+    // read it; Task 2 review).
     let lazy = [
         vec![0x72, 0x00, 0x11],
         symbol(0, "_puts"),
@@ -743,7 +744,7 @@ fn bind_opcodes_bind_each_name() {
         import("_connect", dylib(1, LIBSYSTEM), false),
         import("_dlopen", dylib(1, LIBSYSTEM), true),
         import("_getenv", MachOLibrary::FlatLookup, false),
-        import("_open", MachOLibrary::SelfImage, false),
+        import("_open", dylib(1, LIBSYSTEM), false),
         import("_puts", dylib(1, LIBSYSTEM), false),
         import("_socket", dylib(2, "@rpath/libfoo.dylib"), false),
     ];
@@ -798,6 +799,140 @@ fn a_bind_repeated_zero_times_binds_nothing() {
     }
 }
 
+/// Task 2 review: SET_DYLIB_SPECIAL_IMM's four values, and SET_DYLIB_ORDINAL_ULEB's low 32 bits,
+/// as dyld keeps them (`int`): 0xfffffffe is flat lookup, and 2^32 + 1 is ordinal 1.
+#[test]
+fn bind_opcodes_set_every_special_ordinal_and_a_ulebs_low_32_bits() {
+    let bind = [
+        vec![0x30],
+        symbol(0, "_own"),
+        vec![0x90, 0x3f],
+        symbol(0, "_main_thing"),
+        vec![0x90, 0x3e],
+        symbol(0, "_getenv"),
+        vec![0x90, 0x3d],
+        symbol(0, "__ZdlPv"),
+        vec![0x90, 0x20, 0xfe, 0xff, 0xff, 0xff, 0x0f],
+        symbol(0, "_dlopen"),
+        vec![0x90, 0x20, 0x81, 0x80, 0x80, 0x80, 0x10],
+        symbol(0, "_connect"),
+        vec![0x90, 0x00],
+    ]
+    .concat();
+    assert_eq!(
+        imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &bind, &[])),
+        (
+            vec![
+                import("__ZdlPv", MachOLibrary::WeakLookup, false),
+                import("_connect", dylib(1, LIBSYSTEM), false),
+                import("_dlopen", MachOLibrary::FlatLookup, false),
+                import("_getenv", MachOLibrary::FlatLookup, false),
+                import("_main_thing", MachOLibrary::MainExecutable, false),
+                import("_own", MachOLibrary::SelfImage, false),
+            ],
+            vec![]
+        )
+    );
+}
+
+/// Task 2 review: the sign-extension thresholds of chained ordinals. 0xf0 and 0xfff0 are ordinals
+/// past the dylibs, 0xf1 is a special one dyld does not know, and 0x102 is a 16-bit ordinal.
+#[test]
+fn chained_ordinals_sign_extend_only_above_their_thresholds() {
+    let expected = || {
+        (
+            vec![],
+            vec![
+                "imports: an ordinal past the 2 dylibs".to_string(),
+                "imports: an unknown special ordinal".to_string(),
+            ],
+        )
+    };
+    let narrow = chained_fixups(1, &[(0xf0, false, "_a"), (0xf1, false, "_b")]);
+    assert_eq!(imports_of(&chained_executable(&narrow)), expected());
+    let wide = chained_fixups(
+        3,
+        &[
+            (0x102, false, "_a"),
+            (0xfff0, false, "_b"),
+            (0xfff1, false, "_c"),
+        ],
+    );
+    assert_eq!(imports_of(&chained_executable(&wide)), expected());
+}
+
+/// Task 2 review: a gap repeated through a stream is one gap, and its text names no ordinal, so
+/// the gaps stay bounded.
+#[test]
+fn a_gap_repeated_through_a_stream_is_one_gap() {
+    let bind = [
+        vec![0x19],
+        symbol(0, "_connect"),
+        vec![0x90; 1000],
+        vec![0x1a, 0x90, 0x00],
+    ]
+    .concat();
+    assert_eq!(
+        imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &bind, &[])),
+        (
+            vec![],
+            vec!["imports: an ordinal past the 2 dylibs".to_string()]
+        )
+    );
+}
+
+/// Task 2 review: chained imports may all point at one name; each scan stops at its NUL, and all
+/// of them at 64 MiB, after which the names are not read.
+#[test]
+fn chained_import_names_past_64_mib_of_scanning_are_a_gap() {
+    let name = format!("_{}", "a".repeat(59_999));
+    let count = 1_200u32;
+    let mut blob = vec![];
+    for value in [0, 28, 32, 32 + 4 * count, count, 1, 0] {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob.resize(32, 0);
+    for _ in 0..count {
+        blob.extend_from_slice(&1u32.to_le_bytes());
+    }
+    blob.extend_from_slice(name.as_bytes());
+    blob.push(0);
+    assert_eq!(
+        imports_of(&chained_executable(&blob)),
+        (
+            vec![import(&name, dylib(1, LIBSYSTEM), false)],
+            vec!["imports: chained fixups: over 67108864 bytes of names scanned".to_string()]
+        )
+    );
+}
+
+/// Task 2 review: a dyld command shorter than its structure is a gap, and not read.
+#[test]
+fn a_dyld_command_shorter_than_its_structure_is_a_gap() {
+    let bytes = executable(
+        &[],
+        |_| {
+            vec![
+                common::macho::command(LC_DYLD_INFO, 40, false),
+                common::macho::command(LC_DYLD_INFO_ONLY, 40, false),
+                common::macho::command(LC_DYLD_CHAINED_FIXUPS, 8, false),
+            ]
+        },
+        &[],
+    );
+    assert_eq!(
+        imports_of(&bytes),
+        (
+            vec![],
+            vec![
+                "LC_DYLD_CHAINED_FIXUPS: command is too short".to_string(),
+                "LC_DYLD_INFO: command is too short".to_string(),
+                "LC_DYLD_INFO_ONLY: command is too short".to_string(),
+            ]
+        )
+    );
+}
+
 #[test]
 fn bind_opcodes_not_understood_are_gaps() {
     let connect = [vec![0x11], symbol(0, "_connect"), vec![0x90]].concat();
@@ -823,7 +958,7 @@ fn bind_opcodes_not_understood_are_gaps() {
         ),
         (
             [vec![0x3c], symbol(0, "_y"), vec![0x90]].concat(),
-            "imports: unknown special ordinal -4",
+            "imports: an unknown special ordinal",
         ),
     ] {
         let bind = [connect.clone(), tail].concat();

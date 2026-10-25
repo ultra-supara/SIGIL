@@ -13,6 +13,11 @@ use super::{range, ByteOrder, Header};
 use crate::binary::elf::MAX_IMPORT_NAME;
 use crate::binary::read::Bounded;
 
+/// The most bytes scanned for the names of a slice's chained imports (Task 2 review): the
+/// imports may all point at the same bytes, so each scan stops at its NUL or one byte past
+/// [`MAX_IMPORT_NAME`], and all of them at this.
+const MAX_NAME_SCAN: u64 = 64 << 20;
+
 /// What the load-command walk keeps for the imports.
 #[derive(Debug, Default)]
 pub(super) struct Commands {
@@ -57,13 +62,16 @@ pub(super) fn read<R: ReadCacheOps>(
     out.finish()
 }
 
-/// The imports found so far, within the limit, and the gaps.
+/// The imports found so far, within the limit, and the gaps, each once: a stream that repeats one
+/// keeps one (Task 2 review).
 struct Imports<'c> {
     dylibs: &'c [Option<UntrustedText>],
     limit: u64,
     kept: BTreeSet<MachOImport>,
     over: bool,
-    gaps: Vec<String>,
+    gaps: BTreeSet<String>,
+    /// The bytes [`Imports::name`] may still scan, of [`MAX_NAME_SCAN`].
+    scan: u64,
 }
 
 impl<'c> Imports<'c> {
@@ -73,12 +81,37 @@ impl<'c> Imports<'c> {
             limit,
             kept: BTreeSet::new(),
             over: false,
-            gaps: vec![],
+            gaps: BTreeSet::new(),
+            scan: MAX_NAME_SCAN,
         }
     }
 
     fn gap(&mut self, gap: String) {
-        self.gaps.push(gap);
+        self.gaps.insert(gap);
+    }
+
+    /// The name at `at` in `bytes`, which other names may share: its bytes up to its NUL. One
+    /// byte past [`MAX_IMPORT_NAME`] is scanned at most (a longer name comes back that long, and
+    /// [`Imports::keep`] refuses it), and [`MAX_NAME_SCAN`] bytes in all, after which no name is
+    /// read.
+    fn name<'b>(&mut self, bytes: &'b [u8], at: u64, outside: &'static str) -> Name<'b> {
+        let Some(rest) = usize::try_from(at)
+            .ok()
+            .and_then(|at| bytes.get(at..))
+            .filter(|rest| !rest.is_empty())
+        else {
+            return Name::Missing(outside);
+        };
+        let window = rest.len().min(MAX_IMPORT_NAME + 1);
+        let allowed = window.min(usize::try_from(self.scan).unwrap_or(usize::MAX));
+        let found = rest[..allowed].iter().position(|b| *b == 0);
+        self.scan -= found.map_or(allowed, |end| end + 1) as u64;
+        match found {
+            Some(end) => Name::Read(&rest[..end]),
+            None if allowed < window => Name::Exhausted,
+            None if window < rest.len() || window > MAX_IMPORT_NAME => Name::Read(&rest[..window]),
+            None => Name::Missing("a name without its NUL"),
+        }
     }
 
     /// `name`, bound through library ordinal `ordinal`: 0 this image, from 1 a dylib in ordinal
@@ -95,9 +128,10 @@ impl<'c> Imports<'c> {
                     .ok()
                     .and_then(|i| self.dylibs.get(i))
                     .zip(u32::try_from(n).ok());
+                // The gaps name no ordinal, so that a stream of them stays one gap.
                 let Some((dylib, ordinal)) = dylib else {
                     self.gap(format!(
-                        "imports: ordinal {n} past the {} dylibs",
+                        "imports: an ordinal past the {} dylibs",
                         self.dylibs.len()
                     ));
                     return;
@@ -107,8 +141,8 @@ impl<'c> Imports<'c> {
                     name: dylib.clone(),
                 }
             }
-            n => {
-                self.gap(format!("imports: unknown special ordinal {n}"));
+            _ => {
+                self.gap("imports: an unknown special ordinal".to_string());
                 return;
             }
         };
@@ -133,12 +167,22 @@ impl<'c> Imports<'c> {
 
     fn finish(mut self) -> (Vec<MachOImport>, Vec<String>) {
         if self.over {
-            self.gaps.push(imports_over_gap(self.limit));
+            self.gaps.insert(imports_over_gap(self.limit));
         }
-        self.gaps.sort();
-        self.gaps.dedup();
-        (self.kept.into_iter().collect(), self.gaps)
+        (
+            self.kept.into_iter().collect(),
+            self.gaps.into_iter().collect(),
+        )
     }
+}
+
+/// A name looked up by [`Imports::name`].
+enum Name<'b> {
+    Read(&'b [u8]),
+    /// Not read, and why.
+    Missing(&'static str),
+    /// [`MAX_NAME_SCAN`] bytes were scanned: this name, and the later ones, are not read.
+    Exhausted,
 }
 
 /// The NUL-terminated bytes at `at` in `bytes`.
@@ -245,9 +289,13 @@ fn chained<R: ReadCacheOps>(
             };
             (ordinal, (v >> 8) & 1 == 1, v >> 9)
         };
-        match c_string(blob, symbols_offset + name_offset, "a name out of the blob") {
-            Ok(name) => out.bind(name, ordinal, weak),
-            Err(why) => out.gap(gap(why)),
+        match out.name(blob, symbols_offset + name_offset, "a name out of the blob") {
+            Name::Read(name) => out.bind(name, ordinal, weak),
+            Name::Missing(why) => out.gap(gap(why)),
+            Name::Exhausted => {
+                out.gap(gap(&format!("over {MAX_NAME_SCAN} bytes of names scanned")));
+                break;
+            }
         }
     }
 }
@@ -278,9 +326,10 @@ fn opcodes<R: ReadCacheOps>(
 
 /// The binds of one opcode stream (`<mach-o/loader.h>`), as dyld reads them: each `DO_BIND*`
 /// binds the current name through the current ordinal, `DO_BIND_ULEB_TIMES_SKIPPING_ULEB` as many
-/// times as its count says (none for 0). `DONE` ends the bind stream, and each
-/// entry of the lazy-bind stream (`lazy`), which starts afresh. A stream stops at its first error;
-/// the binds before it are kept.
+/// times as its count says (none for 0). `DONE` ends the bind stream; in the lazy-bind stream
+/// (`lazy`) it ends an entry, and the ordinal, name, and flags carry over to the next, as dyld4
+/// and LLVM read them (Task 2 review). A stream stops at its first error; the binds before it are
+/// kept.
 fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String> {
     let mut at = 0usize;
     let mut ordinal: i64 = 0;
@@ -291,18 +340,16 @@ fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String>
         let (opcode, imm) = (byte & 0xf0, byte & 0x0f);
         let bind = match opcode {
             // DONE
-            0x00 if lazy => {
-                (ordinal, name, weak) = (0, None, false);
-                false
-            }
+            0x00 if lazy => false,
             0x00 => return Ok(()),
             // SET_DYLIB_ORDINAL_IMM, _ULEB, SET_DYLIB_SPECIAL_IMM
             0x10 => {
                 ordinal = imm.into();
                 false
             }
+            // dyld keeps the ULEB's low 32 bits, as an `int`.
             0x20 => {
-                ordinal = i64::try_from(uleb(stream, &mut at)?).unwrap_or(i64::MAX);
+                ordinal = i64::from(uleb(stream, &mut at)? as u32 as i32);
                 false
             }
             0x30 => {
