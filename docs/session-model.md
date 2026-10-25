@@ -601,12 +601,14 @@ is a gap, never dropped.
 import. This holds with or without code analysis, and for `inspect ollama --install-dir` too.
 - `feature`: the capability's key (table below);
 - `signal`: `Import`;
-- `value`: the import's name. The match is exact, and the import's version is not part of it;
+- `value`: the import's name, as the file has it. The match is exact (a Mach-O name without one
+  leading `_`), and the import's version is not part of it;
 - `at`: `Symbol(<name>)`.
 
 A hint says that the file imports the function. It never says that the function is called: that
 is a call site (C). When `binary_imports` cut the import list short, the hints are as short as the
-list. A Mach-O slice has no hints yet.
+list. A Mach-O slice's hints come only from its imports bound to libSystem, found by flat
+lookup, or an object file's (PR-4c-3b).
 
 | Key | Imports |
 |---|---|

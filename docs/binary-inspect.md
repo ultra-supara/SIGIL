@@ -166,8 +166,9 @@ once rendered:
 - With `--code`, a line under the table (or under the line that replaces it) gives the input's
   `binary.code` status and, when its code was searched, the code bytes read:
   `binary.code: complete; 78 of 268435456 code bytes read.`
-- A Mach-O gets the table, or the line, when its facts have imports (PR-4c-3b); one without (a
-  session written before, or a file that binds nothing) gets neither. Its code is not analyzed:
+- A Mach-O gets the table, or the line, when its facts have imports, or its import list was cut
+  (PR-4c-3b); one without either (a session written before, or a file that binds nothing) gets
+  neither. Its code is not analyzed:
   with `--code`, its cells say `not analyzed (see binary.code)`.
 
 **Scope.** Only direct calls are found:
@@ -244,9 +245,10 @@ linker writes bind opcodes):
 - one that dials through `net` imports `_connect`, `_socket`, and `_getaddrinfo`.
 
 A missing hint is never absence: a function linked statically into the file, one looked up at run
-time, and a system call made without libSystem are not imports. The fixtures are
-`tests/fixtures/macho-imports/` (a C program linked by `ld64.lld` for x86_64, with bind opcodes,
-and for arm64, with chained fixups, and its object file) and
+time, and a system call made without libSystem are not imports, and Darwin's variant names
+(`_open$UNIX2003`, `_write$NOCANCEL`) are not the table's names, so they give no hint. The
+fixtures are `tests/fixtures/macho-imports/` (a C program linked by `ld64.lld` for x86_64, with
+bind opcodes, and for arm64, with chained fixups, and its object file) and
 `tests/fixtures/go-darwin/` (the PR-4c-3a Go program of `tests/fixtures/go-capabilities/`, built
 for darwin/arm64).
 
@@ -255,9 +257,10 @@ neither while a dylib is loaded (the `LC_DYSYMTAB` binding of macOS 10.5 and ear
 claimed only when every load command was read, and each dyld command whole); a blob or stream out
 of the file; a chained-fixups format SIGIL does not read, or a compressed symbol table; an unknown
 opcode or a malformed one; an ordinal past the dylibs, which binds nowhere (dyld refuses the
-image); an unknown special ordinal (likewise); more than 64 MiB of names scanned in chained
-imports or an object file's strings, or bound by bind opcodes (a bind that repeats the last one
-costs nothing); and the import limits of ELF (`binary_imports`, 65,536 bytes per name).
+image); an unknown special ordinal (likewise); more than 64 MiB of names in the file (every
+slice together) scanned in chained imports or an object file's strings, or bound by bind opcodes
+(a bind that repeats the last one costs nothing); and the import limits of ELF
+(`binary_imports`, 65,536 bytes per name).
 The list is in [runtime artifacts](runtime-artifacts.md#binaries).
 
 ## Signatures
