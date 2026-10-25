@@ -836,29 +836,55 @@ fn bind_opcodes_set_every_special_ordinal_and_a_ulebs_low_32_bits() {
 }
 
 /// Task 2 review: the sign-extension thresholds of chained ordinals. 0xf0 and 0xfff0 are ordinals
-/// past the dylibs, 0xf1 is a special one dyld does not know, and 0x102 is a 16-bit ordinal.
+/// past the dylibs, 0xf1 and 0xfff1 are special ones dyld does not know, and 0x102 is a 16-bit
+/// ordinal. Each alone, since the gaps name no ordinal.
 #[test]
 fn chained_ordinals_sign_extend_only_above_their_thresholds() {
-    let expected = || {
-        (
-            vec![],
-            vec![
-                "imports: an ordinal past the 2 dylibs".to_string(),
-                "imports: an unknown special ordinal".to_string(),
-            ],
-        )
-    };
-    let narrow = chained_fixups(1, &[(0xf0, false, "_a"), (0xf1, false, "_b")]);
-    assert_eq!(imports_of(&chained_executable(&narrow)), expected());
-    let wide = chained_fixups(
-        3,
-        &[
-            (0x102, false, "_a"),
-            (0xfff0, false, "_b"),
-            (0xfff1, false, "_c"),
-        ],
+    let past = "imports: an ordinal past the 2 dylibs";
+    let special = "imports: an unknown special ordinal";
+    for (format, ordinal, gap) in [
+        (1, 0xf0, past),
+        (1, 0xf1, special),
+        (3, 0x102, past),
+        (3, 0xfff0, past),
+        (3, 0xfff1, special),
+    ] {
+        let blob = chained_fixups(format, &[(ordinal, false, "_a")]);
+        assert_eq!(
+            imports_of(&chained_executable(&blob)),
+            (vec![], vec![gap.to_string()]),
+            "format {format}, ordinal {ordinal:#x}"
+        );
+    }
+}
+
+/// Task 2 review: a bind that repeats the last one is no new import, and costs nothing, however
+/// long its name; binds that are not repeats cost their names, within 64 MiB.
+#[test]
+fn bind_opcodes_past_64_mib_of_names_bound_are_a_gap() {
+    let name = format!("_{}", "a".repeat(59_999));
+    let repeats = [vec![0x11], symbol(0, &name), vec![0x90; 2_000], vec![0x00]].concat();
+    assert_eq!(
+        imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &repeats, &[])),
+        (vec![import(&name, dylib(1, LIBSYSTEM), false)], vec![])
     );
-    assert_eq!(imports_of(&chained_executable(&wide)), expected());
+    let alternating = [
+        vec![0x11],
+        symbol(0, &name),
+        [0x90, 0x12, 0x90, 0x11].repeat(600),
+        vec![0x00],
+    ]
+    .concat();
+    assert_eq!(
+        imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &alternating, &[])),
+        (
+            vec![
+                import(&name, dylib(1, LIBSYSTEM), false),
+                import(&name, dylib(2, "@rpath/libfoo.dylib"), false),
+            ],
+            vec!["imports: bind opcodes: over 67108864 bytes of names bound".to_string()]
+        )
+    );
 }
 
 /// Task 2 review: a gap repeated through a stream is one gap, and its text names no ordinal, so

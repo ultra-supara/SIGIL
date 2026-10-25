@@ -11,11 +11,13 @@ use sigil_model::{imports_over_gap, MachOImport, MachOLibrary, UntrustedText, MH
 
 use super::{range, ByteOrder, Header};
 use crate::binary::elf::MAX_IMPORT_NAME;
-use crate::binary::read::Bounded;
+use crate::binary::read::{Bounded, ENTRY_OVERHEAD};
 
-/// The most bytes scanned for the names of a slice's chained imports (Task 2 review): the
-/// imports may all point at the same bytes, so each scan stops at its NUL or one byte past
-/// [`MAX_IMPORT_NAME`], and all of them at this.
+/// The most bytes scanned for the names of a slice's chained imports, or bound by its bind
+/// opcodes (Task 2 review): the imports may all point at the same bytes, and a stream may bind
+/// one name any number of times, so each scan stops at its NUL or one byte past
+/// [`MAX_IMPORT_NAME`], each bind that is not a repeat costs its name's length and
+/// [`ENTRY_OVERHEAD`], and all of them stop at this.
 const MAX_NAME_SCAN: u64 = 64 << 20;
 
 /// What the load-command walk keeps for the imports.
@@ -70,7 +72,8 @@ struct Imports<'c> {
     kept: BTreeSet<MachOImport>,
     over: bool,
     gaps: BTreeSet<String>,
-    /// The bytes [`Imports::name`] may still scan, of [`MAX_NAME_SCAN`].
+    /// The bytes [`Imports::name`] may still scan, and the bind opcodes still bind, of
+    /// [`MAX_NAME_SCAN`].
     scan: u64,
 }
 
@@ -88,6 +91,14 @@ impl<'c> Imports<'c> {
 
     fn gap(&mut self, gap: String) {
         self.gaps.insert(gap);
+    }
+
+    /// Takes `bytes` of the names' [`MAX_NAME_SCAN`]; `false`, and none left, when they are not
+    /// there.
+    fn spend(&mut self, bytes: u64) -> bool {
+        let left = self.scan.checked_sub(bytes);
+        self.scan = left.unwrap_or(0);
+        left.is_some()
     }
 
     /// The name at `at` in `bytes`, which other names may share: its bytes up to its NUL. One
@@ -328,13 +339,18 @@ fn opcodes<R: ReadCacheOps>(
 /// binds the current name through the current ordinal, `DO_BIND_ULEB_TIMES_SKIPPING_ULEB` as many
 /// times as its count says (none for 0). `DONE` ends the bind stream; in the lazy-bind stream
 /// (`lazy`) it ends an entry, and the ordinal, name, and flags carry over to the next, as dyld4
-/// and LLVM read them (Task 2 review). A stream stops at its first error; the binds before it are
-/// kept.
+/// and LLVM read them (Task 2 review). A bind that repeats the last one (its name, ordinal, and
+/// flags) is no new import, and costs nothing; any other costs its name's length and
+/// [`ENTRY_OVERHEAD`] of [`MAX_NAME_SCAN`]. A stream stops at its first error; the binds before
+/// it are kept.
 fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String> {
     let mut at = 0usize;
     let mut ordinal: i64 = 0;
     let mut name: Option<&[u8]> = None;
     let mut weak = false;
+    // Where the current name starts in the stream, and the last bind: (name, ordinal, flags).
+    let mut name_at = 0usize;
+    let mut bound: Option<(usize, i64, bool)> = None;
     while let Some(&byte) = stream.get(at) {
         at += 1;
         let (opcode, imm) = (byte & 0xf0, byte & 0x0f);
@@ -363,6 +379,7 @@ fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String>
             // SET_SYMBOL_TRAILING_FLAGS_IMM: the name follows; flag 0x1 is a weak import.
             0x40 => {
                 let symbol = c_string(stream, at as u64, "a name without its NUL")?;
+                name_at = at;
                 at += symbol.len() + 1;
                 name = Some(symbol);
                 weak = imm & 0x1 != 0;
@@ -407,7 +424,13 @@ fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String>
             let Some(symbol) = name else {
                 return Err("a bind before any name".to_string());
             };
-            out.bind(symbol, ordinal, weak);
+            if bound != Some((name_at, ordinal, weak)) {
+                if !out.spend(symbol.len() as u64 + ENTRY_OVERHEAD) {
+                    return Err(format!("over {MAX_NAME_SCAN} bytes of names bound"));
+                }
+                out.bind(symbol, ordinal, weak);
+                bound = Some((name_at, ordinal, weak));
+            }
         }
     }
     Ok(())
