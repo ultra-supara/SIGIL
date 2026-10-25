@@ -14,8 +14,8 @@ use object::read::{ReadCacheOps, SectionIndex};
 use object::Endianness;
 use sigil_model::{
     returned_value_gap, scan_over_gap, DataValue, FeatureKey, FunctionReturn, Loc, Signal,
-    UntrustedText, SCAN_GOPCLNTAB_HEADER, SCAN_NAME_NOT_READ, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
-    SCAN_READ_FAILED,
+    UntrustedText, SCAN_GOPCLNTAB_HEADER, SCAN_GOPCLNTAB_NOT_MAPPED, SCAN_NAME_NOT_READ,
+    SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS, SCAN_READ_FAILED,
 };
 
 use super::elf::{is_export, Dynamic, Elf, Sections, MAX_IMPORT_NAME};
@@ -70,14 +70,19 @@ pub enum ScanOutcome {
     NameAndHashOnly,
 }
 
-/// A section `search` reads: the kind of needle looked for in it, its name, and its bytes in
-/// the file (`sh_offset`, `sh_size`).
+/// A section `search` reads: the kind of needle looked for in it, its name, its bytes in the file
+/// (`sh_offset`, `sh_size`), and whether they are the bytes the loader maps at its address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Target {
     pub kind: NeedleKind,
     pub name: Vec<u8>,
     pub offset: u64,
     pub size: u64,
+    /// `sh_addr`, through the `PT_LOAD`s, is `sh_offset` ([`Elf::loader_reads`]). Only a Go target
+    /// needs it (PR #102 re-review P2): no string needle ships. A relocatable object's never is,
+    /// but it has no Go build info SIGIL reads (Go reads it through the `PT_LOAD`s too), so its
+    /// `.gopclntab` is never searched.
+    pub mapped: bool,
 }
 
 /// What `search` found, and read.
@@ -100,7 +105,9 @@ pub(crate) struct Searched {
 /// within the target's own bytes; bytes past the end of the file (or an end that overflows), while
 /// a needle of the kind is still looked for, are the gap [`SCAN_READ_FAILED`], and the bytes in the
 /// file are read. A Go target's header that locates no function-name table is the gap
-/// [`SCAN_GOPCLNTAB_HEADER`] ([`function_names`]). Over the limit, reading stops, and what was
+/// [`SCAN_GOPCLNTAB_HEADER`] ([`function_names`]). A Go target not `mapped` is the gap
+/// [`SCAN_GOPCLNTAB_NOT_MAPPED`], and nothing of it is read: the runtime reads its table through
+/// an address, so not that one (PR #102 re-review P2). Over the limit, reading stops, and what was
 /// found is kept with the gap [`scan_over_gap`]. A read that fails leaves the rest of its target
 /// unread, with the gap [`SCAN_READ_FAILED`]. Each gap is given once. `used` is the reader's,
 /// earlier reads included.
@@ -108,8 +115,8 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
     let size = reader.size();
     let mut out = Searched::default();
     // The gaps: bytes of a target not read (past the end of the file, or a failed read), a Go
-    // target's header not understood, and the budget.
-    let (mut unread, mut not_understood, mut over) = (false, false, false);
+    // target's header not understood, a Go target not mapped, and the budget.
+    let (mut unread, mut not_understood, mut not_mapped, mut over) = (false, false, false, false);
     'kinds: for kind in [NeedleKind::GoFunction, NeedleKind::String] {
         let mut open = needles.of(kind);
         let overlap = needles.overlap(kind);
@@ -121,6 +128,10 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
             // table, which the section's header locates (PR-4c-3a plan review P2: the file table
             // also holds NUL-terminated names).
             let (from, len) = match kind {
+                NeedleKind::GoFunction if !t.mapped => {
+                    not_mapped = true;
+                    continue;
+                }
                 NeedleKind::GoFunction => match pcln_table(reader, t) {
                     Pcln::Table(from, len) => (from, len),
                     Pcln::NotUnderstood => {
@@ -186,6 +197,9 @@ pub(crate) fn search(reader: &mut Reader<'_>, needles: &Needles, targets: &[Targ
     }
     if not_understood {
         out.gaps.push(SCAN_GOPCLNTAB_HEADER.to_string());
+    }
+    if not_mapped {
+        out.gaps.push(SCAN_GOPCLNTAB_NOT_MAPPED.to_string());
     }
     if over {
         out.gaps.push(scan_over_gap(reader.limit()));
@@ -373,8 +387,9 @@ fn exports<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
 
 /// The sections of `kinds` in `table`, in table order: `.gopclntab` for the Go-function needles
 /// (whose header [`search`] reads first); `.rodata`, `.rodata.*`, and `.lrodata` for the string
-/// needles. A section without file bytes (`SHT_NOBITS`) is none of them. A section name that
-/// cannot be read is the gap [`SCAN_NAME_NOT_READ`], given once: it could be one of them.
+/// needles. A section without file bytes (`SHT_NOBITS`) is none of them. Each is `mapped` when the
+/// loader maps its bytes at its address. A section name that cannot be read is the gap
+/// [`SCAN_NAME_NOT_READ`], given once: it could be one of them.
 fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &Elf<'d, R, H>,
     table: &SectionTable<'d, H, &'d Bounded<R>>,
@@ -416,6 +431,7 @@ fn targets<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
                 name: name.to_vec(),
                 offset: s.sh_offset(endian).into(),
                 size: s.sh_size(endian).into(),
+                mapped: e.loader_reads(Some(s), s.sh_addr(endian).into()).is_ok(),
             });
         }
     }
@@ -588,6 +604,7 @@ mod tests {
             name: name.as_bytes().to_vec(),
             offset,
             size,
+            mapped: true,
         }
     }
 
@@ -992,6 +1009,46 @@ mod tests {
         let strings = db(&[("s.f", "string", "main.f")]);
         let s = run(&b, 1 << 30, &strings, &[rodata(2000, 0)]);
         assert_eq!(s, Searched::default());
+    }
+
+    #[test]
+    fn a_gopclntab_not_mapped_is_a_gap_and_not_read() {
+        let go = db(&[("g.f", "go-function", "main.f")]);
+        let mut b = bytes(1000, &[(0x100, "main.f")]);
+        header(&mut b, 0, 1000);
+        // Its bytes are not those the loader maps at its address: the runtime does not read that
+        // table, so it is not searched, and nothing of it is read (PR #102 re-review P2).
+        let unmapped = Target {
+            mapped: false,
+            ..gopclntab(0, 1000)
+        };
+        let s = run(&b, 1 << 30, &go, std::slice::from_ref(&unmapped));
+        assert!(s.found.is_empty());
+        assert_eq!(s.gaps, [SCAN_GOPCLNTAB_NOT_MAPPED]);
+        assert_eq!(s.used, 0);
+        // A mapped `.gopclntab` after it is still searched.
+        let s = run(&b, 1 << 30, &go, &[unmapped, gopclntab(0, 1000)]);
+        assert_eq!(
+            places(&s),
+            [("g.f".to_string(), ".gopclntab".to_string(), 0x100)]
+        );
+        assert_eq!(s.gaps, [SCAN_GOPCLNTAB_NOT_MAPPED]);
+        // Only a Go target needs to be mapped: no string needle ships.
+        let strings = db(&[("s.f", "string", "main.f")]);
+        let s = run(
+            &b,
+            1 << 30,
+            &strings,
+            &[Target {
+                mapped: false,
+                ..rodata(0, 1000)
+            }],
+        );
+        assert_eq!(
+            places(&s),
+            [("s.f".to_string(), ".rodata".to_string(), 0x100)]
+        );
+        assert!(s.gaps.is_empty());
     }
 
     #[test]

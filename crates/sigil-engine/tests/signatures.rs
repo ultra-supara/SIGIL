@@ -21,7 +21,7 @@ use sigil_model::{
     binary_root, scan_over_gap, BinaryFacts, Completeness, CoverageState, FeatureHint,
     FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY, BINARY_IDENTITY,
     BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_GOPCLNTAB_HEADER,
-    SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
+    SCAN_GOPCLNTAB_NOT_MAPPED, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
 };
 use tempfile::TempDir;
 
@@ -378,6 +378,61 @@ fn a_gopclntab_of_zero_bytes_is_partial() {
             missing: vec![SCAN_GOPCLNTAB_HEADER.to_string()]
         }
     );
+}
+
+/// PR #102 re-review P2: a Go executable whose `.gopclntab` section header points at a forged table
+/// (its build info and code unchanged; the program still runs, for the runtime finds its table
+/// through `runtime.firstmoduledata`, never the section headers) must not read as completely
+/// scanned when the section's bytes are not those the loader maps at its address: the gap, and no
+/// hint.
+#[test]
+fn a_gopclntab_not_mapped_where_its_address_says_is_partial() {
+    let real = capabilities_elf();
+    let header = sections64(&real)
+        .into_iter()
+        .find(|s| s.0 == ".gopclntab")
+        .unwrap()
+        .2;
+    // A table of one name, `main.main`, in zeros of the PT_LOAD, between the build info (0x4000)
+    // and the real table (0x8000).
+    let mut forged = go120_header(0x52);
+    forged.extend_from_slice(b"main.main\0");
+    assert!(real[0x6000..0x6000 + forged.len()].iter().all(|b| *b == 0));
+    let mut with_forged = real.clone();
+    with_forged[0x6000..0x6000 + forged.len()].copy_from_slice(&forged);
+    // (sh_addr, sh_offset, sh_size) at the section header's bytes 16..40.
+    let edited = |addr: u64, offset: u64, size: u64| {
+        let mut b = with_forged.clone();
+        for (at, v) in [(16, addr), (24, offset), (32, size)] {
+            b[header + at..header + at + 8].copy_from_slice(&v.to_le_bytes());
+        }
+        b
+    };
+    let size = forged.len() as u64;
+    for bytes in [
+        // The offset moved to the forged table, the address left at the real one's.
+        edited(0x8000, 0x6000, size),
+        // The real table, at an address no PT_LOAD maps.
+        edited(0x1000_0000, 0x8000, 691_240),
+    ] {
+        let (_d, paths) = files(&[("capabilities", &bytes)]);
+        let s = inspect(&paths, NamedBudgets::default());
+        assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+        assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+        assert_eq!(
+            identity(&s, 1),
+            CoverageState::Partial {
+                missing: vec![SCAN_GOPCLNTAB_NOT_MAPPED.to_string()]
+            }
+        );
+    }
+    // The limit (binary-inspect.md): the forged table with its address moved too is mapped where
+    // its address says, and SIGIL cannot tell it from the runtime's table, which it would have to
+    // find through `runtime.firstmoduledata`. It is searched, and has no `go.*` name.
+    let (_d, paths) = files(&[("capabilities", &edited(0x6000, 0x6000, size))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
 #[test]
@@ -916,8 +971,16 @@ fn a_gopclntab_over_binary_scan_bytes_stops_at_the_limit() {
         .find(|s| s.0 == ".gopclntab")
         .unwrap()
         .2;
-    bytes[header + 24..header + 32].copy_from_slice(&at.to_le_bytes());
+    // At `at`, its address and offset alike, and the PT_LOAD (offset and address 0) taken to its
+    // end, so that the loader maps it where its address says (PR #102 re-review P2).
+    for field in [16, 24] {
+        bytes[header + field..header + field + 8].copy_from_slice(&at.to_le_bytes());
+    }
     bytes[header + 32..header + 40].copy_from_slice(&size.to_le_bytes());
+    let load = phdr64(&bytes, PT_LOAD);
+    for field in [32, 40] {
+        bytes[load + field..load + field + 8].copy_from_slice(&(at + size).to_le_bytes());
+    }
     let d = TempDir::new().unwrap();
     let path = d.path().join("ollama");
     std::fs::write(&path, &bytes).unwrap();

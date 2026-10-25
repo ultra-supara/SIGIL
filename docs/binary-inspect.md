@@ -209,7 +209,7 @@ match:
 | Needle kind | Looked for in | Hint |
 |---|---|---|
 | `export` (a prefix) | the names of the exported dynamic symbols (`.dynsym`), in symbol-table order; a relocatable object has none | `signal: Export`; `value` and `at: Symbol` the first matching export's name |
-| `go-function` (an exact function name) | the function-name table of `.gopclntab`, in a file with Go build info: the section's header (Go's `pcHeader`) locates the table, and the name's bytes are an entry of it, between NUL bytes (or at the table's start) | `signal: GoFunction`; `value` the needle; `at: Section { ".gopclntab", offset }`, the offset of the name from the section's start |
+| `go-function` (an exact function name) | the function-name table of `.gopclntab`, in a file with Go build info: the section's bytes must be the bytes the loader maps at its address, the section's header (Go's `pcHeader`) locates the table, and the name's bytes are an entry of it, between NUL bytes (or at the table's start) | `signal: GoFunction`; `value` the needle; `at: Section { ".gopclntab", offset }`, the offset of the name from the section's start |
 | `string` (exact bytes) | `.rodata`, `.rodata.*`, and `.lrodata` | `signal: String`; `value` the needle; `at: Section { name, offset }` |
 
 The database's needles each name their source (`source`, required):
@@ -257,6 +257,22 @@ No string needle ships yet. `libllama-common`'s `.rodata` holds the string
 `ggml_backend_rpc_add_server`, but the library exports no RPC symbol, so a string needle would
 misreport the backend. A hint says that a name is in the file, never that the code runs it. A
 missing hint says only that the needle is not where the scan looked.
+
+**What a Go hint cannot show.** The scan trusts the names the file gives. The Go runtime finds its
+table through `runtime.firstmoduledata`, never through the section headers, and uses a function's
+name only to print it. So a file edited after its build can hide a hint and still run the same:
+- a function renamed in place in the function-name table (`os.StartProcess` to
+  `os.XtartProcess`);
+- a forged table in bytes the loader maps that the program does not use (the zero padding after
+  the program headers, for example), with `.gopclntab`'s section header pointed at it, address and
+  offset in agreement.
+
+SIGIL would have to find `runtime.firstmoduledata` to tell a forged table from the runtime's, and
+no check on the table can catch a renamed function. What it does catch (PR #102 re-review): a
+`.gopclntab` whose bytes are not the bytes the loader maps at its address (`sh_addr`, through the
+`PT_LOAD`s) is no table the runtime reads, and is a gap, below. And a program needs no edit to
+spawn a process through `syscall.RawSyscall`. So `binary.identity: Complete` says that the scan
+finished, never that the file lacks a capability.
 
 **Reading.** Export and section names are read through the parse's cache, under
 `binary_parse_bytes`. Section bytes are read with `pread` in 1 MiB chunks; each read takes the
@@ -306,6 +322,11 @@ The gaps of a scan cut short, and of a value not read:
 - `string scan: .gopclntab header not understood`: the file has Go build info and a `.gopclntab`,
   but its header is not one SIGIL reads, or locates no function-name table within the section, or
   the section has no bytes at all (PR-4c-3a): the Go-function needles were not looked for there;
+- `string scan: .gopclntab is not the bytes mapped at its address`: the file has Go build info
+  and a `.gopclntab`, but the section's bytes in the file (`sh_offset`) are not the bytes the
+  loader maps at its address (`sh_addr`, through the `PT_LOAD`s), or no `PT_LOAD` maps the address
+  (PR #102 re-review): the runtime reads its table through an address, so not that one. Nothing of
+  it is read, and the Go-function needles were not looked for in the table the runtime reads;
 - `string scan: a name not read`: a section's or an export's name could not be read; or the
   loader has dynamic symbols (`DT_SYMTAB`) and the parse has no `.dynsym` that agrees with them,
   or the loader's dynamic table could not be read. A needle or a known function may be there

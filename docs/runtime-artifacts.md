@@ -343,7 +343,7 @@ slice in the session, read from the file's own bytes. They are observations, not
   | State | When |
   |---|---|
   | `Complete` | Discovery is complete, no binary is a Mach-O, and every ELF slice has facts and a scan without a gap (an NVIDIA library is not scanned, and adds no gap) |
-  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, `string scan: .gopclntab header not understood`, …; the list is in [binary inspection](binary-inspect.md#signatures)), and for each returned value not read (`returned value: ggml_version: not decoded: x86-64 only`, …; [binary inspection](binary-inspect.md#returned-values)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
+  | `Partial { missing }` | Otherwise, sorted: `discovery incomplete`; `<path>: <gap>` for each scan gap (`string scan: binary_scan_bytes <limit> exceeded`, `string scan: no section headers`, `string scan: no .gopclntab section`, `string scan: .gopclntab header not understood`, `string scan: .gopclntab is not the bytes mapped at its address`, …; the list is in [binary inspection](binary-inspect.md#signatures)), and for each returned value not read (`returned value: ggml_version: not decoded: x86-64 only`, …; [binary inspection](binary-inspect.md#returned-values)); `<path>: string scan: ELF only` for a Mach-O file; `<path>: not parsed` for an ELF without facts |
   | The state of `artifacts.discovery` | Discovery is `Unavailable`, `BudgetExceeded`, or `Error` |
 
   On the official v0.30.6 bundle it is `Complete`: its NVIDIA libraries are not scanned, and

@@ -190,9 +190,10 @@ The rule then yields an open question at most.
     `symbols: no section header table`, `symbols: no readable section header table`, or
     `symbols: no SHT_DYNSYM` must list `string scan: a name not read`: its loader has dynamic
     symbols the parse has no `.dynsym` for, so the export needle could not look at its exports.
-    A Go ELF whose section header table was read may list `string scan: no .gopclntab section` or
-    `string scan: .gopclntab header not understood` (the model sees no section names or bytes);
-    no other ELF does. Each `Unknown` return of its facts must be listed as
+    A Go ELF whose section header table was read may list `string scan: no .gopclntab section`,
+    `string scan: .gopclntab header not understood`, or
+    `string scan: .gopclntab is not the bytes mapped at its address` (the model sees no section
+    names or bytes); no other ELF does. Each `Unknown` return of its facts must be listed as
     `returned value: <function>: <why>`, and no other such gap may be (PR-4c-2b); an input whose
     facts have a return was scanned, so it is never `OutOfScope`.
     When a claim on the input's slice names `cuda-runtime`,
