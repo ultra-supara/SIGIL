@@ -108,12 +108,13 @@ one looked up at run time, and a raw system call are not imports.
 | `posix.dynamic_loading` | `dlopen`, `dlsym` |
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
-| `cxx.file_write` | libstdc++'s `std::filesystem::` `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open` |
 | `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name, and its `open` |
+| `cxx.file_write` | libstdc++'s `std::filesystem` functions `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open` |
 
-Each entry of `signatures/capabilities.toml` names its source: POSIX.1-2024 for the libc names
-(Linux and macOS `ptrace(2)` for `ptrace`), and the libstdc++ version and demangled form for a
-C++ name.
+Each entry of `crates/sigil-engine/signatures/capabilities.toml` names its source: POSIX.1-2024
+for the libc names (Linux and macOS `ptrace(2)` for `ptrace`), and, for a C++ name, the libstdc++
+symbol version that exports it (`GLIBCXX_3.4.26`) and its demangled form, with `[C1]` or `[C2]`
+after a constructor.
 
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
 imports kept within `binary_imports` give hints: when a file has more, the report says that the
@@ -128,14 +129,20 @@ lookup, or an object file's: `_connect` from another dylib is that dylib's funct
 `libstdc++.so.6.0.35` exports them, matched without demangling:
 `_ZNSt10filesystem6removeERKNS_7__cxx114pathE` is
 `std::filesystem::remove(std::filesystem::__cxx11::path const&)`. Each function is listed for both
-path ABIs (the `__cxx11` path and the old one), with and without `std::error_code&`. Each stream
-is listed for `char` and `wchar_t`, with a `const char*`, the `__cxx11` string, or the old string,
-as its complete-object (C1) and base-object (C2) constructor and as `open`. A name has one
+of libstdc++'s ABIs (the default one, whose `path` and `std::string` are in `__cxx11`, and the old
+one, `-D_GLIBCXX_USE_CXX11_ABI=0`), with and without `std::error_code&`, and `create_directory`
+also with a second path whose attributes the new directory takes: 52 names. `copy` and
+`copy_file` are listed with their `copy_options`; the overloads without them are inline and call
+these. Each stream is listed for `char` and `wchar_t`, with a `const char*`, the `__cxx11`
+string, or the old string, as `open` and as two constructors: the complete-object one (C1), and
+the base-object one (C2), which a derived class's constructor calls with a VTT (a table of
+vtables) as its second argument, so a C2 call site has one argument more. A name has one
 feature: `copy` and `copy_file` read too, but writing is what they are for. An `ifstream`'s mode
 always includes `in`, and an `ofstream`'s `out`, so they are `cxx.file_read` and
 `cxx.file_write`, even when the mode allows the other too. `cxx.file_write` is broader than
-`posix.file_write`: it includes creating directories and links and resizing a file, which v0.1's
-28 names do not (there is no `mkdir`, `rmdir`, `symlink`, `link`, or `truncate` among them).
+`posix.file_write`: it includes creating and removing directories, creating links, and resizing a
+file, which the 28 `posix.*` names do not (there is no `mkdir`, `rmdir`, `symlink`, `link`, or
+`truncate` among them).
 
 Some names stay unmapped:
 - `std::basic_fstream`'s constructors and `open`, and `std::basic_filebuf::open`: the mode decides
@@ -151,9 +158,11 @@ A missing `cxx.*` hint is not absence. A stream constructor that the compiler in
 `basic_filebuf::open` among the imports: g++ 15.3 at `-O2` does this for a class derived from
 `std::ifstream`, and for an `std::ofstream` on the old string. A statically linked libstdc++
 (`-static-libstdc++`, GCC 8's `libstdc++fs.a`, `std::experimental::filesystem`) leaves none of
-these names; such a file imports `unlink`, `rename`, or `open` instead, which `posix.*` maps. On a
-Mach-O slice the names are looked up by the same rules as the others, so in practice only by flat
-lookup or in an object file: a libstdc++ dylib is not libSystem. The fixture is
+these names. Such a file imports libc's functions instead (unless libc is linked statically too),
+and `posix.*` maps only some of them: built with g++ 15.3, `std::filesystem::remove` calls
+`remove` and `create_directory` calls `mkdir`, and neither is in the table. On a Mach-O slice the
+names are looked up by the same rules as the others, so in practice only by flat lookup or in an
+object file: a libstdc++ dylib is not libSystem. The fixture is
 `tests/fixtures/cxx-capabilities/`, a g++ 15.3.0 program with both ABIs and a C2 call.
 
 **`--code`** also finds where each capability import is called directly, and records each call

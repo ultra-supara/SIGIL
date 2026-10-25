@@ -619,8 +619,8 @@ lookup, or an object file's (PR-4c-3b).
 | `posix.dynamic_loading` | `dlopen`, `dlsym` |
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
+| `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name and its `open`: 18 mangled names (PR-4c-3c) |
 | `cxx.file_write` | libstdc++'s `std::filesystem` operations that create, remove, rename, copy, or resize, and `std::basic_ofstream`'s constructors that take a file name and its `open`: 70 mangled names (PR-4c-3c) |
-| `cxx.file_read` | `std::basic_ifstream`'s constructors that take a file name and its `open`: 18 mangled names (PR-4c-3c) |
 
 The names and their sources are in `crates/sigil-engine/signatures/capabilities.toml`, and
 [binary inspection](binary-inspect.md#capabilities-and-code---code) says which C++ names stay

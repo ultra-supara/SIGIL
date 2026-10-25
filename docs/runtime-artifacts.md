@@ -312,6 +312,9 @@ slice in the session, read from the file's own bytes. They are observations, not
   `dlopen` or `dlsym`, `cxx.file_write` for libstdc++'s `std::filesystem::remove`, and so on (the
   names are listed in [binary inspection](binary-inspect.md#capabilities-and-code---code)). In
   the official v0.30.6 bundle, `libllama-common` and `libllama-server-impl` have `cxx.*` hints.
+  `libllama-common` also imports `std::ifstream`'s destructor and `basic_filebuf::open`, but no
+  stream constructor (the compiler inlined them), so it has no `cxx.file_read` hint: a missing
+  hint is not absence.
   A hint says that the file imports the function, never that its code calls it, and
   `inspect ollama` analyzes no code. The report's **Binaries** table shows them in the column
   **Capabilities (imports)**: the slice's distinct capability keys, in key order, or `-`. When
