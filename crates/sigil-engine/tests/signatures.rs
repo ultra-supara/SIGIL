@@ -393,6 +393,26 @@ fn a_gopclntab_not_mapped_where_its_address_says_is_partial() {
         .find(|s| s.0 == ".gopclntab")
         .unwrap()
         .2;
+    // A control: the real table at an address unlike its offset (the PT_LOAD at 0x400000, as
+    // Go's linker places an executable, and each section's address with it) is mapped where its
+    // address says, and searched as at 0.
+    let mut moved = real.clone();
+    let load = phdr64(&moved, PT_LOAD);
+    moved[load + 16..load + 24].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    for (name, _, h, ..) in sections64(&real) {
+        if name == ".gopclntab" || name == ".go.buildinfo" {
+            let addr = u64::from_le_bytes(moved[h + 16..h + 24].try_into().unwrap());
+            moved[h + 16..h + 24].copy_from_slice(&(addr + 0x40_0000).to_le_bytes());
+        }
+    }
+    let found = |bytes: &[u8]| {
+        let (_d, paths) = files(&[("capabilities", bytes)]);
+        let s = inspect(&paths, NamedBudgets::default());
+        (signatures(&s), identity(&s, 1))
+    };
+    let (at_zero, complete) = found(&real);
+    assert_eq!((at_zero.len(), complete), (6, CoverageState::Complete));
+    assert_eq!(found(&moved), (at_zero, CoverageState::Complete));
     // A table of one name, `main.main`, in zeros of the PT_LOAD, between the build info (0x4000)
     // and the real table (0x8000).
     let mut forged = go120_header(0x52);
