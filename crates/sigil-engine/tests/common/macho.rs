@@ -124,3 +124,112 @@ pub fn fat32(slices: &[(Vec<u8>, i32, i32)]) -> Vec<u8> {
     }
     output
 }
+
+pub const MH_EXECUTE: u32 = 2;
+pub const LC_DYLD_INFO: u32 = 0x22;
+pub const LC_DYLD_INFO_ONLY: u32 = 0x8000_0022;
+pub const LC_DYLD_CHAINED_FIXUPS: u32 = 0x8000_0034;
+pub const LIBSYSTEM: &str = "/usr/lib/libSystem.B.dylib";
+
+/// A thin Mach-O of `file_type` whose load commands are `commands(base)`, followed by `tail` at
+/// offset `base`, the first byte after them. The commands' sizes must not depend on `base`.
+pub fn with_tail(
+    is_64: bool,
+    big_endian: bool,
+    cpu_type: i32,
+    file_type: u32,
+    commands: impl Fn(u32) -> Vec<Vec<u8>>,
+    tail: &[u8],
+) -> Vec<u8> {
+    let header = if is_64 { 32 } else { 28 };
+    let base = header + commands(0).iter().map(Vec::len).sum::<usize>();
+    let mut output = thin(is_64, big_endian, cpu_type, 0, &commands(base as u32));
+    assert_eq!(output.len(), base, "the commands' sizes depend on base");
+    output[12..16].copy_from_slice(&encoded_word(file_type, big_endian));
+    output.extend_from_slice(tail);
+    output
+}
+
+/// `LC_DYLD_INFO` or `LC_DYLD_INFO_ONLY` (`id`) with its bind and lazy-bind streams, each
+/// `(offset, size)`.
+pub fn dyld_info_command(id: u32, bind: (u32, u32), lazy: (u32, u32), big_endian: bool) -> Vec<u8> {
+    let mut output = command(id, 48, big_endian);
+    for (at, value) in [(16, bind.0), (20, bind.1), (32, lazy.0), (36, lazy.1)] {
+        output[at..at + 4].copy_from_slice(&encoded_word(value, big_endian));
+    }
+    output
+}
+
+/// A `linkedit_data_command` (`id`, e.g. `LC_DYLD_CHAINED_FIXUPS`): `dataoff`, `datasize`.
+pub fn linkedit_command(id: u32, dataoff: u32, datasize: u32, big_endian: bool) -> Vec<u8> {
+    let mut output = command(id, 16, big_endian);
+    output[8..12].copy_from_slice(&encoded_word(dataoff, big_endian));
+    output[12..16].copy_from_slice(&encoded_word(datasize, big_endian));
+    output
+}
+
+/// An `LC_DYLD_CHAINED_FIXUPS` blob whose imports, in `format` (1, 2, or 3), are each
+/// `(lib_ordinal field, weak_import, name)`; no fixup chains. The names follow the imports.
+pub fn chained_fixups(format: u32, imports: &[(u64, bool, &str)]) -> Vec<u8> {
+    let entry = match format {
+        2 => 8,
+        3 => 16,
+        _ => 4,
+    };
+    let imports_offset = 32u32;
+    let symbols_offset = imports_offset + (imports.len() * entry) as u32;
+    let mut entries = vec![];
+    let mut names = vec![];
+    for (ordinal, weak, name) in imports {
+        let offset = names.len() as u64;
+        names.extend_from_slice(name.as_bytes());
+        names.push(0);
+        if format == 3 {
+            let value = (ordinal & 0xffff) | (u64::from(*weak) << 16) | (offset << 32);
+            entries.extend_from_slice(&value.to_le_bytes());
+            entries.extend_from_slice(&0u64.to_le_bytes());
+        } else {
+            let value = (ordinal & 0xff) as u32 | (u32::from(*weak) << 8) | ((offset as u32) << 9);
+            entries.extend_from_slice(&value.to_le_bytes());
+            if format == 2 {
+                entries.extend_from_slice(&0i32.to_le_bytes());
+            }
+        }
+    }
+    let mut output = vec![];
+    for value in [
+        0,
+        28,
+        imports_offset,
+        symbols_offset,
+        imports.len() as u32,
+        format,
+        0,
+    ] {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    output.resize(imports_offset as usize, 0);
+    output.extend_from_slice(&entries);
+    output.extend_from_slice(&names);
+    output
+}
+
+/// A 64-bit little-endian x86_64 executable that loads `dylibs`, then has `linkedit(base)`
+/// (commands that point at `tail`, which starts at `base`).
+pub fn executable(dylibs: &[&str], linkedit: impl Fn(u32) -> Vec<Vec<u8>>, tail: &[u8]) -> Vec<u8> {
+    with_tail(
+        true,
+        false,
+        X86_64,
+        MH_EXECUTE,
+        |base| {
+            let mut commands: Vec<Vec<u8>> = dylibs
+                .iter()
+                .map(|dylib| dylib_command(0x0c, dylib, false, 8))
+                .collect();
+            commands.extend(linkedit(base));
+            commands
+        },
+        tail,
+    )
+}

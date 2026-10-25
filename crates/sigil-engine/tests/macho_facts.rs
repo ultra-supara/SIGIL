@@ -5,6 +5,10 @@ mod common;
 use std::fs::File;
 use std::path::Path;
 
+use common::macho::{
+    chained_fixups, dyld_info_command, executable, linkedit_command, LC_DYLD_CHAINED_FIXUPS,
+    LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LIBSYSTEM,
+};
 use sha2::{Digest, Sha256};
 use sigil_engine::binary::{parse_artifact, BinaryBudgets, ParsedArtifact};
 use sigil_engine::collect::fs::FsBudgets;
@@ -15,10 +19,17 @@ use sigil_engine::inspect::{
     binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, StoreRequest,
 };
 use sigil_engine::policy::Policy;
-use sigil_model::{ContainerFacts, Format, ObservationMeta, Sha256Hex, Timestamp, ToolInfo};
+use sigil_model::{
+    ContainerFacts, Format, MachOImport, MachOLibrary, ObservationMeta, Sha256Hex, Timestamp,
+    ToolInfo, UntrustedText,
+};
 use tempfile::TempDir;
 
 fn parse(bytes: &[u8]) -> Option<ParsedArtifact> {
+    parse_with(bytes, BinaryBudgets::default())
+}
+
+fn parse_with(bytes: &[u8], budgets: BinaryBudgets) -> Option<ParsedArtifact> {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("input");
     std::fs::write(&path, bytes).unwrap();
@@ -29,7 +40,7 @@ fn parse(bytes: &[u8]) -> Option<ParsedArtifact> {
         bytes.len() as u64,
         &digest,
         &bytes[..bytes.len().min(4)],
-        BinaryBudgets::default(),
+        budgets,
         None,
     )
 }
@@ -370,6 +381,18 @@ fn a_linked_universal_executable_is_read_in_full() {
             Some("/usr/lib/dyld")
         );
         assert_eq!(facts.uuid.as_deref(), Some(uuid));
+        // PR-4c-3b: x86_64 binds `dyld_stub_binder` and lazily binds `_puts`; arm64 has one
+        // chained import, `_puts`. Each from libSystem, ordinal 1.
+        let libsystem = || dylib(1, LIBSYSTEM);
+        let expected = if index == 0 {
+            vec![
+                import("_puts", libsystem(), false),
+                import("dyld_stub_binder", libsystem(), false),
+            ]
+        } else {
+            vec![import("_puts", libsystem(), false)]
+        };
+        assert_eq!(facts.imports, expected);
 
         // The slice alone is the thin executable `lipo -thin` would extract.
         let thin = &HELLO_UNIVERSAL[offset as usize..(offset + size) as usize];
@@ -380,7 +403,464 @@ fn a_linked_universal_executable_is_read_in_full() {
         assert_eq!(thin_facts.load_dylibs, facts.load_dylibs);
         assert_eq!(thin_facts.rpaths, facts.rpaths);
         assert_eq!(thin_facts.uuid, facts.uuid);
+        assert_eq!(thin_facts.imports, facts.imports);
     }
+}
+
+// --- Imports (PR-4c-3b) ------------------------------------------------------------------------
+
+fn import(name: &str, library: MachOLibrary, weak: bool) -> MachOImport {
+    MachOImport {
+        name: UntrustedText::new(name),
+        library,
+        weak,
+    }
+}
+
+fn dylib(ordinal: u32, name: &str) -> MachOLibrary {
+    MachOLibrary::Dylib {
+        ordinal,
+        name: Some(UntrustedText::new(name)),
+    }
+}
+
+/// The imports and gaps of the one slice of `bytes`.
+fn imports_of(bytes: &[u8]) -> (Vec<MachOImport>, Vec<String>) {
+    let parsed = parse(bytes).unwrap();
+    (
+        macho_facts(&parsed, 0).imports.clone(),
+        parsed.slices[0].gaps.clone(),
+    )
+}
+
+/// An executable that loads libSystem and `@rpath/libfoo.dylib`, with `blob` as its chained
+/// fixups.
+fn chained_executable(blob: &[u8]) -> Vec<u8> {
+    executable(
+        &[LIBSYSTEM, "@rpath/libfoo.dylib"],
+        |base| {
+            vec![linkedit_command(
+                LC_DYLD_CHAINED_FIXUPS,
+                base,
+                blob.len() as u32,
+                false,
+            )]
+        },
+        blob,
+    )
+}
+
+/// Six imports, each through another library: libSystem, libfoo (weak), flat lookup, the main
+/// executable, this image, and weak lookup.
+fn six_imports(flat: u64, main: u64, weak: u64) -> Vec<(u64, bool, &'static str)> {
+    vec![
+        (1, false, "_connect"),
+        (2, true, "_socket"),
+        (flat, false, "_getenv"),
+        (main, false, "_main_thing"),
+        (0, false, "_own"),
+        (weak, false, "__ZdlPv"),
+    ]
+}
+
+fn six_expected() -> Vec<MachOImport> {
+    vec![
+        import("__ZdlPv", MachOLibrary::WeakLookup, false),
+        import("_connect", dylib(1, LIBSYSTEM), false),
+        import("_getenv", MachOLibrary::FlatLookup, false),
+        import("_main_thing", MachOLibrary::MainExecutable, false),
+        import("_own", MachOLibrary::SelfImage, false),
+        import("_socket", dylib(2, "@rpath/libfoo.dylib"), true),
+    ]
+}
+
+#[test]
+fn chained_imports_name_their_libraries_in_each_format() {
+    for format in [1, 2] {
+        let blob = chained_fixups(format, &six_imports(0xfe, 0xff, 0xfd));
+        let (imports, gaps) = imports_of(&chained_executable(&blob));
+        assert!(gaps.is_empty(), "format {format}: {gaps:?}");
+        assert_eq!(imports, six_expected(), "format {format}");
+    }
+    // DYLD_CHAINED_IMPORT_ADDEND64: 16-bit ordinals, sign-extended above 0xfff0.
+    let blob = chained_fixups(3, &six_imports(0xfffe, 0xffff, 0xfffd));
+    let (imports, gaps) = imports_of(&chained_executable(&blob));
+    assert!(gaps.is_empty(), "{gaps:?}");
+    assert_eq!(imports, six_expected());
+}
+
+#[test]
+fn chained_fixups_not_understood_are_gaps() {
+    let blob = chained_fixups(1, &[(1, false, "_connect"), (1, false, "_dlopen")]);
+    let with = |at: usize, value: u32| {
+        let mut b = blob.clone();
+        b[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        b
+    };
+    let gap = |why: &str| vec![format!("imports: chained fixups: {why}")];
+    for (bytes, why) in [
+        (with(0, 1), "fixups_version 1 not read"),
+        (with(24, 1), "symbols_format 1 not read (compressed)"),
+        (with(20, 4), "imports_format 4 not read"),
+        (with(16, 1000), "the imports past the blob"),
+        // One entry more than the blob holds, ending past it by less than an entry.
+        (
+            with(16, ((blob.len() - 32) / 4 + 1) as u32),
+            "the imports past the blob",
+        ),
+        (with(12, blob.len() as u32), "a name out of the blob"),
+        (blob[..20].to_vec(), "a header past the blob"),
+    ] {
+        assert_eq!(
+            imports_of(&chained_executable(&bytes)),
+            (vec![], gap(why)),
+            "{why}"
+        );
+    }
+    // The last name without its NUL: the first is kept.
+    let (imports, gaps) = imports_of(&chained_executable(&blob[..blob.len() - 1]));
+    assert_eq!(imports, [import("_connect", dylib(1, LIBSYSTEM), false)]);
+    assert_eq!(gaps, gap("a name without its NUL"));
+    // The blob out of the slice.
+    let bytes = executable(
+        &[LIBSYSTEM],
+        |_| {
+            vec![linkedit_command(
+                LC_DYLD_CHAINED_FIXUPS,
+                0x10_0000,
+                64,
+                false,
+            )]
+        },
+        &[],
+    );
+    assert_eq!(imports_of(&bytes), (vec![], gap("range outside slice")));
+    // A big-endian image.
+    let bytes = common::macho::with_tail(
+        true,
+        true,
+        common::macho::X86_64,
+        common::macho::MH_EXECUTE,
+        |base| {
+            vec![
+                common::macho::dylib_command(0x0c, LIBSYSTEM, true, 8),
+                linkedit_command(LC_DYLD_CHAINED_FIXUPS, base, blob.len() as u32, true),
+            ]
+        },
+        &blob,
+    );
+    assert_eq!(imports_of(&bytes), (vec![], gap("a big-endian image")));
+}
+
+#[test]
+fn a_linked_image_s_imports_come_from_one_dyld_command() {
+    let blob = chained_fixups(1, &[(1, false, "_connect")]);
+    let len = blob.len() as u32;
+    let none = || dyld_info_command(LC_DYLD_INFO_ONLY, (0, 0), (0, 0), false);
+    for (commands, gap) in [
+        (
+            vec![
+                linkedit_command(LC_DYLD_CHAINED_FIXUPS, 0, len, false),
+                none(),
+            ],
+            "imports: both LC_DYLD_INFO and LC_DYLD_CHAINED_FIXUPS",
+        ),
+        (
+            vec![
+                linkedit_command(LC_DYLD_CHAINED_FIXUPS, 0, len, false),
+                linkedit_command(LC_DYLD_CHAINED_FIXUPS, 0, len, false),
+            ],
+            "imports: more than one LC_DYLD_CHAINED_FIXUPS",
+        ),
+        (
+            vec![
+                dyld_info_command(LC_DYLD_INFO, (0, 0), (0, 0), false),
+                none(),
+            ],
+            "imports: more than one LC_DYLD_INFO",
+        ),
+        (vec![], "imports: no LC_DYLD_INFO or LC_DYLD_CHAINED_FIXUPS"),
+    ] {
+        let bytes = executable(&[LIBSYSTEM], |_| commands.clone(), &blob);
+        assert_eq!(imports_of(&bytes), (vec![], vec![gap.to_string()]), "{gap}");
+    }
+    // Neither, and no dylib loaded: nothing to bind.
+    assert_eq!(
+        imports_of(&executable(&[], |_| vec![], &[])),
+        (vec![], vec![])
+    );
+    // No loader reads an object file: its dyld commands are not read.
+    let object = common::macho::with_tail(
+        true,
+        false,
+        common::macho::X86_64,
+        1,
+        |base| vec![linkedit_command(LC_DYLD_CHAINED_FIXUPS, base, len, false)],
+        &blob,
+    );
+    assert_eq!(imports_of(&object), (vec![], vec![]));
+}
+
+#[test]
+fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
+    let blob = chained_fixups(
+        1,
+        &[
+            (1, false, "_a"),
+            (2, false, "_b"),
+            (3, false, "_past"),
+            (0xf5, false, "_special"),
+        ],
+    );
+    let mut unread = common::macho::dylib_command(0x0c, "/usr/lib/libz.1.dylib", false, 8);
+    unread[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    let bytes = common::macho::with_tail(
+        true,
+        false,
+        common::macho::X86_64,
+        common::macho::MH_EXECUTE,
+        |base| {
+            vec![
+                unread.clone(),
+                common::macho::dylib_command(0x0c, LIBSYSTEM, false, 8),
+                linkedit_command(LC_DYLD_CHAINED_FIXUPS, base, blob.len() as u32, false),
+            ]
+        },
+        &blob,
+    );
+    let (imports, gaps) = imports_of(&bytes);
+    assert_eq!(
+        imports,
+        [
+            import(
+                "_a",
+                MachOLibrary::Dylib {
+                    ordinal: 1,
+                    name: None
+                },
+                false
+            ),
+            import("_b", dylib(2, LIBSYSTEM), false),
+        ]
+    );
+    assert_eq!(
+        gaps,
+        [
+            "imports: ordinal 3 past the 2 dylibs",
+            "imports: unknown special ordinal -11",
+            "load dylib: string offset outside load command",
+        ]
+    );
+}
+
+#[test]
+fn binary_imports_keeps_the_smallest_imports() {
+    let blob = chained_fixups(1, &six_imports(0xfe, 0xff, 0xfd));
+    let budgets = BinaryBudgets {
+        imports: 2,
+        ..BinaryBudgets::default()
+    };
+    let thin = chained_executable(&blob);
+    let parsed = parse_with(&thin, budgets).unwrap();
+    assert_eq!(macho_facts(&parsed, 0).imports, six_expected()[..2]);
+    assert_eq!(parsed.slices[0].gaps, ["imports: over binary_imports 2"]);
+    // In each slice of a fat file.
+    let mut arm = thin.clone();
+    arm[4..8].copy_from_slice(&(common::macho::AARCH64 as u32).to_le_bytes());
+    let fat = common::macho::fat32(&[
+        (thin, common::macho::X86_64, 0),
+        (arm, common::macho::AARCH64, 0),
+    ]);
+    let parsed = parse_with(&fat, budgets).unwrap();
+    for index in 0..2 {
+        assert_eq!(macho_facts(&parsed, index).imports, six_expected()[..2]);
+        assert_eq!(
+            parsed.slices[index].gaps,
+            ["imports: over binary_imports 2"]
+        );
+    }
+}
+
+#[test]
+fn an_import_name_over_65536_bytes_is_a_gap() {
+    let longest = format!("_{}", "a".repeat(65_535));
+    let over = format!("_{}", "b".repeat(65_536));
+    let blob = chained_fixups(1, &[(1, false, &longest), (1, false, &over)]);
+    assert_eq!(
+        imports_of(&chained_executable(&blob)),
+        (
+            vec![import(&longest, dylib(1, LIBSYSTEM), false)],
+            vec!["imports: a name over 65536 bytes".to_string()]
+        )
+    );
+}
+
+/// `SET_SYMBOL_TRAILING_FLAGS_IMM` of `name` with `flags`.
+fn symbol(flags: u8, name: &str) -> Vec<u8> {
+    let mut opcodes = vec![0x40 | flags];
+    opcodes.extend_from_slice(name.as_bytes());
+    opcodes.push(0);
+    opcodes
+}
+
+/// An executable that loads libSystem and `@rpath/libfoo.dylib`, with `bind` and `lazy` as the
+/// bind and lazy-bind streams of its `id` (`LC_DYLD_INFO` or `LC_DYLD_INFO_ONLY`).
+fn opcode_executable(id: u32, bind: &[u8], lazy: &[u8]) -> Vec<u8> {
+    let (b, l) = (bind.len() as u32, lazy.len() as u32);
+    executable(
+        &[LIBSYSTEM, "@rpath/libfoo.dylib"],
+        |base| vec![dyld_info_command(id, (base, b), (base + b, l), false)],
+        &[bind, lazy].concat(),
+    )
+}
+
+#[test]
+fn bind_opcodes_bind_each_name() {
+    let bind = [
+        vec![0x11],
+        symbol(0, "_connect"),
+        vec![0x51, 0x72, 0x10, 0x90],
+        symbol(1, "_dlopen"),
+        vec![0xa0, 0x08, 0x20, 0x02, 0x60, 0x7f],
+        symbol(0, "_socket"),
+        // DO_BIND_ULEB_TIMES_SKIPPING_ULEB: a count, and a skip of two bytes.
+        vec![0xc0, 0x02, 0x90, 0x01, 0x3e],
+        symbol(0, "_getenv"),
+        // DO_BIND_ADD_ADDR_IMM_SCALED, then DONE: what follows is not read.
+        vec![0xb1, 0x00, 0xff],
+    ]
+    .concat();
+    // Each lazy entry ends with DONE; the next starts afresh (ordinal 0, this image).
+    let lazy = [
+        vec![0x72, 0x00, 0x11],
+        symbol(0, "_puts"),
+        vec![0x90, 0x00],
+        symbol(0, "_open"),
+        vec![0x90, 0x00],
+    ]
+    .concat();
+    let expected = vec![
+        import("_connect", dylib(1, LIBSYSTEM), false),
+        import("_dlopen", dylib(1, LIBSYSTEM), true),
+        import("_getenv", MachOLibrary::FlatLookup, false),
+        import("_open", MachOLibrary::SelfImage, false),
+        import("_puts", dylib(1, LIBSYSTEM), false),
+        import("_socket", dylib(2, "@rpath/libfoo.dylib"), false),
+    ];
+    for id in [LC_DYLD_INFO_ONLY, LC_DYLD_INFO] {
+        assert_eq!(
+            imports_of(&opcode_executable(id, &bind, &lazy)),
+            (expected.clone(), vec![]),
+            "{id:#x}"
+        );
+    }
+    // Threaded binds: the ordinal table's size, binds, then APPLY.
+    let threaded = [
+        vec![0xd0, 0x02, 0x11],
+        symbol(0, "_connect"),
+        vec![0x90, 0x12],
+        symbol(0, "_socket"),
+        vec![0x90, 0xd1, 0x00],
+    ]
+    .concat();
+    assert_eq!(
+        imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &threaded, &[])),
+        (
+            vec![
+                import("_connect", dylib(1, LIBSYSTEM), false),
+                import("_socket", dylib(2, "@rpath/libfoo.dylib"), false),
+            ],
+            vec![]
+        )
+    );
+}
+
+/// PR-4c-3b plan review P2: DO_BIND_ULEB_TIMES_SKIPPING_ULEB binds as many times as its count
+/// says. A count of 0 binds nothing: no import, and no hint.
+#[test]
+fn a_bind_repeated_zero_times_binds_nothing() {
+    for (count, expected) in [
+        (0, vec![]),
+        (1, vec![import("_connect", dylib(1, LIBSYSTEM), false)]),
+        (2, vec![import("_connect", dylib(1, LIBSYSTEM), false)]),
+    ] {
+        let bind = [
+            vec![0x11],
+            symbol(0, "_connect"),
+            vec![0xc0, count, 0x00, 0x00],
+        ]
+        .concat();
+        assert_eq!(
+            imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &bind, &[])),
+            (expected, vec![]),
+            "count {count}"
+        );
+    }
+}
+
+#[test]
+fn bind_opcodes_not_understood_are_gaps() {
+    let connect = [vec![0x11], symbol(0, "_connect"), vec![0x90]].concat();
+    let kept = || vec![import("_connect", dylib(1, LIBSYSTEM), false)];
+    let over_uleb = [vec![0x20], vec![0xff; 9], vec![0x7f]].concat();
+    let over_sleb = [vec![0x60], vec![0x80; 10], vec![0x00]].concat();
+    for (tail, gap) in [
+        (vec![0xe0], "imports: bind opcodes: an unknown opcode 0xe0"),
+        (vec![0xd2], "imports: bind opcodes: an unknown opcode 0xd2"),
+        (
+            vec![0x20, 0x80],
+            "imports: bind opcodes: a ULEB128 past the stream",
+        ),
+        (over_uleb, "imports: bind opcodes: a ULEB128 over 64 bits"),
+        (over_sleb, "imports: bind opcodes: an SLEB128 over 64 bits"),
+        (
+            vec![0x60, 0x80],
+            "imports: bind opcodes: an SLEB128 past the stream",
+        ),
+        (
+            vec![0x41, b'_', b'x'],
+            "imports: bind opcodes: a name without its NUL",
+        ),
+        (
+            [vec![0x3c], symbol(0, "_y"), vec![0x90]].concat(),
+            "imports: unknown special ordinal -4",
+        ),
+    ] {
+        let bind = [connect.clone(), tail].concat();
+        assert_eq!(
+            imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &bind, &[])),
+            (kept(), vec![gap.to_string()]),
+            "{gap}"
+        );
+    }
+    assert_eq!(
+        imports_of(&opcode_executable(LC_DYLD_INFO_ONLY, &[0x11, 0x90], &[])),
+        (
+            vec![],
+            vec!["imports: bind opcodes: a bind before any name".to_string()]
+        )
+    );
+    // A stream out of the slice; the lazy one is still read.
+    let lazy = [vec![0x11], symbol(0, "_connect"), vec![0x90, 0x00]].concat();
+    let bytes = executable(
+        &[LIBSYSTEM],
+        |base| {
+            vec![dyld_info_command(
+                LC_DYLD_INFO_ONLY,
+                (0x10_0000, 4),
+                (base, lazy.len() as u32),
+                false,
+            )]
+        },
+        &lazy,
+    );
+    assert_eq!(
+        imports_of(&bytes),
+        (
+            kept(),
+            vec!["imports: bind opcodes: range outside slice".to_string()]
+        )
+    );
 }
 
 fn observation() -> ObservationMeta {
