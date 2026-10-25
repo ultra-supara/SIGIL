@@ -79,13 +79,15 @@ symbols = [
 # ifstream's mode always includes in, and an ofstream's always out. cxx.file_write is broader
 # than posix.file_write: it includes creating and removing directories, creating links, and
 # resizing a file, which the 28 names do not (no mkdir, rmdir, symlink, link, or truncate).
-# A missing hint is not absence: a stream constructor that the compiler inlines leaves only
-# basic_filebuf::open in the imports, and a statically linked libstdc++ (GCC 8's libstdc++fs.a,
-# std::experimental::filesystem) leaves none of these names.
+# A missing hint is not absence: a stream constructor that the compiler inlines leaves
+# basic_filebuf::open, which is unmapped, as the only import that opens the file; and a statically
+# linked libstdc++ (GCC 8's libstdc++fs.a, std::experimental::filesystem) leaves none of these
+# names.
 # Not mapped: basic_fstream and basic_filebuf::open (the mode decides read or write); permissions
 # and last_write_time (metadata); status (exists is inline over it) and the directory iterators
-# (they change nothing); the default and move constructors of the streams (they open no file);
-# libc++ (std::__1) and other C++ libraries.
+# (they change nothing); every other std::filesystem function (a query, or current_path(p), which
+# changes the working directory, not a file); the default and move constructors of the streams
+# (they open no file); libc++ (std::__1) and other C++ libraries.
 
 [[capability]]
 feature = "cxx.file_read"

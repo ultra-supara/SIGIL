@@ -151,11 +151,14 @@ Some names stay unmapped:
   `chmod` either);
 - `status` and the directory iterators: they change nothing (`exists` is inline over `status`,
   so it is never an import);
+- every other `std::filesystem` function: a query (`file_size`, `canonical`, …), or
+  `current_path(p)`, which changes the working directory, not a file;
 - the streams' default and move constructors: they open no file;
 - libc++'s names (`std::__1`), and other C++ libraries.
 
-A missing `cxx.*` hint is not absence. A stream constructor that the compiler inlines leaves only
-`basic_filebuf::open` among the imports: g++ 15.3 at `-O2` does this for a class derived from
+A missing `cxx.*` hint is not absence. A stream constructor that the compiler inlines leaves
+`basic_filebuf::open`, which is unmapped, as the only import that opens the file (its destructor
+and vtables are imported too): g++ 15.3 at `-O2` does this for a class derived from
 `std::ifstream`, and for an `std::ofstream` on the old string. A statically linked libstdc++
 (`-static-libstdc++`, GCC 8's `libstdc++fs.a`, `std::experimental::filesystem`) leaves none of
 these names. Such a file imports libc's functions instead (unless libc is linked statically too),
