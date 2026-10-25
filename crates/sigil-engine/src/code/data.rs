@@ -16,6 +16,9 @@ pub struct Capability {
     pub feature: FeatureKey,
     /// The SysV argument registers a call can read.
     pub arity: u8,
+    /// Where the name and its meaning come from: a standard, or the library that exports it
+    /// (PR-4c-3c). Not written to sessions.
+    pub source: String,
 }
 
 /// The parsed data.
@@ -44,6 +47,7 @@ struct RawCapability {
 struct RawSymbol {
     name: String,
     arity: u8,
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -80,9 +84,17 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
                     s.name, s.arity
                 ));
             }
+            let source = match s.source {
+                None => return Err(format!("capabilities.toml: {:?}: no source", s.name)),
+                Some(t) if t.trim().is_empty() => {
+                    return Err(format!("capabilities.toml: {:?}: a blank source", s.name))
+                }
+                Some(t) => t,
+            };
             let entry = Capability {
                 feature: feature.clone(),
                 arity: s.arity,
+                source,
             };
             if table.insert(s.name.clone().into_bytes(), entry).is_some() {
                 return Err(format!("capabilities.toml: {:?} listed twice", s.name));
@@ -161,6 +173,15 @@ mod tests {
         ("ptrace", "posix.anti_debug", 4),
     ];
 
+    /// The PR-4c-3c spec's Appendix B: every name but `ptrace` is in POSIX.1-2024.
+    fn posix_source(name: &str) -> String {
+        if name == "ptrace" {
+            "Linux man-pages ptrace(2); not in POSIX".to_string()
+        } else {
+            format!("POSIX.1-2024 (IEEE Std 1003.1-2024): {name}()")
+        }
+    }
+
     #[test]
     fn the_embedded_signatures_parse() {
         let s = signatures().unwrap();
@@ -171,6 +192,7 @@ mod tests {
                 Some(&Capability {
                     feature: FeatureKey::new(feature).unwrap(),
                     arity,
+                    source: posix_source(name),
                 }),
                 "{name}"
             );
@@ -212,17 +234,32 @@ mod tests {
             .map(|_| ())
         };
         assert_eq!(
-            one("{ name = \"connect\", arity = 7 }"),
+            one("{ name = \"connect\", arity = 7, source = \"s\" }"),
             Err("capabilities.toml: \"connect\": arity 7 is over 6".to_string())
         );
         assert_eq!(
-            one("{ name = \"\", arity = 1 }"),
+            one("{ name = \"\", arity = 1, source = \"s\" }"),
             Err("capabilities.toml: posix.network: an empty name".to_string())
         );
         assert_eq!(
-            one("{ name = \"a\", arity = 1 }, { name = \"a\", arity = 1 }"),
+            one("{ name = \"a\", arity = 1, source = \"s\" }, { name = \"a\", arity = 1, source = \"s\" }"),
             Err("capabilities.toml: \"a\" listed twice".to_string())
         );
+        // PR-4c-3c: every entry has a source, and it is not blank.
+        assert_eq!(
+            one("{ name = \"connect\", arity = 3 }"),
+            Err("capabilities.toml: \"connect\": no source".to_string())
+        );
+        for blank in ["", " ", "\\t\\n"] {
+            assert_eq!(
+                one(&format!(
+                    "{{ name = \"connect\", arity = 3, source = \"{blank}\" }}"
+                )),
+                Err("capabilities.toml: \"connect\": a blank source".to_string()),
+                "{blank:?}"
+            );
+        }
+        assert!(one("{ name = \"connect\", arity = 3, source = \"s\", sources = \"s\" }").is_err());
         assert!(parse(CAPABILITIES, "prefixes = []").is_err());
         assert!(parse(CAPABILITIES, "prefixes = [\"\"]\nnames = []").is_err());
     }
