@@ -1,0 +1,52 @@
+_ITM_deregisterTMCloneTable	_ITM_deregisterTMCloneTable
+_ITM_registerTMCloneTable	_ITM_registerTMCloneTable
+_Unwind_Resume@GCC_3.0	_Unwind_Resume
+_ZNKSt10filesystem4path5_List13_Impl_deleterclEPNS1_5_ImplE@GLIBCXX_3.4.26	std::filesystem::path::_List::_Impl_deleter::operator()(std::filesystem::path::_List::_Impl*) const
+_ZNKSt10filesystem7__cxx1118directory_iteratordeEv@GLIBCXX_3.4.26	std::filesystem::__cxx11::directory_iterator::operator*() const
+_ZNKSt10filesystem7__cxx114path5_List13_Impl_deleterclEPNS2_5_ImplE@GLIBCXX_3.4.26	std::filesystem::__cxx11::path::_List::_Impl_deleter::operator()(std::filesystem::__cxx11::path::_List::_Impl*) const
+_ZNKSt9basic_iosIcSt11char_traitsIcEE4goodEv@GLIBCXX_3.4	std::basic_ios<char, std::char_traits<char> >::good() const
+_ZNSt10filesystem11permissionsERKNS_7__cxx114pathENS_5permsENS_12perm_optionsE@GLIBCXX_3.4.26	std::filesystem::permissions(std::filesystem::__cxx11::path const&, std::filesystem::perms, std::filesystem::perm_options)
+_ZNSt10filesystem15last_write_timeERKNS_7__cxx114pathE@GLIBCXX_3.4.26	std::filesystem::last_write_time(std::filesystem::__cxx11::path const&)
+_ZNSt10filesystem18create_directoriesERKNS_7__cxx114pathE@GLIBCXX_3.4.26	std::filesystem::create_directories(std::filesystem::__cxx11::path const&)
+_ZNSt10filesystem4path14_M_split_cmptsEv@GLIBCXX_3.4.26	std::filesystem::path::_M_split_cmpts()
+_ZNSt10filesystem4path5_ListC1Ev@GLIBCXX_3.4.26	std::filesystem::path::_List::_List()
+_ZNSt10filesystem6removeERKNS_4pathE@GLIBCXX_3.4.26	std::filesystem::remove(std::filesystem::path const&)
+_ZNSt10filesystem6removeERKNS_7__cxx114pathERSt10error_code@GLIBCXX_3.4.26	std::filesystem::remove(std::filesystem::__cxx11::path const&, std::error_code&)
+_ZNSt10filesystem6renameERKNS_7__cxx114pathES3_@GLIBCXX_3.4.26	std::filesystem::rename(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)
+_ZNSt10filesystem6statusERKNS_7__cxx114pathE@GLIBCXX_3.4.26	std::filesystem::status(std::filesystem::__cxx11::path const&)
+_ZNSt10filesystem7__cxx1118directory_iteratorC1ERKNS0_4pathENS_17directory_optionsEPSt10error_code@GLIBCXX_3.4.26	std::filesystem::__cxx11::directory_iterator::directory_iterator(std::filesystem::__cxx11::path const&, std::filesystem::directory_options, std::error_code*)
+_ZNSt10filesystem7__cxx1118directory_iteratorppEv@GLIBCXX_3.4.26	std::filesystem::__cxx11::directory_iterator::operator++()
+_ZNSt10filesystem7__cxx114path14_M_split_cmptsEv@GLIBCXX_3.4.26	std::filesystem::__cxx11::path::_M_split_cmpts()
+_ZNSt10filesystem7__cxx114path5_ListC1Ev@GLIBCXX_3.4.26	std::filesystem::__cxx11::path::_List::_List()
+_ZNSt10filesystem9copy_fileERKNS_7__cxx114pathES3_NS_12copy_optionsE@GLIBCXX_3.4.26	std::filesystem::copy_file(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options)
+_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode@GLIBCXX_3.4	std::basic_filebuf<char, std::char_traits<char> >::open(char const*, std::_Ios_Openmode)
+_ZNSt13basic_filebufIcSt11char_traitsIcEEC1Ev@GLIBCXX_3.4	std::basic_filebuf<char, std::char_traits<char> >::basic_filebuf()
+_ZNSt13basic_filebufIcSt11char_traitsIcEED1Ev@GLIBCXX_3.4	std::basic_filebuf<char, std::char_traits<char> >::~basic_filebuf()
+_ZNSt13basic_fstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode@GLIBCXX_3.4	std::basic_fstream<char, std::char_traits<char> >::basic_fstream(char const*, std::_Ios_Openmode)
+_ZNSt13basic_fstreamIcSt11char_traitsIcEED1Ev@GLIBCXX_3.4	std::basic_fstream<char, std::char_traits<char> >::~basic_fstream()
+_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode@GLIBCXX_3.4	std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(char const*, std::_Ios_Openmode)
+_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2EPKcSt13_Ios_Openmode@GLIBCXX_3.4	std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(char const*, std::_Ios_Openmode)
+_ZNSt14basic_ifstreamIcSt11char_traitsIcEED1Ev@GLIBCXX_3.4	std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+_ZNSt14basic_ifstreamIcSt11char_traitsIcEED2Ev@GLIBCXX_3.4	std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode@GLIBCXX_3.4.21	std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)
+_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1ERKSsSt13_Ios_Openmode@GLIBCXX_3.4.13	std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)
+_ZNSt14basic_ofstreamIcSt11char_traitsIcEED1Ev@GLIBCXX_3.4	std::basic_ofstream<char, std::char_traits<char> >::~basic_ofstream()
+_ZNSt3_V215system_categoryEv@GLIBCXX_3.4.21	std::_V2::system_category()
+_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE10_M_disposeEv@GLIBCXX_3.4.21	std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()
+_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE9_M_createERmm@GLIBCXX_3.4.21	std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned long&, unsigned long)
+_ZNSt9basic_iosIcSt11char_traitsIcEEC2Ev@GLIBCXX_3.4	std::basic_ios<char, std::char_traits<char> >::basic_ios()
+_ZNSt9basic_iosIcSt11char_traitsIcEED2Ev@GLIBCXX_3.4	std::basic_ios<char, std::char_traits<char> >::~basic_ios()
+_ZSt17__throw_bad_allocv@GLIBCXX_3.4	std::__throw_bad_alloc()
+_ZSt19__throw_logic_errorPKc@GLIBCXX_3.4	std::__throw_logic_error(char const*)
+_ZSt20__throw_length_errorPKc@GLIBCXX_3.4	std::__throw_length_error(char const*)
+_ZTISi@GLIBCXX_3.4	typeinfo for std::basic_istream<char, std::char_traits<char> >
+_ZTISt14basic_ifstreamIcSt11char_traitsIcEE@GLIBCXX_3.4	typeinfo for std::basic_ifstream<char, std::char_traits<char> >
+_ZTVN10__cxxabiv120__si_class_type_infoE@CXXABI_1.3	vtable for __cxxabiv1::__si_class_type_info
+_ZdlPvm@CXXABI_1.3.9	operator delete(void*, unsigned long)
+_Znwm@GLIBCXX_3.4	operator new(unsigned long)
+__cxa_finalize@GLIBC_2.2.5	__cxa_finalize
+__gmon_start__	__gmon_start__
+__gxx_personality_v0@CXXABI_1.3	__gxx_personality_v0
+__libc_start_main@GLIBC_2.34	__libc_start_main
+memcpy@GLIBC_2.14	memcpy
+strlen@GLIBC_2.2.5	strlen
