@@ -33,6 +33,7 @@ fn word(value: u32, big_endian: bool, output: &mut Vec<u8>) {
     output.extend_from_slice(&encoded_word(value, big_endian));
 }
 
+/// A thin Mach-O object file (`MH_OBJECT`) with `commands`; [`with_tail`] makes another file type.
 pub fn thin(
     is_64: bool,
     big_endian: bool,
@@ -125,6 +126,7 @@ pub fn fat32(slices: &[(Vec<u8>, i32, i32)]) -> Vec<u8> {
     output
 }
 
+// Repeated here, so that the tests' expectations do not depend on the code under test.
 pub const MH_EXECUTE: u32 = 2;
 pub const LC_DYLD_INFO: u32 = 0x22;
 pub const LC_DYLD_INFO_ONLY: u32 = 0x8000_0022;
@@ -197,6 +199,8 @@ pub fn chained_fixups(format: u32, imports: &[(u64, bool, &str)]) -> Vec<u8> {
         }
     }
     let mut output = vec![];
+    // fixups_version 0; starts_offset 28, an empty dyld_chained_starts_in_image (seg_count 0) after
+    // the header; then the imports, the names, and symbols_format 0.
     for value in [
         0,
         28,
@@ -234,6 +238,7 @@ pub fn executable(dylibs: &[&str], linkedit: impl Fn(u32) -> Vec<Vec<u8>>, tail:
     )
 }
 
+// Repeated here, so that the tests' expectations do not depend on the code under test.
 pub const MH_OBJECT: u32 = 1;
 pub const LC_SYMTAB: u32 = 0x2;
 

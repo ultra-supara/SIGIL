@@ -357,6 +357,7 @@ fn record_name(
 }
 
 /// The 32-bit word at `at` of a load command at least `at + 4` bytes long.
+/// The slice is four bytes long, so the conversion never fails: the default is never taken.
 fn word_at(command: &[u8], at: usize, order: ByteOrder) -> u32 {
     let bytes: [u8; 4] = command[at..at + 4].try_into().unwrap_or_default();
     match order {
@@ -409,9 +410,11 @@ fn parse_commands<R: object::read::ReadCacheOps>(
         }
     };
     let mut offset = 0usize;
+    let mut whole = true;
     for _ in 0..header.ncmds {
         if commands.len().saturating_sub(offset) < 8 {
             gaps.push("load commands: truncated command header".to_string());
+            whole = false;
             break;
         }
         let cmd = match header.order {
@@ -448,6 +451,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
             || cmdsize > commands.len().saturating_sub(offset)
         {
             gaps.push("load commands: invalid command size".to_string());
+            whole = false;
             break;
         }
         let bytes = &commands[offset..offset + cmdsize];
@@ -481,6 +485,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                         "LC_DYLD_INFO_ONLY"
                     };
                     gaps.push(format!("{name}: command is too short"));
+                    whole = false;
                 } else {
                     let word = |at| word_at(bytes, at, header.order);
                     found
@@ -488,7 +493,8 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                         .push([(word(16), word(20)), (word(32), word(36))]);
                 }
             }
-            // symtab_command: symoff, nsyms, stroff, strsize.
+            // symtab_command: symoff, nsyms, stroff, strsize. Only an object file's is read, so a
+            // short one is that read's gap (`imports::read`), not the walk's.
             LC_SYMTAB => {
                 let word = |at| word_at(bytes, at, header.order);
                 found
@@ -499,6 +505,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
             LC_DYLD_CHAINED_FIXUPS => {
                 if cmdsize < 16 {
                     gaps.push("LC_DYLD_CHAINED_FIXUPS: command is too short".to_string());
+                    whole = false;
                 } else {
                     found.chained.push((
                         word_at(bytes, 8, header.order),
@@ -570,6 +577,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                     None => {
                         gaps.push(format!("load commands: unknown required command {cmd:#x}"));
                         stop_after_command = true;
+                        whole = false;
                     }
                 }
             }
@@ -583,21 +591,22 @@ fn parse_commands<R: object::read::ReadCacheOps>(
     if offset != commands.len() {
         gaps.push("load commands: command count does not cover sizeofcmds".to_string());
     }
+    found.all_read = whole && offset == commands.len();
     gaps.sort();
     gaps.dedup();
     (facts, gaps, found)
 }
 
-/// The slice at `base`, `size` bytes, with at most `imports` imports (`binary_imports`).
+/// The slice at `base`, `size` bytes, with at most `import_limit` imports (`binary_imports`).
 fn parse_thin<R: object::read::ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,
     size: u64,
-    imports: u64,
+    import_limit: u64,
 ) -> Result<(Arch, Parsed), String> {
     let header = parse_header(data, base, size)?;
     let (mut facts, mut gaps, found) = parse_commands(data, base, size, &header);
-    let (kept, import_gaps) = imports::read(data, base, size, &header, &found, imports);
+    let (kept, import_gaps) = imports::read(data, base, size, &header, &found, import_limit);
     facts.imports = kept;
     gaps.extend(import_gaps);
     gaps.sort();
@@ -847,9 +856,9 @@ fn parsed_slice(
 fn fat_slice_facts<R: ReadCacheOps>(
     data: &Bounded<R>,
     descriptor: &FatSlice,
-    imports: u64,
+    import_limit: u64,
 ) -> Result<Parsed, String> {
-    let (_, mut parsed) = parse_thin(data, descriptor.offset, descriptor.size, imports)?;
+    let (_, mut parsed) = parse_thin(data, descriptor.offset, descriptor.size, import_limit)?;
     if let ContainerFacts::MachO(facts) = &mut parsed.container {
         facts.fat_cpu_type = Some(descriptor.cpu_type);
         facts.fat_cpu_subtype = Some(descriptor.cpu_subtype);

@@ -596,7 +596,7 @@ fn a_linked_image_s_imports_come_from_one_dyld_command() {
         true,
         false,
         common::macho::X86_64,
-        1,
+        common::macho::MH_OBJECT,
         |base| vec![linkedit_command(LC_DYLD_CHAINED_FIXUPS, base, len, false)],
         &blob,
     );
@@ -725,7 +725,7 @@ fn bind_opcodes_bind_each_name() {
         symbol(1, "_dlopen"),
         vec![0xa0, 0x08, 0x20, 0x02, 0x60, 0x7f],
         symbol(0, "_socket"),
-        // DO_BIND_ULEB_TIMES_SKIPPING_ULEB: a count, and a skip of two bytes.
+        // DO_BIND_ULEB_TIMES_SKIPPING_ULEB: a count, and a skip (144) encoded in two bytes.
         vec![0xc0, 0x02, 0x90, 0x01, 0x3e],
         symbol(0, "_getenv"),
         // DO_BIND_ADD_ADDR_IMM_SCALED, then DONE: what follows is not read.
@@ -1151,6 +1151,58 @@ fn an_object_file_s_imports_are_its_undefined_external_symbols() {
         imports_of(&common::macho::object(true, false, &table, &strings)),
         (vec![], vec![])
     );
+    // The same, big-endian: the high word is the first four bytes.
+    let (table, strings) = common::macho::nlists(true, true, &[("_big", 0x01, 0, 1 << 32)]);
+    assert_eq!(
+        imports_of(&common::macho::object(true, true, &table, &strings)),
+        (vec![], vec![])
+    );
+    // An empty name names nothing.
+    let (table, strings) = common::macho::nlists(true, false, &[("", 0x01, 0, 0)]);
+    assert_eq!(
+        imports_of(&common::macho::object(true, false, &table, &strings)),
+        (vec![], vec![])
+    );
+}
+
+/// Without a whole walk, no dyld command is known to be absent: the walk's gap says why, and the
+/// imports claim nothing.
+#[test]
+fn a_walk_cut_short_claims_no_dyld_command_absent() {
+    // An unknown required command stops the walk before the dyld command.
+    let bytes = executable(
+        &[LIBSYSTEM],
+        |_| {
+            vec![
+                common::macho::command(0x8000_1234, 8, false),
+                dyld_info_command(LC_DYLD_INFO_ONLY, (0, 0), (0, 0), false),
+            ]
+        },
+        &[],
+    );
+    assert_eq!(
+        imports_of(&bytes),
+        (
+            vec![],
+            vec![
+                "load commands: command count does not cover sizeofcmds".to_string(),
+                "load commands: unknown required command 0x80001234".to_string(),
+            ]
+        )
+    );
+    // A dyld command shorter than its structure is there, though not read.
+    let bytes = executable(
+        &[LIBSYSTEM],
+        |_| vec![common::macho::command(LC_DYLD_INFO_ONLY, 40, false)],
+        &[],
+    );
+    assert_eq!(
+        imports_of(&bytes),
+        (
+            vec![],
+            vec!["LC_DYLD_INFO_ONLY: command is too short".to_string()]
+        )
+    );
 }
 
 #[test]
@@ -1251,7 +1303,14 @@ fn object_symbol_names_past_64_mib_of_scanning_are_a_gap() {
         )
     );
 }
+
 // --- The import fixtures (PR-4c-3b) -------------------------------------------------------------
+
+fn fixture_path(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
 
 /// `fixture` (under `tests/fixtures/`), copied to a temporary directory and inspected: the session
 /// validates.
@@ -1260,13 +1319,7 @@ fn inspected(fixture: &str) -> sigil_model::Session {
     let path = directory
         .path()
         .join(Path::new(fixture).file_name().unwrap());
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(fixture),
-        &path,
-    )
-    .unwrap();
+    std::fs::copy(fixture_path(fixture), &path).unwrap();
     let s = binary_inspection(&path);
     assert_eq!(s.validate(), Ok(()));
     s
@@ -1383,11 +1436,8 @@ fn a_go_darwin_executable_s_hints_are_its_runtime_s_capability_imports() {
     let s = inspected("go-darwin/capabilities-darwin-arm64");
     let (imports, gaps, got) = slice_of(&s, sigil_model::Arch::Aarch64);
     assert!(gaps.is_empty(), "{gaps:?}");
-    let dump = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/go-darwin/capabilities-darwin-arm64.bind"),
-    )
-    .unwrap();
+    let dump =
+        std::fs::read_to_string(fixture_path("go-darwin/capabilities-darwin-arm64.bind")).unwrap();
     let mut llvm: Vec<&str> = dump
         .lines()
         .filter_map(|line| {
@@ -1400,6 +1450,7 @@ fn a_go_darwin_executable_s_hints_are_its_runtime_s_capability_imports() {
         .collect();
     llvm.sort_unstable();
     llvm.dedup();
+    // A parse that matched no line would leave both lists empty, and equal.
     assert_eq!(llvm.len(), 83);
     assert_eq!(
         imports,

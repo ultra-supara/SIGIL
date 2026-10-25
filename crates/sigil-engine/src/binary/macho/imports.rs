@@ -35,6 +35,9 @@ pub(super) struct Commands {
     /// Each `LC_SYMTAB`: `[symoff, nsyms, stroff, strsize]`; `None` for one shorter than its
     /// structure.
     pub symtab: Vec<Option<[u32; 4]>>,
+    /// Whether the walk read every load command, and each dyld command whole. Otherwise a dyld
+    /// command may be there unread, so its absence is not claimed (the walk's own gap says why).
+    pub all_read: bool,
 }
 
 /// The imports of the slice `header` (base `base`, `size` bytes) from its `commands`, at most
@@ -65,8 +68,9 @@ pub(super) fn read<R: ReadCacheOps>(
         ([_], [_]) => out.gap("imports: both LC_DYLD_INFO and LC_DYLD_CHAINED_FIXUPS".to_string()),
         ([blob], []) => chained(data, base, size, header.order, *blob, &mut out),
         ([], [streams]) => opcodes(data, base, size, *streams, &mut out),
-        // The classic binding of macOS 10.5 and earlier (`LC_DYSYMTAB`) is not read.
-        ([], []) if !commands.dylibs.is_empty() => {
+        // The classic binding of macOS 10.5 and earlier (`LC_DYSYMTAB`) is not read. Without a
+        // whole walk, no command is known to be absent.
+        ([], []) if !commands.dylibs.is_empty() && commands.all_read => {
             out.gap("imports: no LC_DYLD_INFO or LC_DYLD_CHAINED_FIXUPS".to_string())
         }
         ([], []) => {}
@@ -80,6 +84,7 @@ struct Imports<'c> {
     dylibs: &'c [Option<UntrustedText>],
     limit: u64,
     kept: BTreeSet<MachOImport>,
+    /// Whether an import was dropped for `binary_imports`.
     over: bool,
     gaps: BTreeSet<String>,
     /// The bytes [`Imports::name`] may still scan, and the bind opcodes still bind, of
@@ -130,7 +135,7 @@ impl<'c> Imports<'c> {
         match found {
             Some(end) => Name::Read(&rest[..end]),
             None if allowed < window => Name::Exhausted,
-            None if window < rest.len() || window > MAX_IMPORT_NAME => Name::Read(&rest[..window]),
+            None if window > MAX_IMPORT_NAME => Name::Read(&rest[..window]),
             None => Name::Missing("a name without its NUL"),
         }
     }
@@ -170,7 +175,12 @@ impl<'c> Imports<'c> {
         self.keep(name, library, weak);
     }
 
+    /// Keeps `name` from `library`, within `binary_imports`: the smallest, in sorted order. An
+    /// empty name names nothing (as an ELF's), and one over [`MAX_IMPORT_NAME`] is a gap.
     fn keep(&mut self, name: &[u8], library: MachOLibrary, weak: bool) {
+        if name.is_empty() {
+            return;
+        }
         if name.len() > MAX_IMPORT_NAME {
             self.gap(format!("imports: a name over {MAX_IMPORT_NAME} bytes"));
             return;
@@ -199,6 +209,7 @@ impl<'c> Imports<'c> {
 
 /// A name looked up by [`Imports::name`].
 enum Name<'b> {
+    /// The name's bytes, up to its NUL.
     Read(&'b [u8]),
     /// Not read, and why.
     Missing(&'static str),
@@ -219,44 +230,48 @@ fn symbols<R: ReadCacheOps>(
 ) {
     let gap = |why: &str| format!("imports: symbol table: {why}");
     let entry: usize = if header.is_64 { 16 } else { 12 };
-    let read = |offset: u32, len: u64| range(data, base, size, offset.into(), len);
-    let (table, strings) = match (
-        read(symoff, u64::from(nsyms) * entry as u64),
-        read(stroff, strsize.into()),
-    ) {
-        (Ok(table), Ok(strings)) => (table, strings),
-        (Err(why), _) | (_, Err(why)) => {
+    const N_STAB: u8 = 0xe0;
+    const N_TYPE: u8 = 0x0e;
+    const N_UNDF: u8 = 0x00;
+    const N_EXT: u8 = 0x01;
+    const N_WEAK_REF: u16 = 0x40;
+    let slice_at = |offset: u32, len: u64| range(data, base, size, offset.into(), len);
+    let table = match slice_at(symoff, u64::from(nsyms) * entry as u64) {
+        Ok(table) => table,
+        Err(why) => {
             out.gap(gap(&why));
             return;
         }
     };
-    let u16_at = |e: &[u8], at: usize| {
-        let b = [e[at], e[at + 1]];
+    let strings = match slice_at(stroff, strsize.into()) {
+        Ok(strings) => strings,
+        Err(why) => {
+            out.gap(gap(&why));
+            return;
+        }
+    };
+    let u16_at = |nlist: &[u8], at: usize| {
+        let b = [nlist[at], nlist[at + 1]];
         match header.order {
             ByteOrder::Little => u16::from_le_bytes(b),
             ByteOrder::Big => u16::from_be_bytes(b),
         }
     };
-    let u32_at = |e: &[u8], at: usize| {
-        let b = [e[at], e[at + 1], e[at + 2], e[at + 3]];
-        match header.order {
-            ByteOrder::Little => u32::from_le_bytes(b),
-            ByteOrder::Big => u32::from_be_bytes(b),
-        }
-    };
-    for e in table.chunks_exact(entry) {
-        // n_strx, n_type, n_sect, n_desc, n_value (4 or 8 bytes).
-        let n_type = e[4];
-        let n_value = if header.is_64 {
-            u64::from(u32_at(e, 8)) | (u64::from(u32_at(e, 12)) << 32)
-        } else {
-            u32_at(e, 8).into()
-        };
-        if n_type & 0xe0 != 0 || n_type & 0x0e != 0 || n_type & 0x01 == 0 || n_value != 0 {
+    for nlist in table.chunks_exact(entry) {
+        // n_strx, n_type, n_sect, n_desc, n_value (4 or 8 bytes): whether it is 0 does not
+        // depend on the byte order.
+        let n_type = nlist[4];
+        let defined = nlist[8..].iter().any(|b| *b != 0);
+        if n_type & N_STAB != 0 || n_type & N_TYPE != N_UNDF || n_type & N_EXT == 0 || defined {
             continue;
         }
-        match out.name(strings, u32_at(e, 0).into(), "a name out of the strings") {
-            Name::Read(name) => out.keep(name, MachOLibrary::Unbound, u16_at(e, 6) & 0x40 != 0),
+        let n_strx = super::word_at(nlist, 0, header.order);
+        match out.name(strings, n_strx.into(), "a name out of the strings") {
+            Name::Read(name) => out.keep(
+                name,
+                MachOLibrary::Unbound,
+                u16_at(nlist, 6) & N_WEAK_REF != 0,
+            ),
             Name::Missing(why) => out.gap(gap(why)),
             Name::Exhausted => {
                 out.gap(gap(&format!("over {MAX_NAME_SCAN} bytes of names scanned")));
@@ -266,7 +281,8 @@ fn symbols<R: ReadCacheOps>(
     }
 }
 
-/// The NUL-terminated bytes at `at` in `bytes`.
+/// The NUL-terminated bytes at `at` in `bytes`, scanned to the NUL: for the bind opcodes, whose
+/// stream is read past each name, so that every byte is scanned once.
 fn c_string<'b>(bytes: &'b [u8], at: u64, outside: &'static str) -> Result<&'b [u8], &'static str> {
     let rest = usize::try_from(at)
         .ok()
@@ -391,12 +407,13 @@ fn opcodes<R: ReadCacheOps>(
     streams: [(u32, u32); 2],
     out: &mut Imports<'_>,
 ) {
-    for (k, (offset, len)) in streams.into_iter().enumerate() {
+    let [bind, lazy] = streams;
+    for ((offset, len), lazy) in [(bind, false), (lazy, true)] {
         if len == 0 {
             continue;
         }
         let why = match range(data, base, size, offset.into(), len.into()) {
-            Ok(stream) => binds(stream, k == 1, out).err(),
+            Ok(stream) => binds(stream, lazy, out).err(),
             Err(why) => Some(why),
         };
         if let Some(why) = why {
@@ -409,8 +426,10 @@ fn opcodes<R: ReadCacheOps>(
 /// binds the current name through the current ordinal, `DO_BIND_ULEB_TIMES_SKIPPING_ULEB` as many
 /// times as its count says (none for 0). `DONE` ends the bind stream; in the lazy-bind stream
 /// (`lazy`) it ends an entry, and the ordinal, name, and flags carry over to the next, as dyld4
-/// and LLVM read them (Task 2 review). A bind that repeats the last one (its name, ordinal, and
-/// flags) is no new import, and costs nothing; any other costs its name's length and
+/// and LLVM read them (Task 2 review). A bind that repeats the last one (the same
+/// `SET_SYMBOL_TRAILING_FLAGS_IMM`, by its place in the stream, through the same ordinal) is no
+/// new import and costs nothing; places are compared, not bytes, so each check is constant. Any
+/// other costs its name's length and
 /// [`ENTRY_OVERHEAD`] of [`MAX_NAME_SCAN`]. A stream stops at its first error; the binds before
 /// it are kept.
 fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String> {
@@ -418,7 +437,7 @@ fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String>
     let mut ordinal: i64 = 0;
     let mut name: Option<&[u8]> = None;
     let mut weak = false;
-    // Where the current name starts in the stream, and the last bind: (name, ordinal, flags).
+    // Where the current name starts in the stream, and the last bind: (that place, ordinal, weak).
     let mut name_at = 0usize;
     let mut bound: Option<(usize, i64, bool)> = None;
     while let Some(&byte) = stream.get(at) {
@@ -428,16 +447,17 @@ fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String>
             // DONE
             0x00 if lazy => false,
             0x00 => return Ok(()),
-            // SET_DYLIB_ORDINAL_IMM, _ULEB, SET_DYLIB_SPECIAL_IMM
+            // SET_DYLIB_ORDINAL_IMM
             0x10 => {
                 ordinal = imm.into();
                 false
             }
-            // dyld keeps the ULEB's low 32 bits, as an `int`.
+            // SET_DYLIB_ORDINAL_ULEB: dyld keeps its low 32 bits, as an `int`.
             0x20 => {
                 ordinal = i64::from(uleb(stream, &mut at)? as u32 as i32);
                 false
             }
+            // SET_DYLIB_SPECIAL_IMM: 0, or -1 to -15 sign-extended.
             0x30 => {
                 ordinal = if imm == 0 {
                     0
@@ -506,7 +526,8 @@ fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String>
     Ok(())
 }
 
-/// The ULEB128 at `at`, which it moves past.
+/// The ULEB128 at `at`, which it moves past, read as LLVM's `decodeULEB128` reads it: zero
+/// continuation bytes are allowed, and bits past 64 are an error.
 fn uleb(stream: &[u8], at: &mut usize) -> Result<u64, String> {
     let mut value = 0u64;
     let mut shift = 0u32;
@@ -533,7 +554,7 @@ fn uleb(stream: &[u8], at: &mut usize) -> Result<u64, String> {
     }
 }
 
-/// Moves `at` past the SLEB128 there, of at most ten bytes.
+/// Moves `at` past the SLEB128 there; one of more than ten bytes is an error.
 fn sleb(stream: &[u8], at: &mut usize) -> Result<(), String> {
     let mut shift = 0u32;
     loop {
