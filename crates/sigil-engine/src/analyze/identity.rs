@@ -796,6 +796,7 @@ mod tests {
                 load_dylibs: vec![],
                 rpaths: vec![],
                 dylinker: None,
+                imports: vec![],
             }),
             go: None,
             gaps: vec![],

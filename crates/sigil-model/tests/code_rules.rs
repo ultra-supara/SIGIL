@@ -504,6 +504,135 @@ fn c6_an_import_hint_names_an_import_of_its_slice() {
     assert_eq!(code_errors(&s), Vec::<String>::new());
 }
 
+/// `session(false)` with its input a thin x86-64 Mach-O executable (PR-4c-3b). It loads libSystem
+/// and `@rpath/libfoo.dylib`, and imports `_connect` from the first, `_socket` from the second,
+/// and `_getenv` by flat lookup.
+fn macho_session() -> Session {
+    let mut s = session(false);
+    s.artifacts[0].format = Format::MachO;
+    let slice = s.artifacts[0].slices[0].id.clone();
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { .. }));
+    let dylibs = [
+        UntrustedText::new(LIBSYSTEM),
+        UntrustedText::new("@rpath/libfoo.dylib"),
+    ];
+    for needed in &dylibs {
+        s.relations.push(Relation::Declares {
+            from: slice.clone(),
+            needed: needed.clone(),
+            kind: DeclKind::MachOLoadDylib,
+        });
+    }
+    let import = |name: &str, library: MachOLibrary| MachOImport {
+        name: UntrustedText::new(name),
+        library,
+        weak: false,
+    };
+    s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        is_64: true,
+        cpu_type: 0x0100_0007,
+        cpu_subtype: 3,
+        fat_cpu_type: None,
+        fat_cpu_subtype: None,
+        fat_alignment: None,
+        file_type: 2,
+        flags: 0,
+        uuid: None,
+        id_dylib: None,
+        load_dylibs: dylibs.to_vec(),
+        rpaths: vec![],
+        dylinker: None,
+        imports: vec![
+            import(
+                "_connect",
+                MachOLibrary::Dylib {
+                    ordinal: 1,
+                    name: Some(dylibs[0].clone()),
+                },
+            ),
+            import("_getenv", MachOLibrary::FlatLookup),
+            import(
+                "_socket",
+                MachOLibrary::Dylib {
+                    ordinal: 2,
+                    name: Some(dylibs[1].clone()),
+                },
+            ),
+        ],
+    });
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+    s
+}
+
+fn import_hint(s: &Session, feature: &str, name: &str) -> FeatureHint {
+    FeatureHint {
+        subject: s.artifacts[0].slices[0].id.clone(),
+        feature: FeatureKey::new(feature).unwrap(),
+        signal: Signal::Import,
+        value: UntrustedText::new(name),
+        at: Loc::Symbol(UntrustedText::new(name)),
+    }
+}
+
+/// PR-4c-3b: on a Mach-O slice, an import hint names an import whose library is looked up:
+/// libSystem, flat lookup, or an object file's.
+#[test]
+fn c6_a_mach_o_import_hint_names_an_import_looked_up() {
+    let mut s = macho_session();
+    s.hints = vec![
+        import_hint(&s, "posix.network", "_connect"),
+        import_hint(&s, "posix.environment_access", "_getenv"),
+    ];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+    // `_socket` is libfoo's: not looked up.
+    s.hints = vec![import_hint(&s, "posix.network", "_socket")];
+    assert!(
+        errors(&s)
+            .iter()
+            .any(|e| e.contains("whose library is not looked up")),
+        "{:?}",
+        errors(&s)
+    );
+    // Not an import at all; nor is the name without its `_`.
+    for name in ["_send", "connect"] {
+        s.hints = vec![import_hint(&s, "posix.network", name)];
+        assert!(
+            errors(&s).iter().any(|e| e.contains("not an import")),
+            "{name}: {:?}",
+            errors(&s)
+        );
+    }
+    // A name imported from libfoo and from libSystem is looked up through libSystem's.
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.imports.push(MachOImport {
+        name: UntrustedText::new("_connect"),
+        library: MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new("@rpath/libfoo.dylib")),
+        },
+        weak: false,
+    });
+    s.canonicalize();
+    s.hints = vec![import_hint(&s, "posix.network", "_connect")];
+    assert_eq!(errors(&s), Vec::<String>::new());
+    // An object file's undefined symbol is looked up (its library is the linker's).
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.file_type = MH_OBJECT;
+    for i in &mut facts.imports {
+        i.library = MachOLibrary::Unbound;
+    }
+    s.hints = vec![import_hint(&s, "posix.network", "_socket")];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+}
+
 #[test]
 fn c1_request_code_is_only_for_a_binary_inspection() {
     for s in [common::complete_pass(), common::store_and_runtime()] {
@@ -730,6 +859,7 @@ fn c3_a_mach_o_is_unsupported() {
             load_dylibs: vec![],
             rpaths: vec![],
             dylinker: None,
+            imports: vec![],
         });
         // An x86_64 slice, analyzed: refused.
         rejected_by_c3(

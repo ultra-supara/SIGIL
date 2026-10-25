@@ -74,10 +74,16 @@ impl Session {
         sort_json(&mut self.releases);
         sort_json(&mut self.reference_matches);
         for facts in &mut self.binaries {
-            if let crate::binary::ContainerFacts::Elf(elf) = &mut facts.container {
-                elf.imports.sort();
-                elf.imports.dedup();
-                elf.data.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+            match &mut facts.container {
+                crate::binary::ContainerFacts::Elf(elf) => {
+                    elf.imports.sort();
+                    elf.imports.dedup();
+                    elf.data.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+                }
+                crate::binary::ContainerFacts::MachO(macho) => {
+                    macho.imports.sort();
+                    macho.imports.dedup();
+                }
             }
             facts.gaps.sort();
             facts.gaps.dedup();

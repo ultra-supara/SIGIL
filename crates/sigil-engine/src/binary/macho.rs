@@ -13,25 +13,29 @@ use super::read::{Bounded, Budgeted};
 use super::{BinaryBudgets, Parsed, ParsedArtifact, ParsedSlice};
 use crate::code::CodeOutcome;
 
+mod imports;
+
 const MAX_SLICES: usize = 64;
 const MAX_LOAD_COMMANDS: u32 = 65_536;
 const MAX_LOAD_COMMAND_BYTES: u64 = 8 << 20;
 const MAX_NAMES: usize = 1_024;
 const MAX_NAME_BYTES: usize = 4_096;
 const LC_REQ_DYLD: u32 = 0x8000_0000;
+const LC_SYMTAB: u32 = 0x2;
 const LC_LOAD_WEAK_DYLIB: u32 = LC_REQ_DYLD | 0x18;
 const LC_RPATH: u32 = LC_REQ_DYLD | 0x1c;
 const LC_REEXPORT_DYLIB: u32 = LC_REQ_DYLD | 0x1f;
+const LC_DYLD_INFO: u32 = 0x22;
+const LC_DYLD_INFO_ONLY: u32 = LC_REQ_DYLD | 0x22;
 const LC_LOAD_UPWARD_DYLIB: u32 = LC_REQ_DYLD | 0x23;
+const LC_DYLD_CHAINED_FIXUPS: u32 = LC_REQ_DYLD | 0x34;
 
 /// The other load commands dyld requires (`LC_REQ_DYLD`), with the size of each one's structure
 /// (`<mach-o/loader.h>`). Their contents are not facts, so each is skipped once its size is
 /// checked. Any other required command is unknown: the walk stops there.
-const SKIPPED_REQUIRED: [(u32, &str, usize); 5] = [
-    (LC_REQ_DYLD | 0x22, "LC_DYLD_INFO_ONLY", 48),
+const SKIPPED_REQUIRED: [(u32, &str, usize); 3] = [
     (LC_REQ_DYLD | 0x28, "LC_MAIN", 24),
     (LC_REQ_DYLD | 0x33, "LC_DYLD_EXPORTS_TRIE", 16),
-    (LC_REQ_DYLD | 0x34, "LC_DYLD_CHAINED_FIXUPS", 16),
     (LC_REQ_DYLD | 0x35, "LC_FILESET_ENTRY", 32),
 ];
 
@@ -277,6 +281,7 @@ fn empty_facts() -> MachOFacts {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     }
 }
 
@@ -324,6 +329,8 @@ fn name_in_command(
     Ok(UntrustedText::from_bytes(value[..end].to_vec()))
 }
 
+/// Records the name of `command` in `target`, and returns it; `None`, with its gap, when it is not
+/// read or not kept.
 fn record_name(
     target: &mut Vec<UntrustedText>,
     command: &[u8],
@@ -332,20 +339,41 @@ fn record_name(
     order: ByteOrder,
     label: &str,
     gaps: &mut Vec<String>,
-) {
+) -> Option<UntrustedText> {
     match name_in_command(command, offset, min_string_offset, order) {
-        Ok(name) if target.len() < MAX_NAMES => target.push(name),
-        Ok(_) => gaps.push(format!("{label}: over {MAX_NAMES} names")),
-        Err(why) => gaps.push(format!("{label}: {why}")),
+        Ok(name) if target.len() < MAX_NAMES => {
+            target.push(name.clone());
+            Some(name)
+        }
+        Ok(_) => {
+            gaps.push(format!("{label}: over {MAX_NAMES} names"));
+            None
+        }
+        Err(why) => {
+            gaps.push(format!("{label}: {why}"));
+            None
+        }
     }
 }
 
+/// The 32-bit word at `at` of `command` (a load command, or an nlist entry), at least `at + 4`
+/// bytes long. The slice is four bytes long, so the conversion never fails: the default is never
+/// taken.
+fn word_at(command: &[u8], at: usize, order: ByteOrder) -> u32 {
+    let bytes: [u8; 4] = command[at..at + 4].try_into().unwrap_or_default();
+    match order {
+        ByteOrder::Little => u32::from_le_bytes(bytes),
+        ByteOrder::Big => u32::from_be_bytes(bytes),
+    }
+}
+
+/// The facts of the load commands, their gaps, and what the imports are read from.
 fn parse_commands<R: object::read::ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,
     slice_size: u64,
     header: &Header,
-) -> (MachOFacts, Vec<String>) {
+) -> (MachOFacts, Vec<String>, imports::Commands) {
     let mut facts = MachOFacts {
         is_64: header.is_64,
         cpu_type: header.cpu_type,
@@ -358,15 +386,16 @@ fn parse_commands<R: object::read::ReadCacheOps>(
         ..empty_facts()
     };
     let mut gaps = vec![];
+    let mut found = imports::Commands::default();
     if header.ncmds > MAX_LOAD_COMMANDS {
         gaps.push(format!("load commands: over {MAX_LOAD_COMMANDS} commands"));
-        return (facts, gaps);
+        return (facts, gaps, found);
     }
     if u64::from(header.sizeofcmds) > MAX_LOAD_COMMAND_BYTES {
         gaps.push(format!(
             "load commands: over {MAX_LOAD_COMMAND_BYTES} bytes"
         ));
-        return (facts, gaps);
+        return (facts, gaps, found);
     }
     let commands = match range(
         data,
@@ -378,13 +407,15 @@ fn parse_commands<R: object::read::ReadCacheOps>(
         Ok(commands) => commands,
         Err(why) => {
             gaps.push(format!("load commands: {why}"));
-            return (facts, gaps);
+            return (facts, gaps, found);
         }
     };
     let mut offset = 0usize;
+    let mut whole = true;
     for _ in 0..header.ncmds {
         if commands.len().saturating_sub(offset) < 8 {
             gaps.push("load commands: truncated command header".to_string());
+            whole = false;
             break;
         }
         let cmd = match header.order {
@@ -421,14 +452,17 @@ fn parse_commands<R: object::read::ReadCacheOps>(
             || cmdsize > commands.len().saturating_sub(offset)
         {
             gaps.push("load commands: invalid command size".to_string());
+            whole = false;
             break;
         }
         let bytes = &commands[offset..offset + cmdsize];
         let mut stop_after_command = false;
         match cmd {
+            // Each takes the next library ordinal, whether or not its name is read.
             0x0c | LC_LOAD_WEAK_DYLIB | LC_REEXPORT_DYLIB | 0x20 | LC_LOAD_UPWARD_DYLIB => {
-                if cmdsize < 24 {
+                let name = if cmdsize < 24 {
                     gaps.push("load dylib: command is too short".to_string());
+                    None
                 } else {
                     record_name(
                         &mut facts.load_dylibs,
@@ -438,7 +472,46 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                         header.order,
                         "load dylib",
                         &mut gaps,
-                    );
+                    )
+                };
+                found.dylibs.push(name);
+            }
+            // dyld_info_command: bind_off and bind_size at 16, lazy_bind_off and lazy_bind_size
+            // at 32.
+            LC_DYLD_INFO | LC_DYLD_INFO_ONLY => {
+                if cmdsize < 48 {
+                    let name = if cmd == LC_DYLD_INFO {
+                        "LC_DYLD_INFO"
+                    } else {
+                        "LC_DYLD_INFO_ONLY"
+                    };
+                    gaps.push(format!("{name}: command is too short"));
+                    whole = false;
+                } else {
+                    let word = |at| word_at(bytes, at, header.order);
+                    found
+                        .dyld_info
+                        .push([(word(16), word(20)), (word(32), word(36))]);
+                }
+            }
+            // symtab_command: symoff, nsyms, stroff, strsize. Only an object file's is read, so a
+            // short one is that read's gap (`imports::read`), not the walk's.
+            LC_SYMTAB => {
+                let word = |at| word_at(bytes, at, header.order);
+                found
+                    .symtab
+                    .push((cmdsize >= 24).then(|| [word(8), word(12), word(16), word(20)]));
+            }
+            // linkedit_data_command: dataoff, datasize.
+            LC_DYLD_CHAINED_FIXUPS => {
+                if cmdsize < 16 {
+                    gaps.push("LC_DYLD_CHAINED_FIXUPS: command is too short".to_string());
+                    whole = false;
+                } else {
+                    found.chained.push((
+                        word_at(bytes, 8, header.order),
+                        word_at(bytes, 12, header.order),
+                    ));
                 }
             }
             0x0d => {
@@ -505,6 +578,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                     None => {
                         gaps.push(format!("load commands: unknown required command {cmd:#x}"));
                         stop_after_command = true;
+                        whole = false;
                     }
                 }
             }
@@ -518,18 +592,28 @@ fn parse_commands<R: object::read::ReadCacheOps>(
     if offset != commands.len() {
         gaps.push("load commands: command count does not cover sizeofcmds".to_string());
     }
+    found.all_read = whole && offset == commands.len();
     gaps.sort();
     gaps.dedup();
-    (facts, gaps)
+    (facts, gaps, found)
 }
 
+/// The slice at `base`, `size` bytes, with at most `import_limit` imports (`binary_imports`), and
+/// the file's names budget, `names` ([`imports::MAX_NAME_SCAN`] for the whole file).
 fn parse_thin<R: object::read::ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,
     size: u64,
+    import_limit: u64,
+    names: &mut u64,
 ) -> Result<(Arch, Parsed), String> {
     let header = parse_header(data, base, size)?;
-    let (facts, gaps) = parse_commands(data, base, size, &header);
+    let (mut facts, mut gaps, found) = parse_commands(data, base, size, &header);
+    let (kept, import_gaps) = imports::read(data, base, size, &header, &found, import_limit, names);
+    facts.imports = kept;
+    gaps.extend(import_gaps);
+    gaps.sort();
+    gaps.dedup();
     Ok((
         arch(header.cpu_type),
         Parsed {
@@ -775,8 +859,16 @@ fn parsed_slice(
 fn fat_slice_facts<R: ReadCacheOps>(
     data: &Bounded<R>,
     descriptor: &FatSlice,
+    import_limit: u64,
+    names: &mut u64,
 ) -> Result<Parsed, String> {
-    let (_, mut parsed) = parse_thin(data, descriptor.offset, descriptor.size)?;
+    let (_, mut parsed) = parse_thin(
+        data,
+        descriptor.offset,
+        descriptor.size,
+        import_limit,
+        names,
+    )?;
     if let ContainerFacts::MachO(facts) = &mut parsed.container {
         facts.fat_cpu_type = Some(descriptor.cpu_type);
         facts.fat_cpu_subtype = Some(descriptor.cpu_subtype);
@@ -821,9 +913,13 @@ pub(super) fn parse_artifact(
             return None;
         }
     }
+    // The names' budget is the file's: every slice of a fat file draws on it.
+    let mut names = imports::MAX_NAME_SCAN;
     match format {
         Format::MachO => {
-            if let Ok((slice_arch, parsed)) = parse_thin(&data, 0, size) {
+            if let Ok((slice_arch, parsed)) =
+                parse_thin(&data, 0, size, budgets.imports, &mut names)
+            {
                 slices.push(parsed_slice(
                     0,
                     size,
@@ -845,7 +941,7 @@ pub(super) fn parse_artifact(
                         continue;
                     }
                 };
-                match fat_slice_facts(&data, &descriptor) {
+                match fat_slice_facts(&data, &descriptor, budgets.imports, &mut names) {
                     Ok(parsed) => slices.push(parsed_slice(
                         descriptor.offset,
                         descriptor.size,

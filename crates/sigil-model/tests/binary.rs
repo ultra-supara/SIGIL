@@ -4,8 +4,8 @@ mod common;
 
 use sigil_model::{
     imports_over_gap, BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport,
-    FunctionReturn, GoBuildInfo, GoModule, GoSetting, Loc, SliceId, UntrustedText,
-    IMPORTS_OVER_GAP,
+    FunctionReturn, GoBuildInfo, GoModule, GoSetting, Loc, MachOFacts, MachOImport, MachOLibrary,
+    SliceId, UntrustedText, IMPORTS_OVER_GAP, LIBSYSTEM, LOAD_DYLIB_GAP_PREFIX, MH_OBJECT,
 };
 
 fn t(s: &str) -> UntrustedText {
@@ -354,6 +354,7 @@ fn macho_facts(cpu_type: i32, cpu_subtype: i32, fat: (i32, i32)) -> ContainerFac
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     })
 }
 
@@ -522,4 +523,224 @@ fn b11_a_relocatable_object_has_no_returns() {
     assert_eq!(s.validate(), Ok(()));
     s.artifacts[0].format = Format::Elf { kind: ElfType::Rel };
     rejected_for(&s, "a relocatable object has no returns");
+}
+
+// --- Mach-O imports (PR-4c-3b) -----------------------------------------------------------------
+
+fn libsystem(ordinal: u32) -> MachOLibrary {
+    MachOLibrary::Dylib {
+        ordinal,
+        name: Some(t(LIBSYSTEM)),
+    }
+}
+
+fn macho_import(name: &str, library: MachOLibrary) -> MachOImport {
+    MachOImport {
+        name: t(name),
+        library,
+        weak: false,
+    }
+}
+
+fn macho(s: &mut Session) -> &mut MachOFacts {
+    let ContainerFacts::MachO(f) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    f
+}
+
+/// `fat_base()` with libSystem loaded (and declared), and two imports bound to it.
+fn macho_base() -> Session {
+    let mut s = fat_base();
+    let slice = s.binaries[0].slice.clone();
+    s.relations.push(Relation::Declares {
+        from: slice,
+        needed: t(LIBSYSTEM),
+        kind: DeclKind::MachOLoadDylib,
+    });
+    let f = macho(&mut s);
+    f.load_dylibs = vec![t(LIBSYSTEM)];
+    f.imports = vec![
+        macho_import("_connect", libsystem(1)),
+        macho_import("_getenv", libsystem(1)),
+    ];
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()), "the Mach-O base must be valid");
+    s
+}
+
+#[test]
+fn macho_imports_are_written_only_when_present_and_read_when_missing() {
+    let ContainerFacts::MachO(mut facts) = macho_facts(X86_64, 3, (X86_64, 3)) else {
+        panic!()
+    };
+    let json = serde_json::to_value(&facts).unwrap();
+    assert!(json.get("imports").is_none(), "{json}");
+    let back: MachOFacts = serde_json::from_value(json).unwrap();
+    assert_eq!(back, facts);
+    facts.imports = vec![
+        macho_import("_connect", libsystem(1)),
+        macho_import("_dlopen", MachOLibrary::FlatLookup),
+    ];
+    let json = serde_json::to_value(&facts).unwrap();
+    assert_eq!(
+        json["imports"],
+        serde_json::json!([
+            {"name": "_connect", "library": {"Dylib": {"ordinal": 1, "name": LIBSYSTEM}}, "weak": false},
+            {"name": "_dlopen", "library": "FlatLookup", "weak": false},
+        ])
+    );
+    assert_eq!(serde_json::from_value::<MachOFacts>(json).unwrap(), facts);
+}
+
+#[test]
+fn only_libsystem_flat_lookup_and_an_object_s_imports_are_looked_up() {
+    assert!(libsystem(1).looked_up());
+    assert!(MachOLibrary::FlatLookup.looked_up());
+    assert!(MachOLibrary::Unbound.looked_up());
+    for library in [
+        MachOLibrary::Dylib {
+            ordinal: 1,
+            name: Some(t("@rpath/libfoo.dylib")),
+        },
+        MachOLibrary::Dylib {
+            ordinal: 1,
+            name: None,
+        },
+        MachOLibrary::SelfImage,
+        MachOLibrary::MainExecutable,
+        MachOLibrary::WeakLookup,
+    ] {
+        assert!(!library.looked_up(), "{library:?}");
+    }
+}
+
+#[test]
+fn canonicalize_sorts_macho_imports() {
+    let mut s = macho_base();
+    macho(&mut s).imports.reverse();
+    let again = macho(&mut s).imports[0].clone();
+    macho(&mut s).imports.push(again);
+    s.canonicalize();
+    assert_eq!(s, macho_base());
+}
+
+#[test]
+fn b4_macho_imports_are_sorted_unique_and_within_the_budget() {
+    let mut s = macho_base();
+    macho(&mut s).imports.reverse();
+    rejected_for(&s, "imports are not sorted and unique");
+    let mut s = macho_base();
+    let again = macho(&mut s).imports[0].clone();
+    macho(&mut s).imports.insert(0, again);
+    rejected_for(&s, "imports are not sorted and unique");
+    let mut s = macho_base();
+    s.request.budgets.insert("binary_imports".into(), 1);
+    rejected_for(&s, "more imports than binary_imports");
+}
+
+#[test]
+fn b12_an_object_s_imports_are_unbound_and_only_its() {
+    let complaint = "an import is Unbound outside an object file";
+    let mut s = macho_base();
+    macho(&mut s).imports[0].library = MachOLibrary::Unbound;
+    rejected_for(&s, complaint);
+    let mut s = macho_base();
+    macho(&mut s).file_type = MH_OBJECT;
+    rejected_for(&s, complaint);
+    for i in macho(&mut s).imports.iter_mut() {
+        i.library = MachOLibrary::Unbound;
+    }
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()));
+}
+
+const LIBFOO: &str = "@rpath/libfoo.dylib";
+
+/// `macho_base()` loading libfoo too, as ordinal 2.
+fn two_dylibs() -> Session {
+    let mut s = macho_base();
+    let slice = s.binaries[0].slice.clone();
+    s.relations.push(Relation::Declares {
+        from: slice,
+        needed: t(LIBFOO),
+        kind: DeclKind::MachOLoadDylib,
+    });
+    macho(&mut s).load_dylibs.push(t(LIBFOO));
+    s.canonicalize();
+    assert_eq!(s.validate(), Ok(()));
+    s
+}
+
+fn dylib(ordinal: u32, name: Option<&str>) -> MachOLibrary {
+    MachOLibrary::Dylib {
+        ordinal,
+        name: name.map(t),
+    }
+}
+
+#[test]
+fn b12_a_dylib_import_is_its_ordinal_s_dylib() {
+    let complaint = "a dylib import's ordinal is 0, or its name is not its ordinal's dylib";
+    for library in [
+        libsystem(0),
+        // Not loaded at all.
+        dylib(1, Some("/usr/lib/libz.1.dylib")),
+        // PR-4c-3b plan review P2: loaded, but as ordinal 1, not 2.
+        dylib(2, Some(LIBSYSTEM)),
+        dylib(1, Some(LIBFOO)),
+        // Past the dylibs.
+        dylib(3, Some(LIBSYSTEM)),
+        // Every name was kept: none is unknown.
+        dylib(2, None),
+    ] {
+        let mut s = two_dylibs();
+        macho(&mut s).imports[0].library = library.clone();
+        rejected_for(&s, complaint);
+    }
+    // Each at its ordinal, and the special ordinals, are valid.
+    let mut s = two_dylibs();
+    macho(&mut s).imports = vec![
+        macho_import("_a", dylib(1, Some(LIBSYSTEM))),
+        macho_import("_b", dylib(2, Some(LIBFOO))),
+        macho_import("_c", MachOLibrary::SelfImage),
+        macho_import("_d", MachOLibrary::MainExecutable),
+        macho_import("_e", MachOLibrary::FlatLookup),
+        macho_import("_f", MachOLibrary::WeakLookup),
+    ];
+    assert_eq!(s.validate(), Ok(()));
+}
+
+/// With a `load dylib: ` gap, a name was not kept, and the later ones moved up a place or more:
+/// a name is at or before its ordinal's place, and may be unknown.
+#[test]
+fn b12_with_a_dylib_not_kept_a_name_is_at_or_before_its_ordinal() {
+    let complaint = "a dylib import's ordinal is 0, or its name is not its ordinal's dylib";
+    let gapped = |library: MachOLibrary| {
+        let mut s = two_dylibs();
+        macho(&mut s).imports[0].library = library;
+        s.binaries[0].gaps.push(format!(
+            "{LOAD_DYLIB_GAP_PREFIX}string offset outside load command"
+        ));
+        s
+    };
+    for library in [
+        dylib(3, None),
+        dylib(2, Some(LIBSYSTEM)),
+        dylib(3, Some(LIBFOO)),
+    ] {
+        not_rejected_for(&gapped(library), complaint);
+    }
+    // The facts are consistent, but the container is not Complete (B7).
+    rejected_for(
+        &gapped(dylib(3, None)),
+        &format!("{ARTIFACTS_CONTAINER} is Complete"),
+    );
+    for library in [
+        libsystem(0),
+        dylib(1, Some(LIBFOO)),
+        dylib(1, Some("/usr/lib/libz.1.dylib")),
+    ] {
+        rejected_for(&gapped(library), complaint);
+    }
 }

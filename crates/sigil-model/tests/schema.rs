@@ -70,7 +70,7 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         ReferenceMatch => "ReferenceMatch", MemberResult => "MemberResult", MemberKind => "MemberKind",
         EntryKind => "EntryKind",
         BinaryFacts => "BinaryFacts", ContainerFacts => "ContainerFacts", ElfFacts => "ElfFacts",
-        MachOFacts => "MachOFacts",
+        MachOFacts => "MachOFacts", MachOImport => "MachOImport", MachOLibrary => "MachOLibrary",
         ElfImport => "ElfImport", DataSymbol => "DataSymbol", DataValue => "DataValue",
         FunctionReturn => "FunctionReturn",
         GoBuildInfo => "GoBuildInfo", GoModule => "GoModule", GoSetting => "GoSetting",
@@ -111,10 +111,10 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
 }
 
 /// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a,
-/// PR-4b-1, PR-5a, PR-4c-2b). They are optional on read, where a missing list is empty and a
-/// missing `code` is false. `active`, `probes`, and `code` are always written;
-/// `reference_matches`, `binaries`, and an ELF's `returns` only when non-empty, so sessions
-/// without them keep their bytes.
+/// PR-4b-1, PR-5a, PR-4c-2b, PR-4c-3b). They are optional on read, where a missing list is empty
+/// and a missing `code` is false. `active`, `probes`, and `code` are always written;
+/// `reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` only when
+/// non-empty, so sessions without them keep their bytes.
 const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("RunRequest", "active"),
     ("RunRequest", "code"),
@@ -122,6 +122,7 @@ const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("Session", "reference_matches"),
     ("Session", "binaries"),
     ("ElfFacts", "returns"),
+    ("MachOFacts", "imports"),
 ];
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
@@ -293,6 +294,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 load_dylibs: vec![t("/usr/lib/libSystem.B.dylib")],
                 rpaths: vec![t("@loader_path/../Frameworks")],
                 dylinker: Some(t("/usr/lib/dyld")),
+                imports: vec![],
             }),
         ),
         sample(
@@ -308,11 +310,35 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 flags: 0x200085,
                 uuid: None,
                 id_dylib: None,
-                load_dylibs: vec![],
+                load_dylibs: vec![t("/usr/lib/libSystem.B.dylib")],
                 rpaths: vec![],
                 dylinker: None,
+                // Shapes only: ordinal 2 has no loaded dylib here (B12 is the validator's).
+                imports: vec![
+                    MachOImport {
+                        name: t("_connect"),
+                        library: MachOLibrary::Dylib {
+                            ordinal: 1,
+                            name: Some(t("/usr/lib/libSystem.B.dylib")),
+                        },
+                        weak: false,
+                    },
+                    MachOImport {
+                        name: t("_socket"),
+                        library: MachOLibrary::Dylib {
+                            ordinal: 2,
+                            name: None,
+                        },
+                        weak: true,
+                    },
+                ],
             },
         ),
+        sample("MachOLibrary", MachOLibrary::SelfImage),
+        sample("MachOLibrary", MachOLibrary::MainExecutable),
+        sample("MachOLibrary", MachOLibrary::FlatLookup),
+        sample("MachOLibrary", MachOLibrary::WeakLookup),
+        sample("MachOLibrary", MachOLibrary::Unbound),
         sample("ElfType", ElfType::Exec),
         sample("ElfType", ElfType::Rel),
         sample("Arch", Arch::Other),

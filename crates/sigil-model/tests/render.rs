@@ -1027,7 +1027,59 @@ fn a_cut_short_import_list_with_capability_imports_says_so() {
 }
 
 #[test]
-fn a_macho_content_gets_no_capabilities() {
+fn a_macho_content_with_imports_under_code_is_not_analyzed() {
+    let mut s = binary_code();
+    s.artifacts[0].format = Format::MachO;
+    s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        is_64: true,
+        cpu_type: 0x0100_0007,
+        cpu_subtype: 3,
+        fat_cpu_type: None,
+        fat_cpu_subtype: None,
+        fat_alignment: None,
+        file_type: 2,
+        flags: 0,
+        uuid: None,
+        id_dylib: None,
+        load_dylibs: vec![t(LIBSYSTEM)],
+        rpaths: vec![],
+        dylinker: None,
+        imports: vec![MachOImport {
+            name: t("_connect"),
+            library: MachOLibrary::Dylib {
+                ordinal: 1,
+                name: Some(t(LIBSYSTEM)),
+            },
+            weak: false,
+        }],
+    });
+    s.hints[0].value = t("_connect");
+    s.hints[0].at = Loc::Symbol(t("_connect"));
+    s.code.clear();
+    let entry = s
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap();
+    entry.state = CoverageState::Unsupported {
+        what: CODE_UNSUPPORTED.to_string(),
+    };
+    entry.budget = None;
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: ids(&[BINARY_CODE]),
+        gaps: vec![],
+    };
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(
+        row_of(section, "posix.network").ends_with(&format!("| {} |", md_esc(NOT_SEARCHED))),
+        "{section}"
+    );
+    assert!(section.contains(&md_esc("binary.code: ")), "{section}");
+}
+
+#[test]
+fn a_macho_content_without_imports_gets_no_capabilities() {
     let mut s = binary_code();
     s.artifacts[0].format = Format::MachO;
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
@@ -1044,16 +1096,169 @@ fn a_macho_content_gets_no_capabilities() {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     });
     let md = render_session(&s);
     let section = binaries_section(&md);
     assert!(section.contains(&md_esc("Mach-O 64-bit")), "{section}");
+    // PR-4c-3b: facts without imports (a session written before) render as before.
+    assert!(!section.contains(&md_esc("Imports (dyld)")), "{section}");
     assert!(!section.contains(&md_esc("Capabilities of")), "{section}");
     assert!(
         !section.contains(&md_esc(NO_CAPABILITY_IMPORTS)),
         "{section}"
     );
     assert!(!section.contains(&md_esc("binary.code: ")), "{section}");
+}
+
+/// PR-4c-3b: a Mach-O with imports lists them, each with its library, and gets its capability rows;
+/// one without (above) gets neither. An object file's are its undefined symbols, without a library.
+#[test]
+fn a_macho_content_with_imports_lists_them_and_gets_capability_rows() {
+    let mut s = binary_no_code();
+    s.artifacts[0].format = Format::MachO;
+    let slice = s.binaries[0].slice.clone();
+    let import = |name: &str, library: MachOLibrary, weak: bool| MachOImport {
+        name: t(name),
+        library,
+        weak,
+    };
+    let facts = |file_type: u32, imports: Vec<MachOImport>| {
+        ContainerFacts::MachO(MachOFacts {
+            is_64: true,
+            cpu_type: 0x0100_0007,
+            cpu_subtype: 3,
+            fat_cpu_type: None,
+            fat_cpu_subtype: None,
+            fat_alignment: None,
+            file_type,
+            flags: 0,
+            uuid: None,
+            id_dylib: None,
+            load_dylibs: vec![t(LIBSYSTEM)],
+            rpaths: vec![],
+            dylinker: None,
+            imports,
+        })
+    };
+    s.binaries[0].container = facts(
+        2,
+        vec![
+            import(
+                "_connect",
+                MachOLibrary::Dylib {
+                    ordinal: 1,
+                    name: Some(t(LIBSYSTEM)),
+                },
+                false,
+            ),
+            import("_getenv", MachOLibrary::FlatLookup, true),
+            import(
+                "_x",
+                MachOLibrary::Dylib {
+                    ordinal: 2,
+                    name: None,
+                },
+                false,
+            ),
+            import("_own", MachOLibrary::SelfImage, false),
+            import("_m", MachOLibrary::MainExecutable, false),
+            import("_w", MachOLibrary::WeakLookup, false),
+        ],
+    );
+    s.hints = vec![FeatureHint {
+        subject: slice,
+        feature: id("posix.network"),
+        signal: Signal::Import,
+        value: t("_connect"),
+        at: Loc::Symbol(t("_connect")),
+    }];
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Imports (dyld)"),
+        fact_row("Imports (dyld)", "6")
+    );
+    let list = [
+        format!(
+            "{}{}{}",
+            md_esc("_connect ("),
+            md_esc(LIBSYSTEM),
+            md_esc(")")
+        ),
+        format!("{}{}", md_esc("_getenv (flat lookup)"), md_esc(" (weak)")),
+        md_esc("_x (ordinal 2)"),
+        md_esc("_own (self)"),
+        md_esc("_m (main executable)"),
+        md_esc("_w (weak lookup)"),
+    ]
+    .join(", ");
+    assert!(section.contains(&md_esc("Imports (dyld) of")), "{section}");
+    assert!(section.contains(&format!("\n{list}\n")), "{section}");
+    assert!(section.contains(&md_esc("Capabilities of")), "{section}");
+    assert!(row_of(section, "posix.network").contains(&md_esc("_connect")));
+    // Without a hint: the line, as for an ELF.
+    s.hints.clear();
+    let md = render_session(&s);
+    assert!(binaries_section(&md).contains(&md_esc(NO_CAPABILITY_IMPORTS)));
+    // An object file's undefined symbols.
+    s.binaries[0].container = facts(1, vec![import("_dlopen", MachOLibrary::Unbound, false)]);
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Undefined symbols (link time)"),
+        fact_row("Undefined symbols (link time)", "1")
+    );
+    assert!(
+        section.contains(&format!("\n{}\n", md_esc("_dlopen"))),
+        "{section}"
+    );
+    // A hostile library name renders escaped.
+    s.binaries[0].container = facts(
+        2,
+        vec![import(
+            "_y",
+            MachOLibrary::Dylib {
+                ordinal: 1,
+                name: Some(t("<x>|y")),
+            },
+            false,
+        )],
+    );
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(!section.contains("<x>"), "{section}");
+    assert!(section.contains(&md_esc("<x>|y")), "{section}");
+    // Every import cut at `binary_imports`: the row and the cut-short line, as for an ELF.
+    s.binaries[0].container = facts(2, vec![]);
+    s.binaries[0].gaps.push(imports_over_gap(0));
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert_eq!(
+        row_of(section, "Imports (dyld)"),
+        fact_row("Imports (dyld)", "0")
+    );
+    assert!(
+        section.contains(&md_esc(&no_capability_imports_kept(0))),
+        "{section}"
+    );
+    // A hostile import name renders escaped.
+    s.binaries[0].gaps.clear();
+    s.binaries[0].container = facts(
+        2,
+        vec![import(
+            "_x|<script>",
+            MachOLibrary::Dylib {
+                ordinal: 1,
+                name: Some(t(LIBSYSTEM)),
+            },
+            false,
+        )],
+    );
+    let md = render_session(&s);
+    let section = binaries_section(&md);
+    assert!(!section.contains("<script>"), "{section}");
+    assert!(section.contains(&md_esc("_x|<script>")), "{section}");
 }
 
 #[test]
@@ -1412,6 +1617,7 @@ fn a_macho_content_has_the_identity_rows_too() {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     });
     let md = render_session(&s);
     let section = binaries_section(&md);

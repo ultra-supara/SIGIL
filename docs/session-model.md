@@ -142,7 +142,7 @@ The rule then yields an open question at most.
     unless the slice has the parser's gap for it;
   - B3: the slice's dependency `Declares` relations are unique, and exactly its distinct ELF
     NEEDED or Mach-O loaded-dylib names;
-  - B4: imports are sorted, unique, and within `binary_imports`;
+  - B4: imports are sorted, unique, and within `binary_imports`, an ELF's and a Mach-O's;
   - B5: a data value that is `Unknown` has its gap;
   - B6: a Go version is not empty;
   - B7: `artifacts.container` is `Complete` only with a complete discovery, facts for every ELF
@@ -152,6 +152,11 @@ The rule then yields an open question at most.
     its symbol and the address it was read at, or an `Unknown` value with its symbol alone, never
     a number. A relocatable object has none. An `Unknown` one's gap is in the identity coverage
     (S1, S2), not in the record;
+  - B12 (PR-4c-3b): a Mach-O object file's (`MH_OBJECT`) imports are `Unbound`, left for the
+    linker, and no other slice's are. A `Dylib` import's ordinal is from 1, and its name is its
+    ordinal's dylib: without a `load dylib: ` gap, every dylib-loading command's name was kept,
+    in ordinal order, so ordinal n names the n-th loaded dylib, and a name is never unknown; with
+    one, a name was kept at or before its ordinal's place;
   - S2 (PR-4c-2a): a session has at most one `artifacts.identity` entry. It is scoped to the
     install root, and is `Complete` only with a complete discovery and facts for every slice of
     the install's ELF and Mach-O files, none of them a Mach-O, and none a Go ELF without section
@@ -216,7 +221,9 @@ The rule then yields an open question at most.
     a value that is not a `Low`, and a `Set` has 2 to 4 members, none a `Set` or `Unknown`. The
     values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,
     with the values nested in each;
-  - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF facts.
+  - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF or
+    Mach-O facts. On a Mach-O slice, the import's library must be looked up (PR-4c-3b): bound to
+    `/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object file's.
 
   C1 and C4 are about a binary inspection. Outside one, code facts are the M1 analyzer's (plan
   §4.6.5), which the golden install examples carry.
@@ -594,12 +601,14 @@ is a gap, never dropped.
 import. This holds with or without code analysis, and for `inspect ollama --install-dir` too.
 - `feature`: the capability's key (table below);
 - `signal`: `Import`;
-- `value`: the import's name. The match is exact, and the import's version is not part of it;
+- `value`: the import's name, as the file has it. The match is exact (a Mach-O name without one
+  leading `_`), and the import's version is not part of it;
 - `at`: `Symbol(<name>)`.
 
 A hint says that the file imports the function. It never says that the function is called: that
 is a call site (C). When `binary_imports` cut the import list short, the hints are as short as the
-list. A Mach-O slice has no hints yet.
+list. A Mach-O slice's hints come only from its imports bound to libSystem, found by flat
+lookup, or an object file's (PR-4c-3b).
 
 | Key | Imports |
 |---|---|
@@ -803,16 +812,17 @@ A field added after sessions without it were written is optional on read, so tho
 | `binaries` | PR-4b-1 | `[]` (no binary parsed) |
 | `request.code` | PR-5a | `false` (no code analyzed) |
 | `binaries[].container.Elf.returns` | PR-4c-2b | `[]` (no returned value read) |
+| `binaries[].container.MachO.imports` | PR-4c-3b | `[]` (no import read) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
-`reference_matches`, `binaries`, and an ELF's `returns` are the exceptions to "always writes it":
-SIGIL writes them only when they have entries, so a session without `--install-dir` keeps its
-bytes, and an earlier SIGIL still reads it.
+`reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` are the exceptions to
+"always writes it": SIGIL writes them only when they have entries, so a session without
+`--install-dir` keeps its bytes, and an earlier SIGIL still reads it.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, and one from before PR-4c-2b a session with an ELF's `returns`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet
