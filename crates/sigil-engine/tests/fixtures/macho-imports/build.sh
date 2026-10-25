@@ -23,8 +23,11 @@ trap 'exit 1' HUP INT TERM
 
 fail() { echo "build.sh: $*" >&2; exit 1; }
 
-for tool in clang ld64.lld llvm-objdump; do
-  v=$("$tool" --version | sed -n '1s/.* \([0-9][0-9.]*\).*/\1/p') || fail "$tool --version failed"
+# Each tool's version: the first dotted number of the first line that has one (llvm-lipo and
+# llvm-nm print their name first).
+for tool in clang ld64.lld llvm-lipo llvm-otool llvm-objdump llvm-nm; do
+  "$tool" --version > "$tmp/version" || fail "$tool --version failed"
+  v=$(sed -n '/[0-9]\.[0-9]/{s/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9.]*\).*/\1/p;q;}' "$tmp/version")
   [ "$v" = 21.1.8 ] || fail "needs LLVM 21.1.8, found $tool ${v:-unknown}"
 done
 

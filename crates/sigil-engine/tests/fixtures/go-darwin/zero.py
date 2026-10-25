@@ -16,6 +16,8 @@ for _ in range(ncmds):
     # LC_SEGMENT_64: segname at 8, fileoff and filesize at 40.
     if cmd == 0x19 and data[at + 8:at + 24].rstrip(b'\0') == b'__LINKEDIT':
         fileoff, filesize = struct.unpack_from('<QQ', data, at + 40)
+        if fileoff + filesize > len(data):
+            raise SystemExit('zero.py: __LINKEDIT past the file')
         keep.append((fileoff, fileoff + filesize))
     at += size
 if len(keep) != 2:
