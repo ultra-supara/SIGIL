@@ -91,14 +91,13 @@ with `component: <component> (<status>)`, the status in words, for example
 ## Capabilities and code (`--code`)
 
 **Capability hints.** A binary inspection records the capability imports of each ELF and Mach-O
-slice: 28
-libc/POSIX functions in 7 groups. Each is a feature hint in the session (its `feature`, `signal:
-Import`, and the import's name as `value`), with or without `--code`. `inspect ollama
+slice: 28 libc/POSIX functions in 7 groups. Each is a feature hint in the session (its `feature`,
+`signal: Import`, and the import's name as `value`), with or without `--code`. `inspect ollama
 --install-dir` records them too ([runtime artifacts](runtime-artifacts.md#binaries)). A hint is
-import-level evidence: the file asks its loader (or, for a `.o`, its linker) for the function.
-It is not proof that the code calls it. A missing hint is not proof that the code cannot: a
-function linked statically into the file, one looked up at run time, and a raw system call are
-not imports.
+import-level evidence: the file asks its loader (or, for a `.o`, its linker) for the function. It
+is not proof that the code calls it. A missing hint is not proof that the code cannot: a function
+linked statically into the file, one looked up at run time, and a raw system call are not
+imports.
 
 | Capability | Imports |
 |---|---|
@@ -113,10 +112,11 @@ not imports.
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
 imports kept within `binary_imports` give hints: when a file has more, the report says that the
 capability imports past the cut are not known (below). A Mach-O import is matched by its name with
-one leading `_` stripped (`_connect` is `connect`), and only when it is bound to
-`/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object file's: `_connect` from another
-dylib is that dylib's function, not POSIX `connect`. Its hint's value is the name as the file has
-it (`_connect`) ([below](#mach-o-imports)).
+one leading `_` stripped (`_connect` is `connect`), and a name without a leading `_` is never
+looked up. It is matched only when it is bound to `/usr/lib/libSystem.B.dylib`, found by flat
+lookup, or an object file's: `_connect` from another dylib is that dylib's function, not POSIX
+`connect`. Its hint's value is the name as the file has it (`_connect`)
+([below](#mach-o-imports)).
 
 **`--code`** also finds where each capability import is called directly, and records each call
 site:
@@ -229,14 +229,15 @@ to `/usr/lib/libSystem.B.dylib`, the ones found by flat lookup, and an object fi
 names with one leading `_` stripped. In the Markdown, a Mach-O's facts table gains an
 `Imports (dyld)` row (`Undefined symbols (link time)` for an object file), followed by the
 imports, each with its library: the dylib's name, `self`, `main executable`, `flat lookup`,
-`weak lookup`, or `ordinal <n>` when the dylib's name was not read.
+`weak lookup`, or `ordinal <n>` when the dylib's name was not kept (not read, or over the limit of
+names).
 
 **Presence, never use.** As for ELF, an import says that the file asks for the function, not that
 it calls it. A Go executable for darwin binds the libSystem functions its runtime and standard
 library use, whatever the program does (measured with Go 1.25.6, darwin/arm64, without cgo; Go's
 linker writes bind opcodes):
-- a program that only prints imports `_execve`, `_open`, `_read`, and `_write`: every Go darwin
-  executable shows `posix.process_spawn`, `posix.file_read`, and `posix.file_write`;
+- a program that only prints imports, among the capability functions, `_execve`, `_open`,
+  `_read`, and `_write`: every Go darwin executable shows `posix.process_spawn`, `posix.file_read`, and `posix.file_write`;
 - one that runs a command through `os/exec` also imports `_fork` and `_ptrace` (`syscall` can
   trace the child), so it shows `posix.anti_debug`;
 - one that dials through `net` imports `_connect`, `_socket`, and `_getaddrinfo`.
@@ -244,14 +245,17 @@ linker writes bind opcodes):
 A missing hint is never absence: a function linked statically into the file, one looked up at run
 time, and a system call made without libSystem are not imports. The fixtures are
 `tests/fixtures/macho-imports/` (a C program linked by `ld64.lld` for x86_64, with bind opcodes,
-and for arm64, with chained fixups, and its object file) and `tests/fixtures/go-darwin/` (the 3a
-Go program, built for darwin/arm64).
+and for arm64, with chained fixups, and its object file) and `tests/fixtures/go-darwin/` (the PR-4c-3a
+Go program of `tests/fixtures/go-capabilities/`, built for darwin/arm64).
 
 What is not read is a `binary.container` gap (`imports: …`): both dyld commands, or two of one;
-neither while a dylib is loaded (the `LC_DYSYMTAB` binding of macOS 10.5 and earlier is not read);
-a blob or stream out of the file; a chained-fixups format SIGIL does not read, or a compressed
-symbol table; an unknown opcode or a malformed one; an ordinal past the dylibs, which binds nowhere
-(dyld refuses the image); and the import limits of ELF (`binary_imports`, 65,536 bytes per name).
+neither while a dylib is loaded (the `LC_DYSYMTAB` binding of macOS 10.5 and earlier is not read;
+claimed only when every load command was read whole); a blob or stream out of the file; a
+chained-fixups format SIGIL does not read, or a compressed symbol table; an unknown opcode or a
+malformed one; an ordinal past the dylibs, which binds nowhere (dyld refuses the image); an unknown
+special ordinal (likewise); more than 64 MiB of names scanned in chained imports or an object
+file's strings, or bound by bind opcodes (a bind that repeats the last one costs nothing); and the
+import limits of ELF (`binary_imports`, 65,536 bytes per name).
 The list is in [runtime artifacts](runtime-artifacts.md#binaries).
 
 ## Signatures
