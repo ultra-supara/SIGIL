@@ -357,8 +357,8 @@ fn record_name(
 }
 
 /// The 32-bit word at `at` of `command` (a load command, or an nlist entry), at least `at + 4`
-/// bytes long.
-/// The slice is four bytes long, so the conversion never fails: the default is never taken.
+/// bytes long. The slice is four bytes long, so the conversion never fails: the default is never
+/// taken.
 fn word_at(command: &[u8], at: usize, order: ByteOrder) -> u32 {
     let bytes: [u8; 4] = command[at..at + 4].try_into().unwrap_or_default();
     match order {
@@ -598,16 +598,18 @@ fn parse_commands<R: object::read::ReadCacheOps>(
     (facts, gaps, found)
 }
 
-/// The slice at `base`, `size` bytes, with at most `import_limit` imports (`binary_imports`).
+/// The slice at `base`, `size` bytes, with at most `import_limit` imports (`binary_imports`), and
+/// the file's names budget, `names` ([`imports::MAX_NAME_SCAN`] for the whole file).
 fn parse_thin<R: object::read::ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,
     size: u64,
     import_limit: u64,
+    names: &mut u64,
 ) -> Result<(Arch, Parsed), String> {
     let header = parse_header(data, base, size)?;
     let (mut facts, mut gaps, found) = parse_commands(data, base, size, &header);
-    let (kept, import_gaps) = imports::read(data, base, size, &header, &found, import_limit);
+    let (kept, import_gaps) = imports::read(data, base, size, &header, &found, import_limit, names);
     facts.imports = kept;
     gaps.extend(import_gaps);
     gaps.sort();
@@ -858,8 +860,15 @@ fn fat_slice_facts<R: ReadCacheOps>(
     data: &Bounded<R>,
     descriptor: &FatSlice,
     import_limit: u64,
+    names: &mut u64,
 ) -> Result<Parsed, String> {
-    let (_, mut parsed) = parse_thin(data, descriptor.offset, descriptor.size, import_limit)?;
+    let (_, mut parsed) = parse_thin(
+        data,
+        descriptor.offset,
+        descriptor.size,
+        import_limit,
+        names,
+    )?;
     if let ContainerFacts::MachO(facts) = &mut parsed.container {
         facts.fat_cpu_type = Some(descriptor.cpu_type);
         facts.fat_cpu_subtype = Some(descriptor.cpu_subtype);
@@ -904,9 +913,13 @@ pub(super) fn parse_artifact(
             return None;
         }
     }
+    // The names' budget is the file's: every slice of a fat file draws on it.
+    let mut names = imports::MAX_NAME_SCAN;
     match format {
         Format::MachO => {
-            if let Ok((slice_arch, parsed)) = parse_thin(&data, 0, size, budgets.imports) {
+            if let Ok((slice_arch, parsed)) =
+                parse_thin(&data, 0, size, budgets.imports, &mut names)
+            {
                 slices.push(parsed_slice(
                     0,
                     size,
@@ -928,7 +941,7 @@ pub(super) fn parse_artifact(
                         continue;
                     }
                 };
-                match fat_slice_facts(&data, &descriptor, budgets.imports) {
+                match fat_slice_facts(&data, &descriptor, budgets.imports, &mut names) {
                     Ok(parsed) => slices.push(parsed_slice(
                         descriptor.offset,
                         descriptor.size,

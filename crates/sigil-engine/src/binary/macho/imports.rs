@@ -14,12 +14,12 @@ use super::{range, ByteOrder, Header};
 use crate::binary::elf::MAX_IMPORT_NAME;
 use crate::binary::read::{Bounded, ENTRY_OVERHEAD};
 
-/// The most bytes scanned for the names of a slice's chained imports or of an object file's
-/// symbols, or bound by its bind opcodes (Task 2 review): the names may all point at the same
-/// bytes, and a stream may bind one name any number of times, so each scan stops at its NUL or one
-/// byte past [`MAX_IMPORT_NAME`], each bind that is not a repeat costs its name's length and
-/// [`ENTRY_OVERHEAD`], and all of them stop at this.
-const MAX_NAME_SCAN: u64 = 64 << 20;
+/// The most bytes scanned for the names of a file's chained imports or object symbols, or bound
+/// by its bind opcodes, every slice of a fat file together (Task 2 and final reviews): the names
+/// may all point at the same bytes, and a stream may bind one name any number of times, so each
+/// scan stops at its NUL or one byte past [`MAX_IMPORT_NAME`], each bind that is not a repeat
+/// costs its name's length and [`ENTRY_OVERHEAD`], and all of them stop at this.
+pub(super) const MAX_NAME_SCAN: u64 = 64 << 20;
 
 /// What the load-command walk keeps for the imports.
 #[derive(Debug, Default)]
@@ -43,6 +43,7 @@ pub(super) struct Commands {
 /// The imports of the slice `header` (base `base`, `size` bytes) from its `commands`, at most
 /// `limit` of them (the smallest, in sorted order), and their gaps, sorted. No loader reads an
 /// object file (`MH_OBJECT`), so its dyld commands are not read: its imports are its symbols.
+/// `names` is what is left of the file's [`MAX_NAME_SCAN`], which the slices share.
 pub(super) fn read<R: ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,
@@ -50,8 +51,9 @@ pub(super) fn read<R: ReadCacheOps>(
     header: &Header,
     commands: &Commands,
     limit: u64,
+    names: &mut u64,
 ) -> (Vec<MachOImport>, Vec<String>) {
-    let mut out = Imports::new(&commands.dylibs, limit);
+    let mut out = Imports::new(&commands.dylibs, limit, names);
     if header.file_type == MH_OBJECT {
         match commands.symtab.as_slice() {
             [] => {}
@@ -87,20 +89,20 @@ struct Imports<'c> {
     /// Whether an import was dropped for `binary_imports`.
     over: bool,
     gaps: BTreeSet<String>,
-    /// The bytes [`Imports::name`] may still scan, and the bind opcodes still bind, of
-    /// [`MAX_NAME_SCAN`].
-    scan: u64,
+    /// What is left of the file's [`MAX_NAME_SCAN`]: the bytes [`Imports::name`] may still scan,
+    /// and the bind opcodes still bind.
+    scan: &'c mut u64,
 }
 
 impl<'c> Imports<'c> {
-    fn new(dylibs: &'c [Option<UntrustedText>], limit: u64) -> Imports<'c> {
+    fn new(dylibs: &'c [Option<UntrustedText>], limit: u64, scan: &'c mut u64) -> Imports<'c> {
         Imports {
             dylibs,
             limit,
             kept: BTreeSet::new(),
             over: false,
             gaps: BTreeSet::new(),
-            scan: MAX_NAME_SCAN,
+            scan,
         }
     }
 
@@ -112,7 +114,7 @@ impl<'c> Imports<'c> {
     /// there.
     fn spend(&mut self, bytes: u64) -> bool {
         let left = self.scan.checked_sub(bytes);
-        self.scan = left.unwrap_or(0);
+        *self.scan = left.unwrap_or(0);
         left.is_some()
     }
 
@@ -129,9 +131,9 @@ impl<'c> Imports<'c> {
             return Name::Missing(outside);
         };
         let window = rest.len().min(MAX_IMPORT_NAME + 1);
-        let allowed = window.min(usize::try_from(self.scan).unwrap_or(usize::MAX));
+        let allowed = window.min(usize::try_from(*self.scan).unwrap_or(usize::MAX));
         let found = rest[..allowed].iter().position(|b| *b == 0);
-        self.scan -= found.map_or(allowed, |end| end + 1) as u64;
+        *self.scan -= found.map_or(allowed, |end| end + 1) as u64;
         match found {
             Some(end) => Name::Read(&rest[..end]),
             None if allowed < window => Name::Exhausted,
@@ -429,9 +431,8 @@ fn opcodes<R: ReadCacheOps>(
 /// and LLVM read them (Task 2 review). A bind that repeats the last one (the same
 /// `SET_SYMBOL_TRAILING_FLAGS_IMM`, by its place in the stream, through the same ordinal) is no
 /// new import and costs nothing; places are compared, not bytes, so each check is constant. Any
-/// other costs its name's length and
-/// [`ENTRY_OVERHEAD`] of [`MAX_NAME_SCAN`]. A stream stops at its first error; the binds before
-/// it are kept.
+/// other costs its name's length and [`ENTRY_OVERHEAD`] of [`MAX_NAME_SCAN`]. A stream stops at
+/// its first error; the binds before it are kept.
 fn binds(stream: &[u8], lazy: bool, out: &mut Imports<'_>) -> Result<(), String> {
     let mut at = 0usize;
     let mut ordinal: i64 = 0;

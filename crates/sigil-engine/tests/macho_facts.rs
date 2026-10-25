@@ -603,8 +603,9 @@ fn a_linked_image_s_imports_come_from_one_dyld_command() {
     assert_eq!(imports_of(&object), (vec![], vec![]));
 }
 
-#[test]
-fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
+/// An executable whose first dylib-loading command has an unreadable name (a string offset past
+/// its command), then libSystem, and chained imports of `_a`, `_b`, `_past`, and `_special`.
+fn unread_dylib_executable() -> Vec<u8> {
     let blob = chained_fixups(
         1,
         &[
@@ -616,7 +617,7 @@ fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
     );
     let mut unread = common::macho::dylib_command(0x0c, "/usr/lib/libz.1.dylib", false, 8);
     unread[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
-    let bytes = common::macho::with_tail(
+    common::macho::with_tail(
         true,
         false,
         common::macho::X86_64,
@@ -629,7 +630,12 @@ fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
             ]
         },
         &blob,
-    );
+    )
+}
+
+#[test]
+fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
+    let bytes = unread_dylib_executable();
     let (imports, gaps) = imports_of(&bytes);
     assert_eq!(
         imports,
@@ -652,6 +658,33 @@ fn an_ordinal_past_the_dylibs_binds_nowhere_and_a_dylib_not_read_has_no_name() {
             "imports: an unknown special ordinal",
             "load dylib: string offset outside load command",
         ]
+    );
+    assert!(
+        gaps.iter()
+            .any(|g| g.starts_with(sigil_model::LOAD_DYLIB_GAP_PREFIX)),
+        "{gaps:?}"
+    );
+}
+
+/// B12 with a dylib whose name was not read, end to end: the session validates.
+#[test]
+fn a_session_with_a_dylib_not_read_validates() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("unread-dylib");
+    std::fs::write(&path, unread_dylib_executable()).unwrap();
+    let s = binary_inspection(&path);
+    assert_eq!(s.validate(), Ok(()));
+    let (imports, _, _) = slice_of(&s, sigil_model::Arch::X86_64);
+    assert_eq!(
+        imports[0],
+        import(
+            "_a",
+            MachOLibrary::Dylib {
+                ordinal: 1,
+                name: None
+            },
+            false
+        )
     );
 }
 
@@ -1471,5 +1504,43 @@ fn a_go_darwin_executable_s_hints_are_its_runtime_s_capability_imports() {
             ("posix.process_spawn", "_execve"),
             ("posix.process_spawn", "_fork"),
         ])
+    );
+}
+
+/// Final review: the names' 64 MiB are the file's. Two slices that each scan about 36 MB of one
+/// shared name: the first reads its names, and the second runs out.
+#[test]
+fn a_fat_file_s_slices_share_the_names_budget() {
+    let name = format!("_{}", "a".repeat(59_999));
+    let count = 600u32;
+    let mut blob = vec![];
+    for value in [0, 28, 32, 32 + 4 * count, count, 1, 0] {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob.resize(32, 0);
+    for _ in 0..count {
+        blob.extend_from_slice(&1u32.to_le_bytes());
+    }
+    blob.extend_from_slice(name.as_bytes());
+    blob.push(0);
+    let thin = chained_executable(&blob);
+    let mut arm = thin.clone();
+    arm[4..8].copy_from_slice(&(common::macho::AARCH64 as u32).to_le_bytes());
+    let fat = common::macho::fat32(&[
+        (thin, common::macho::X86_64, 0),
+        (arm, common::macho::AARCH64, 0),
+    ]);
+    let parsed = parse(&fat).unwrap();
+    let kept = vec![import(&name, dylib(1, LIBSYSTEM), false)];
+    assert_eq!(macho_facts(&parsed, 0).imports, kept);
+    assert!(
+        parsed.slices[0].gaps.is_empty(),
+        "{:?}",
+        parsed.slices[0].gaps
+    );
+    assert_eq!(macho_facts(&parsed, 1).imports, kept);
+    assert_eq!(
+        parsed.slices[1].gaps,
+        ["imports: chained fixups: over 67108864 bytes of names scanned"]
     );
 }

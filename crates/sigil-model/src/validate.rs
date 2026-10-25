@@ -1788,7 +1788,7 @@ impl<'a> Validator<'a> {
                         .any(|i| (i.library == MachOLibrary::Unbound) != object)
                     {
                         why.push(
-                            "an import is unbound exactly in an object file (MH_OBJECT)"
+                            "an import is Unbound outside an object file (MH_OBJECT), or bound inside one"
                                 .to_string(),
                         );
                     }

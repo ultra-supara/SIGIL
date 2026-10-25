@@ -641,7 +641,7 @@ fn b4_macho_imports_are_sorted_unique_and_within_the_budget() {
 
 #[test]
 fn b12_an_object_s_imports_are_unbound_and_only_its() {
-    let complaint = "an import is unbound exactly in an object file";
+    let complaint = "an import is Unbound outside an object file";
     let mut s = macho_base();
     macho(&mut s).imports[0].library = MachOLibrary::Unbound;
     rejected_for(&s, complaint);
