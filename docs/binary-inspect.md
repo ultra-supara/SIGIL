@@ -91,13 +91,13 @@ with `component: <component> (<status>)`, the status in words, for example
 ## Capabilities and code (`--code`)
 
 **Capability hints.** A binary inspection records the capability imports of each ELF and Mach-O
-slice: 28 libc/POSIX functions in 7 groups. Each is a feature hint in the session (its `feature`,
-`signal: Import`, and the import's name as `value`), with or without `--code`. `inspect ollama
---install-dir` records them too ([runtime artifacts](runtime-artifacts.md#binaries)). A hint is
-import-level evidence: the file asks its loader (or, for a `.o`, its linker) for the function. It
-is not proof that the code calls it. A missing hint is not proof that the code cannot: a function
-linked statically into the file, one looked up at run time, and a raw system call are not
-imports.
+slice: 28 libc/POSIX functions in 7 groups, and 88 libstdc++ names in 2 groups (below). Each is a
+feature hint in the session (its `feature`, `signal: Import`, and the import's name as `value`),
+with or without `--code`. `inspect ollama --install-dir` records them too
+([runtime artifacts](runtime-artifacts.md#binaries)). A hint is import-level evidence: the file
+asks its loader (or, for a `.o`, its linker) for the function. It is not proof that the code calls
+it. A missing hint is not proof that the code cannot: a function linked statically into the file,
+one looked up at run time, and a raw system call are not imports.
 
 | Capability | Imports |
 |---|---|
@@ -108,6 +108,12 @@ imports.
 | `posix.dynamic_loading` | `dlopen`, `dlsym` |
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
+| `cxx.file_write` | libstdc++'s `std::filesystem::` `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open` |
+| `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name, and its `open` |
+
+Each entry of `signatures/capabilities.toml` names its source: POSIX.1-2024 for the libc names
+(Linux and macOS `ptrace(2)` for `ptrace`), and the libstdc++ version and demangled form for a
+C++ name.
 
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
 imports kept within `binary_imports` give hints: when a file has more, the report says that the
@@ -117,6 +123,38 @@ looked up. It is matched only when it is bound to `/usr/lib/libSystem.B.dylib`, 
 lookup, or an object file's: `_connect` from another dylib is that dylib's function, not POSIX
 `connect`. Its hint's value is the name as the file has it (`_connect`)
 ([below](#mach-o-imports)).
+
+**C++ names.** The `cxx.*` names (PR-4c-3c) are libstdc++'s exact mangled names, as
+`libstdc++.so.6.0.35` exports them, matched without demangling:
+`_ZNSt10filesystem6removeERKNS_7__cxx114pathE` is
+`std::filesystem::remove(std::filesystem::__cxx11::path const&)`. Each function is listed for both
+path ABIs (the `__cxx11` path and the old one), with and without `std::error_code&`. Each stream
+is listed for `char` and `wchar_t`, with a `const char*`, the `__cxx11` string, or the old string,
+as its complete-object (C1) and base-object (C2) constructor and as `open`. A name has one
+feature: `copy` and `copy_file` read too, but writing is what they are for. An `ifstream`'s mode
+always includes `in`, and an `ofstream`'s `out`, so they are `cxx.file_read` and
+`cxx.file_write`, even when the mode allows the other too. `cxx.file_write` is broader than
+`posix.file_write`: it includes creating directories and links and resizing a file, which v0.1's
+28 names do not (there is no `mkdir`, `rmdir`, `symlink`, `link`, or `truncate` among them).
+
+Some names stay unmapped:
+- `std::basic_fstream`'s constructors and `open`, and `std::basic_filebuf::open`: the mode decides
+  read or write;
+- `permissions` and `last_write_time`: metadata, not a file's contents or name (`posix.*` has no
+  `chmod` either);
+- `status` and the directory iterators: they change nothing (`exists` is inline over `status`,
+  so it is never an import);
+- the streams' default and move constructors: they open no file;
+- libc++'s names (`std::__1`), and other C++ libraries.
+
+A missing `cxx.*` hint is not absence. A stream constructor that the compiler inlines leaves only
+`basic_filebuf::open` among the imports: g++ 15.3 at `-O2` does this for a class derived from
+`std::ifstream`, and for an `std::ofstream` on the old string. A statically linked libstdc++
+(`-static-libstdc++`, GCC 8's `libstdc++fs.a`, `std::experimental::filesystem`) leaves none of
+these names; such a file imports `unlink`, `rename`, or `open` instead, which `posix.*` maps. On a
+Mach-O slice the names are looked up by the same rules as the others, so in practice only by flat
+lookup or in an object file: a libstdc++ dylib is not libSystem. The fixture is
+`tests/fixtures/cxx-capabilities/`, a g++ 15.3.0 program with both ABIs and a C2 call.
 
 **`--code`** also finds where each capability import is called directly, and records each call
 site:
@@ -227,9 +265,10 @@ A library is a dylib, by its ordinal: the dylib-loading commands, in order. Or i
 the main executable, flat lookup (every loaded image, in order), weak lookup, or, in an object
 file, the linker. The [capability table](#capabilities-and-code---code) looks up the imports bound
 to `/usr/lib/libSystem.B.dylib`, the ones found by flat lookup, and an object file's, by their
-names with one leading `_` stripped. In the Markdown, a Mach-O's facts table gains an
-`Imports (dyld)` row (`Undefined symbols (link time)` for an object file), followed by the
-imports, each with its library: the dylib's name, `self`, `main executable`, `flat lookup`,
+names with one leading `_` stripped. This holds for the `cxx.*` names too: libc++'s names are not
+in the table, and a libstdc++ dylib is not looked up. In the Markdown, a Mach-O's facts table
+gains an `Imports (dyld)` row (`Undefined symbols (link time)` for an object file), followed by
+the imports, each with its library: the dylib's name, `self`, `main executable`, `flat lookup`,
 `weak lookup`, or `ordinal <n>` when the dylib's name was not kept (not read, or over the limit of
 names).
 

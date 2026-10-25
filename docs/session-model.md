@@ -602,7 +602,7 @@ import. This holds with or without code analysis, and for `inspect ollama --inst
 - `feature`: the capability's key (table below);
 - `signal`: `Import`;
 - `value`: the import's name, as the file has it. The match is exact (a Mach-O name without one
-  leading `_`), and the import's version is not part of it;
+  leading `_`; a C++ name mangled, never demangled), and the import's version is not part of it;
 - `at`: `Symbol(<name>)`.
 
 A hint says that the file imports the function. It never says that the function is called: that
@@ -619,6 +619,12 @@ lookup, or an object file's (PR-4c-3b).
 | `posix.dynamic_loading` | `dlopen`, `dlsym` |
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
+| `cxx.file_write` | libstdc++'s `std::filesystem` operations that create, remove, rename, copy, or resize, and `std::basic_ofstream`'s constructors that take a file name and its `open`: 70 mangled names (PR-4c-3c) |
+| `cxx.file_read` | `std::basic_ifstream`'s constructors that take a file name and its `open`: 18 mangled names (PR-4c-3c) |
+
+The names and their sources are in `crates/sigil-engine/signatures/capabilities.toml`, and
+[binary inspection](binary-inspect.md#capabilities-and-code---code) says which C++ names stay
+unmapped and why.
 
 **Code facts (C).** An analyzed input with at least one call site has one `CodeFacts`, for its
 slice. Code analysis records functions and call sites only. `predicate_checks`, `close_checks`,

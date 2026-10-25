@@ -309,10 +309,11 @@ slice in the session, read from the file's own bytes. They are observations, not
 - **Capability hints.** Each ELF slice, and each Mach-O slice (its imports from libSystem, by flat
   lookup, or an object file's, each by its name without one leading `_`; PR-4c-3b), also gets one
   feature hint per capability import: `posix.network` for `connect`, `posix.dynamic_loading` for
-  `dlopen` or `dlsym`, and so on (the 28 names are listed in
-  [binary inspection](binary-inspect.md#capabilities-and-code---code)). A hint says that the file
-  imports the function, never that its code calls it, and `inspect ollama` analyzes no code. The
-  report's **Binaries** table shows them in the column
+  `dlopen` or `dlsym`, `cxx.file_write` for libstdc++'s `std::filesystem::remove`, and so on (the
+  names are listed in [binary inspection](binary-inspect.md#capabilities-and-code---code)). In
+  the official v0.30.6 bundle, `libllama-common` and `libllama-server-impl` have `cxx.*` hints.
+  A hint says that the file imports the function, never that its code calls it, and
+  `inspect ollama` analyzes no code. The report's **Binaries** table shows them in the column
   **Capabilities (imports)**: the slice's distinct capability keys, in key order, or `-`. When
   the slice's import list was cut short at `binary_imports`, the keys of the imports past the cut
   are not known, and the cell says so: `- (imports cut short)`, or the keys followed by
