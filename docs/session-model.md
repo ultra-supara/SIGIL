@@ -142,7 +142,7 @@ The rule then yields an open question at most.
     unless the slice has the parser's gap for it;
   - B3: the slice's dependency `Declares` relations are unique, and exactly its distinct ELF
     NEEDED or Mach-O loaded-dylib names;
-  - B4: imports are sorted, unique, and within `binary_imports`;
+  - B4: imports are sorted, unique, and within `binary_imports`, an ELF's and a Mach-O's;
   - B5: a data value that is `Unknown` has its gap;
   - B6: a Go version is not empty;
   - B7: `artifacts.container` is `Complete` only with a complete discovery, facts for every ELF
@@ -152,6 +152,12 @@ The rule then yields an open question at most.
     its symbol and the address it was read at, or an `Unknown` value with its symbol alone, never
     a number. A relocatable object has none. An `Unknown` one's gap is in the identity coverage
     (S1, S2), not in the record;
+  - B12 (PR-4c-3b): a Mach-O object file's (`MH_OBJECT`) imports are `Unbound`, left for the
+    linker, and no other slice's are. A `Dylib` import's ordinal is from 1, and its name is its
+    ordinal's dylib: without a `load dylib: ` gap, every dylib-loading command's name was kept,
+    in ordinal order, so ordinal n names the n-th loaded dylib, and a name is never unknown; with
+    one, a name was kept at or before its ordinal's place. A Mach-O's `imports` field is optional
+    on read and written only when non-empty, so a session written before PR-4c-3b keeps its bytes;
   - S2 (PR-4c-2a): a session has at most one `artifacts.identity` entry. It is scoped to the
     install root, and is `Complete` only with a complete discovery and facts for every slice of
     the install's ELF and Mach-O files, none of them a Mach-O, and none a Go ELF without section
@@ -216,7 +222,9 @@ The rule then yields an open question at most.
     a value that is not a `Low`, and a `Set` has 2 to 4 members, none a `Set` or `Unknown`. The
     values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,
     with the values nested in each;
-  - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF facts.
+  - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF or
+    Mach-O facts. A Mach-O import is one whose library is looked up (PR-4c-3b): bound to
+    `/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object file's.
 
   C1 and C4 are about a binary inspection. Outside one, code facts are the M1 analyzer's (plan
   §4.6.5), which the golden install examples carry.

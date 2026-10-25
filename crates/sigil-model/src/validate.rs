@@ -244,7 +244,7 @@ pub enum ValidationError {
         why: &'static str,
     },
     /// A `BinaryFacts` record, a `Declares` relation, or `artifacts.identity` disagrees with the
-    /// session (B1–B8, B11; S2, PR-4c-2a).
+    /// session (B1–B8, B11, B12; S2, PR-4c-2a).
     Binary { slice: String, why: String },
     /// A binary inspection's input, its root, its `binary.container`, or its `binary.identity`
     /// disagrees with the session (B9, B10; PR-4b-2a; S1, PR-4c-2a).
@@ -1531,13 +1531,13 @@ impl<'a> Validator<'a> {
         }
     }
 
-    /// B1–B8 (PR-4b-1) and B11 (PR-4c-2b): binary facts against the session. The facts
-    /// themselves are the parser's observations: `validate` checks that the stored results agree
-    /// with each other, not that the gaps are right (that is the parser's contract).
+    /// B1–B8 (PR-4b-1), B11 (PR-4c-2b), and B12 (PR-4c-3b): binary facts against the session.
+    /// The facts themselves are the parser's observations: `validate` checks that the stored
+    /// results agree with each other, not that the gaps are right (that is the parser's contract).
     fn binaries(&mut self) {
         use crate::binary::{
-            macho_architecture, ContainerFacts, DataValue, ARTIFACTS_CONTAINER,
-            FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP,
+            macho_architecture, ContainerFacts, DataValue, MachOLibrary, ARTIFACTS_CONTAINER,
+            FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP, LOAD_DYLIB_GAP_PREFIX, MH_OBJECT,
         };
         use crate::relation::{DeclKind, Relation};
         let s = self.s;
@@ -1771,6 +1771,51 @@ impl<'a> Validator<'a> {
                         )
                     }) {
                         why.push("a dependency relation has the wrong Mach-O kind".to_string());
+                    }
+                    // B4
+                    if macho.imports.windows(2).any(|w| w[0] >= w[1]) {
+                        why.push("imports are not sorted and unique".to_string());
+                    }
+                    if limit.is_some_and(|l| macho.imports.len() as u64 > l) {
+                        why.push("more imports than binary_imports".to_string());
+                    }
+                    // B12 (PR-4c-3b): an object file's imports are left for the linker, and only
+                    // its; a dylib's ordinal is from 1, and its name is its ordinal's.
+                    let object = macho.file_type == MH_OBJECT;
+                    if macho
+                        .imports
+                        .iter()
+                        .any(|i| (i.library == MachOLibrary::Unbound) != object)
+                    {
+                        why.push(
+                            "an import is unbound exactly in an object file (MH_OBJECT)"
+                                .to_string(),
+                        );
+                    }
+                    // Without a `load dylib: ` gap, every name was kept, in ordinal order: ordinal n
+                    // is the n-th name, and none is unknown. With one, a name was kept at or
+                    // before its ordinal's place (PR-4c-3b plan review P2).
+                    let all_kept = !facts
+                        .gaps
+                        .iter()
+                        .any(|g| g.starts_with(LOAD_DYLIB_GAP_PREFIX));
+                    let misplaced = |ordinal: u32, name: &Option<crate::text::UntrustedText>| {
+                        let at = ordinal as usize;
+                        match name {
+                            _ if at == 0 => true,
+                            Some(n) if all_kept => macho.load_dylibs.get(at - 1) != Some(n),
+                            Some(n) => !macho.load_dylibs.iter().take(at).any(|d| d == n),
+                            None => all_kept,
+                        }
+                    };
+                    if macho.imports.iter().any(|i| {
+                        matches!(&i.library, MachOLibrary::Dylib { ordinal, name }
+                            if misplaced(*ordinal, name))
+                    }) {
+                        why.push(
+                            "a dylib import's ordinal is 0, or its name is not its ordinal's dylib"
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -2091,6 +2136,10 @@ impl<'a> Validator<'a> {
     }
 
     /// C6 (PR-5a spec §5.2): an `Import` hint names an import of its slice, at `Symbol(value)`.
+    /// On a Mach-O slice (PR-4c-3b), the import is one whose library is looked up
+    /// ([`MachOLibrary::looked_up`]): libSystem, flat lookup, or an object file's.
+    ///
+    /// [`MachOLibrary::looked_up`]: crate::binary::MachOLibrary::looked_up
     fn import_hints(&mut self) {
         use crate::binary::ContainerFacts;
         use crate::hint::Signal;
@@ -2100,13 +2149,28 @@ impl<'a> Validator<'a> {
             if hint.at != Loc::Symbol(hint.value.clone()) {
                 self.code_error(&at, "an import hint's at must be Symbol(value)");
             }
-            let imported = s.binaries.iter().any(|b| {
-                b.slice == hint.subject
-                    && matches!(&b.container, ContainerFacts::Elf(elf)
-                        if elf.imports.iter().any(|i| i.name == hint.value))
-            });
+            let facts = s.binaries.iter().find(|b| b.slice == hint.subject);
+            let imported = match facts.map(|b| &b.container) {
+                Some(ContainerFacts::Elf(elf)) => elf.imports.iter().any(|i| i.name == hint.value),
+                Some(ContainerFacts::MachO(macho)) => {
+                    macho.imports.iter().any(|i| i.name == hint.value)
+                }
+                None => false,
+            };
+            let looked_up = match facts.map(|b| &b.container) {
+                Some(ContainerFacts::MachO(macho)) => macho
+                    .imports
+                    .iter()
+                    .any(|i| i.name == hint.value && i.library.looked_up()),
+                _ => true,
+            };
             if !imported {
                 self.code_error(&at, "the value is not an import of its slice");
+            } else if !looked_up {
+                self.code_error(
+                    &at,
+                    "the value is a Mach-O import not looked up (libSystem, flat lookup, or an object file's)",
+                );
             }
         }
     }

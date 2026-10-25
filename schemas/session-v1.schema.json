@@ -743,8 +743,41 @@
         "id_dylib": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
         "load_dylibs": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}},
         "rpaths": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}},
-        "dylinker": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]}
+        "dylinker": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
+        "imports": {"type": "array", "items": {"$ref": "#/$defs/MachOImport"}}
       }
+    },
+    "MachOImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "library", "weak"],
+      "properties": {
+        "name": {"$ref": "#/$defs/UntrustedText"},
+        "library": {"$ref": "#/$defs/MachOLibrary"},
+        "weak": {"type": "boolean"}
+      }
+    },
+    "MachOLibrary": {
+      "description": "Where a Mach-O import is looked up: a dylib by its library ordinal (from 1; name null when its command's name was not read), ordinal 0, -1, -2, or -3, or an object file's linker.",
+      "oneOf": [
+        {"type": "string", "enum": ["SelfImage", "MainExecutable", "FlatLookup", "WeakLookup", "Unbound"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["Dylib"],
+          "properties": {
+            "Dylib": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ordinal", "name"],
+              "properties": {
+                "ordinal": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+                "name": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]}
+              }
+            }
+          }
+        }
+      ]
     },
     "ElfFacts": {
       "type": "object",

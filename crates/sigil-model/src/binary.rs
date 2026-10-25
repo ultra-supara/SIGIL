@@ -26,7 +26,7 @@ pub const FAT_CPU_MISMATCH_GAP: &str = "fat slice: CPU type or subtype disagrees
 /// refuses to build such a file, and dyld loads only one of the two.
 pub const FAT_DUPLICATE_ARCH_GAP: &str = "fat header: an architecture is listed twice";
 
-/// The gap of an ELF slice with more imports than `binary_imports`, before its limit
+/// The gap of a slice with more imports than `binary_imports`, before its limit
 /// ([`imports_over_gap`]): only the first `binary_imports` imports, in sorted order, are kept.
 pub const IMPORTS_OVER_GAP: &str = "imports: over binary_imports";
 
@@ -112,11 +112,82 @@ pub struct MachOFacts {
     pub flags: u32,
     pub uuid: Option<String>,
     pub id_dylib: Option<UntrustedText>,
-    /// `LC_LOAD_*_DYLIB` names, in load-command order.
+    /// `LC_LOAD_*_DYLIB` names, in load-command order. A dylib-loading command whose name is not
+    /// kept has no entry, and its gap starts with [`LOAD_DYLIB_GAP_PREFIX`]: without one, the
+    /// list is in library-ordinal order (its n-th name is ordinal n's).
     pub load_dylibs: Vec<UntrustedText>,
     /// `LC_RPATH` values, in load-command order.
     pub rpaths: Vec<UntrustedText>,
     pub dylinker: Option<UntrustedText>,
+    /// What dyld binds (PR-4c-3b): the imports of `LC_DYLD_CHAINED_FIXUPS`, or the names of the
+    /// bind and lazy-bind opcodes of `LC_DYLD_INFO(_ONLY)`; for an object file (`MH_OBJECT`), the
+    /// undefined external symbols of `LC_SYMTAB`, left for the linker. Sorted by
+    /// `(name, library, weak)`, unique, at most `binary_imports`. Optional on read (empty when
+    /// missing); written only when non-empty, so facts without one keep their bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<MachOImport>,
+}
+
+/// The dylib whose names are the POSIX ones (PR-4c-3b): `libSystem`, which re-exports the C
+/// library and the system calls.
+pub const LIBSYSTEM: &str = "/usr/lib/libSystem.B.dylib";
+
+/// The start of a Mach-O slice's gap for a dylib-loading command whose name is not in
+/// `load_dylibs`: not read (`load dylib: <why>`, `load dylib: command is too short`), or over the
+/// limit of names (`load dylib: over 1024 names`). The command still takes its library ordinal.
+pub const LOAD_DYLIB_GAP_PREFIX: &str = "load dylib: ";
+
+/// The file type of a Mach-O object file (`MH_OBJECT`): no loader reads it.
+pub const MH_OBJECT: u32 = 1;
+
+/// A name a Mach-O slice imports (PR-4c-3b).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachOImport {
+    /// As the file has it, with its leading `_` (`_connect`).
+    pub name: UntrustedText,
+    pub library: MachOLibrary,
+    /// `weak_import` (chained fixups), `BIND_SYMBOL_FLAGS_WEAK_IMPORT` (bind opcodes), or
+    /// `N_WEAK_REF` (an object file's symbol).
+    pub weak: bool,
+}
+
+/// Where a Mach-O import is looked up: its library ordinal, or an object file's linker.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum MachOLibrary {
+    /// Library ordinal `ordinal` (from 1): the dylib of that dylib-loading command, counted in
+    /// load-command order. `name` is `None` when that command's name was not read (its gap is the
+    /// container's).
+    Dylib {
+        ordinal: u32,
+        name: Option<UntrustedText>,
+    },
+    /// Ordinal 0: this image.
+    SelfImage,
+    /// Ordinal -1: the main executable.
+    MainExecutable,
+    /// Ordinal -2: every loaded image, in load order.
+    FlatLookup,
+    /// Ordinal -3: a weak definition, coalesced by name.
+    WeakLookup,
+    /// An object file's undefined symbol: the linker resolves it.
+    Unbound,
+}
+
+impl MachOLibrary {
+    /// Whether an import of this library is looked up in the capability table (PR-4c-3b): one
+    /// bound to [`LIBSYSTEM`], one found by flat lookup, or an object file's. Another dylib's
+    /// `_connect` is that dylib's function, not POSIX `connect`.
+    pub fn looked_up(&self) -> bool {
+        match self {
+            MachOLibrary::Dylib {
+                name: Some(name), ..
+            } => name.as_bytes() == LIBSYSTEM.as_bytes(),
+            MachOLibrary::FlatLookup | MachOLibrary::Unbound => true,
+            _ => false,
+        }
+    }
 }
 
 /// ELF facts, from the program headers first (what the loader reads), then the sections.

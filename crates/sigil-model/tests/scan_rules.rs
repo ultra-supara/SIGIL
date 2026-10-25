@@ -76,6 +76,7 @@ fn macho() -> ContainerFacts {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     })
 }
 

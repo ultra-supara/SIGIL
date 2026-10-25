@@ -56,9 +56,10 @@ pub use artifact::{
 };
 pub use binary::{
     imports_over_gap, macho_architecture, BinaryFacts, ContainerFacts, DataSymbol, DataValue,
-    ElfFacts, ElfImport, FunctionReturn, GoBuildInfo, GoModule, GoSetting, MachOFacts,
-    ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY, DYNSYM_UNREAD_GAPS, FAT_CPU_MISMATCH_GAP,
-    FAT_DUPLICATE_ARCH_GAP, IMPORTS_OVER_GAP, SYMBOLS_NO_DYNSYM_GAP, SYMBOLS_NO_SECTIONS_GAP,
+    ElfFacts, ElfImport, FunctionReturn, GoBuildInfo, GoModule, GoSetting, MachOFacts, MachOImport,
+    MachOLibrary, ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY, DYNSYM_UNREAD_GAPS,
+    FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP, IMPORTS_OVER_GAP, LIBSYSTEM,
+    LOAD_DYLIB_GAP_PREFIX, MH_OBJECT, SYMBOLS_NO_DYNSYM_GAP, SYMBOLS_NO_SECTIONS_GAP,
     SYMBOLS_UNREADABLE_SECTIONS_GAP,
 };
 pub use binary_input::{

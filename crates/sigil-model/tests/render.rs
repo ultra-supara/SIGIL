@@ -1044,6 +1044,7 @@ fn a_macho_content_gets_no_capabilities() {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     });
     let md = render_session(&s);
     let section = binaries_section(&md);
@@ -1412,6 +1413,7 @@ fn a_macho_content_has_the_identity_rows_too() {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     });
     let md = render_session(&s);
     let section = binaries_section(&md);

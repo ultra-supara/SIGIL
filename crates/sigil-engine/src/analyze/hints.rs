@@ -189,6 +189,7 @@ mod tests {
                 load_dylibs: vec![UntrustedText::new("_connect")],
                 rpaths: vec![],
                 dylinker: None,
+                imports: vec![],
             }),
             go: None,
             gaps: vec![],

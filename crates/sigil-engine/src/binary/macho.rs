@@ -277,6 +277,7 @@ fn empty_facts() -> MachOFacts {
         load_dylibs: vec![],
         rpaths: vec![],
         dylinker: None,
+        imports: vec![],
     }
 }
 
