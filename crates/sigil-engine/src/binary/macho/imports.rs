@@ -1,8 +1,9 @@
 //! The imports of a Mach-O slice (PR-4c-3b spec §3): what dyld binds, never a linked image's
 //! symbol table. A linked image's come from `LC_DYLD_CHAINED_FIXUPS` (its imports table) or from
-//! `LC_DYLD_INFO(_ONLY)` (its bind and lazy-bind opcodes). Every read goes through the slice's
-//! `Bounded` reader, under `binary_parse_bytes`, at the file offset dyld reads. What is not read
-//! or not understood is an `imports: …` gap of the container.
+//! `LC_DYLD_INFO(_ONLY)` (its bind and lazy-bind opcodes); an object file's are the undefined
+//! external symbols of its `LC_SYMTAB`, left for the linker. Every read goes through the slice's
+//! `Bounded` reader, under `binary_parse_bytes`, at the file offset dyld (or the linker) reads.
+//! What is not read or not understood is an `imports: …` gap of the container.
 
 use std::collections::BTreeSet;
 
@@ -13,10 +14,10 @@ use super::{range, ByteOrder, Header};
 use crate::binary::elf::MAX_IMPORT_NAME;
 use crate::binary::read::{Bounded, ENTRY_OVERHEAD};
 
-/// The most bytes scanned for the names of a slice's chained imports, or bound by its bind
-/// opcodes (Task 2 review): the imports may all point at the same bytes, and a stream may bind
-/// one name any number of times, so each scan stops at its NUL or one byte past
-/// [`MAX_IMPORT_NAME`], each bind that is not a repeat costs its name's length and
+/// The most bytes scanned for the names of a slice's chained imports or of an object file's
+/// symbols, or bound by its bind opcodes (Task 2 review): the names may all point at the same
+/// bytes, and a stream may bind one name any number of times, so each scan stops at its NUL or one
+/// byte past [`MAX_IMPORT_NAME`], each bind that is not a repeat costs its name's length and
 /// [`ENTRY_OVERHEAD`], and all of them stop at this.
 const MAX_NAME_SCAN: u64 = 64 << 20;
 
@@ -31,11 +32,14 @@ pub(super) struct Commands {
     /// Each `LC_DYLD_INFO` or `LC_DYLD_INFO_ONLY`: its bind and lazy-bind streams, each
     /// `(offset, size)`.
     pub dyld_info: Vec<[(u32, u32); 2]>,
+    /// Each `LC_SYMTAB`: `[symoff, nsyms, stroff, strsize]`; `None` for one shorter than its
+    /// structure.
+    pub symtab: Vec<Option<[u32; 4]>>,
 }
 
 /// The imports of the slice `header` (base `base`, `size` bytes) from its `commands`, at most
 /// `limit` of them (the smallest, in sorted order), and their gaps, sorted. No loader reads an
-/// object file (`MH_OBJECT`), so its dyld commands are not read.
+/// object file (`MH_OBJECT`), so its dyld commands are not read: its imports are its symbols.
 pub(super) fn read<R: ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,
@@ -46,6 +50,12 @@ pub(super) fn read<R: ReadCacheOps>(
 ) -> (Vec<MachOImport>, Vec<String>) {
     let mut out = Imports::new(&commands.dylibs, limit);
     if header.file_type == MH_OBJECT {
+        match commands.symtab.as_slice() {
+            [] => {}
+            [Some(symtab)] => symbols(data, base, size, header, *symtab, &mut out),
+            [None] => out.gap("imports: symbol table: command is too short".to_string()),
+            _ => out.gap("imports: more than one LC_SYMTAB".to_string()),
+        }
         return out.finish();
     }
     match (commands.chained.as_slice(), commands.dyld_info.as_slice()) {
@@ -194,6 +204,66 @@ enum Name<'b> {
     Missing(&'static str),
     /// [`MAX_NAME_SCAN`] bytes were scanned: this name, and the later ones, are not read.
     Exhausted,
+}
+
+/// An object file's undefined external symbols (`nlist` or `nlist_64`, in the slice's byte
+/// order): no stab (`N_STAB`), undefined (`N_TYPE` is `N_UNDF`), external (`N_EXT`), and a value of
+/// 0 (a nonzero one is a common symbol, a definition). `N_WEAK_REF` in `n_desc` is weak.
+fn symbols<R: ReadCacheOps>(
+    data: &Bounded<R>,
+    base: u64,
+    size: u64,
+    header: &Header,
+    [symoff, nsyms, stroff, strsize]: [u32; 4],
+    out: &mut Imports<'_>,
+) {
+    let gap = |why: &str| format!("imports: symbol table: {why}");
+    let entry: usize = if header.is_64 { 16 } else { 12 };
+    let read = |offset: u32, len: u64| range(data, base, size, offset.into(), len);
+    let (table, strings) = match (
+        read(symoff, u64::from(nsyms) * entry as u64),
+        read(stroff, strsize.into()),
+    ) {
+        (Ok(table), Ok(strings)) => (table, strings),
+        (Err(why), _) | (_, Err(why)) => {
+            out.gap(gap(&why));
+            return;
+        }
+    };
+    let u16_at = |e: &[u8], at: usize| {
+        let b = [e[at], e[at + 1]];
+        match header.order {
+            ByteOrder::Little => u16::from_le_bytes(b),
+            ByteOrder::Big => u16::from_be_bytes(b),
+        }
+    };
+    let u32_at = |e: &[u8], at: usize| {
+        let b = [e[at], e[at + 1], e[at + 2], e[at + 3]];
+        match header.order {
+            ByteOrder::Little => u32::from_le_bytes(b),
+            ByteOrder::Big => u32::from_be_bytes(b),
+        }
+    };
+    for e in table.chunks_exact(entry) {
+        // n_strx, n_type, n_sect, n_desc, n_value (4 or 8 bytes).
+        let n_type = e[4];
+        let n_value = if header.is_64 {
+            u64::from(u32_at(e, 8)) | (u64::from(u32_at(e, 12)) << 32)
+        } else {
+            u32_at(e, 8).into()
+        };
+        if n_type & 0xe0 != 0 || n_type & 0x0e != 0 || n_type & 0x01 == 0 || n_value != 0 {
+            continue;
+        }
+        match out.name(strings, u32_at(e, 0).into(), "a name out of the strings") {
+            Name::Read(name) => out.keep(name, MachOLibrary::Unbound, u16_at(e, 6) & 0x40 != 0),
+            Name::Missing(why) => out.gap(gap(why)),
+            Name::Exhausted => {
+                out.gap(gap(&format!("over {MAX_NAME_SCAN} bytes of names scanned")));
+                break;
+            }
+        }
+    }
 }
 
 /// The NUL-terminated bytes at `at` in `bytes`.

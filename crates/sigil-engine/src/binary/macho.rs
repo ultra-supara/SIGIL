@@ -21,6 +21,7 @@ const MAX_LOAD_COMMAND_BYTES: u64 = 8 << 20;
 const MAX_NAMES: usize = 1_024;
 const MAX_NAME_BYTES: usize = 4_096;
 const LC_REQ_DYLD: u32 = 0x8000_0000;
+const LC_SYMTAB: u32 = 0x2;
 const LC_LOAD_WEAK_DYLIB: u32 = LC_REQ_DYLD | 0x18;
 const LC_RPATH: u32 = LC_REQ_DYLD | 0x1c;
 const LC_REEXPORT_DYLIB: u32 = LC_REQ_DYLD | 0x1f;
@@ -486,6 +487,13 @@ fn parse_commands<R: object::read::ReadCacheOps>(
                         .dyld_info
                         .push([(word(16), word(20)), (word(32), word(36))]);
                 }
+            }
+            // symtab_command: symoff, nsyms, stroff, strsize.
+            LC_SYMTAB => {
+                let word = |at| word_at(bytes, at, header.order);
+                found
+                    .symtab
+                    .push((cmdsize >= 24).then(|| [word(8), word(12), word(16), word(20)]));
             }
             // linkedit_data_command: dataoff, datasize.
             LC_DYLD_CHAINED_FIXUPS => {

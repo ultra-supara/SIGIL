@@ -80,6 +80,8 @@ fn compiler_generated_macho_object_is_parsed_without_macos_ci() {
     assert_eq!(parsed.slices.len(), 1);
     assert_eq!(macho_facts(&parsed, 0).cpu_type, common::macho::X86_64);
     assert!(parsed.slices[0].gaps.is_empty(), "{parsed:?}");
+    // PR-4c-3b: its symbol table was read; it defines `_sigil_fixture`, and imports nothing.
+    assert!(macho_facts(&parsed, 0).imports.is_empty());
 }
 
 #[test]
@@ -1111,4 +1113,141 @@ fn binary_inspect_and_install_scan_record_the_same_macho_facts() {
         installed.binaries[0].container
     );
     assert_eq!(direct.binaries[0].gaps, installed.binaries[0].gaps);
+}
+
+/// The symbols of the object-file tests: two imports (one weak), a private external import, and
+/// what is not an import: a common symbol, a definition, a local undefined symbol, and two stabs
+/// (`N_FUN`, and one whose low bits look like an undefined external).
+const OBJECT_SYMBOLS: [(&str, u8, u16, u64); 8] = [
+    ("_connect", 0x01, 0, 0),
+    ("_dlopen", 0x01, 0x40, 0),
+    ("_common", 0x01, 0, 8),
+    ("_main", 0x0f, 0, 0x10),
+    ("_local", 0x00, 0, 0),
+    ("_stab", 0x24, 0, 0),
+    ("_gsym", 0x21, 0, 0),
+    ("_private", 0x11, 0, 0),
+];
+
+#[test]
+fn an_object_file_s_imports_are_its_undefined_external_symbols() {
+    let expected = vec![
+        import("_connect", MachOLibrary::Unbound, false),
+        import("_dlopen", MachOLibrary::Unbound, true),
+        import("_private", MachOLibrary::Unbound, false),
+    ];
+    for (is_64, big_endian) in [(true, false), (true, true), (false, false), (false, true)] {
+        let (table, strings) = common::macho::nlists(is_64, big_endian, &OBJECT_SYMBOLS);
+        let bytes = common::macho::object(is_64, big_endian, &table, &strings);
+        assert_eq!(
+            imports_of(&bytes),
+            (expected.clone(), vec![]),
+            "64-bit {is_64}, big-endian {big_endian}"
+        );
+    }
+    // A 64-bit common symbol whose value is above 2^32: its high word counts.
+    let (table, strings) = common::macho::nlists(true, false, &[("_big", 0x01, 0, 1 << 32)]);
+    assert_eq!(
+        imports_of(&common::macho::object(true, false, &table, &strings)),
+        (vec![], vec![])
+    );
+}
+
+#[test]
+fn an_object_file_s_symbol_table_not_read_is_a_gap() {
+    let (table, strings) = common::macho::nlists(true, false, &OBJECT_SYMBOLS[..2]);
+    let gap = |why: &str| vec![format!("imports: symbol table: {why}")];
+    // The first name past the strings.
+    let mut outside = table.clone();
+    outside[..4].copy_from_slice(&(strings.len() as u32).to_le_bytes());
+    assert_eq!(
+        imports_of(&common::macho::object(true, false, &outside, &strings)),
+        (
+            vec![import("_dlopen", MachOLibrary::Unbound, true)],
+            gap("a name out of the strings")
+        )
+    );
+    // The last name without its NUL.
+    assert_eq!(
+        imports_of(&common::macho::object(
+            true,
+            false,
+            &table,
+            &strings[..strings.len() - 1]
+        )),
+        (
+            vec![import("_connect", MachOLibrary::Unbound, false)],
+            gap("a name without its NUL")
+        )
+    );
+    // The table out of the slice.
+    let bytes = common::macho::with_tail(
+        true,
+        false,
+        common::macho::X86_64,
+        common::macho::MH_OBJECT,
+        |base| vec![common::macho::symtab_command(0x10_0000, 2, base, 4, false)],
+        &[0; 4],
+    );
+    assert_eq!(imports_of(&bytes), (vec![], gap("range outside slice")));
+    // A command shorter than its structure, and two commands.
+    let short = common::macho::command(common::macho::LC_SYMTAB, 16, false);
+    let bytes = common::macho::thin(true, false, common::macho::X86_64, 3, &[short]);
+    assert_eq!(imports_of(&bytes), (vec![], gap("command is too short")));
+    let full = common::macho::symtab_command(0, 0, 0, 0, false);
+    let bytes = common::macho::thin(true, false, common::macho::X86_64, 3, &[full.clone(), full]);
+    assert_eq!(
+        imports_of(&bytes),
+        (vec![], vec!["imports: more than one LC_SYMTAB".to_string()])
+    );
+}
+
+/// D1: a linked image's symbol table is not what dyld binds, and is not read.
+#[test]
+fn a_linked_image_s_symbol_table_is_not_read() {
+    let blob = chained_fixups(1, &[(1, false, "_puts")]);
+    let (table, strings) = common::macho::nlists(true, false, &OBJECT_SYMBOLS[..1]);
+    let len = blob.len() as u32;
+    let bytes = executable(
+        &[LIBSYSTEM],
+        |base| {
+            vec![
+                linkedit_command(LC_DYLD_CHAINED_FIXUPS, base, len, false),
+                common::macho::symtab_command(
+                    base + len,
+                    1,
+                    base + len + table.len() as u32,
+                    strings.len() as u32,
+                    false,
+                ),
+            ]
+        },
+        &[blob.as_slice(), &table, &strings].concat(),
+    );
+    assert_eq!(
+        imports_of(&bytes),
+        (vec![import("_puts", dylib(1, LIBSYSTEM), false)], vec![])
+    );
+}
+
+/// Task 2 review: an object file's symbols may all name the same string; each scan stops at its
+/// NUL, and all of them at 64 MiB, after which the names are not read.
+#[test]
+fn object_symbol_names_past_64_mib_of_scanning_are_a_gap() {
+    let name = format!("_{}", "a".repeat(59_999));
+    let mut table = vec![];
+    for _ in 0..1_200 {
+        // n_strx 1, N_UNDF | N_EXT, n_sect 0, n_desc 0, n_value 0.
+        table.extend_from_slice(&1u32.to_le_bytes());
+        table.extend_from_slice(&[0x01, 0, 0, 0]);
+        table.extend_from_slice(&0u64.to_le_bytes());
+    }
+    let strings = [&[0u8][..], name.as_bytes(), &[0]].concat();
+    assert_eq!(
+        imports_of(&common::macho::object(true, false, &table, &strings)),
+        (
+            vec![import(&name, MachOLibrary::Unbound, false)],
+            vec!["imports: symbol table: over 67108864 bytes of names scanned".to_string()]
+        )
+    );
 }

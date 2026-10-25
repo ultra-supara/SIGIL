@@ -233,3 +233,74 @@ pub fn executable(dylibs: &[&str], linkedit: impl Fn(u32) -> Vec<Vec<u8>>, tail:
         tail,
     )
 }
+
+pub const MH_OBJECT: u32 = 1;
+pub const LC_SYMTAB: u32 = 0x2;
+
+/// `LC_SYMTAB`: `symoff`, `nsyms`, `stroff`, `strsize`.
+pub fn symtab_command(
+    symoff: u32,
+    nsyms: u32,
+    stroff: u32,
+    strsize: u32,
+    big_endian: bool,
+) -> Vec<u8> {
+    let mut output = command(LC_SYMTAB, 24, big_endian);
+    for (at, value) in [(8, symoff), (12, nsyms), (16, stroff), (20, strsize)] {
+        output[at..at + 4].copy_from_slice(&encoded_word(value, big_endian));
+    }
+    output
+}
+
+/// The `nlist` (or `nlist_64`) entries of `symbols`, each `(name, n_type, n_desc, n_value)`, and
+/// their strings, which start with a NUL.
+pub fn nlists(
+    is_64: bool,
+    big_endian: bool,
+    symbols: &[(&str, u8, u16, u64)],
+) -> (Vec<u8>, Vec<u8>) {
+    let mut table = vec![];
+    let mut strings = vec![0];
+    for (name, n_type, n_desc, n_value) in symbols {
+        word(strings.len() as u32, big_endian, &mut table);
+        strings.extend_from_slice(name.as_bytes());
+        strings.push(0);
+        table.extend_from_slice(&[*n_type, 0]);
+        table.extend_from_slice(&if big_endian {
+            n_desc.to_be_bytes()
+        } else {
+            n_desc.to_le_bytes()
+        });
+        if is_64 {
+            table.extend_from_slice(&if big_endian {
+                n_value.to_be_bytes()
+            } else {
+                n_value.to_le_bytes()
+            });
+        } else {
+            word(*n_value as u32, big_endian, &mut table);
+        }
+    }
+    (table, strings)
+}
+
+/// An object file (`MH_OBJECT`) whose `LC_SYMTAB` holds `table` and `strings`.
+pub fn object(is_64: bool, big_endian: bool, table: &[u8], strings: &[u8]) -> Vec<u8> {
+    let entry = if is_64 { 16 } else { 12 };
+    with_tail(
+        is_64,
+        big_endian,
+        X86_64,
+        MH_OBJECT,
+        |base| {
+            vec![symtab_command(
+                base,
+                (table.len() / entry) as u32,
+                base + table.len() as u32,
+                strings.len() as u32,
+                big_endian,
+            )]
+        },
+        &[table, strings].concat(),
+    )
+}
