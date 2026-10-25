@@ -1251,3 +1251,174 @@ fn object_symbol_names_past_64_mib_of_scanning_are_a_gap() {
         )
     );
 }
+// --- The import fixtures (PR-4c-3b) -------------------------------------------------------------
+
+/// `fixture` (under `tests/fixtures/`), copied to a temporary directory and inspected: the session
+/// validates.
+fn inspected(fixture: &str) -> sigil_model::Session {
+    let directory = TempDir::new().unwrap();
+    let path = directory
+        .path()
+        .join(Path::new(fixture).file_name().unwrap());
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture),
+        &path,
+    )
+    .unwrap();
+    let s = binary_inspection(&path);
+    assert_eq!(s.validate(), Ok(()));
+    s
+}
+
+/// The imports, gaps, and capability hints (feature, value) of the slice of `arch` in `s`.
+fn slice_of(
+    s: &sigil_model::Session,
+    arch: sigil_model::Arch,
+) -> (Vec<MachOImport>, Vec<String>, Vec<(String, String)>) {
+    let slice = s
+        .artifacts
+        .iter()
+        .flat_map(|a| &a.slices)
+        .find(|x| x.arch == arch)
+        .unwrap()
+        .id
+        .clone();
+    let b = s.binaries.iter().find(|b| b.slice == slice).unwrap();
+    let ContainerFacts::MachO(facts) = &b.container else {
+        panic!("{b:?}")
+    };
+    let hints = s
+        .hints
+        .iter()
+        .filter(|h| h.subject == slice)
+        .map(|h| {
+            (
+                h.feature.as_str().to_string(),
+                h.value.as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    (facts.imports.clone(), b.gaps.clone(), hints)
+}
+
+fn hints(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(f, v)| (f.to_string(), v.to_string()))
+        .collect()
+}
+
+/// The capability imports of the C fixtures: from libSystem in an executable.
+const LIBSYSTEM_HINTS: [(&str, &str); 3] = [
+    ("posix.dynamic_loading", "_dlopen"),
+    ("posix.environment_access", "_getenv"),
+    ("posix.network", "_connect"),
+];
+
+/// #53's acceptance criterion: an arm64 Mach-O that imports `_connect` gets `posix.network`. Both
+/// slices of `macho-imports/imports-universal` (`build.sh`; their imports are in its `.otool`):
+/// x86_64 binds through opcodes, arm64 through chained fixups. Each imports `_socket` from libfoo,
+/// another dylib: recorded, and no hint (D2).
+#[test]
+fn a_universal_executable_s_hints_are_its_libsystem_capability_imports() {
+    let s = inspected("macho-imports/imports-universal");
+    let libfoo = || dylib(2, "@rpath/libfoo.dylib");
+    let both = || {
+        vec![
+            import("_connect", dylib(1, LIBSYSTEM), false),
+            import("_dlopen", dylib(1, LIBSYSTEM), false),
+            import("_getenv", dylib(1, LIBSYSTEM), false),
+            import("_puts", dylib(1, LIBSYSTEM), false),
+            import("_sigil_weak", libfoo(), true),
+            import("_socket", libfoo(), false),
+        ]
+    };
+    let mut x86_64 = both();
+    x86_64.push(import("dyld_stub_binder", dylib(1, LIBSYSTEM), false));
+    for (arch, imports) in [
+        (sigil_model::Arch::X86_64, x86_64),
+        (sigil_model::Arch::Aarch64, both()),
+    ] {
+        assert_eq!(
+            slice_of(&s, arch),
+            (imports, vec![], hints(&LIBSYSTEM_HINTS)),
+            "{arch:?}"
+        );
+    }
+}
+
+/// The arm64 object file the fixture is linked from: its undefined symbols, left for the linker,
+/// are all looked up, `_socket` too: an object file does not say which dylib will define it.
+#[test]
+fn a_real_object_file_s_hints_are_its_undefined_capability_symbols() {
+    let s = inspected("macho-imports/imports-arm64.o");
+    let unbound = |name: &str, weak: bool| import(name, MachOLibrary::Unbound, weak);
+    let mut expected = hints(&LIBSYSTEM_HINTS);
+    expected.push(("posix.network".to_string(), "_socket".to_string()));
+    assert_eq!(
+        slice_of(&s, sigil_model::Arch::Aarch64),
+        (
+            vec![
+                unbound("_connect", false),
+                unbound("_dlopen", false),
+                unbound("_getenv", false),
+                unbound("_puts", false),
+                unbound("_sigil_weak", true),
+                unbound("_socket", false),
+            ],
+            vec![],
+            expected
+        )
+    );
+}
+
+/// D7: Go 1.25.6's darwin/arm64 build of the 3a program (`go-darwin/build.sh`) binds its
+/// libSystem functions through bind opcodes: each import is one LLVM reads
+/// (`capabilities-darwin-arm64.bind`), and its hints are the runtime's and the standard library's,
+/// whatever the program uses them for.
+#[test]
+fn a_go_darwin_executable_s_hints_are_its_runtime_s_capability_imports() {
+    let s = inspected("go-darwin/capabilities-darwin-arm64");
+    let (imports, gaps, got) = slice_of(&s, sigil_model::Arch::Aarch64);
+    assert!(gaps.is_empty(), "{gaps:?}");
+    let dump = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/go-darwin/capabilities-darwin-arm64.bind"),
+    )
+    .unwrap();
+    let mut llvm: Vec<&str> = dump
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace().rev();
+            match (words.next(), words.next()) {
+                (Some(symbol), Some("libSystem")) => Some(symbol),
+                _ => None,
+            }
+        })
+        .collect();
+    llvm.sort_unstable();
+    llvm.dedup();
+    assert_eq!(llvm.len(), 83);
+    assert_eq!(
+        imports,
+        llvm.iter()
+            .map(|name| import(name, dylib(1, LIBSYSTEM), false))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        got,
+        hints(&[
+            ("posix.anti_debug", "_ptrace"),
+            ("posix.file_read", "_open"),
+            ("posix.file_read", "_read"),
+            ("posix.file_write", "_write"),
+            ("posix.network", "_connect"),
+            ("posix.network", "_getaddrinfo"),
+            ("posix.network", "_socket"),
+            ("posix.process_spawn", "_execve"),
+            ("posix.process_spawn", "_fork"),
+        ])
+    );
+}

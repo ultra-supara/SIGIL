@@ -231,6 +231,22 @@ names with one leading `_` stripped. In the Markdown, a Mach-O's facts table gai
 imports, each with its library: the dylib's name, `self`, `main executable`, `flat lookup`,
 `weak lookup`, or `ordinal <n>` when the dylib's name was not read.
 
+**Presence, never use.** As for ELF, an import says that the file asks for the function, not that
+it calls it. A Go executable for darwin binds the libSystem functions its runtime and standard
+library use, whatever the program does (measured with Go 1.25.6, darwin/arm64, without cgo; Go's
+linker writes bind opcodes):
+- a program that only prints imports `_execve`, `_open`, `_read`, and `_write`: every Go darwin
+  executable shows `posix.process_spawn`, `posix.file_read`, and `posix.file_write`;
+- one that runs a command through `os/exec` also imports `_fork` and `_ptrace` (`syscall` can
+  trace the child), so it shows `posix.anti_debug`;
+- one that dials through `net` imports `_connect`, `_socket`, and `_getaddrinfo`.
+
+A missing hint is never absence: a function linked statically into the file, one looked up at run
+time, and a system call made without libSystem are not imports. The fixtures are
+`tests/fixtures/macho-imports/` (a C program linked by `ld64.lld` for x86_64, with bind opcodes,
+and for arm64, with chained fixups, and its object file) and `tests/fixtures/go-darwin/` (the 3a
+Go program, built for darwin/arm64).
+
 What is not read is a `binary.container` gap (`imports: …`): both dyld commands, or two of one;
 neither while a dylib is loaded (the `LC_DYSYMTAB` binding of macOS 10.5 and earlier is not read);
 a blob or stream out of the file; a chained-fixups format SIGIL does not read, or a compressed
