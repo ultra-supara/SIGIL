@@ -293,4 +293,97 @@ mod tests {
         assert_eq!(hints[0].feature.as_str(), "posix.network");
         assert_eq!(hints[0].value.as_str(), Some("_connect"));
     }
+
+    /// libstdc++'s `std::filesystem::remove(path const&)` and
+    /// `std::ifstream::ifstream(char const*, openmode)` (C1) (PR-4c-3c).
+    const REMOVE: &str = "_ZNSt10filesystem6removeERKNS_7__cxx114pathE";
+    const IFSTREAM: &str = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode";
+    /// libc++'s `std::filesystem::remove`, as a Mach-O names it.
+    const LIBCXX_REMOVE: &str =
+        "__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE";
+
+    #[test]
+    fn a_cxx_import_is_a_hint_beside_the_posix_ones() {
+        let hints = derive(&[facts(
+            SLICE,
+            &[
+                (REMOVE, Some("GLIBCXX_3.4.26")),
+                ("connect", Some("GLIBC_2.2.5")),
+                (IFSTREAM, Some("GLIBCXX_3.4")),
+            ],
+        )])
+        .unwrap();
+        let got: Vec<(&str, &str)> = hints
+            .iter()
+            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("cxx.file_read", IFSTREAM),
+                ("cxx.file_write", REMOVE),
+                ("posix.network", "connect"),
+            ]
+        );
+        assert!(hints
+            .iter()
+            .all(|h| h.signal == Signal::Import && h.at == Loc::Symbol(h.value.clone())));
+    }
+
+    #[test]
+    fn ambiguous_and_other_cxx_names_are_no_hints() {
+        let hints = derive(&[facts(
+            SLICE,
+            &names(&[
+                // The mode decides read or write.
+                "_ZNSt13basic_fstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode",
+                "_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode",
+                // Metadata, and nothing changed.
+                "_ZNSt10filesystem11permissionsERKNS_7__cxx114pathENS_5permsENS_12perm_optionsE",
+                "_ZNSt10filesystem15last_write_timeERKNS_7__cxx114pathE",
+                "_ZNSt10filesystem6statusERKNS_7__cxx114pathE",
+                // No file opened.
+                "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1Ev",
+                // libc++'s remove, as an ELF names it.
+                "_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE",
+                // A version is not part of the name.
+                "_ZNSt10filesystem6removeERKNS_7__cxx114pathE@GLIBCXX_3.4.26",
+            ]),
+        )])
+        .unwrap();
+        assert!(hints.is_empty(), "{hints:?}");
+    }
+
+    #[test]
+    fn a_macho_cxx_import_is_looked_up_by_its_library_as_any_other() {
+        let remove = format!("_{REMOVE}");
+        let libstdcxx = MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new(
+                "/opt/homebrew/lib/gcc/current/libstdc++.6.dylib",
+            )),
+        };
+        let libcxx = MachOLibrary::Dylib {
+            ordinal: 3,
+            name: Some(UntrustedText::new("/usr/lib/libc++.1.dylib")),
+        };
+        // An object file's and a flat lookup's are looked up; another dylib's is not, and libc++'s
+        // names are not in the table.
+        let hints = derive(&[macho(&[
+            (&remove, MachOLibrary::Unbound),
+            (&remove, MachOLibrary::FlatLookup),
+            (&remove, libstdcxx.clone()),
+            (LIBCXX_REMOVE, libcxx),
+            (LIBCXX_REMOVE, MachOLibrary::Unbound),
+        ])])
+        .unwrap();
+        let got: Vec<(&str, &str)> = hints
+            .iter()
+            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
+            .collect();
+        assert_eq!(got, [("cxx.file_write", remove.as_str())]);
+        assert!(derive(&[macho(&[(&remove, libstdcxx)])])
+            .unwrap()
+            .is_empty());
+    }
 }

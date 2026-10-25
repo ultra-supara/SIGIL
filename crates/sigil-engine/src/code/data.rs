@@ -16,6 +16,9 @@ pub struct Capability {
     pub feature: FeatureKey,
     /// The SysV argument registers a call can read.
     pub arity: u8,
+    /// Where the name and its meaning come from: a standard, or the library that exports it
+    /// (PR-4c-3c). Not blank, and not written to sessions.
+    pub source: String,
 }
 
 /// The parsed data.
@@ -44,6 +47,7 @@ struct RawCapability {
 struct RawSymbol {
     name: String,
     arity: u8,
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -80,9 +84,17 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
                     s.name, s.arity
                 ));
             }
+            let source = match s.source {
+                None => return Err(format!("capabilities.toml: {:?}: no source", s.name)),
+                Some(t) if t.trim().is_empty() => {
+                    return Err(format!("capabilities.toml: {:?}: a blank source", s.name))
+                }
+                Some(t) => t,
+            };
             let entry = Capability {
                 feature: feature.clone(),
                 arity: s.arity,
+                source,
             };
             if table.insert(s.name.clone().into_bytes(), entry).is_some() {
                 return Err(format!("capabilities.toml: {:?} listed twice", s.name));
@@ -161,6 +173,107 @@ mod tests {
         ("ptrace", "posix.anti_debug", 4),
     ];
 
+    /// The PR-4c-3c spec's Appendix A: libstdc++'s names, by feature, with their arities.
+    const CXX: [(&str, &str, u8); 88] = [
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1ERKSsSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2EPKcSt13_Ios_Openmode", "cxx.file_read", 4),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", "cxx.file_read", 4),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2ERKSsSt13_Ios_Openmode", "cxx.file_read", 4),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEE4openERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIcSt11char_traitsIcEE4openERKSsSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC1EPKcSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC1ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC1ERKSsSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC2EPKcSt13_Ios_Openmode", "cxx.file_read", 4),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC2ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", "cxx.file_read", 4),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC2ERKSsSt13_Ios_Openmode", "cxx.file_read", 4),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEE4openEPKcSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEE4openERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt14basic_ifstreamIwSt11char_traitsIwEE4openERKSsSt13_Ios_Openmode", "cxx.file_read", 3),
+        ("_ZNSt10filesystem6removeERKNS_7__cxx114pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem6removeERKNS_7__cxx114pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem6removeERKNS_4pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem6removeERKNS_4pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem10remove_allERKNS_7__cxx114pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem10remove_allERKNS_7__cxx114pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem10remove_allERKNS_4pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem10remove_allERKNS_4pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem6renameERKNS_7__cxx114pathES3_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem6renameERKNS_7__cxx114pathES3_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem6renameERKNS_4pathES2_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem6renameERKNS_4pathES2_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathES3_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathES3_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem16create_directoryERKNS_4pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem16create_directoryERKNS_4pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem16create_directoryERKNS_4pathES2_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem16create_directoryERKNS_4pathES2_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem18create_directoriesERKNS_7__cxx114pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem18create_directoriesERKNS_7__cxx114pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem18create_directoriesERKNS_4pathE", "cxx.file_write", 1),
+        ("_ZNSt10filesystem18create_directoriesERKNS_4pathERSt10error_code", "cxx.file_write", 2),
+        ("_ZNSt10filesystem14create_symlinkERKNS_7__cxx114pathES3_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem14create_symlinkERKNS_7__cxx114pathES3_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem14create_symlinkERKNS_4pathES2_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem14create_symlinkERKNS_4pathES2_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem16create_hard_linkERKNS_7__cxx114pathES3_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem16create_hard_linkERKNS_7__cxx114pathES3_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem16create_hard_linkERKNS_4pathES2_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem16create_hard_linkERKNS_4pathES2_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem24create_directory_symlinkERKNS_7__cxx114pathES3_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem24create_directory_symlinkERKNS_7__cxx114pathES3_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem24create_directory_symlinkERKNS_4pathES2_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem24create_directory_symlinkERKNS_4pathES2_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem4copyERKNS_7__cxx114pathES3_NS_12copy_optionsE", "cxx.file_write", 3),
+        ("_ZNSt10filesystem4copyERKNS_7__cxx114pathES3_NS_12copy_optionsERSt10error_code", "cxx.file_write", 4),
+        ("_ZNSt10filesystem4copyERKNS_4pathES2_NS_12copy_optionsE", "cxx.file_write", 3),
+        ("_ZNSt10filesystem4copyERKNS_4pathES2_NS_12copy_optionsERSt10error_code", "cxx.file_write", 4),
+        ("_ZNSt10filesystem9copy_fileERKNS_7__cxx114pathES3_NS_12copy_optionsE", "cxx.file_write", 3),
+        ("_ZNSt10filesystem9copy_fileERKNS_7__cxx114pathES3_NS_12copy_optionsERSt10error_code", "cxx.file_write", 4),
+        ("_ZNSt10filesystem9copy_fileERKNS_4pathES2_NS_12copy_optionsE", "cxx.file_write", 3),
+        ("_ZNSt10filesystem9copy_fileERKNS_4pathES2_NS_12copy_optionsERSt10error_code", "cxx.file_write", 4),
+        ("_ZNSt10filesystem12copy_symlinkERKNS_7__cxx114pathES3_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem12copy_symlinkERKNS_7__cxx114pathES3_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem12copy_symlinkERKNS_4pathES2_", "cxx.file_write", 2),
+        ("_ZNSt10filesystem12copy_symlinkERKNS_4pathES2_RSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem11resize_fileERKNS_7__cxx114pathEm", "cxx.file_write", 2),
+        ("_ZNSt10filesystem11resize_fileERKNS_7__cxx114pathEmRSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt10filesystem11resize_fileERKNS_4pathEm", "cxx.file_write", 2),
+        ("_ZNSt10filesystem11resize_fileERKNS_4pathEmRSt10error_code", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1ERKSsSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC2EPKcSt13_Ios_Openmode", "cxx.file_write", 4),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC2ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", "cxx.file_write", 4),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC2ERKSsSt13_Ios_Openmode", "cxx.file_write", 4),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEE4openERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIcSt11char_traitsIcEE4openERKSsSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC1EPKcSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC1ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC1ERKSsSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC2EPKcSt13_Ios_Openmode", "cxx.file_write", 4),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC2ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", "cxx.file_write", 4),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC2ERKSsSt13_Ios_Openmode", "cxx.file_write", 4),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openEPKcSt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", "cxx.file_write", 3),
+        ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openERKSsSt13_Ios_Openmode", "cxx.file_write", 3),
+    ];
+
+    /// The PR-4c-3c spec's Appendix B: every name but `ptrace` is in POSIX.1-2024.
+    fn posix_source(name: &str) -> String {
+        if name == "ptrace" {
+            "Linux and macOS ptrace(2); not in POSIX".to_string()
+        } else {
+            format!("POSIX.1-2024 (IEEE Std 1003.1-2024): {name}()")
+        }
+    }
+
     #[test]
     fn the_embedded_signatures_parse() {
         let s = signatures().unwrap();
@@ -171,7 +284,16 @@ mod tests {
                 Some(&Capability {
                     feature: FeatureKey::new(feature).unwrap(),
                     arity,
+                    source: posix_source(name),
                 }),
+                "{name}"
+            );
+        }
+        for (name, feature, arity) in CXX {
+            let cap = s.capability(name.as_bytes());
+            assert_eq!(
+                cap.map(|c| (c.feature.as_str(), c.arity)),
+                Some((feature, arity)),
                 "{name}"
             );
         }
@@ -180,9 +302,187 @@ mod tests {
             "exact names only"
         );
         assert!(s.capability(b"Connect").is_none());
-        assert_eq!(s.longest(), "getaddrinfo".len());
-        // v0.1's 28 names (7 + 5 + 6 + 4 + 2 + 3 + 1), unchanged.
-        assert_eq!(s.count(), 28);
+        assert!(s
+            .capability(b"_ZNSt10filesystem6removeERKNS_7__cxx114pathE@GLIBCXX_3.4.26")
+            .is_none());
+        // The wchar_t streams' open on the __cxx11 string.
+        assert_eq!(s.longest(), 107);
+        // v0.1's 28 names (7 + 5 + 6 + 4 + 2 + 3 + 1), unchanged, and libstdc++'s 88 (18 + 70).
+        assert_eq!(s.count(), 28 + 88);
+    }
+
+    /// libstdc++.so.6.0.35's exports of the families the `cxx.*` names come from, as the C++
+    /// fixture's build.sh listed them: name, version, demangled form.
+    const EXPORTS: &str =
+        include_str!("../../tests/fixtures/cxx-capabilities/libstdcxx-exports.tsv");
+
+    fn exports() -> BTreeMap<&'static str, (&'static str, &'static str)> {
+        let exports: BTreeMap<_, _> = EXPORTS
+            .lines()
+            .map(|line| {
+                let mut f = line.split('\t');
+                let (Some(name), Some(version), Some(demangled), None) =
+                    (f.next(), f.next(), f.next(), f.next())
+                else {
+                    panic!("{line:?}")
+                };
+                (name, (version, demangled))
+            })
+            .collect();
+        // A name listed twice would hide one of its rows.
+        assert_eq!(
+            exports.len(),
+            EXPORTS.lines().count(),
+            "a name listed twice"
+        );
+        exports
+    }
+
+    #[test]
+    fn the_cxx_names_are_libstdcxx_exports_and_their_sources_say_so() {
+        let s = signatures().unwrap();
+        let exports = exports();
+        let mut cxx = 0;
+        for (name, cap) in &s.capabilities {
+            if !cap.feature.as_str().starts_with("cxx.") {
+                continue;
+            }
+            cxx += 1;
+            let name = std::str::from_utf8(name).unwrap();
+            let Some((version, demangled)) = exports.get(name) else {
+                panic!("not a libstdc++ export: {name}");
+            };
+            // A constructor's two variants demangle alike.
+            let tag = if name.contains("EEC1E") {
+                " [C1]"
+            } else if name.contains("EEC2E") {
+                " [C2]"
+            } else {
+                ""
+            };
+            assert_eq!(
+                cap.source,
+                format!("libstdc++ {version}: {demangled}{tag}"),
+                "{name}"
+            );
+        }
+        assert_eq!(cxx, 88);
+    }
+
+    /// The rule of the PR-4c-3c spec's §2, applied to the exports list rather than written out:
+    /// the std::filesystem operations that create, remove, rename, copy, or resize, and the
+    /// ifstream and ofstream constructors and `open` that take a file name. Each arity is the
+    /// demangled form's parameters, plus `this` for a stream, plus the VTT for a C2 constructor.
+    #[test]
+    fn the_cxx_names_are_the_exports_the_rule_selects_with_their_arities() {
+        const WRITES: [&str; 12] = [
+            "remove",
+            "remove_all",
+            "rename",
+            "create_directory",
+            "create_directories",
+            "create_symlink",
+            "create_hard_link",
+            "create_directory_symlink",
+            "copy",
+            "copy_file",
+            "copy_symlink",
+            "resize_file",
+        ];
+        // A file name: a `const char*`, or a string of either ABI.
+        const FILE_NAMES: [&str; 3] = [
+            "char const*",
+            "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&",
+            "std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&",
+        ];
+        // The parameters of a demangled function, split at the commas outside brackets.
+        fn params(list: &str) -> Vec<&str> {
+            let (mut depth, mut start, mut out) = (0, 0, vec![]);
+            for (i, c) in list.char_indices() {
+                match c {
+                    '<' | '(' => depth += 1,
+                    '>' | ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        out.push(list[start..i].trim());
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            if !list.trim().is_empty() {
+                out.push(list[start..].trim());
+            }
+            out
+        }
+        let mut want = BTreeMap::new();
+        for (name, (_, demangled)) in exports() {
+            let Some((head, rest)) = demangled.split_once('(') else {
+                continue;
+            };
+            let Some(list) = rest.strip_suffix(')') else {
+                continue;
+            };
+            let params = params(list);
+            let fs = head.strip_prefix("std::filesystem::");
+            if fs.is_some_and(|f| WRITES.contains(&f)) {
+                want.insert(name, ("cxx.file_write", params.len()));
+                continue;
+            }
+            for (class, feature) in [
+                ("ifstream", "cxx.file_read"),
+                ("ofstream", "cxx.file_write"),
+            ] {
+                for char in ["char", "wchar_t"] {
+                    let stream = format!("std::basic_{class}<{char}, std::char_traits<{char}> >::");
+                    let Some(member) = head.strip_prefix(&stream) else {
+                        continue;
+                    };
+                    let opens = member == "open" || member == format!("basic_{class}");
+                    if opens && params.first().is_some_and(|p| FILE_NAMES.contains(p)) {
+                        let vtt = usize::from(name.contains("EEC2E"));
+                        want.insert(name, (feature, params.len() + 1 + vtt));
+                    }
+                }
+            }
+        }
+        let s = signatures().unwrap();
+        let got: BTreeMap<&str, (&str, usize)> = s
+            .capabilities
+            .iter()
+            .filter(|(_, c)| c.feature.as_str().starts_with("cxx."))
+            .map(|(n, c)| {
+                let name = std::str::from_utf8(n).unwrap();
+                (name, (c.feature.as_str(), usize::from(c.arity)))
+            })
+            .collect();
+        assert_eq!(got, want);
+        assert_eq!(got.len(), 88);
+    }
+
+    #[test]
+    fn the_unmapped_cxx_names_are_exports_not_in_the_table() {
+        let s = signatures().unwrap();
+        let exports = exports();
+        for name in [
+            // The mode decides read or write.
+            "_ZNSt13basic_fstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode",
+            "_ZNSt13basic_fstreamIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode",
+            "_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode",
+            // Metadata, not a file's contents or name.
+            "_ZNSt10filesystem11permissionsERKNS_7__cxx114pathENS_5permsENS_12perm_optionsE",
+            "_ZNSt10filesystem15last_write_timeERKNS_7__cxx114pathE",
+            "_ZNSt10filesystem15last_write_timeERKNS_7__cxx114pathENSt6chrono10time_pointINS_12__file_clockENS4_8durationIlSt5ratioILl1ELl1000000000EEEEEE",
+            // They change nothing.
+            "_ZNSt10filesystem6statusERKNS_7__cxx114pathE",
+            "_ZNSt10filesystem7__cxx1118directory_iteratorC1ERKNS0_4pathENS_17directory_optionsEPSt10error_code",
+            // They open no file.
+            "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1Ev",
+            "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1EOS2_",
+            "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1Ev",
+        ] {
+            assert!(exports.contains_key(name), "not a libstdc++ export: {name}");
+            assert!(s.capability(name.as_bytes()).is_none(), "{name}");
+        }
     }
 
     #[test]
@@ -212,16 +512,43 @@ mod tests {
             .map(|_| ())
         };
         assert_eq!(
-            one("{ name = \"connect\", arity = 7 }"),
+            one("{ name = \"connect\", arity = 7, source = \"s\" }"),
             Err("capabilities.toml: \"connect\": arity 7 is over 6".to_string())
         );
         assert_eq!(
-            one("{ name = \"\", arity = 1 }"),
+            one("{ name = \"\", arity = 1, source = \"s\" }"),
             Err("capabilities.toml: posix.network: an empty name".to_string())
         );
         assert_eq!(
-            one("{ name = \"a\", arity = 1 }, { name = \"a\", arity = 1 }"),
+            one("{ name = \"a\", arity = 1, source = \"s\" }, { name = \"a\", arity = 1, source = \"s\" }"),
             Err("capabilities.toml: \"a\" listed twice".to_string())
+        );
+        // PR-4c-3c: every entry has a source, and it is not blank.
+        assert_eq!(
+            one("{ name = \"connect\", arity = 3 }"),
+            Err("capabilities.toml: \"connect\": no source".to_string())
+        );
+        // "\\t\\n" is TOML's escapes: a tab and a newline.
+        for blank in ["", " ", "\\t\\n"] {
+            assert_eq!(
+                one(&format!(
+                    "{{ name = \"connect\", arity = 3, source = \"{blank}\" }}"
+                )),
+                Err("capabilities.toml: \"connect\": a blank source".to_string()),
+                "{blank:?}"
+            );
+        }
+        // A source with blanks around it is not blank.
+        assert_eq!(
+            one("{ name = \"connect\", arity = 3, source = \" s \" }"),
+            Ok(())
+        );
+        let unknown = one("{ name = \"connect\", arity = 3, source = \"s\", sources = \"s\" }");
+        assert!(
+            unknown
+                .as_ref()
+                .is_err_and(|e| e.contains("unknown field `sources`")),
+            "{unknown:?}"
         );
         assert!(parse(CAPABILITIES, "prefixes = []").is_err());
         assert!(parse(CAPABILITIES, "prefixes = [\"\"]\nnames = []").is_err());
