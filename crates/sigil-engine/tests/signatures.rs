@@ -1,6 +1,7 @@
-//! The signature scan in sessions (PR-4c-2a): Go functions in `.gopclntab`, the RPC backend by its
-//! exports, NVIDIA libraries never scanned, and the scan's own coverage. The synthetic files are
-//! written to temporary directories and never run.
+//! The signature scan in sessions (PR-4c-2a): Go functions in `.gopclntab` (and the Go standard
+//! library's capabilities, PR-4c-3a), the RPC backend by its exports, NVIDIA libraries never
+//! scanned, and the scan's own coverage. The synthetic files are written to temporary directories
+//! and never run.
 
 mod common;
 
@@ -19,7 +20,8 @@ use sigil_engine::policy::Policy;
 use sigil_model::{
     binary_root, scan_over_gap, BinaryFacts, Completeness, CoverageState, FeatureHint,
     FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY, BINARY_IDENTITY,
-    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
+    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_GOPCLNTAB_HEADER,
+    SCAN_GOPCLNTAB_NOT_MAPPED, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
 };
 use tempfile::TempDir;
 
@@ -32,11 +34,14 @@ fn pclntab(len: usize) -> Vec<u8> {
 }
 
 /// A `.gopclntab` of `len` bytes with the launch needle at 0x100, and the discovery needle at
-/// `discover`.
+/// `discover`: a Go 1.20 header whose function-name table is `[0x48, len)` (PR-4c-3a plan review
+/// P2), and the names in it.
 fn pclntab_with(len: usize, discover: usize) -> Vec<u8> {
     let mut t = vec![0u8; len];
+    let header = go120_header(len as u64);
+    t[..header.len()].copy_from_slice(&header);
     for (at, name) in [
-        (0x10, "runtime.main"),
+        (0x60, "runtime.main"),
         (0x100, LAUNCH),
         (discover, DISCOVER),
     ] {
@@ -45,18 +50,33 @@ fn pclntab_with(len: usize, discover: usize) -> Vec<u8> {
     t
 }
 
+/// A Go 1.20 `pcHeader` (little-endian, 8-byte pointers, 0x48 bytes) whose function-name table is
+/// `[0x48, names_end)`.
+fn go120_header(names_end: u64) -> Vec<u8> {
+    let mut header = vec![0xf1, 0xff, 0xff, 0xff, 0, 0, 1, 8];
+    for field in [1, 1, 0, 0x48, names_end, names_end, names_end, names_end] {
+        header.extend_from_slice(&u64::to_le_bytes(field));
+    }
+    header
+}
+
 /// An executable with `pclntab` as `.gopclntab` at 0x8000, and with `buildinfo` Go's build info
 /// in `.go.buildinfo` at 0x4000 (a real piece, `go/go-amd64.buildinfo`), in one writable PT_LOAD.
 fn go_elf(pclntab: &[u8], buildinfo: bool) -> Vec<u8> {
     let piece = fixture("go/go-amd64.buildinfo");
+    go_elf_with(pclntab, buildinfo.then_some(piece.as_slice()))
+}
+
+/// [`go_elf`] with `buildinfo`, if any, as its `.go.buildinfo`.
+fn go_elf_with(pclntab: &[u8], buildinfo: Option<&[u8]>) -> Vec<u8> {
     let mut img = ElfImage::new(2);
-    if buildinfo {
-        img.put(0x4000, &piece);
+    if let Some(piece) = buildinfo {
+        img.put(0x4000, piece);
     }
     img.put(0x8000, pclntab);
     let end = img.body.len() as u64;
     img.seg(PT_LOAD, PF_R | PF_W, 0, 0, end, end);
-    if buildinfo {
+    if let Some(piece) = buildinfo {
         img.sec(
             ".go.buildinfo",
             SHT_PROGBITS,
@@ -190,6 +210,97 @@ fn a_go_executable_s_gopclntab_gives_both_function_hints() {
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
+/// PR-4c-3a: a real Go 1.25.6 build of a program that uses `os/exec`, `net.Dial`, `os.Create`, and
+/// `os.Open`, with a function recorded under the file name `syscall.Exec` by a `//line` directive
+/// (`fixtures/go-capabilities/build.sh`): its `.gopclntab` and `.go.buildinfo`, in an executable.
+fn capabilities_elf() -> Vec<u8> {
+    go_elf_with(
+        &fixture("go-capabilities/capabilities.gopclntab"),
+        Some(&fixture("go-capabilities/capabilities.buildinfo")),
+    )
+}
+
+/// The `go.*` hint of `value` at `offset` in `.gopclntab`.
+fn go_hint(feature: &str, value: &str, offset: u64) -> (String, Signal, String, Loc) {
+    (
+        feature.to_string(),
+        Signal::GoFunction,
+        value.to_string(),
+        gopclntab(offset),
+    )
+}
+
+#[test]
+fn a_real_go_build_gives_its_capability_hints() {
+    // The `//line syscall.Exec:1` coverage rests on these bytes: the exact entry `\0syscall.Exec\0`
+    // is in the file table, past `cuOffset` (the end of the function-name table). If a rebuild
+    // moved `syscall.Exec` into the function-name table, this test would stop proving the
+    // plan-review fix.
+    let pcln = fixture("go-capabilities/capabilities.gopclntab");
+    assert_eq!(&pcln[0x1f100..0x1f10e], b"\0syscall.Exec\0");
+    // Go 1.20 header, little-endian, 8-byte fields: pointer-size fields 4, 5, and 6 are cuOffset,
+    // filetabOffset, and pctabOffset. The name is in the file table, after the function-name table.
+    let field = |k: usize| u64::from_le_bytes(pcln[8 + k * 8..8 + (k + 1) * 8].try_into().unwrap());
+    assert_eq!(field(4), 0x1c0e0);
+    assert!(field(5) <= 0x1f101 && 0x1f101 < field(6));
+    let (_d, paths) = files(&[("capabilities", &capabilities_elf())]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    let mut got = signatures(&s);
+    got.sort_by(|a, b| (&a.0, &a.2).cmp(&(&b.0, &b.2)));
+    // Each function at its name's entry in the function-name table. The table also has
+    // `os.OpenFile`, `os.Getenv`, `syscall.Syscall`, `os.(*File).Write`, and `os.(*File).Read`,
+    // which are not mapped. `syscall.Exec` is an exact entry of the file table only (the `//line`
+    // file name, at 0x1f101), so it gives no hint (PR-4c-3a plan review P2).
+    assert_eq!(
+        got,
+        [
+            go_hint("go.file_read", "os.Open", 0x1730a),
+            go_hint("go.file_write", "os.Create", 0x1c097),
+            go_hint("go.network", "net.(*Dialer).DialContext", 0x18db9),
+            go_hint("go.process_spawn", "os.StartProcess", 0x16a14),
+            go_hint("go.process_spawn", "os/exec.(*Cmd).Start", 0x1bc4a),
+            go_hint("go.process_spawn", "syscall.StartProcess", 0x16a92),
+        ]
+    );
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR-4c-3a: ambiguous names, the environment, and ptrace are not mapped; nor is a name that only
+/// begins or ends like a mapped one. One mapped name in the same table is found, so the table is
+/// searched, and it is the only hint.
+#[test]
+fn unmapped_go_names_give_no_hint_beside_a_mapped_one() {
+    let mut t = vec![0u8; 0x3000];
+    let header = go120_header(0x3000);
+    t[..header.len()].copy_from_slice(&header);
+    for (k, name) in [
+        "os.OpenFile",
+        "os.(*File).Write",
+        "os.(*File).Read",
+        "syscall.Syscall",
+        "syscall.RawSyscall",
+        "os.Getenv",
+        "syscall.PtraceAttach",
+        "os.Open.func1",
+        "bios.Open",
+        "net.(*ListenConfig).ListenPacketConn",
+        "os.Open",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = 0x100 * (k + 1);
+        t[at..at + name.len()].copy_from_slice(name.as_bytes());
+    }
+    let (_d, paths) = files(&[("unmapped", &go_elf(&t, true))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    // `os.Open` is the eleventh name, at 0xb00.
+    assert_eq!(signatures(&s), [go_hint("go.file_read", "os.Open", 0xb00)]);
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
 /// PR #97 review P2: a Go executable whose sections, all named, include no `.gopclntab` was not
 /// searched for its Go functions; its scan says so.
 #[test]
@@ -219,6 +330,128 @@ fn a_go_executable_without_a_gopclntab_section_is_partial() {
     let (_d, paths) = files(&[("ollama", &bytes)]);
     let s = inspect(&paths, NamedBudgets::default());
     assert!(s.binaries[0].go.is_none());
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR-4c-3a plan review P2: Go-function needles look only in `.gopclntab`'s function-name table,
+/// which its header locates. A header SIGIL does not read is a gap, and the needles were not
+/// looked for there; the session still validates.
+#[test]
+fn a_gopclntab_header_not_understood_is_partial() {
+    let mut t = pclntab(0x3000);
+    t[..4].copy_from_slice(&0xffff_fffbu32.to_le_bytes());
+    let (_d, paths) = files(&[("ollama", &go_elf(&t, true))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 1),
+        CoverageState::Partial {
+            missing: vec![SCAN_GOPCLNTAB_HEADER.to_string()]
+        }
+    );
+    // Without Go build info, no Go-function needle applies: the header is never read.
+    let (_d, paths) = files(&[("ollama", &go_elf(&t, false))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert_eq!(identity(&s, 1), CoverageState::Complete);
+}
+
+/// PR #102 review P2: a Go executable whose `.gopclntab` has `sh_size` 0 (its bytes, build info,
+/// and code unchanged; the program still runs) must not read as completely scanned. The section
+/// has no header, so its function names were looked for nowhere: the header gap, and no hint.
+#[test]
+fn a_gopclntab_of_zero_bytes_is_partial() {
+    let mut bytes = capabilities_elf();
+    let header = sections64(&bytes)
+        .into_iter()
+        .find(|s| s.0 == ".gopclntab")
+        .unwrap()
+        .2;
+    bytes[header + 32..header + 40].copy_from_slice(&0u64.to_le_bytes());
+    let (_d, paths) = files(&[("capabilities", &bytes)]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+    assert_eq!(
+        identity(&s, 1),
+        CoverageState::Partial {
+            missing: vec![SCAN_GOPCLNTAB_HEADER.to_string()]
+        }
+    );
+}
+
+/// PR #102 re-review P2: a Go executable whose `.gopclntab` section header points at a forged table
+/// (its build info and code unchanged; the program still runs, for the runtime finds its table
+/// through `runtime.firstmoduledata`, never the section headers) must not read as completely
+/// scanned when the section's bytes are not those the loader maps at its address: the gap, and no
+/// hint.
+#[test]
+fn a_gopclntab_not_mapped_where_its_address_says_is_partial() {
+    let real = capabilities_elf();
+    let header = sections64(&real)
+        .into_iter()
+        .find(|s| s.0 == ".gopclntab")
+        .unwrap()
+        .2;
+    // A control: the real table at an address unlike its offset (the PT_LOAD at 0x400000, as
+    // Go's linker places an executable, and each section's address with it) is mapped where its
+    // address says, and searched as at 0.
+    let mut moved = real.clone();
+    let load = phdr64(&moved, PT_LOAD);
+    moved[load + 16..load + 24].copy_from_slice(&0x40_0000u64.to_le_bytes());
+    for (name, _, h, ..) in sections64(&real) {
+        if name == ".gopclntab" || name == ".go.buildinfo" {
+            let addr = u64::from_le_bytes(moved[h + 16..h + 24].try_into().unwrap());
+            moved[h + 16..h + 24].copy_from_slice(&(addr + 0x40_0000).to_le_bytes());
+        }
+    }
+    let found = |bytes: &[u8]| {
+        let (_d, paths) = files(&[("capabilities", bytes)]);
+        let s = inspect(&paths, NamedBudgets::default());
+        (signatures(&s), identity(&s, 1))
+    };
+    let (at_zero, complete) = found(&real);
+    assert_eq!((at_zero.len(), complete), (6, CoverageState::Complete));
+    assert_eq!(found(&moved), (at_zero, CoverageState::Complete));
+    // A table of one name, `main.main`, in zeros of the PT_LOAD, between the build info (0x4000)
+    // and the real table (0x8000).
+    let mut forged = go120_header(0x52);
+    forged.extend_from_slice(b"main.main\0");
+    assert!(real[0x6000..0x6000 + forged.len()].iter().all(|b| *b == 0));
+    let mut with_forged = real.clone();
+    with_forged[0x6000..0x6000 + forged.len()].copy_from_slice(&forged);
+    // (sh_addr, sh_offset, sh_size) at the section header's bytes 16..40.
+    let edited = |addr: u64, offset: u64, size: u64| {
+        let mut b = with_forged.clone();
+        for (at, v) in [(16, addr), (24, offset), (32, size)] {
+            b[header + at..header + at + 8].copy_from_slice(&v.to_le_bytes());
+        }
+        b
+    };
+    let size = forged.len() as u64;
+    for bytes in [
+        // The offset moved to the forged table, the address left at the real one's.
+        edited(0x8000, 0x6000, size),
+        // The real table, at an address no PT_LOAD maps.
+        edited(0x1000_0000, 0x8000, 691_240),
+    ] {
+        let (_d, paths) = files(&[("capabilities", &bytes)]);
+        let s = inspect(&paths, NamedBudgets::default());
+        assert!(s.binaries[0].go.is_some(), "{:?}", s.binaries[0].gaps);
+        assert!(signatures(&s).is_empty(), "{:?}", s.hints);
+        assert_eq!(
+            identity(&s, 1),
+            CoverageState::Partial {
+                missing: vec![SCAN_GOPCLNTAB_NOT_MAPPED.to_string()]
+            }
+        );
+    }
+    // The limit (binary-inspect.md): the forged table with its address moved too is mapped where
+    // its address says, and SIGIL cannot tell it from the runtime's table, which it would have to
+    // find through `runtime.firstmoduledata`. It is searched, and has no `go.*` name.
+    let (_d, paths) = files(&[("capabilities", &edited(0x6000, 0x6000, size))]);
+    let s = inspect(&paths, NamedBudgets::default());
+    assert!(signatures(&s).is_empty(), "{:?}", s.hints);
     assert_eq!(identity(&s, 1), CoverageState::Complete);
 }
 
@@ -491,7 +724,8 @@ fn string_needles_are_looked_for_in_read_only_data_sections() {
     for (k, (_, _, needle)) in sections.iter().enumerate() {
         img.put(0x1000 + 0x100 * k as u64, needle.as_bytes());
         db.push_str(&format!(
-            "[[needle]]\nfeature = \"s.{needle}\"\nkind = \"string\"\nvalue = \"{needle}\"\n"
+            "[[needle]]\nfeature = \"s.{needle}\"\nkind = \"string\"\nvalue = \"{needle}\"\n\
+             source = \"t\"\n"
         ));
     }
     let end = img.body.len() as u64;
@@ -665,7 +899,8 @@ fn a_scan_over_its_budget_keeps_what_it_found_and_is_partial() {
         "ollama",
         &go_elf(&pclntab_with(2 * mib + 0x1000, mib + 0x100), true),
     )]);
-    let limit = mib as u64 + 100;
+    // The header (0x48 bytes) and the table's first read fit; its second read does not.
+    let limit = 0x48 + mib as u64 + 100;
     let s = inspect(
         &paths,
         NamedBudgets {
@@ -756,17 +991,26 @@ fn a_gopclntab_over_binary_scan_bytes_stops_at_the_limit() {
         .find(|s| s.0 == ".gopclntab")
         .unwrap()
         .2;
-    bytes[header + 24..header + 32].copy_from_slice(&at.to_le_bytes());
+    // At `at`, its address and offset alike, and the PT_LOAD (offset and address 0) taken to its
+    // end, so that the loader maps it where its address says (PR #102 re-review P2).
+    for field in [16, 24] {
+        bytes[header + field..header + field + 8].copy_from_slice(&at.to_le_bytes());
+    }
     bytes[header + 32..header + 40].copy_from_slice(&size.to_le_bytes());
+    let load = phdr64(&bytes, PT_LOAD);
+    for field in [32, 40] {
+        bytes[load + field..load + field + 8].copy_from_slice(&(at + size).to_le_bytes());
+    }
     let d = TempDir::new().unwrap();
     let path = d.path().join("ollama");
     std::fs::write(&path, &bytes).unwrap();
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_len(at + size)
-        .unwrap();
+    let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    f.set_len(at + size).unwrap();
+    // A header whose function-name table is the whole section, after it.
+    use std::io::{Seek, Write};
+    f.seek(std::io::SeekFrom::Start(at)).unwrap();
+    f.write_all(&go120_header(size)).unwrap();
+    drop(f);
     let s = inspect(&[path], NamedBudgets::default());
     assert!(signatures(&s).is_empty());
     assert_eq!(
@@ -853,7 +1097,8 @@ fn a_dynsym_the_parse_does_not_read_is_a_gap() {
     let gap = found_nothing(&[sigil_model::SCAN_NAME_NOT_READ]);
     assert_eq!(scan_of("libggml-rpc.so", &bytes), gap);
     // Without an export needle, nothing is missing.
-    let go = "[[needle]]\nfeature = \"g.f\"\nkind = \"go-function\"\nvalue = \"main.f\"\n";
+    let go = "[[needle]]\nfeature = \"g.f\"\nkind = \"go-function\"\nvalue = \"main.f\"\n\
+              source = \"t\"\n";
     assert_eq!(scan_with(&bytes, go), found_nothing(&[]));
 }
 
@@ -972,7 +1217,7 @@ fn exports_not_checked_against_the_loader_s_table_are_a_gap_unless_found() {
         assert_eq!(gaps, [sigil_model::SCAN_NAME_NOT_READ], "{how}");
         // Looking for the RPC export alone, the one found leaves nothing missing.
         let rpc = "[[needle]]\nfeature = \"rpc.code_present\"\nkind = \"export\"\n\
-                   value = \"ggml_backend_rpc_\"\n";
+                   value = \"ggml_backend_rpc_\"\nsource = \"t\"\n";
         let ScanOutcome::Scanned { found, gaps } = scan_with(&patch(&rpc_library()), rpc) else {
             panic!("{how}: not scanned");
         };

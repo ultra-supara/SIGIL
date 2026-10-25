@@ -49,12 +49,31 @@ pub const SCAN_NO_SECTIONS: &str = "string scan: no section headers";
 /// A scan gap: the name of a section or of an exported symbol could not be read, so a needle may
 /// be there unseen.
 pub const SCAN_NAME_NOT_READ: &str = "string scan: a name not read";
-/// A scan gap: a read of a section failed, and the rest of that section was not read; or the
-/// section passes the end of the file, and its bytes past it could not be read.
+/// A scan gap: a read of a section failed, and the rest of it was not read; or the section passes
+/// the end of the file (for `.gopclntab`, its header or table), and only its bytes in it were read.
 pub const SCAN_READ_FAILED: &str = "string scan: a read failed";
 /// A scan gap: the file has Go build info, so its Go-function needles apply, and none of its
 /// sections, every name read, is `.gopclntab`: they were looked for nowhere (PR #97 review P2).
 pub const SCAN_NO_GOPCLNTAB: &str = "string scan: no .gopclntab section";
+/// A scan gap: the file has Go build info and a `.gopclntab`, but the section's header is not
+/// one of the layouts SIGIL reads (Go 1.16 and later), or locates no function-name table within
+/// the section: the Go-function needles, which look only in that table, were not looked for there
+/// (PR-4c-3a plan review P2).
+pub const SCAN_GOPCLNTAB_HEADER: &str = "string scan: .gopclntab header not understood";
+/// A scan gap: the file has Go build info and a `.gopclntab`, but the section's bytes in the file
+/// (`sh_offset`) are not the bytes the loader maps at its address (`sh_addr`, through the
+/// `PT_LOAD`s), or it is at no address: the runtime reads its table through an address, so it
+/// does not read that one, and the Go-function needles were not looked for in the one it reads
+/// (PR #102 re-review P2).
+pub const SCAN_GOPCLNTAB_NOT_MAPPED: &str =
+    "string scan: .gopclntab is not the bytes mapped at its address";
+
+/// The scan's gaps about `.gopclntab`, admitted only when `no_gopclntab_admitted`.
+const GOPCLNTAB_GAPS: [&str; 3] = [
+    SCAN_NO_GOPCLNTAB,
+    SCAN_GOPCLNTAB_HEADER,
+    SCAN_GOPCLNTAB_NOT_MAPPED,
+];
 
 /// `binary.identity`'s `Unsupported` reason for a Mach-O input, and the gap of a Mach-O artifact
 /// in `artifacts.identity`: SIGIL reads no Mach-O section yet.
@@ -84,6 +103,8 @@ pub fn is_scan_gap(gap: &str, limit: u64) -> bool {
     [
         SCAN_NO_SECTIONS,
         SCAN_NO_GOPCLNTAB,
+        SCAN_GOPCLNTAB_HEADER,
+        SCAN_GOPCLNTAB_NOT_MAPPED,
         SCAN_NAME_NOT_READ,
         SCAN_READ_FAILED,
     ]
@@ -379,11 +400,11 @@ pub enum ExpectedIdentity {
     /// repeats (the engine's form); [`SCAN_NO_SECTIONS`] among them as `no_sections` says, and
     /// [`SCAN_NAME_NOT_READ`] among them when `exports_unread`: a linked ELF whose facts carry one
     /// of [`DYNSYM_UNREAD_GAPS`]. `Complete` only when neither gap is required.
-    /// [`SCAN_NO_GOPCLNTAB`] only when `no_gopclntab_admitted`: a slice is a Go ELF whose section
-    /// header table was read. The model sees no section names, so it admits the gap there, and
-    /// `Complete` too. Also `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when
-    /// `name_and_hash_only`: a claim on a slice of the input names one of
-    /// [`NAME_AND_HASH_ONLY`].
+    /// [`SCAN_NO_GOPCLNTAB`], [`SCAN_GOPCLNTAB_HEADER`], and [`SCAN_GOPCLNTAB_NOT_MAPPED`] only
+    /// when `no_gopclntab_admitted`: a slice is a Go ELF whose section header table was read. The
+    /// model sees no section names or bytes, so it admits the gaps there, and `Complete` too. Also
+    /// `OutOfScope {` [`NAME_AND_HASH_ONLY_WHY`] `}` when `name_and_hash_only`: a claim on a slice
+    /// of the input names one of [`NAME_AND_HASH_ONLY`].
     ///
     /// The engine excludes a file by its placement's own file name (ADR-010), and scans one whose
     /// SONAME alone is NVIDIA's. The model has no name database, so it cannot tell the two
@@ -443,9 +464,11 @@ pub(crate) fn exports_unread(b: &BinaryFacts, kind: ElfType) -> bool {
             .any(|g| DYNSYM_UNREAD_GAPS.contains(&g.as_str()))
 }
 
-/// Whether `b`, a slice's facts, admit the scan's gap [`SCAN_NO_GOPCLNTAB`]: a Go ELF (its
-/// Go-function needles apply) whose section header table was read (`stripped` is set; B8), so
-/// that the scan could find no section named `.gopclntab`.
+/// Whether `b`, a slice's facts, admit the scan's gaps [`SCAN_NO_GOPCLNTAB`],
+/// [`SCAN_GOPCLNTAB_HEADER`], and [`SCAN_GOPCLNTAB_NOT_MAPPED`]: a Go ELF (its Go-function needles
+/// apply) whose section header table was read (`stripped` is set; B8), so that the scan could find
+/// no section named `.gopclntab`, or one whose header it does not read, or one not mapped where its
+/// address says.
 pub(crate) fn no_gopclntab_admitted(b: &BinaryFacts) -> bool {
     b.go.is_some() && matches!(&b.container, ContainerFacts::Elf(elf) if elf.stripped.is_some())
 }
@@ -530,7 +553,7 @@ impl ExpectedIdentity {
                             }
                             && (!*exports_unread || missing.iter().any(|g| g == SCAN_NAME_NOT_READ))
                             && (*no_gopclntab_admitted
-                                || !missing.iter().any(|g| g == SCAN_NO_GOPCLNTAB))
+                                || !missing.iter().any(|g| GOPCLNTAB_GAPS.contains(&g.as_str())))
                     }
                     CoverageState::OutOfScope { why } => {
                         *name_and_hash_only && why == NAME_AND_HASH_ONLY_WHY && !*any_returns
@@ -558,7 +581,7 @@ impl ExpectedIdentity {
                     refused.push(format!("{SCAN_NO_SECTIONS:?}"));
                 }
                 if !*no_gopclntab_admitted {
-                    refused.push(format!("{SCAN_NO_GOPCLNTAB:?}"));
+                    refused.extend(GOPCLNTAB_GAPS.iter().map(|g| format!("{g:?}")));
                 }
                 if !refused.is_empty() {
                     gaps.push_str(&format!(" other than {}", refused.join(" and ")));

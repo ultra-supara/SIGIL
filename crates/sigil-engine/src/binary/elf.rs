@@ -1246,7 +1246,11 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
     /// Whether section `s` is the table the loader reads at `vaddr` (review of #91): object reads
     /// a section at its `sh_offset`, the loader reads the address through the `PT_LOAD`s, so both
     /// the address and the bytes must agree. `Err` says how it does not.
-    fn loader_reads(&self, s: Option<&H::SectionHeader>, vaddr: u64) -> Result<(), &'static str> {
+    pub(crate) fn loader_reads(
+        &self,
+        s: Option<&H::SectionHeader>,
+        vaddr: u64,
+    ) -> Result<(), &'static str> {
         let endian = self.endian;
         let Some(s) = s.filter(|s| Into::<u64>::into(s.sh_addr(endian)) == vaddr) else {
             return Err("is not at");
