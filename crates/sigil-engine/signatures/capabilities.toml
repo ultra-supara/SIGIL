@@ -1,4 +1,7 @@
-# Capability imports (PR-5a spec §4.3): v0.1's capability_for_symbol, unchanged in its names.
+# Capability imports (PR-5a spec §4.3): v0.1's capability_for_symbol, unchanged in its names,
+# and libstdc++'s file operations (PR-4c-3c, below). A hint says that the file imports the
+# function: presence, never a call. The table is not a complete list of how a program reaches a
+# capability.
 # Exact names only; a version (connect@GLIBC_2.2.5) is not part of the name.
 # arity: the SysV argument registers a call can read (the most, for a variadic function).
 # source: where the name and its meaning come from, required and not blank (PR-4c-3c).
@@ -63,4 +66,118 @@ symbols = [
 feature = "posix.anti_debug"
 symbols = [
   { name = "ptrace", arity = 4, source = "Linux and macOS ptrace(2); not in POSIX" },
+]
+
+# libstdc++'s names (PR-4c-3c): exact mangled names that libstdc++.so.6.0.35 exports, matched
+# without demangling. Each std::filesystem operation for both path ABIs (std::filesystem::__cxx11::
+# path and the old std::filesystem::path), each with and without std::error_code&; the streams for
+# char and wchar_t, with the three string forms (const char*, the __cxx11 string, the old string).
+# source: "libstdc++ <version>: <demangled form>", with [C1] (complete object) or [C2] (base
+# object; it takes the VTT as its second argument, so its arity is one more) after a constructor.
+# One feature per name: copy and copy_file read too, but writing is what they are for. An
+# ifstream's mode always includes in, and an ofstream's always out.
+# A missing hint is not absence: a stream constructor that the compiler inlines leaves only
+# basic_filebuf::open in the imports, and a statically linked libstdc++ (GCC 8's libstdc++fs.a,
+# std::experimental::filesystem) leaves none of these names.
+# Not mapped: basic_fstream and basic_filebuf::open (the mode decides read or write); permissions
+# and last_write_time (metadata); status, exists, and the directory iterators (they change
+# nothing); the default and move constructors of the streams (they open no file); libc++
+# (std::__1) and other C++ libraries.
+
+[[capability]]
+feature = "cxx.file_read"
+symbols = [
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(char const*, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1ERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2EPKcSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4: std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(char const*, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC2ERKSsSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ifstream<char, std::char_traits<char> >::open(char const*, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEE4openERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ifstream<char, std::char_traits<char> >::open(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ifstreamIcSt11char_traitsIcEE4openERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ifstream<char, std::char_traits<char> >::open(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC1EPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::basic_ifstream(char const*, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC1ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC1ERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::basic_ifstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC2EPKcSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::basic_ifstream(char const*, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC2ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEEC2ERKSsSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::basic_ifstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEE4openEPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::open(char const*, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEE4openERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::open(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ifstreamIwSt11char_traitsIwEE4openERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ifstream<wchar_t, std::char_traits<wchar_t> >::open(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+]
+
+[[capability]]
+feature = "cxx.file_write"
+symbols = [
+  { name = "_ZNSt10filesystem6removeERKNS_7__cxx114pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove(std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem6removeERKNS_7__cxx114pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove(std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem6removeERKNS_4pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove(std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem6removeERKNS_4pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove(std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem10remove_allERKNS_7__cxx114pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove_all(std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem10remove_allERKNS_7__cxx114pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove_all(std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem10remove_allERKNS_4pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove_all(std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem10remove_allERKNS_4pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::remove_all(std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem6renameERKNS_7__cxx114pathES3_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::rename(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem6renameERKNS_7__cxx114pathES3_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::rename(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem6renameERKNS_4pathES2_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::rename(std::filesystem::path const&, std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem6renameERKNS_4pathES2_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::rename(std::filesystem::path const&, std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathES3_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_7__cxx114pathES3_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_4pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_4pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_4pathES2_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::path const&, std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem16create_directoryERKNS_4pathES2_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory(std::filesystem::path const&, std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem18create_directoriesERKNS_7__cxx114pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directories(std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem18create_directoriesERKNS_7__cxx114pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directories(std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem18create_directoriesERKNS_4pathE", arity = 1, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directories(std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem18create_directoriesERKNS_4pathERSt10error_code", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directories(std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem14create_symlinkERKNS_7__cxx114pathES3_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem14create_symlinkERKNS_7__cxx114pathES3_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem14create_symlinkERKNS_4pathES2_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_symlink(std::filesystem::path const&, std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem14create_symlinkERKNS_4pathES2_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_symlink(std::filesystem::path const&, std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem16create_hard_linkERKNS_7__cxx114pathES3_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_hard_link(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem16create_hard_linkERKNS_7__cxx114pathES3_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_hard_link(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem16create_hard_linkERKNS_4pathES2_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_hard_link(std::filesystem::path const&, std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem16create_hard_linkERKNS_4pathES2_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_hard_link(std::filesystem::path const&, std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem24create_directory_symlinkERKNS_7__cxx114pathES3_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem24create_directory_symlinkERKNS_7__cxx114pathES3_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem24create_directory_symlinkERKNS_4pathES2_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory_symlink(std::filesystem::path const&, std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem24create_directory_symlinkERKNS_4pathES2_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::create_directory_symlink(std::filesystem::path const&, std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem4copyERKNS_7__cxx114pathES3_NS_12copy_optionsE", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options)" },
+  { name = "_ZNSt10filesystem4copyERKNS_7__cxx114pathES3_NS_12copy_optionsERSt10error_code", arity = 4, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options, std::error_code&)" },
+  { name = "_ZNSt10filesystem4copyERKNS_4pathES2_NS_12copy_optionsE", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy(std::filesystem::path const&, std::filesystem::path const&, std::filesystem::copy_options)" },
+  { name = "_ZNSt10filesystem4copyERKNS_4pathES2_NS_12copy_optionsERSt10error_code", arity = 4, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy(std::filesystem::path const&, std::filesystem::path const&, std::filesystem::copy_options, std::error_code&)" },
+  { name = "_ZNSt10filesystem9copy_fileERKNS_7__cxx114pathES3_NS_12copy_optionsE", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_file(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options)" },
+  { name = "_ZNSt10filesystem9copy_fileERKNS_7__cxx114pathES3_NS_12copy_optionsERSt10error_code", arity = 4, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_file(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::filesystem::copy_options, std::error_code&)" },
+  { name = "_ZNSt10filesystem9copy_fileERKNS_4pathES2_NS_12copy_optionsE", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_file(std::filesystem::path const&, std::filesystem::path const&, std::filesystem::copy_options)" },
+  { name = "_ZNSt10filesystem9copy_fileERKNS_4pathES2_NS_12copy_optionsERSt10error_code", arity = 4, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_file(std::filesystem::path const&, std::filesystem::path const&, std::filesystem::copy_options, std::error_code&)" },
+  { name = "_ZNSt10filesystem12copy_symlinkERKNS_7__cxx114pathES3_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&)" },
+  { name = "_ZNSt10filesystem12copy_symlinkERKNS_7__cxx114pathES3_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_symlink(std::filesystem::__cxx11::path const&, std::filesystem::__cxx11::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem12copy_symlinkERKNS_4pathES2_", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_symlink(std::filesystem::path const&, std::filesystem::path const&)" },
+  { name = "_ZNSt10filesystem12copy_symlinkERKNS_4pathES2_RSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::copy_symlink(std::filesystem::path const&, std::filesystem::path const&, std::error_code&)" },
+  { name = "_ZNSt10filesystem11resize_fileERKNS_7__cxx114pathEm", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::resize_file(std::filesystem::__cxx11::path const&, unsigned long)" },
+  { name = "_ZNSt10filesystem11resize_fileERKNS_7__cxx114pathEmRSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::resize_file(std::filesystem::__cxx11::path const&, unsigned long, std::error_code&)" },
+  { name = "_ZNSt10filesystem11resize_fileERKNS_4pathEm", arity = 2, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::resize_file(std::filesystem::path const&, unsigned long)" },
+  { name = "_ZNSt10filesystem11resize_fileERKNS_4pathEmRSt10error_code", arity = 3, source = "libstdc++ GLIBCXX_3.4.26: std::filesystem::resize_file(std::filesystem::path const&, unsigned long, std::error_code&)" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1EPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(char const*, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC1ERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC2EPKcSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4: std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(char const*, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC2ERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEEC2ERKSsSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ofstream<char, std::char_traits<char> >::basic_ofstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ofstream<char, std::char_traits<char> >::open(char const*, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEE4openERKNSt7__cxx1112basic_stringIcS1_SaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ofstream<char, std::char_traits<char> >::open(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ofstreamIcSt11char_traitsIcEE4openERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ofstream<char, std::char_traits<char> >::open(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC1EPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::basic_ofstream(char const*, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC1ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::basic_ofstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC1ERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::basic_ofstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C1]" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC2EPKcSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::basic_ofstream(char const*, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC2ERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::basic_ofstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEEC2ERKSsSt13_Ios_Openmode", arity = 4, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::basic_ofstream(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode) [C2]" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openEPKcSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::open(char const*, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openERKNSt7__cxx1112basic_stringIcS0_IcESaIcEEESt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.21: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::open(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
+  { name = "_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openERKSsSt13_Ios_Openmode", arity = 3, source = "libstdc++ GLIBCXX_3.4.13: std::basic_ofstream<wchar_t, std::char_traits<wchar_t> >::open(std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)" },
 ]
