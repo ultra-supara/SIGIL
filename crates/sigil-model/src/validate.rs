@@ -1792,28 +1792,29 @@ impl<'a> Validator<'a> {
                                 .to_string(),
                         );
                     }
-                    // Without a `load dylib: ` gap, every name was kept, in ordinal order: ordinal n
-                    // is the n-th name, and none is unknown. With one, a name was kept at or
-                    // before its ordinal's place (PR-4c-3b plan review P2).
+                    // Without a `load dylib: ` gap, every name was kept, in ordinal order:
+                    // ordinal n is the n-th name, and none is unknown. With one, a name was kept
+                    // at or before its ordinal's place (PR-4c-3b plan review P2).
                     let all_kept = !facts
                         .gaps
                         .iter()
                         .any(|g| g.starts_with(LOAD_DYLIB_GAP_PREFIX));
-                    let misplaced = |ordinal: u32, name: &Option<crate::text::UntrustedText>| {
+                    let misplaced = |ordinal: u32, name: Option<&crate::text::UntrustedText>| {
                         let at = ordinal as usize;
-                        match name {
-                            _ if at == 0 => true,
-                            Some(n) if all_kept => macho.load_dylibs.get(at - 1) != Some(n),
-                            Some(n) => !macho.load_dylibs.iter().take(at).any(|d| d == n),
-                            None => all_kept,
-                        }
+                        at == 0
+                            || match name {
+                                Some(n) if all_kept => macho.load_dylibs.get(at - 1) != Some(n),
+                                Some(n) => !macho.load_dylibs.iter().take(at).any(|d| d == n),
+                                None => all_kept,
+                            }
                     };
                     if macho.imports.iter().any(|i| {
                         matches!(&i.library, MachOLibrary::Dylib { ordinal, name }
-                            if misplaced(*ordinal, name))
+                            if misplaced(*ordinal, name.as_ref()))
                     }) {
                         why.push(
-                            "a dylib import's ordinal is 0, or its name is not its ordinal's dylib"
+                            "a dylib import's ordinal is 0, or its name is not its ordinal's dylib, \
+                             or unknown without a `load dylib: ` gap"
                                 .to_string(),
                         );
                     }
@@ -2136,7 +2137,7 @@ impl<'a> Validator<'a> {
     }
 
     /// C6 (PR-5a spec §5.2): an `Import` hint names an import of its slice, at `Symbol(value)`.
-    /// On a Mach-O slice (PR-4c-3b), the import is one whose library is looked up
+    /// On a Mach-O slice (PR-4c-3b), the import's library must be looked up
     /// ([`MachOLibrary::looked_up`]): libSystem, flat lookup, or an object file's.
     ///
     /// [`MachOLibrary::looked_up`]: crate::binary::MachOLibrary::looked_up
@@ -2149,27 +2150,33 @@ impl<'a> Validator<'a> {
             if hint.at != Loc::Symbol(hint.value.clone()) {
                 self.code_error(&at, "an import hint's at must be Symbol(value)");
             }
-            let facts = s.binaries.iter().find(|b| b.slice == hint.subject);
-            let imported = match facts.map(|b| &b.container) {
-                Some(ContainerFacts::Elf(elf)) => elf.imports.iter().any(|i| i.name == hint.value),
-                Some(ContainerFacts::MachO(macho)) => {
-                    macho.imports.iter().any(|i| i.name == hint.value)
+            // Whether the value is an import of the slice, and, on a Mach-O slice, one whose
+            // library is looked up.
+            let (imported, looked_up) = match s
+                .binaries
+                .iter()
+                .find(|b| b.slice == hint.subject)
+                .map(|b| &b.container)
+            {
+                Some(ContainerFacts::Elf(elf)) => {
+                    (elf.imports.iter().any(|i| i.name == hint.value), true)
                 }
-                None => false,
-            };
-            let looked_up = match facts.map(|b| &b.container) {
-                Some(ContainerFacts::MachO(macho)) => macho
-                    .imports
-                    .iter()
-                    .any(|i| i.name == hint.value && i.library.looked_up()),
-                _ => true,
+                Some(ContainerFacts::MachO(macho)) => {
+                    let named = || macho.imports.iter().filter(|i| i.name == hint.value);
+                    (
+                        named().next().is_some(),
+                        named().any(|i| i.library.looked_up()),
+                    )
+                }
+                None => (false, true),
             };
             if !imported {
                 self.code_error(&at, "the value is not an import of its slice");
             } else if !looked_up {
                 self.code_error(
                     &at,
-                    "the value is a Mach-O import not looked up (libSystem, flat lookup, or an object file's)",
+                    "the value is a Mach-O import whose library is not looked up (only libSystem's, \
+                     flat lookup's, and an object file's are)",
                 );
             }
         }

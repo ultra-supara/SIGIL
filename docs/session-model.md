@@ -156,8 +156,7 @@ The rule then yields an open question at most.
     linker, and no other slice's are. A `Dylib` import's ordinal is from 1, and its name is its
     ordinal's dylib: without a `load dylib: ` gap, every dylib-loading command's name was kept,
     in ordinal order, so ordinal n names the n-th loaded dylib, and a name is never unknown; with
-    one, a name was kept at or before its ordinal's place. A Mach-O's `imports` field is optional
-    on read and written only when non-empty, so a session written before PR-4c-3b keeps its bytes;
+    one, a name was kept at or before its ordinal's place;
   - S2 (PR-4c-2a): a session has at most one `artifacts.identity` entry. It is scoped to the
     install root, and is `Complete` only with a complete discovery and facts for every slice of
     the install's ELF and Mach-O files, none of them a Mach-O, and none a Go ELF without section
@@ -223,7 +222,7 @@ The rule then yields an open question at most.
     values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,
     with the values nested in each;
   - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF or
-    Mach-O facts. A Mach-O import is one whose library is looked up (PR-4c-3b): bound to
+    Mach-O facts. On a Mach-O slice, the import's library must be looked up (PR-4c-3b): bound to
     `/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object file's.
 
   C1 and C4 are about a binary inspection. Outside one, code facts are the M1 analyzer's (plan

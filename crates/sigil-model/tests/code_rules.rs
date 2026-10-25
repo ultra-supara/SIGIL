@@ -592,7 +592,7 @@ fn c6_a_mach_o_import_hint_names_an_import_looked_up() {
     assert!(
         errors(&s)
             .iter()
-            .any(|e| e.contains("a Mach-O import not looked up")),
+            .any(|e| e.contains("whose library is not looked up")),
         "{:?}",
         errors(&s)
     );
@@ -605,6 +605,21 @@ fn c6_a_mach_o_import_hint_names_an_import_looked_up() {
             errors(&s)
         );
     }
+    // A name imported from libfoo and from libSystem is looked up through libSystem's.
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.imports.push(MachOImport {
+        name: UntrustedText::new("_connect"),
+        library: MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new("@rpath/libfoo.dylib")),
+        },
+        weak: false,
+    });
+    s.canonicalize();
+    s.hints = vec![import_hint(&s, "posix.network", "_connect")];
+    assert_eq!(errors(&s), Vec::<String>::new());
     // An object file's undefined symbol is looked up (its library is the linker's).
     let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
         panic!()

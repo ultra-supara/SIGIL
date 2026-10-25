@@ -157,8 +157,9 @@ pub struct MachOImport {
 #[serde(deny_unknown_fields)]
 pub enum MachOLibrary {
     /// Library ordinal `ordinal` (from 1): the dylib of that dylib-loading command, counted in
-    /// load-command order. `name` is `None` when that command's name was not read (its gap is the
-    /// container's).
+    /// load-command order. `name` is `None` when that command's name was not kept in
+    /// `load_dylibs` (not read, or over the limit of names); its gap starts with
+    /// [`LOAD_DYLIB_GAP_PREFIX`].
     Dylib {
         ordinal: u32,
         name: Option<UntrustedText>,

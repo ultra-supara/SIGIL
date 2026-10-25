@@ -758,7 +758,7 @@
       }
     },
     "MachOLibrary": {
-      "description": "Where a Mach-O import is looked up: a dylib by its library ordinal (from 1; name null when its command's name was not read), ordinal 0, -1, -2, or -3, or an object file's linker.",
+      "description": "Where a Mach-O import is looked up: a dylib by its library ordinal (from 1; name null when its command's name was not kept: not read, or over the limit of names), ordinal 0, -1, -2, or -3, or an object file's linker.",
       "oneOf": [
         {"type": "string", "enum": ["SelfImage", "MainExecutable", "FlatLookup", "WeakLookup", "Unbound"]},
         {

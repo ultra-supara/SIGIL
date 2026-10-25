@@ -313,6 +313,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 load_dylibs: vec![t("/usr/lib/libSystem.B.dylib")],
                 rpaths: vec![],
                 dylinker: None,
+                // Shapes only: ordinal 2 has no loaded dylib here (B12 is the validator's).
                 imports: vec![
                     MachOImport {
                         name: t("_connect"),

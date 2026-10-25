@@ -732,7 +732,10 @@ fn b12_with_a_dylib_not_kept_a_name_is_at_or_before_its_ordinal() {
         not_rejected_for(&gapped(library), complaint);
     }
     // The facts are consistent, but the container is not Complete (B7).
-    rejected_for(&gapped(dylib(3, None)), "Complete");
+    rejected_for(
+        &gapped(dylib(3, None)),
+        &format!("{ARTIFACTS_CONTAINER} is Complete"),
+    );
     for library in [
         libsystem(0),
         dylib(1, Some(LIBFOO)),
