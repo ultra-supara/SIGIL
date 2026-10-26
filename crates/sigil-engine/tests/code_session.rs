@@ -452,6 +452,6 @@ fn a_code_request_never_changes_the_container_coverage() {
         }
         seen += 1;
     }
-    // 28 code fixtures, 7 ELF fixtures, and hello-universal.
-    assert!(seen >= 36, "{seen} files");
+    // 29 code fixtures, 7 ELF fixtures, and hello-universal.
+    assert!(seen >= 37, "{seen} files");
 }
