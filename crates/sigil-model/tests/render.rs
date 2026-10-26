@@ -2262,8 +2262,6 @@ fn a_violation_shows_its_evidence_and_an_open_question_why_it_is_open() {
     )));
 }
 
-/// #51: a cell shows the first three evidence references, then how many more there are; an
-/// import is shown by its name, escaped as any input.
 /// The cells #51 adds escape what they show: a hostile import name, section name, and unknown
 /// reason form no Markdown or HTML, and every evidence form keeps its row whole.
 #[test]
@@ -2300,9 +2298,13 @@ fn hostile_capability_cells_form_no_markdown_or_html() {
     assert!(md.contains("0x4d in "), "{md}");
     assert!(md.contains("offset 0x20 in "), "{md}");
     assert!(md.contains("+0x10 in "), "{md}");
+    // Shown escaped, character for character.
+    assert!(md.contains(&t(HOSTILE).markdown_inline()), "{md}");
     assert_rows_whole(&md);
 }
 
+/// #51: a cell shows the first three evidence references, then how many more there are; an
+/// import is shown by its name, escaped as any input.
 #[test]
 fn an_evidence_cell_shows_three_references_then_the_count() {
     let mut s = capability_policy();
