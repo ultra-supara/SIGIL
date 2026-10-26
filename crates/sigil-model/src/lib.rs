@@ -86,7 +86,8 @@ pub use evidence::{
 pub use finding::{
     Action, Completeness, CondEvidence, CondState, Condition, Finding, FindingKind, OpenQuestion,
     OpenQuestionDecision, OqTreatment, Outcome, PolicyDecision, PolicyViolation, Settles, Severity,
-    ValueNeed, Verdict,
+    ValueNeed, Verdict, CAPABILITY_CONDITION_PREFIX, CAPABILITY_DENY_PREFIX, CAPABILITY_RULE,
+    CAPABILITY_TABLE_ID,
 };
 pub use hint::{FeatureHint, Signal};
 pub use id::{
