@@ -608,3 +608,17 @@ The policy's `binary_audit` is what a binary inspection requires: `["binary"]`, 
 `binary.container` and `binary.identity`, when the policy sets it that way or leaves it out. With
 `--code`, `binary_code_audit` is added after it: `["binary_code"]`, whose check is `binary.code`,
 when the policy sets it that way or leaves it out. See [policy](policy.md).
+
+A policy can deny a capability (`[[capabilities.deny]]`, #51). A direct call site of one of its
+imports is then a policy violation citing the call site, so `--code --fail-on fail` exits 3 for a
+file that calls a denied capability. An import of it without a direct call site is an open
+question, counted as a gap by default, so the result is INCOMPLETE: without `--code` the code was
+not analyzed, and with it a call through a function pointer or from data is not followed. In the
+Markdown, a violation's row lists its evidence (the call sites) and an open question's row why it
+is open. `sigil explain --finding <id>` explains either.
+
+The session records the capability table its hints and call sites were made with (a `SignatureDb`
+knowledge entry `capabilities`, with the table's SHA-256). A later build with another table
+refuses to judge the session under a capability denial: inspect the files again with it.
+`sigil session verify <SESSION> --policy FILE` checks that a saved session is what the policy
+gives ([policy](policy.md#verifying-a-session-against-its-policy)).

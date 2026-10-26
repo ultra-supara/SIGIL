@@ -462,6 +462,7 @@ fn the_documented_example_loads() {
     let policy = Policy::load(&block).unwrap();
     assert_eq!(policy.rules.len(), 2);
     assert_eq!(policy.deny.len(), 1);
+    assert_eq!(policy.capabilities.len(), 1);
 }
 
 #[test]

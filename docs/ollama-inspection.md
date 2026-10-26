@@ -28,6 +28,7 @@ Static and observe perform no network I/O. The active probe is off by default. T
 
   When reference matches establish no release (no release matches every file, or discovery was incomplete), the install's self-reported commits (`LLAMA_COMMIT`, `ggml_commit`) can still give an open claim, added to the line: `not established (…); consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)`. It lists the official releases whose own files report the same commits. It is "consistent with" only: a custom build, a mixed install, or an unlisted release is not excluded, and it never closes `artifacts.release`.
 - `sigil session render <SESSION> [--format md|aibom]` renders a saved session again, without inspecting anything.
+- `sigil session verify <SESSION> [--policy FILE]` checks that a saved session is what its policy gives: it evaluates the session again and names each difference ([policy](policy.md#verifying-a-session-against-its-policy)).
 
 ## A first run
 

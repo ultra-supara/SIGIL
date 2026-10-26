@@ -49,6 +49,11 @@ extra_groups = []                  # gid:<n>
 component = "ggml-backend/rpc"
 action    = "fail"                 # fail | warn
 reason    = "The RPC backend is outside the internal standard"
+
+[[capabilities.deny]]
+feature = "posix.process_spawn"    # a key of the capability-import table
+action  = "fail"                   # fail | warn
+reason  = "The runtime must not start processes"
 ```
 
 A deny entry matches a component claim through the claim's component or any of its names: a file
@@ -56,6 +61,16 @@ named `libggml-base.so.0` whose SONAME is `libggml-rpc.so` is a `ggml-base` clai
 and the entry above matches it. The violation's subject is that claim, and its rule names the
 denied component (`policy:components.deny.ggml-backend/rpc`). An `Unidentified` claim never
 matches.
+
+A capability denial (#51) is about code, not imports. A slice whose code calls an import of the
+denied capability directly is a policy violation that cites each such call site
+(`policy:capabilities.deny.posix.process_spawn`). A slice that imports the capability but has no
+direct call site of it is an open question (rule `binary.capability_call`), whatever code
+analysis says: a call through a function pointer or from data is not followed, so the absence of
+a direct call is not proof that there is none. Without code analysis (`binary inspect` without
+`--code`, and an installation, whose code is not analyzed yet), every such import is an open
+question. The capabilities a policy can deny are the keys of the capability-import table
+(`sigil rules` lists them); allowing one is not listing it.
 
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
 `[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy
@@ -105,8 +120,9 @@ session `INCOMPLETE`. That is `Partial`, `BudgetExceeded`, `Error`, or `Unsuppor
 - `Unsupported`: a Mach-O or fat file, an ELF of another machine, an x32 or big-endian ELF, or a
   file that is not a container. Only x86-64 ELF64 little-endian code is analyzed.
 
-Code facts are facts, not findings. No rule applies to a call site, so code analysis never changes
-the verdict. What `binary.code` records: [`docs/session-model.md`](session-model.md#code-analysis-pr-5a).
+Code facts are facts, not findings. Only a capability denial (above) acts on them: without one,
+code analysis never changes the verdict. What `binary.code` records:
+[`docs/session-model.md`](session-model.md#code-analysis-pr-5a).
 
 ## Catalogs
 
@@ -153,6 +169,12 @@ have no rules: [`docs/runtime-artifacts.md`](runtime-artifacts.md).
 | A-3 | The runtime was launched by this system-instance unit, so an unset `WorkingDirectory=` means cwd `/` |
 | A-4 | No symbol interposition in the role: each loader PLT call binds to the analyzed definer |
 
+**Capabilities** a `[[capabilities.deny]]` entry may name (#51), the keys of
+`crates/sigil-engine/signatures/capabilities.toml`: `cxx.file_read`, `cxx.file_write`,
+`posix.anti_debug`, `posix.dynamic_loading`, `posix.environment_access`, `posix.file_read`,
+`posix.file_write`, `posix.network`, and `posix.process_spawn`. A signature key (`go.*`,
+`ollama.*`, `rpc.*`) is a name found in a file, with no call site to judge, and does not load.
+
 ## Inputs to the analysis
 
 Two parts of a policy decide what the analysis concludes, not only what is done with it:
@@ -169,9 +191,17 @@ differ from those recorded, and leaves the session unchanged. Required checks ar
 set: a check added or removed is a difference, their order is not (a session saved as canonical
 JSON lists them sorted). Such a policy changes the technical
 conclusions, so the session must be analyzed again with it. A policy that differs only in its
-decisions (rule overrides, open-question treatment, denied components) can re-evaluate a recorded
-session. Deny entries are matched through the evaluating build's component database, so a build
-with other names may give other violations for the same session.
+decisions (rule overrides, open-question treatment, denied components and capabilities) can
+re-evaluate a recorded session. Component deny entries are matched through the evaluating build's
+component database, so a build with other names may give other violations for the same session.
+Capability denials are judged by the session's own hints and code facts, which were made with the
+capability table the session records (a `SignatureDb` knowledge entry `capabilities`, by
+SHA-256): a build with the same table gives the same results. Under a capability denial,
+evaluation refuses a session with binary facts that records another table, or none (every session
+made before #51), and leaves it unchanged: its hints and call sites name only that table's
+imports, so the files must be analyzed again with this build. It also refuses a session whose
+`Import` hints are not the ones the table gives its import facts. Without a capability denial
+nothing of this is checked.
 
 ## What evaluation does
 
@@ -192,6 +222,20 @@ Evaluation changes only what the policy owns.
     component of the database; any other key is fatal (below).
   - The violation's evidence is the claim's artifact.
   - Policy violations are separate from technical findings.
+- **Denied capabilities** (#51), for each slice of the session's binary facts and each denial, in
+  the policy's order, once the session is known to be made with this build's capability table
+  (above). The imports of the capability are those the slice's `Import` hints give it:
+  - a slice with a direct call site (`Call` or `TailJump`) of one of them gives a
+    `PolicyViolation`: subject the slice, evidence every such call site by ID, the denial's action
+    and reason;
+  - a slice with none gives an open question: id `capability:<feature>@<slice>`, rule
+    `binary.capability_call`, one unknown condition `calls:<feature>`, evidence the imports, and
+    the `[open_questions]` treatment. The condition says why: `binary.code` did not close, the code
+    was not analyzed, or the code's every direct call was found and these are not among them;
+  - a slice that does not import the capability gives nothing.
+
+  Evaluation owns these open questions as it owns the violations: each evaluation removes those of
+  rule `binary.capability_call` and makes them again. The analysis's own open questions stay.
 
 ## Outcome
 
@@ -216,6 +260,25 @@ Two independent results, always shown together.
   observation start). Re-evaluating a session reuses it, so the result does not change by itself
   over time.
 
+## Verifying a session against its policy
+
+`sigil session verify <SESSION> [--policy FILE]` (#51) says whether a saved session is what the
+policy gives (by default the built-in policy). Validation, which every command that reads a
+session runs, checks that a session agrees with itself. It cannot know what a policy should have
+decided: a session records its policy's name and SHA-256, not its rules, so one whose violation
+was removed and whose verdict was set to PASS still validates. `session verify`:
+- re-verifies the session's reference knowledge, as `session render` does;
+- checks that the session's one policy knowledge entry has this policy's name and SHA-256;
+- evaluates a copy under the policy, at the session's recorded `policy_time` (a policy that cannot
+  evaluate it, such as one with other required checks, is a difference);
+- compares the copy with the session in canonical form, and names each finding, open question, and
+  policy violation that the policy gives and the session lacks or records otherwise, each one the
+  policy does not give, and an outcome that differs.
+
+It prints `verified: <SESSION> is what the policy <name> (<sha256>) gives` and exits 0, or names
+the differences and exits 1. What the policy gives is what this build gives: component denials
+are matched through its component database, and capability denials need its capability table.
+
 ## What is fatal
 
 Loading fails, and nothing is evaluated, for:
@@ -230,7 +293,9 @@ Loading fails, and nothing is evaluated, for:
 - a principal other than `root`, `runtime`, or `uid:<n>`, and a group other than `gid:<n>`;
 - a component deny entry with `ignore`, without a reason, listed twice, or naming a component
   that is not in the component database
-  ([runtime artifacts](runtime-artifacts.md#components)).
+  ([runtime artifacts](runtime-artifacts.md#components));
+- a capability denial with `ignore`, without a reason, listed twice, or naming a key that is not
+  in the capability-import table (#51).
 
 A typo never silently weakens a policy.
 
@@ -243,7 +308,8 @@ A typo never silently weakens a policy.
 - in a binary inspection, audits `binary`, plus `binary_code` when code is analyzed;
 - counts open questions as gaps;
 - accepts no assumption;
-- has no overrides.
+- has no overrides;
+- denies no component or capability.
 
 Each later PR adds its scope to the default when its collector exists. A run never reports a gap
 for a check SIGIL cannot perform yet unless that scope was requested.

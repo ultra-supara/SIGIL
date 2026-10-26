@@ -16,7 +16,7 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 - The session (`sigil-session/1`): the one record of a run, with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): a compact projection of the session that names it by SHA-256.
 - The browser viewer (`sigil-wasm`), which renders sessions and AI-BOM v2 with the CLI's own renderers.
-- The CLI: `inspect ollama`, `session render`, `explain`, and `rules`.
+- The CLI: `inspect ollama`, `session render`, `session verify`, `explain`, and `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path.
 
 How to run it: the [Ollama guide](ollama-inspection.md).
