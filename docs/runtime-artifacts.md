@@ -211,7 +211,7 @@ Without `--install-dir`, a policy that requires `runtime_artifacts` anyway gets 
 | Where | `validate` | Verifier |
 |---|---|---|
 | `sigil inspect` | every session it writes | both, on every session it writes (an internal error otherwise, exit 1) |
-| `sigil session render`, `sigil session verify`, `sigil explain` | every session read | both, when the session names the embedded set by its id and SHA-256 (a disagreement is exit 1; so is the SHA-256 under another id). A session made with another set is rendered with a note |
+| `sigil session render`, `sigil session verify`, `sigil explain` | every session read | both, when the session names the embedded set by its id and SHA-256 (a disagreement is exit 1; so is the SHA-256 under another id). A session made with another set is rendered (or verified, or explained) with a note |
 | The browser viewer | every session read | **never**: it has no reference set |
 
 ## Binaries

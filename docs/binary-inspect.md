@@ -66,8 +66,9 @@ architecture table as Mach-O; when that table is invalid but the file has a vali
 header and constant pool, it is treated as an unsupported format. This resolves the shared-magic
 ambiguity in favor of a valid fat table.
 
-No rule judges binaries yet, so the verdict is `PASS`. Use `--fail-on-incomplete` (exit 4) to
-fail on an unsupported or partial input.
+Without a `[[components.deny]]` or `[[capabilities.deny]]` entry (the default policy has none),
+nothing judges binaries, so the verdict is `PASS`. Use `--fail-on-incomplete` (exit 4) to fail on
+an unsupported or partial input.
 
 The summary on stderr has one `binary:` line per input, in argument order: its path, type,
 digest, and status, then its `binary.identity` status in the same form, after `signature scan:`:
@@ -611,12 +612,15 @@ when the policy sets it that way or leaves it out. See [policy](policy.md).
 
 A policy can deny a capability (`[[capabilities.deny]]`, #51). A direct call site of one of its
 imports is then a policy violation citing the call site, so `--code --fail-on fail` exits 3 for a
-file that calls a denied capability. An import of it without a direct call site is an open
-question, counted as a gap by default, so the result is INCOMPLETE: without `--code` the code was
-not analyzed, and with it a call through a function pointer or from data is not followed. In the
-Markdown, a violation's row lists its evidence (the call sites) and an open question's row why it
-is open. `sigil explain --finding <id>` explains an open question, and `sigil explain --verdict`
-lists each violation's call sites with the import each calls.
+file that calls a capability denied with `fail` (`--fail-on warn` for one denied with `warn`). An
+import of it without a direct call site is an open question, counted as a gap by default, so the
+result is INCOMPLETE (`--fail-on-incomplete` exits 4): without `--code` the code was not analyzed,
+with it a call through a function pointer or from data is not followed, and when `binary.code`
+did not close (`Partial`, or a Mach-O file) the scan was incomplete. A denial sees only the names
+its key lists in [the capability table](#capabilities-and-code---code). In the Markdown, a
+violation's row lists its first three call sites, then how many more, and an open question's row
+why it is open. `sigil explain --finding <id>` explains an open question, and `sigil explain
+--verdict` lists each violation's call sites with the import each calls.
 
 The session records the capability table its hints and call sites were made with (a `SignatureDb`
 knowledge entry `capabilities`, with the table's SHA-256). A later build with another table

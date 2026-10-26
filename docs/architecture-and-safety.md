@@ -7,7 +7,7 @@ SIGIL is a Rust workspace of five crates. Everything it does to an inspected sys
 - **`sigil-model`**: the session's types (including each finding's policy decision), its validation and canonical form, and the renderers (Markdown, AI-BOM v2, and the viewer's HTML). Pure: no file, process, or network I/O, so it also builds for `wasm32-unknown-unknown`.
 - **`sigil-engine`**: anchored, bounded file access (`SafeFs`), the Ollama store collector, observe mode (`/proc`), the analyses, and policy loading and evaluation. Network APIs are banned in it at build time.
 - **`sigil-probe`**: the active API probe, the only code that performs network I/O. Only the CLI depends on it.
-- **`sigil-cli`**: the `sigil` command (`inspect ollama`, `session render`, `session verify`, `explain`, `rules`).
+- **`sigil-cli`**: the `sigil` command (`inspect ollama`, `binary inspect`, `session render`, `session verify`, `explain`, `rules`).
 - **`sigil-wasm`**: the browser viewer's renderers. It depends only on `sigil-model`.
 
 ```text

@@ -6,8 +6,8 @@ from the analysis. The policy decides only what is done with them, and which che
 closed for the result to be complete.
 
 - **Status:** `crates/sigil-engine` loads and evaluates policies. `sigil inspect ollama --policy
-  FILE` and `sigil binary inspect --policy FILE` load one; without `--policy`, the built-in
-  default applies.
+  FILE`, `sigil binary inspect --policy FILE`, and `sigil session verify --policy FILE` load one;
+  without `--policy`, the built-in default applies.
 - **Source:** plan §4.7. The session it applies to is described in
   [`docs/session-model.md`](session-model.md).
 
@@ -72,14 +72,19 @@ a direct call is not proof that there is none. Without code analysis (`binary in
 question. The capabilities a policy can deny are the keys of the capability-import table
 (`sigil rules` lists them); allowing one is not listing it.
 
-A denial sees imports of the table's functions and the direct calls of them, nothing else: a file
-that reaches the capability without importing one (a statically linked Go program that starts
-processes through its own system calls, say) gives no result (#48). An open question's treatment
+A denial sees imports of the names its key lists in the capability table, and the direct calls
+of them, nothing else. `posix.process_spawn` lists `execve`, `fork`, `posix_spawn`, and `system`:
+a file that starts processes through `execvp` or `popen` alone gives no result under it, and
+neither does one that imports none of the names (a statically linked Go program that starts
+processes through its own system calls, say; #48). The names of each key:
+[binary inspection](binary-inspect.md#capabilities-and-code---code). An open question's treatment
 is the `[open_questions]` one, not the denial's action, so a `warn` denial of an import that is
-never called directly still makes the result INCOMPLETE while open questions count as gaps. A file
-whose import list is longer than `binary_imports` is read up to that budget, and a denied import
-past it gives nothing; `binary.container` is then `Partial`, which keeps the result INCOMPLETE as
-long as the policy requires that check (the default does).
+never called directly still makes the result INCOMPLETE while open questions count as gaps; no
+`[rules."binary.capability_call"]` override exists (it does not load). A file with more imports
+than `binary_imports` keeps the first ones in name order, and a denied import past them gives
+nothing; the cut leaves `binary.container` (`artifacts.container` for an installation)
+`Partial`, which keeps the result INCOMPLETE as long as the policy requires that check (the
+default does).
 
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
 `[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy
@@ -201,7 +206,9 @@ set: a check added or removed is a difference, their order is not (a session sav
 JSON lists them sorted). Such a policy changes the technical
 conclusions, so the session must be analyzed again with it. A policy that differs only in its
 decisions (rule overrides, open-question treatment, denied components and capabilities) can
-re-evaluate a recorded session. Component deny entries are matched through the evaluating build's
+re-evaluate a recorded session through the engine's `evaluate`; the CLI re-evaluates a saved
+session only to compare it, in `session verify`, so from the CLI another policy means inspecting
+again. Component deny entries are matched through the evaluating build's
 component database, so a build with other names may give other violations for the same session.
 Capability denials are judged by the session's own hints and code facts, which were made with the
 capability table the session records (a `SignatureDb` knowledge entry `capabilities`, by
@@ -279,21 +286,24 @@ was removed and whose verdict was set to PASS still validates. `session verify`:
 - re-verifies the session's reference knowledge, as `session render` does;
 - checks that the session's one policy knowledge entry has this policy's name and SHA-256;
 - evaluates a copy under the policy, at the session's recorded `policy_time` (a policy that cannot
-  evaluate it, such as one with other required checks, is a difference);
+  evaluate it is a difference: most often a capability denial on a session made by a build with
+  another capability table, which must be inspected again);
 - compares the copy with the session in canonical form, and names each finding, open question, and
   policy violation that the policy gives and the session lacks or records otherwise, each one the
   policy does not give, and an outcome that differs.
 
 It also checks that each finding's rule is in this build's rule catalog with the kind and default
 severity the session records. It prints `verified: <SESSION> is what the policy <name> (<sha256>)
-gives at <policy_time>: <verdict> + <completeness>` and exits 0, or names the differences and
-exits 1. What the policy gives is what this build gives: component denials are matched through
-its component database, and capability denials need its capability table. The analysis
+gives at <policy_time>: <verdict> + <completeness>` and exits 0, or exits 1 with the first five
+differences on stderr (`error: …`, then how many more), as for any execution error. What the
+policy gives is what this build gives: component denials are matched through its component
+database, and capability denials need its capability table. The analysis
 (findings, their conditions and evidence, hints, call sites, coverage, the request) and the policy
 time are the session's: `session verify` checks what the policy makes of them, not them. Only
 inspecting the files again checks the analysis.
 Validation does not check what a decision, a capability open question's ID, or an unknown
-condition's reason should be; `session verify` does, by evaluating again.
+condition's reason should be given the recorded analysis; `session verify` does, by evaluating
+again.
 
 ## What is fatal
 

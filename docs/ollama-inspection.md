@@ -28,7 +28,7 @@ Static and observe perform no network I/O. The active probe is off by default. T
 
   When reference matches establish no release (no release matches every file, or discovery was incomplete), the install's self-reported commits (`LLAMA_COMMIT`, `ggml_commit`) can still give an open claim, added to the line: `not established (…); consistent with ollama v0.30.5, v0.30.6, v0.30.7 by self-reported commit 6f3a9f3de (open)`. It lists the official releases whose own files report the same commits. It is "consistent with" only: a custom build, a mixed install, or an unlisted release is not excluded, and it never closes `artifacts.release`.
 - `sigil session render <SESSION> [--format md|aibom]` renders a saved session again, without inspecting anything.
-- `sigil session verify <SESSION> [--policy FILE]` checks that a saved session is what its policy gives: it evaluates the session again and names each difference ([policy](policy.md#verifying-a-session-against-its-policy)).
+- `sigil session verify <SESSION> [--policy FILE]` checks that a saved session is what its policy gives: it evaluates the session again, prints `verified: …` (exit 0), or exits 1 with the first five differences on stderr ([policy](policy.md#verifying-a-session-against-its-policy)).
 
 ## A first run
 
@@ -51,7 +51,7 @@ cargo run -p sigil-cli -- rules
 
 - `--models-dir <dir>`: the model store (default `$OLLAMA_MODELS`, else `~/.ollama/models`). `--model <name>` inventories one model.
 - `--install-dir <prefix>`: the installation, for example `/usr/local` for the official install script. SIGIL reads `bin/ollama` and `lib/ollama/` under it, and nothing else: it follows no symlink there. It compares each file with the release manifests of Ollama v0.30.5 to v0.30.7 embedded in SIGIL. That is a comparison with the official archives' contents, not a signature check ([runtime artifacts](runtime-artifacts.md)). Without it, the installation is not inspected.
-- `--policy <file>`: a policy (TOML, [policy](policy.md)) that sets the audit scope, rule actions with reasons and expiry, and accepted assumptions. Without it, the built-in policy applies.
+- `--policy <file>`: a policy (TOML, [policy](policy.md)) that sets the audit scope, rule actions with reasons and expiry, accepted assumptions, and denied components and capabilities. Without it, the built-in policy applies. An installation's code is not analyzed yet, so a capability denial makes each of its imports of the capability an open question: INCOMPLETE by default.
 - `--policy-time now|RFC3339`: the instant at which policy expiry is judged (default `now`).
 - `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`, `manifest_bytes`). Budgets that run out leave the result incomplete, never silently clean. With `--install-dir`, the installation has its own: `install_files_discovered`, `install_entries_listed`, and `install_bytes` (summed over the whole installation, default 64 GiB), each ELF or Mach-O file's parse `binary_parse_bytes` (default 64 MiB) and `binary_imports` (default 4096 for ELF imports), and each ELF file's signature scan `binary_scan_bytes` (default 64 MiB of section bytes).
 - `--active api-probe [--api-addr IP[:PORT]] [--allow-remote]`: probe the API at a literal address (default `127.0.0.1:11434`; `localhost` means 127.0.0.1). A refused connection closes the check: nothing answers at that address from SIGIL's network namespace. That is not "no Ollama on this system": a runtime in another namespace (for example, outside SIGIL's container) or on another host is neither seen nor ruled out, and a version is the endpoint's own claim, not tied to an observed process or binary. A timeout or a reply that is not the Ollama API leaves the check open. The probe's budgets are `api_connect_ms` (at most 30000), `api_io_ms` (at most 60000), and `api_response_bytes` (at most 1048576).
@@ -82,15 +82,15 @@ Every result has two parts, side by side:
 What SIGIL could not see is never reported as absent; it leaves a check open and the result incomplete.
 
 `sigil explain <SESSION>` answers one question at a time:
-- `--finding <ID>`: the rule, the policy decision, the facts the finding rests on, and the remediation;
+- `--finding <ID>`: the rule, the policy decision, the facts the finding rests on, and the remediation; an open question's ID explains that question;
 - `--verdict`: how the verdict and completeness were reached;
 - `--coverage`: the state of every check.
 
 `--format text` (the default) is for a terminal, and `--format md` for a review ticket. The same session always gives the same text.
 
-`sigil rules` lists every rule. What each rule and coverage state means: [model store](model-store.md), [exposure](exposure.md), and [runtime artifacts](runtime-artifacts.md).
+`sigil rules` lists every rule, the capabilities a policy can deny, and the rule of their open questions (`binary.capability_call`). What each rule and coverage state means: [model store](model-store.md), [exposure](exposure.md), and [runtime artifacts](runtime-artifacts.md).
 
-`session render` and `explain` also re-check a saved session's reference matches against the manifests embedded in this SIGIL, when the session names them. A session whose rows disagree is an execution error (1).
+`session render`, `session verify`, and `explain` also re-check a saved session's reference matches against the manifests embedded in this SIGIL, when the session names them. A session whose rows disagree is an execution error (1).
 
 ## From v0.1
 

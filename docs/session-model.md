@@ -244,8 +244,8 @@ The rule then yields an open question at most.
     feature;
   - P2 (#51): a capability open question (rule `binary.capability_call`) is about a slice, has one
     unknown condition `calls:<feature>`, cites every import of the feature, each once, and nothing
-    else, of a slice that calls none of them directly and has no violation of the feature; at most
-    one per slice and feature;
+    else, at least one, of a slice that calls none of them directly and has no violation of the
+    feature; at most one per slice and feature;
   - a session with a P1 or P2 result records one capability table (`SignatureDb`, id
     `capabilities`): the one its binaries' hints and call sites were made with. These rules say
     that the results agree with the session, not that its policy gave them: `sigil session

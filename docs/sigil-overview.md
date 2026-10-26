@@ -12,11 +12,11 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 - The installation's release (`--install-dir`): each file of `bin/ollama` and `lib/ollama/` compared with the official release manifests embedded in SIGIL. Which releases the content matches and whether the installation is complete are reported separately.
 - Observe mode: the runtime's listening sockets, attributed through `/proc` fd tables, with network-namespace checks. `hidepid` and permission gaps are reported as incompleteness.
 - The active API probe (`--active api-probe`): one `GET /api/version` to a literal address, off by default.
-- Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, and open-question treatment.
+- Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, and denied components and capabilities.
 - The session (`sigil-session/1`): the one record of a run, with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): a compact projection of the session that names it by SHA-256.
 - The browser viewer (`sigil-wasm`), which renders sessions and AI-BOM v2 with the CLI's own renderers.
-- The CLI: `inspect ollama`, `session render`, `session verify`, `explain`, and `rules`.
+- The CLI: `inspect ollama`, `binary inspect`, `session render`, `session verify`, `explain`, and `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path.
 
 How to run it: the [Ollama guide](ollama-inspection.md).
