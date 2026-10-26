@@ -530,7 +530,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | D: behavior | `RuleSupport`, `Support`, `LoadFacts`, `LoadFact`, `Tri`, `ProcessValue`, `ValueOrigin` | Per-rule support (recorded once) and per-file facts, with premises and value provenance |
 | Access | `WriteAccess`, `NodeAccess`, `CapabilityAccess`, `AccessConclusion` | Who can write where, from observed metadata |
 | Coverage | `Coverage`, `CoverageState` | What was checked and how far |
-| E: findings | `Condition`, `CondState`, `CondEvidence`, `ValueNeed`, `Settles`, `Finding`, `OpenQuestion`, `PolicyViolation` | Conditions that name their records; technical conclusions, open questions, and organizational violations, kept in separate lists |
+| E: findings | `Condition`, `CondState`, `CondEvidence`, `ValueNeed`, `Settles`, `Finding`, `OpenQuestion`, `PolicyViolation` | Conditions that name their records; technical conclusions, open questions (the analysis's, and the capability ones evaluation makes, #51), and organizational violations, kept in separate lists |
 | Policy and outcome | `PolicyDecision`, `OpenQuestionDecision`, `Outcome`, `Verdict`, `Completeness` | The policy's treatment, and the two independent results |
 | Text and IDs | `UntrustedText`, `ArtifactId`, `InstanceId`, `CheckId`, `RuleId`, `ProfileRef`, … | Escape-only display of input text. One newtype per identity domain |
 

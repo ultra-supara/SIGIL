@@ -6,8 +6,10 @@
 //!   runtime's API for its version (one request to a literal address, loopback unless
 //!   `--allow-remote`). It writes the session (or its Markdown) and a summary.
 //! - `session render` renders a saved session, as Markdown or as its AI-BOM v2.
-//! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
-//! - `rules` lists the detection rules.
+//! - `session verify` checks that a saved session is what its policy gives (#51).
+//! - `explain` explains a finding or open question, the verdict, or the coverage of a saved
+//!   session (#21).
+//! - `rules` lists the detection rules, and the capabilities a policy can deny.
 //! - `binary inspect` inspects files directly: each one's digest, format, and container facts, in
 //!   one session (PR-4b-2a). With `--code`, it also records the direct call sites of capability
 //!   imports (PR-5a).
@@ -85,10 +87,10 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
-    /// Explain a finding, the verdict, or the coverage of a saved session. Deterministic: the
-    /// same session gives the same text.
+    /// Explain a finding or open question, the verdict, or the coverage of a saved session.
+    /// Deterministic: the same session gives the same text.
     Explain(ExplainArgs),
-    /// List the detection rules.
+    /// List the detection rules, and the capabilities a policy can deny.
     Rules,
 }
 

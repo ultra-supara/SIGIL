@@ -311,10 +311,30 @@ pub fn verdict(s: &Session, format: Format) -> String {
         .iter()
         .filter(|f| f.decision.action == Action::Ignore)
         .collect();
-    if !ignored.is_empty() {
+    // An open question the policy ignores neither raises the verdict nor counts as a gap (#51).
+    let ignored_questions: Vec<&OpenQuestion> = s
+        .open_questions
+        .iter()
+        .filter(|q| q.decision.treatment == OqTreatment::Ignore)
+        .collect();
+    if !ignored.is_empty() || !ignored_questions.is_empty() {
         doc.section("Set aside by the policy");
         for f in ignored {
             doc.item(decision_item(f));
+        }
+        for q in ignored_questions {
+            let d = &q.decision;
+            let mut line = format!(
+                "open question {} ({}): {}, from {}",
+                q.id,
+                q.rule,
+                treatment(&d.treatment),
+                d.source
+            );
+            if let Some(reason) = &d.reason {
+                line.push_str(&format!("; reason: {reason}"));
+            }
+            doc.item(Shown::own(line));
         }
         doc.end();
     }

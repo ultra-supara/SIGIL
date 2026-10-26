@@ -29,6 +29,9 @@ use super::{catalog, evaluate, Policy};
 /// - The copy equals the session in canonical form. Findings and open questions are named by ID,
 ///   policy violations by rule and subject; the outcome by verdict and completeness.
 ///
+/// The differences quote the session's IDs and subjects as they are: a caller that shows them
+/// escapes them, as the CLI does.
+///
 /// What the policy gives is what this build gives: component denials are matched through its
 /// component database and capability denials judged with its capability table, so a session that
 /// a build with other data made may differ. The analysis (findings, their conditions and

@@ -84,7 +84,12 @@ never called directly still makes the result INCOMPLETE while open questions cou
 than `binary_imports` keeps the first ones in name order, and a denied import past them gives
 nothing; the cut leaves `binary.container` (`artifacts.container` for an installation)
 `Partial`, which keeps the result INCOMPLETE as long as the policy requires that check (the
-default does).
+default does). Code analysis reads every import, so a direct call of one past the cut may be in
+the session's code facts; without its hint it is judged neither way.
+
+A denial judges only the binaries a run reads: `inspect ollama` without `--install-dir` reads
+none, so it gives no capability result. With `runtime_artifacts` in `audit`, such a run is
+INCOMPLETE, since the installation's checks are required and not run.
 
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
 `[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy

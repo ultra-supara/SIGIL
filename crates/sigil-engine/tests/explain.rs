@@ -312,6 +312,26 @@ fn an_open_question_is_explained_too() {
 
 /// #51: the verdict counts the call sites a capability violation cites, and lists each with the
 /// import it calls.
+/// An open question the policy ignores is set aside by it, as an ignored finding is: the verdict
+/// says so, never a silent pass.
+#[test]
+fn an_ignored_open_question_is_set_aside_in_the_verdict() {
+    let mut s = example_18();
+    let q = &mut s.open_questions[0];
+    q.decision.treatment = OqTreatment::Ignore;
+    q.decision.reason = Some("accepted risk".to_string());
+    let id = q.id.clone();
+    let text = explain::verdict(&s, Format::Text);
+    assert!(text.contains("Set aside by the policy"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "open question {id} (binary.capability_call): ignore, from \
+             policy:open_questions.default; reason: accepted risk"
+        )),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_capability_violation_counts_its_call_sites_in_the_verdict() {
     let mut s = example_18();
