@@ -1,164 +1,243 @@
 # SIGIL
 
-**Local-first audits of local LLMs.**
+**Inspect local AI deployments, from model stores to native code.**
 
-The local-AI audit artifact you can attach to a review ticket — no cloud, no LLM in the verdict path, no subprocess spawned.
+SIGIL is a Rust CLI for auditing Ollama installations and the binaries that make up a local AI stack. It checks model integrity and licenses, identifies runtime components, records network exposure, and finds direct calls to capability imports in supported native code. Every run produces an evidence-backed session with a deterministic policy verdict and an explicit account of what the inspection could cover.
 
-```bash
-git clone https://github.com/ultra-supara/SIGIL && cd SIGIL
-cargo run -q -p sigil-cli -- inspect ollama --format md --out out/report.md
-# verdict: WARN           confirmed: 0 fail · 1 warn · 0 policy violations
-# completeness: COMPLETE
-```
+Inspection is local and read-only. SIGIL never executes the files it inspects, spawns a subprocess, or asks an LLM to decide a verdict. Network access requires an explicit API probe.
 
-A single Rust binary inventories the models in an Ollama store, verifies every blob against its manifest digest, records license layers, and, in observe mode, attributes the runtime's listening sockets. Every result has two parts: a **verdict** (PASS / WARN / FAIL) from a deterministic analyzer and a policy, and a **completeness** that says whether everything required was actually seen. What SIGIL could not see is never reported as absent. No telemetry and no uploads: static and observe modes perform no network I/O, and the optional active API probe makes one explicitly requested connection, to a remote address only when `--allow-remote` is set. No LLM ever decides the verdict.
+[Website](https://ultra-supara.github.io/SIGIL/) · [Browser viewer](https://ultra-supara.github.io/SIGIL/viewer/) · [Ollama guide](docs/ollama-inspection.md) · [Binary inspection guide](docs/binary-inspect.md) · [Policy reference](docs/policy.md)
 
-[Live site](https://ultra-supara.github.io/SIGIL/) · [Try the viewer in your browser](https://ultra-supara.github.io/SIGIL/viewer/) · [Compare to other tools](https://ultra-supara.github.io/SIGIL/compare/) · [State of Local AI Audit — 2026 H1](https://ultra-supara.github.io/SIGIL/reports/2026-h1/)
+## What you can inspect
 
----
-
-## The audit you can't get today
-
-Local LLMs slip past every SBOM tool you already run. Models arrive via `ollama pull` with no package-manager trace. Runtime APIs bind to ports nobody audits. License obligations are invisible. When the auditor asks _"what AI is running here, where is it exposed, and under what license?"_, there is no single artefact to hand them.
-
-SIGIL produces that artefact: one session per inspection, as JSON and as Markdown, rendered from the same facts.
-
-## What you get
-
-- **The session** (`sigil-session/1`, [schema](schemas/session-v1.schema.json)): every fact observed, every finding with the facts it rests on, what each check covered, and the outcome. Canonical JSON, so two runs over the same input give the same bytes. Diff it across review cycles.
-- **Markdown**: the outcome, findings, open coverage, models, listeners, and processes, for the review ticket. Every input-derived string is escaped.
-- **The AI-BOM v2** (`sigil-aibom/2`, [schema](schemas/aibom-v2.schema.json)): a compact projection of the session for reviewers and downstream tools (outcome, runtime, models, artifacts and components, findings, coverage summary). It names its session by SHA-256, so every line traces back to the evidence.
-- **`sigil explain`**: why a finding fired (its facts, the policy decision, and the fix), or how the verdict and completeness were reached.
-
-| Surface | Evidence captured |
+| Surface | What SIGIL records |
 |---|---|
-| Ollama model store | Each manifest, its layers, and each blob's SHA-256 against its digest |
-| Ollama installation (`--install-dir`) | Each file of `bin/ollama` and `lib/ollama` against the official release manifests: which releases the content matches, and whether any member is absent |
-| Provenance | `registry / namespace / model / tag` from the manifest path |
-| License | The license layer, its SPDX id where detected, and an excerpt |
-| Runtime exposure (`--mode observe`) | `ollama serve`'s listening sockets, attributed through its fd table, never by port; bind class loopback / wildcard / private / global |
-| Runtime API (`--active api-probe`) | Whether `GET /api/version` answered at one literal address, and the version it reported |
-| Binaries (`binary inspect`) | Each file's SHA-256, format, and container facts (ELF, Mach-O); an ELF or Mach-O file's capability imports (for example `connect` → `posix.network`, or libstdc++'s `std::filesystem::remove` → `cxx.file_write`; for a Mach-O, those bound to libSystem, found by flat lookup, or left to the linker in an object file), as imports, not calls; its signature hints (the RPC backend's exports, Ollama's Go function names), as names found in the file, not behavior; with `--code`, the direct call sites of those imports in x86-64 ELF code, with their arguments |
-| Outcome | Verdict (`PASS` / `WARN` / `FAIL`) and completeness (`COMPLETE` / `INCOMPLETE`), side by side |
+| **Ollama model store** | Models and their registry provenance, manifest layers, blob SHA-256 verification, license text, and detected SPDX identifiers. |
+| **Ollama installation** | Files under `bin/ollama` and `lib/ollama`, their matches against embedded official release manifests, and missing installation members. |
+| **Runtime components** | ELF component claims from file names, SONAMEs, embedded versions and commits, and reference hashes. Conflicting evidence stays visible. |
+| **Standalone binaries** | Digests and container facts for ELF executables, shared libraries, and object files, plus thin and universal Mach-O files. No model store or running runtime is needed. |
+| **Capabilities and code** | POSIX and libstdc++ capability imports, Go function-name and export hints in ELF files, and—with `binary inspect --code`—direct call sites and argument values in x86-64 ELF code. |
+| **Runtime exposure** | In observe mode, listening sockets attributed to `ollama serve` through `/proc` file descriptors. The optional API probe records the response from one requested endpoint. |
 
-## Why local-first, LLM-free
-
-- **No network I/O unless you ask for it.** SIGIL reads files and, in observe mode, allowlisted `/proc` entries. The one exception is the API probe, an explicit active feature (`--active api-probe`) that is off by default. It sends one `GET /api/version` to a literal address, loopback unless `--allow-remote` is given, and it resolves no names.
-- **No subprocess spawn.** Listener attribution reads `/proc/net/tcp{,6}` and `/proc/<pid>/fd` directly. `ss`, `lsof`, `netstat`, and `docker` are never invoked.
-- **No LLM in the verdict path.** Every finding comes from a deterministic analyzer, and every decision from a policy rule ([`crates/sigil-engine/src/policy`](crates/sigil-engine/src/policy)). An LLM-derived verdict isn't acceptable evidence to an auditor; SIGIL doesn't produce one.
-- **Read-only.** SIGIL never executes, loads, or maps what it inspects, and writes only the `--out` you name, which must lie outside the inspected store and installation. An existing file at `--out` is replaced by a rename, never written through, and outputs are created readable by their owner only.
-
-These properties are **checked** by build-time API bans and by syscall tests over the exercised CLI paths ([ADR-002](docs/adr/ADR-002-execution-modes.md)). They are not enforced by a runtime sandbox.
+Use SIGIL to collect evidence for a security review, check a local deployment in CI, or inspect a native library before including it in an AI environment. Each finding links back to the facts and evidence that support it.
 
 ## Quickstart
 
-```bash
-cargo test
-cargo run -p sigil-cli -- --help
-```
-
-SIGIL needs a stable Rust toolchain ([rustup](https://rustup.rs)). The syscall safety tests run on Linux with `strace` and a C compiler.
-
-## Inspect an Ollama installation
+The CLI currently targets **Linux** and builds with a stable Rust toolchain. The commands below run from the repository root.
 
 ```bash
-# Static (the default): the model store only
-cargo run -p sigil-cli -- inspect ollama --out out/session.json
-
-# Markdown for the review ticket
-cargo run -p sigil-cli -- inspect ollama --format md --out out/report.md
-
-# Also the installation: bin/ollama and lib/ollama against the official release manifests
-cargo run -p sigil-cli -- inspect ollama --install-dir /usr/local --out out/session.json
-
-# Observe: also the runtime's listening sockets (allowlisted /proc reads)
-cargo run -p sigil-cli -- inspect ollama --mode observe --out out/session.json
-
-# Active: also ask the runtime's API for its version (one request to 127.0.0.1:11434)
-cargo run -p sigil-cli -- inspect ollama --active api-probe --out out/session.json
-
-# AI-BOM v2: from an inspection, or from a saved session (which it names by SHA-256)
-cargo run -p sigil-cli -- inspect ollama --format aibom --out out/aibom.json
-cargo run -p sigil-cli -- session render out/session.json --format aibom --out out/aibom.json
-
-# Explain a saved session: one finding, the verdict, or the coverage
-cargo run -p sigil-cli -- explain out/session.json --verdict
-cargo run -p sigil-cli -- explain out/session.json --finding <FINDING-ID> --format md
-cargo run -p sigil-cli -- session render out/session.json
-
-# The detection rules
-cargo run -p sigil-cli -- rules
-
-# Files directly (no model store or installation): digest, format, container facts, capability imports
-cargo run -p sigil-cli -- binary inspect ./libggml-base.so --format md --out out/binary.md
-
-# With --code: the direct call sites of capability imports (connect, dlopen, …); x86-64 ELF only
-cargo run -p sigil-cli -- binary inspect --code ./suspicious_kernel.o --format md --out out/code.md
+git clone https://github.com/ultra-supara/SIGIL
+cd SIGIL
+cargo run --locked -q -p sigil-cli -- --help
 ```
 
-`binary inspect` reads files directly and writes one session for all of them; its options (`--code` included), budgets, and statuses are in [docs/binary-inspect.md](docs/binary-inspect.md).
+For an installed `sigil` command, use `cargo install --locked --path crates/sigil-cli`.
 
-Every option of `inspect ollama`, the exit codes, and a CI recipe are in the [Ollama guide](docs/ollama-inspection.md). Exit codes: `0` normal, `1` execution error, `2` usage error, `3` verdict threshold reached (`--fail-on`), `4` incomplete (`--fail-on-incomplete`).
+### Try the bundled binary example
 
-Details: [Ollama guide](docs/ollama-inspection.md) · [model store](docs/model-store.md) · [runtime artifacts](docs/runtime-artifacts.md) · [exposure](docs/exposure.md) · [policy](docs/policy.md) · [session model](docs/session-model.md).
+This example needs no Ollama installation. It inspects a committed test fixture without executing it, then renders the saved session as Markdown:
 
-## Who SIGIL is for
+```bash
+cargo run --locked -q -p sigil-cli -- binary inspect --code \
+  crates/sigil-engine/tests/fixtures/code/suspicious_kernel-gcc-O2.o \
+  --out out/binary.json
+cargo run --locked -q -p sigil-cli -- session render out/binary.json --out out/binary.md
+```
 
-| If you are… | SIGIL gives you |
+The report includes this capability evidence:
+
+| Capability | Import | Direct call sites |
+|---|---|---|
+| `posix.network` | `connect` | `kernel @ 0x4d: connect(rdi=0, rsi=0, rdx=0)` |
+
+This is a call site found in the file's code. A policy decides whether that evidence is allowed: the default policy denies no capabilities, so finding this call alone does not produce a failure.
+
+Replace the fixture path with your own executable, `.so`, or `.o`; multiple paths can be inspected into one session. See the [binary guide](docs/binary-inspect.md) for format support, budgets, and coverage states.
+
+### Audit an Ollama model store
+
+```bash
+cargo run --locked -q -p sigil-cli -- inspect ollama --out out/session.json
+cargo run --locked -q -p sigil-cli -- session render out/session.json --out out/report.md
+```
+
+The store defaults to `$OLLAMA_MODELS`, then `~/.ollama/models`. Use `--models-dir /path/to/models` to select another store, including one owned by a system service. Static inspection needs only the files; Ollama does not need to be running.
+
+The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store and installation, and separate from binary inputs.
+
+### Include the installation or runtime
+
+```bash
+# Also identify the installation's files and compare them with release references.
+cargo run --locked -q -p sigil-cli -- inspect ollama \
+  --install-dir /usr/local --out out/install.json
+
+# Also attribute the running server's listening sockets through /proc.
+cargo run --locked -q -p sigil-cli -- inspect ollama \
+  --mode observe --out out/observe.json
+
+# Explicitly request one GET /api/version at the default loopback address.
+cargo run --locked -q -p sigil-cli -- inspect ollama \
+  --active api-probe --out out/active.json
+```
+
+These options can be combined. The API probe defaults to `127.0.0.1:11434`; `--api-addr` selects an address, and a non-loopback target requires `--allow-remote`. It resolves no DNS names. The [Ollama guide](docs/ollama-inspection.md) covers all options and the scope of each observation.
+
+## Read the verdict and the coverage together
+
+Every session reports two independent results:
+
+| Result | Meaning |
 |---|---|
-| An AI compliance / GRC reviewer | One session per review cycle that captures provenance, license, runtime exposure, layer digests, and findings, with a completeness you can hold the run to. |
-| A security or AI platform engineer running the audit | A read-only CLI that never shells out, streams SHA-256 over multi-GB blobs, and produces the artefact the reviewer needs in one command. |
-| A CISO / Head of AI Risk | A defensible local-AI audit story you can show an external auditor: every verdict comes from a deterministic analyzer plus a policy, in the open, unit-tested. |
-| A legal / IP reviewer | License layer, SPDX id, and provenance per model. |
+| **Verdict: `PASS`, `WARN`, or `FAIL`** | What the recorded findings, policy violations, and policy treatment of open questions require. |
+| **Completeness: `COMPLETE` or `INCOMPLETE`** | Whether the policy's required checks are closed and no open questions remain counted as gaps. |
 
-If your entire AI footprint is hosted (OpenAI API, Bedrock, Vertex AI) and there is no local model store or local runtime to inspect, SIGIL has nothing to do today.
+**`PASS` + `INCOMPLETE` is not a clean audit.** It can mean a file was unreadable, a format was unsupported, a read budget was exhausted, or a denied capability was imported but its use could not be established. A confirmed failure remains `FAIL` even if other checks are incomplete.
 
-## Try it in the browser
+`COMPLETE` is relative to the requested checks and their documented scope. It does not establish that a program is safe under every possible execution.
 
-The viewer at [`/viewer/`](https://ultra-supara.github.io/SIGIL/viewer/) shows the report of a session or an AI-BOM v2 with the CLI's own renderers, compiled to `wasm32-unknown-unknown` (`crates/sigil-wasm`). The file stays in your browser: no upload, no sign-up. A session is validated before it is shown. The page's HTML comes only from the Rust renderer's escaping contract, under a strict Content Security Policy. An AI-BOM v1 file (SIGIL 0.1) is named, not rendered.
+```bash
+cargo run --locked -q -p sigil-cli -- explain out/session.json --verdict
+cargo run --locked -q -p sigil-cli -- explain out/session.json --coverage
+cargo run --locked -q -p sigil-cli -- rules
+```
 
-## Direction
+Use `explain out/session.json --finding ID` for a specific finding or open question. The [session model](docs/session-model.md) defines the evidence and coverage records.
 
-SIGIL grows from single-runtime inspection into local AI environment **comparison**:
+## Understand binary evidence
 
-- Identify the runtime's own binaries and libraries, and how its loader picks backends.
-- Diff a session against a trusted baseline: model digest drift, missing license, wider exposure, new findings (planned).
-- Add llama.cpp, LM Studio, vLLM, and other local OpenAI-compatible runtimes (planned).
+SIGIL preserves how each conclusion was reached:
 
-The milestones are in the [Roadmap](docs/sigil-overview.md#roadmap).
+| Evidence | What it establishes |
+|---|---|
+| **Reference match** | File content matches an entry in an embedded release manifest. Installation completeness is assessed separately. This is a content comparison, not signature verification. |
+| **Component identity** | Names, embedded build values, and reference hashes support a component claim. Versions retain their sources; conflicting claims are reported explicitly. |
+| **Signature hint** | A known export or an exact Go function name was found in the ELF file. For example, `go.process_spawn` records a function-name match, not a call. |
+| **Capability import** | The binary requests a known function from its loader or linker, such as `connect` → `posix.network` or a mapped libstdc++ file operation → `cxx.file_write`. |
+| **Direct call site** | With `--code`, supported code contains a direct call or tail jump to a capability import, with its location, containing function, and recovered argument values. This is static evidence, not an observation of runtime execution. |
 
-## What's in the box
+Component identification also reads supported `ggml_version()` and `ggml_commit()` return values without running those functions. When reference hashes cannot establish an installation's release, an embedded commit may produce an open set of releases it is **consistent with**; that does not close release coverage.
 
-**Implemented today**
+Current analysis boundaries:
 
-- Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, license layers with SPDX detection.
-- The installation's release by reference (`--install-dir`): every file of `bin/ollama` and `lib/ollama` compared with the official release manifests embedded in SIGIL (not a signature check), with attribution and completeness reported separately; without a match, the commits a library reports can give an open "consistent with" release set.
-- Component identification (`--install-dir`, `binary inspect`): each ELF whose file name or SONAME the component database knows gets a component claim from its names, embedded build values, and reference matches, with every source kept. Each of the 34 files of the official v0.30.6 bundle is reference-matched. The strings `ggml_version()` and `ggml_commit()` return are read without running them (x86-64), and a version that disagrees with the file's names makes the claim conflicting. On arm64 the two values are not decoded, so the identity coverage is partial and the result incomplete.
-- Signature scans (`--install-dir`, `binary inspect`): each ELF file is searched for the needles of an embedded database: export-name prefixes, and exact Go function names in `.gopclntab`'s function-name table, among them the Go standard library's process, network, file, and plugin functions (`go.*` signature hints: presence, not use). String needles for read-only data are supported; none ship yet. Section bytes are read with `pread` within `binary_scan_bytes` (64 MiB per file). Each needle found is a hint, and `binary.identity` and `artifacts.identity` say whether every scan was done. A file named as an NVIDIA library is identified by name and hash only, and not scanned.
-- Observe mode: `/proc` listener attribution through fd tables, network-namespace checks, and `hidepid` and permission gaps reported as incompleteness.
-- Policy (`sigil-policy/1`): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, denied components, and denied capabilities (a direct call of a denied capability's import is a violation citing its call site; an import of one without a direct call site is an open question, counted as a gap by default: INCOMPLETE, never a silent PASS).
-- The session model (`sigil-session/1`) with its JSON Schema, validation, and canonical form.
-- AI-BOM v2 (`sigil-aibom/2`): the projection, its JSON Schema, and its Markdown.
-- The browser viewer (`sigil-wasm`) for sessions and AI-BOM v2.
-- CLI: `inspect ollama` (static, observe, the installation, and the active API probe; session, Markdown, or AI-BOM output), `binary inspect`, `session render` (Markdown or AI-BOM), `session verify` (a saved session is what its policy gives), `explain`, `rules`.
-- Syscall safety tests of contracts C-1 to C-6 over every CLI path, with the active probe held to one connection to its destination.
+- **Code analysis is x86-64 ELF only**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
+- **`--code` is available on `binary inspect`.** Installation inspection collects container facts, identities, and hints; it does not yet analyze call sites. Inspect an installation's individual files with `binary inspect --code` when needed.
+- **Mach-O support covers containers and imports**, including per-architecture slices in universal files. Identity scans and code analysis remain unsupported, so these required checks leave the default result incomplete.
+- **Capability mappings cover specific names.** POSIX and libstdc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
 
-**Not yet**
+## Apply a policy
 
-- Binary analysis of the runtime's executables and libraries beyond their release (the v0.1 `lift`/`assess` commands are removed; a new analyzer is planned).
-- Runtimes beyond Ollama, and baseline comparison.
+A `sigil-policy/1` TOML policy selects audit scopes, required checks, finding actions, component denials, capability denials, and how to handle open questions. Rule overrides can record reasons and expiry dates.
+
+For example, save this as `policy.toml` to deny mapped network calls in a binary audit:
+
+```toml
+schema = "sigil-policy/1"
+name = "no-network-calls"
+
+[open_questions]
+default = "count_as_gap"
+
+[[capabilities.deny]]
+feature = "posix.network"
+action = "fail"
+reason = "Reviewed native kernels must not call network APIs"
+```
+
+Add `--policy policy.toml` to the `binary inspect --code` command above. The bundled fixture then produces a `FAIL` policy violation citing its `connect` call site. Without `--code`, that same import produces an open question, counted as a gap by this policy: `PASS` + `INCOMPLETE`.
+
+A denial applies only to the mapped imports in binaries the run reads. For example, `inspect ollama` without `--install-dir` reads no binaries and evaluates no capability evidence. See the [policy reference](docs/policy.md) for component denials, scope requirements, and the full capability list.
+
+### Verify a saved decision
+
+```bash
+cargo run --locked -q -p sigil-cli -- session verify out/session.json
+```
+
+For a custom-policy session, supply the same policy with `--policy policy.toml`. Verification checks the recorded policy identity and recomputes its decisions at the session's recorded policy time. Capability denials also require the matching capability table and consistent import hints.
+
+`session verify` checks the policy's treatment of the recorded analysis. It does not re-inspect files, authenticate the evidence, or establish that the environment is unchanged. A correctly recorded `FAIL` can verify successfully. Verification exits `0` on agreement and `1` on a mismatch or execution error.
+
+## Use SIGIL in CI
+
+Inspection commands return success after producing a report unless you request an outcome threshold. To fail a job on either a `FAIL` verdict or incomplete coverage:
+
+```bash
+cargo run --locked -q -p sigil-cli -- inspect ollama \
+  --fail-on fail --fail-on-incomplete --format md --out out/ci-report.md
+```
+
+The same threshold flags work with `binary inspect`. Use `--fail-on warn` for a stricter verdict threshold.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Command completed; no requested inspection threshold was reached. |
+| `1` | Execution error, including a session verification mismatch. |
+| `2` | Usage error. |
+| `3` | Verdict reached `--fail-on`. |
+| `4` | Coverage is incomplete and `--fail-on-incomplete` was requested. Code `3` takes precedence. |
+
+## Keep and share the evidence
+
+- **Session JSON** ([`sigil-session/1`](schemas/session-v1.schema.json)) is the full record: request, facts, evidence, component claims, code facts, findings, policy decisions, coverage, and outcome. Its canonical serialization is deterministic for the same session value; separate inspections retain their own timestamps.
+- **Markdown** is a readable report rendered from that session, suitable for a review ticket. Input-derived text is escaped.
+- **AI-BOM v2** ([`sigil-aibom/2`](schemas/aibom-v2.schema.json)) is a compact projection for reviewers and downstream tools. It identifies its source session by SHA-256.
+
+```bash
+cargo run --locked -q -p sigil-cli -- session render out/session.json \
+  --format aibom --out out/aibom.json
+```
+
+The [browser viewer](https://ultra-supara.github.io/SIGIL/viewer/) opens session JSON and AI-BOM v2 locally, using the Rust renderers compiled to WebAssembly. Files stay in the browser, and sessions are validated before rendering. It also includes samples to explore without building the CLI.
+
+## Inspection safety
+
+- **Read-only access to inspected files.** Reads are anchored and bounded; hashing streams large model blobs. Inspected binaries are never executed, loaded, or memory-mapped.
+- **No subprocesses.** Runtime observation reads allowlisted `/proc` entries directly.
+- **No network I/O during static or observe inspection.** The optional active probe makes one connection to its requested address. There is no telemetry or report upload.
+- **Controlled output.** Only the requested `--out` is written; an existing output is replaced by rename, and output files are created readable by their owner only.
+- **Deterministic decisions.** Findings come from analyzers and decisions from policy rules; no LLM participates in the verdict path.
+
+Build-time API restrictions and syscall tests check these contracts over the exercised paths. They are not a runtime sandbox. See [architecture and safety](docs/architecture-and-safety.md) and [ADR-002](docs/adr/ADR-002-execution-modes.md) for the guarantees and their limits.
+
+## Development
+
+The Rust workspace has five crates:
+
+| Crate | Responsibility |
+|---|---|
+| [`sigil-cli`](crates/sigil-cli) | Commands, output handling, and exit codes. |
+| [`sigil-engine`](crates/sigil-engine) | File collection, runtime observation, binary analysis, identification, and policy evaluation. |
+| [`sigil-model`](crates/sigil-model) | Session types, validation, canonical serialization, and report renderers. |
+| [`sigil-probe`](crates/sigil-probe) | The explicitly requested API probe. |
+| [`sigil-wasm`](crates/sigil-wasm) | Browser bindings for the model's renderers. |
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+The syscall safety suite needs Linux, `strace`, and a C compiler. Run `SIGIL_SAFETY_REQUIRED=1 cargo test --locked -p sigil-cli --test safety` to require those checks rather than allowing them to skip when prerequisites are missing. CI also checks schemas, saved-session examples, WebAssembly builds, and the committed viewer bundle.
+
+## What's next
+
+The next steps build on the existing container, identity, and direct-call analysis: dependency resolution and backend loading, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned.
+
+The legacy `lift` and `assess` commands and their IR/emulator were removed. See [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md) for the transition and the [roadmap](docs/sigil-overview.md#roadmap) for milestones.
 
 ## Documentation
 
-- [Overview and Roadmap](docs/sigil-overview.md): what SIGIL is, what it does today, and what comes next.
-- [Session model](docs/session-model.md): what a session records, and the invariants it keeps.
-- [Ollama guide](docs/ollama-inspection.md): modes, outputs, options, exit codes, and CI.
-- [Model store](docs/model-store.md), [runtime artifacts](docs/runtime-artifacts.md), and [exposure](docs/exposure.md): what is read, and what each finding and coverage state means.
-- [Policy](docs/policy.md): the policy format and how the outcome is computed.
-- [Architecture and safety](docs/architecture-and-safety.md): the crates, the data flow, and the safety boundaries.
-- [ADR-002](docs/adr/ADR-002-execution-modes.md): execution modes and safety contracts.
-- [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md): why the v0.1 IR, SafeISA, and emulator were removed, and where each v0.1 capability went.
-- [AI-BOM and comparison](docs/ai-bom-and-comparison.md): the AI-BOM v2, how it names its session, and the comparison direction.
+| Guide | Contents |
+|---|---|
+| [Ollama inspection](docs/ollama-inspection.md) | Store selection, installation inspection, modes, probe options, and CI. |
+| [Binary inspection](docs/binary-inspect.md) | Formats, capabilities, direct calls, signatures, and read budgets. |
+| [Policy](docs/policy.md) | Scopes, rule overrides, denials, open questions, and session verification. |
+| [Session model](docs/session-model.md) | Evidence, claims, coverage, validation, and canonical form. |
+| [Runtime artifacts](docs/runtime-artifacts.md) | Release references, binary facts, and component identification. |
+| [Model store](docs/model-store.md) / [Exposure](docs/exposure.md) | Integrity and license checks; listener attribution and visibility limits. |
+| [AI-BOM and comparison](docs/ai-bom-and-comparison.md) | AI-BOM v2 and the planned baseline comparison workflow. |
+| [Architecture and safety](docs/architecture-and-safety.md) | Crate boundaries, data flow, output handling, and safety contracts. |
 
 ## License
 
