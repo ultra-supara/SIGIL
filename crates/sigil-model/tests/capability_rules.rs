@@ -240,9 +240,32 @@ fn p1_refuses_a_violation_without_the_feature_s_call_sites() {
     assert_eq!(
         capability_errors(&s),
         [
-            "policy_violations[policy:capabilities.deny.posix.network]: cites cs:0x99, which is not a call site of an import",
-            "policy_violations[policy:capabilities.deny.posix.network]: does not cite cs:0x4d, a call of a posix.network import"
+            format!("policy_violations[policy:capabilities.deny.posix.network on {slice}]: cites cs:0x99, which is not a call site of an import"),
+            format!("policy_violations[policy:capabilities.deny.posix.network on {slice}]: does not cite cs:0x4d, a call of a posix.network import")
         ]
+    );
+
+    // A call site whose target is a function of the slice, not an import.
+    let mut s = base.clone();
+    let mut internal = s.code[0].call_sites[0].clone();
+    internal.id = CallId::new("cs:0x70").unwrap();
+    internal.addr = 0x70;
+    internal.target = CallTarget::Internal {
+        entry: 0x40,
+        export_name: None,
+    };
+    s.code[0].call_sites.push(internal);
+    with_violation(
+        &mut s,
+        violation(
+            "posix.network",
+            Ref::Slice(slice.clone()),
+            vec![call(&slice, "cs:0x4d"), call(&slice, "cs:0x70")],
+        ),
+    );
+    assert_eq!(
+        capability_errors(&s),
+        [format!("policy_violations[policy:capabilities.deny.posix.network on {slice}]: cites cs:0x70, which is not a call site of an import")]
     );
 
     // One violation per slice and feature.
@@ -256,7 +279,7 @@ fn p1_refuses_a_violation_without_the_feature_s_call_sites() {
     with_violation(&mut s, v);
     assert_eq!(
         capability_errors(&s),
-        [format!("policy_violations[policy:capabilities.deny.posix.network]: a second violation of posix.network on {slice}")]
+        [format!("policy_violations[policy:capabilities.deny.posix.network on {slice}]: a second violation of posix.network on {slice}")]
     );
 }
 
@@ -304,13 +327,20 @@ fn p2_refuses_an_open_question_that_the_session_contradicts() {
             "its condition is not calls:<feature>".to_string(),
         ),
         (
+            "a condition without a feature",
+            Box::new(|q| {
+                q.conditions[0].id = CondId::new("calls:").unwrap();
+            }),
+            "its condition is not calls:<feature>".to_string(),
+        ),
+        (
             "two conditions",
             Box::new(|q| {
                 let mut c = q.conditions[0].clone();
                 c.id = CondId::new("calls:posix.environment_access").unwrap();
                 q.conditions.push(c);
             }),
-            "has exactly one condition, unknown".to_string(),
+            "a capability open question has exactly one condition, unknown".to_string(),
         ),
         (
             "a subject that is not a slice",
@@ -400,7 +430,7 @@ fn p1_and_p2_cite_every_call_site_or_import_once() {
     second.id = CallId::new("cs:0x60").unwrap();
     second.addr = 0x60;
     base.code[0].call_sites.push(second);
-    let at = "policy_violations[policy:capabilities.deny.posix.network]";
+    let at = format!("policy_violations[policy:capabilities.deny.posix.network on {slice}]");
     let cited = |ids: &[&str]| {
         let mut s = base.clone();
         let evidence = ids.iter().map(|id| call(&slice, id)).collect();

@@ -253,7 +253,8 @@ pub enum ValidationError {
     /// PR-4c-2a).
     Code { at: String, why: String },
     /// A capability violation or open question disagrees with the session's hints and code facts
-    /// (P1, P2; #51).
+    /// (P1, P2; #51), or a session with one does not record the one capability table its binaries
+    /// were analyzed with (`at` is `knowledge`).
     Capability { at: String, why: String },
 }
 
@@ -3293,6 +3294,8 @@ impl<'a> Validator<'a> {
                 self.capability_error(&at, "a capability violation's subject is a slice");
                 continue;
             };
+            // Call site IDs are addresses, the same in many files: the slice tells them apart.
+            let at = format!("policy_violations[{} on {slice}]", v.policy_rule);
             if !violated.insert((slice, feature)) {
                 self.capability_error(&at, format!("a second violation of {feature} on {slice}"));
             }
@@ -3368,7 +3371,10 @@ impl<'a> Validator<'a> {
                     }
                 }
                 _ => {
-                    self.capability_error(&at, "has exactly one condition, unknown");
+                    self.capability_error(
+                        &at,
+                        "a capability open question has exactly one condition, unknown",
+                    );
                     continue;
                 }
             };
