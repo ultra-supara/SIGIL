@@ -206,25 +206,27 @@ fn a_finding_s_rule_is_this_build_s() {
     );
 }
 
-/// PR review: `verify` judges only a valid session, whoever calls it: a session that does not
-/// agree with itself gets its validation errors as differences.
+/// PR review: `verify` judges only a valid session, whoever calls it. A string hint on a slice
+/// the session has no facts of is invalid, and re-evaluation leaves hints alone: without
+/// validation, the session would verify.
 #[test]
 fn an_invalid_session_does_not_verify() {
     let p = Policy::load(DENY_SPAWN).unwrap();
     let mut s = spawn(&p);
-    let v = s.policy_violations[0].clone();
-    s.policy_violations.push(v);
+    let elsewhere = ArtifactId::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+    s.hints.push(FeatureHint {
+        subject: SliceId::from_parts(&elsewhere, Arch::X86_64, 0),
+        feature: FeatureKey::new("ollama.device_discovery").unwrap(),
+        signal: Signal::String,
+        value: UntrustedText::new("x"),
+        at: Loc::FileOffset(0),
+    });
     let errors = verify(&s, &p).unwrap_err();
+    assert!(!errors.is_empty());
     assert!(
         errors
             .iter()
             .all(|e| e.starts_with("the session is not valid: ")),
-        "{errors:?}"
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.contains("a second violation of posix.process_spawn")),
         "{errors:?}"
     );
 }

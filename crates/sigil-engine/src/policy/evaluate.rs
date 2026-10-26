@@ -85,8 +85,8 @@ pub enum EvaluateError {
     },
     /// The policy denies a capability, and the session's `Import` hints are not the ones its
     /// capability table gives its import facts (#51): how many are missing, and how many the
-    /// table does not give. `validate` checks that a hint names a real import, not that every
-    /// import has its hint, so evaluation does.
+    /// table does not give, each hint counted as often as it is recorded. `validate` checks that a
+    /// hint names a real import, not that every import has its hint, so evaluation does.
     CapabilityHints { missing: usize, extra: usize },
     /// The embedded capability table is invalid: an internal error that its tests rule out.
     Signatures(String),
@@ -414,17 +414,27 @@ fn pinned(session: &Session) -> Result<(), EvaluateError> {
     Ok(())
 }
 
-/// The `Import` hints of `hints`, each as the fields that make it, sorted.
+/// The `Import` hints of `hints`, each as all the fields that make it, sorted. The fields are
+/// named, so a field added to `FeatureHint` breaks the build here rather than leaving the check.
+/// `Loc`'s derived `Debug` tells its values apart: they are integers, IDs, and `UntrustedText`,
+/// whose `Debug` shows its bytes.
 fn import_keys(hints: &[FeatureHint]) -> Vec<(&str, &str, &[u8], String)> {
     let mut keys: Vec<_> = hints
         .iter()
         .filter(|h| h.signal == Signal::Import)
         .map(|h| {
+            let FeatureHint {
+                subject,
+                feature,
+                signal: _,
+                value,
+                at,
+            } = h;
             (
-                h.subject.as_str(),
-                h.feature.as_str(),
-                h.value.as_bytes(),
-                format!("{:?}", h.at),
+                subject.as_str(),
+                feature.as_str(),
+                value.as_bytes(),
+                format!("{at:?}"),
             )
         })
         .collect();
@@ -435,6 +445,7 @@ fn import_keys(hints: &[FeatureHint]) -> Vec<(&str, &str, &[u8], String)> {
 /// How many items of the sorted lists `a` and `b` the other lacks, each counted as often as it
 /// occurs: `(in a only, in b only)`.
 fn surplus<T: Ord>(a: &[T], b: &[T]) -> (usize, usize) {
+    debug_assert!(a.is_sorted() && b.is_sorted());
     let (mut i, mut j, mut only_a, mut only_b) = (0, 0, 0, 0);
     while i < a.len() && j < b.len() {
         match a[i].cmp(&b[j]) {

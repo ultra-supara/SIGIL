@@ -1291,6 +1291,8 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
 /// itself; this checks that it is what the policy gives, by evaluating it again
 /// (`policy::verify`). The session is loaded and re-verified as for `session render`.
 fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
+    // Validated here, so a bad session is an error as for `render`; `policy::verify` validates it
+    // again, as it does for every caller.
     let session = load_session(&args.session)?;
     reverify(&session, &args.session)?;
     let policy = load_policy(args.policy.as_deref())?;
