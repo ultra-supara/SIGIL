@@ -25,16 +25,32 @@ fn every_session_example_carries_the_hints_the_engine_derives() {
         let mut recorded = session.hints.clone();
         recorded.sort_by_cached_key(key);
         assert_eq!(recorded, derived, "{}", path.display());
+        // The table's kind, ID, and SHA-256: its version only says which build wrote it.
         let table = sigil_engine::code::data::signatures().unwrap().knowledge();
+        let key = |k: &sigil_model::KnowledgeRef| (k.kind, k.id.clone(), k.sha256.clone());
         let tables: Vec<_> = session
             .knowledge
             .iter()
-            .filter(|k| k.kind == sigil_model::KnowledgeKind::SignatureDb)
+            .filter(|k| {
+                k.kind == sigil_model::KnowledgeKind::SignatureDb
+                    && k.id == sigil_model::CAPABILITY_TABLE_ID
+            })
+            .map(key)
             .collect();
         if session.binaries.is_empty() {
             assert!(tables.is_empty(), "{}", path.display());
         } else {
-            assert_eq!(tables, [table], "{}", path.display());
+            assert_eq!(
+                tables,
+                [key(table)],
+                "{}: not this build's capability table. After a change to \
+                 signatures/capabilities.toml, set CAPABILITY_TABLE_HEX in \
+                 crates/sigil-model/tests/common/mod.rs to its SHA-256 ({}), then run \
+                 SIGIL_BLESS=1 cargo test -p sigil-model --test examples, then --test aibom, and \
+                 copy 16-binary-code.json to site/viewer/samples/session-16-binary-code.json",
+                path.display(),
+                table.sha256
+            );
         }
     }
 }

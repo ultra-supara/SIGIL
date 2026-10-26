@@ -4,9 +4,9 @@
   "knowledge": [
     {
       "kind": "Policy",
-      "id": "default",
+      "id": "deny-capabilities",
       "version": "1",
-      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+      "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
     },
     {
       "kind": "SignatureDb",

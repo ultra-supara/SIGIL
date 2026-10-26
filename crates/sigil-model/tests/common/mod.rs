@@ -2031,9 +2031,16 @@ pub const NO_CONNECTIONS: &str = "The runtime must not open connections";
 /// that denies `posix.network` and `posix.process_spawn` (`fail`). The call of `connect` is a
 /// policy violation citing its call site; `execve` is an open question counted as a gap, since
 /// code analysis does not follow a call that is not direct. Synthetic: the fixture imports only
-/// `connect`. FAIL + INCOMPLETE.
+/// `connect`. Its policy is its own (`deny-capabilities`), not the built-in one, which denies
+/// nothing. FAIL + INCOMPLETE.
 pub fn capability_policy() -> Session {
     let mut s = binary_code();
+    for k in &mut s.knowledge {
+        if k.kind == KnowledgeKind::Policy {
+            k.id = "deny-capabilities".to_string();
+            k.sha256 = id(&hex(0xa4));
+        }
+    }
     let slice = s.binaries[0].slice.clone();
     if let ContainerFacts::Elf(elf) = &mut s.binaries[0].container {
         elf.imports.push(ElfImport {

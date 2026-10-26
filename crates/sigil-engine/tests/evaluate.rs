@@ -116,6 +116,10 @@ fn re_evaluating_every_golden_example_reproduces_it() {
                 *k = policy_for(&s, body).knowledge();
             }
         }
+        // In canonical form, as SIGIL writes a session: evaluation appends its capability open
+        // questions after the analysis's, and a saved session sorts them (#51).
+        s.canonicalize();
+        expected.canonicalize();
         assert_eq!(s, expected, "{}", path.display());
         seen += 1;
     }

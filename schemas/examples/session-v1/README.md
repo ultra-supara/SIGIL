@@ -1,12 +1,14 @@
 # Session examples (`sigil-session/1`)
 
 **Specification examples, not SIGIL measurements.** Nothing here was observed on a real system.
-Every file is labeled `tool.version: "0.0.0-example"` and uses synthetic hashes. The exception is
-`13-loader-slice-spec-example.json`, which reuses the values of the plan's §5.8 example (the
+Every file is labeled `tool.version: "0.0.0-example"` and uses synthetic hashes, with these
+exceptions. `13-loader-slice-spec-example.json` reuses the values of the plan's §5.8 example (the
 official Ollama v0.30.6 `libggml` hash and addresses found during PR-0 research) to show the
 intended shape. `16-binary-code.json` reuses the engine's results for its test fixture
 `suspicious_kernel-gcc-O2.o` (its hash, facts, hint, code facts, and bytes read); its path and
-stat are synthetic.
+stat are synthetic, and `18-capability-policy.json` adds a synthetic import to it. `15`, `16`,
+and `18` record the real SHA-256 of `crates/sigil-engine/signatures/capabilities.toml`, the
+capability table their hints were made with (#51).
 
 Each file is generated from a builder in `crates/sigil-model/tests/common/mod.rs` and is checked
 by `crates/sigil-model/tests/examples.rs`. Each must:
@@ -15,7 +17,9 @@ by `crates/sigil-model/tests/examples.rs`. Each must:
 - pass `Session::validate`.
 
 After an intended model change, regenerate them with
-`SIGIL_BLESS=1 cargo test -p sigil-model --test examples`.
+`SIGIL_BLESS=1 cargo test -p sigil-model --test examples`, then their AI-BOMs with
+`SIGIL_BLESS=1 cargo test -p sigil-model --test aibom`. The viewer's sample
+`site/viewer/samples/session-16-binary-code.json` is a copy of `16-binary-code.json`.
 
 | File | Shows |
 |---|---|

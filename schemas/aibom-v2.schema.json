@@ -62,6 +62,7 @@
           }
         },
         "open_questions": {
+          "description": "The session's open questions (#51). Optional on read (missing means empty); written only when non-empty.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/BomOpenQuestion"
