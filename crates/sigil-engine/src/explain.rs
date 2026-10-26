@@ -1,5 +1,5 @@
-//! Deterministic explanations of a session (#21; plan §4.8): one finding, the verdict, or the
-//! coverage.
+//! Deterministic explanations of a session (#21; plan §4.8): one finding or open question (#51),
+//! the verdict, or the coverage.
 //!
 //! The text comes from templates. The rule's summary and remediation come from the catalog, and
 //! everything else is read from the session, so the same session gives the same bytes. No model
@@ -11,11 +11,12 @@ use std::fmt;
 use sigil_model::probe::RUNTIME_API_VERSION;
 use sigil_model::render::{
     action, completeness, coverage_state, kind, not_observable, probe_result, severity, subject,
-    treatment, verdict as verdict_name, Shown, PROBE_SCOPE_NOTE,
+    treatment, unknown_reason, verdict as verdict_name, Shown, PROBE_SCOPE_NOTE,
 };
 use sigil_model::{
-    Action, Completeness, CondEvidence, CondState, EvidenceRef, Finding, ListenerOwner,
-    OqTreatment, ProcessExe, Session, UntrustedText,
+    Action, CallTarget, Completeness, CondEvidence, CondState, Condition, EvidenceRef, Finding,
+    ListenerOwner, Loc, OpenQuestion, OqTreatment, ProcessExe, Session, UntrustedText,
+    CAPABILITY_DENY_PREFIX, CAPABILITY_RULE,
 };
 
 use crate::policy::catalog;
@@ -31,10 +32,10 @@ pub enum Format {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExplainError {
-    /// No finding has this ID.
+    /// No finding or open question has this ID.
     UnknownFinding {
         id: String,
-        /// The IDs of the findings in the session.
+        /// The IDs of the findings and open questions in the session.
         known: Vec<String>,
     },
 }
@@ -45,7 +46,10 @@ impl fmt::Display for ExplainError {
             ExplainError::UnknownFinding { id, known } => {
                 let id = UntrustedText::new(id.as_str()).terminal_line();
                 if known.is_empty() {
-                    write!(f, "no finding {id}: the session has no findings")
+                    write!(
+                        f,
+                        "no finding {id}: the session has no findings or open questions"
+                    )
                 } else {
                     let known: Vec<String> = known
                         .iter()
@@ -53,7 +57,7 @@ impl fmt::Display for ExplainError {
                         .collect();
                     write!(
                         f,
-                        "no finding {id} in the session; its findings are: {}",
+                        "no finding {id} in the session; its findings and open questions are: {}",
                         known.join(", ")
                     )
                 }
@@ -65,12 +69,20 @@ impl fmt::Display for ExplainError {
 impl std::error::Error for ExplainError {}
 
 /// One finding: its rule, decision, subject, the facts each condition rests on, its limits, and
-/// what removes it.
+/// what removes it. An open question's ID explains that question (#51).
 pub fn finding(s: &Session, id: &str, format: Format) -> Result<String, ExplainError> {
     let Some(f) = s.findings.iter().find(|f| f.id.as_str() == id) else {
+        if let Some(q) = s.open_questions.iter().find(|q| q.id.as_str() == id) {
+            return Ok(open_question(s, q, format));
+        }
         return Err(ExplainError::UnknownFinding {
             id: id.to_string(),
-            known: s.findings.iter().map(|f| f.id.to_string()).collect(),
+            known: s
+                .findings
+                .iter()
+                .map(|f| f.id.to_string())
+                .chain(s.open_questions.iter().map(|q| q.id.to_string()))
+                .collect(),
         });
     };
     let info = catalog::rule(f.rule.as_str());
@@ -90,24 +102,7 @@ pub fn finding(s: &Session, id: &str, format: Format) -> Result<String, ExplainE
     doc.field("Summary", Shown::own(f.summary.as_str()));
     doc.end();
 
-    doc.section("Conditions");
-    for c in &f.conditions {
-        let (state, evidence) = match &c.state {
-            CondState::Met { evidence } => ("met", Some(evidence)),
-            CondState::NotMet { evidence } => ("not met", Some(evidence)),
-            CondState::Unknown { evidence, .. } => ("unknown", evidence.as_ref()),
-        };
-        let mut shown = Shown::own(format!("{}: {state}", c.id));
-        if let Some(evidence) = evidence {
-            shown = shown.and(format!(", {}", cond_evidence(evidence)));
-        }
-        if !c.unresolved.is_empty() {
-            let premises: Vec<String> = c.unresolved.iter().map(ToString::to_string).collect();
-            shown = shown.and(format!("; unresolved premises: {}", premises.join(", ")));
-        }
-        doc.item(shown);
-    }
-    doc.end();
+    conditions(&mut doc, &f.conditions);
 
     doc.section("Evidence");
     for e in &f.evidence {
@@ -136,6 +131,81 @@ pub fn finding(s: &Session, id: &str, format: Format) -> Result<String, ExplainE
         Action::Ignore => "Its decision is ignore, so it does not affect the verdict.",
     }));
     Ok(doc.finish())
+}
+
+/// Each condition: its state, why an unknown one is unknown (#51), what it rests on, and its
+/// unresolved premises.
+fn conditions(doc: &mut Doc, conditions: &[Condition]) {
+    doc.section("Conditions");
+    for c in conditions {
+        let (state, evidence) = match &c.state {
+            CondState::Met { evidence } => ("met".to_string(), Some(evidence)),
+            CondState::NotMet { evidence } => ("not met".to_string(), Some(evidence)),
+            CondState::Unknown { reason, evidence } => (
+                format!("unknown, {}", unknown_reason(reason)),
+                evidence.as_ref(),
+            ),
+        };
+        let mut shown = Shown::own(format!("{}: {state}", c.id));
+        if let Some(evidence) = evidence {
+            shown = shown.and(format!(", {}", cond_evidence(evidence)));
+        }
+        if !c.unresolved.is_empty() {
+            let premises: Vec<String> = c.unresolved.iter().map(ToString::to_string).collect();
+            shown = shown.and(format!("; unresolved premises: {}", premises.join(", ")));
+        }
+        doc.item(shown);
+    }
+    doc.end();
+}
+
+/// One open question (#51): its rule, treatment, subject, why each condition is unknown, its
+/// evidence, what settles it, and its effect on the outcome.
+fn open_question(s: &Session, q: &OpenQuestion, format: Format) -> String {
+    let capability = q.rule.as_str() == CAPABILITY_RULE;
+    let info = catalog::rule(q.rule.as_str());
+    let mut doc = Doc::new(format);
+    doc.title(Shown::own(format!("Open question {}", q.id)));
+    doc.field(
+        "Rule",
+        Shown::own(match (capability, info) {
+            (true, _) => format!("{} ({})", q.rule, catalog::CAPABILITY_SUMMARY),
+            (false, Some(r)) => format!("{} ({})", q.rule, r.summary),
+            (false, None) => format!("{} (not in this SIGIL's rule catalog)", q.rule),
+        }),
+    );
+    let d = &q.decision;
+    let mut decided = format!("{}, from {}", treatment(&d.treatment), d.source);
+    if let Some(reason) = &d.reason {
+        decided.push_str(&format!("; reason: {reason}"));
+    }
+    doc.field("Treatment", Shown::own(decided));
+    doc.field("Subject", Shown::own(subject(&q.subject)));
+    doc.end();
+
+    conditions(&mut doc, &q.conditions);
+
+    doc.section("Evidence");
+    for e in &q.evidence {
+        doc.item(evidence(s, e));
+    }
+    doc.end();
+
+    doc.section("What settles it");
+    doc.para(Shown::own(match (capability, info) {
+        (true, _) => catalog::CAPABILITY_REMEDIATION,
+        (false, Some(r)) => r.remediation,
+        (false, None) => "No remediation is recorded for this rule in this SIGIL.",
+    }));
+
+    doc.section("Effect on the outcome");
+    doc.para(Shown::own(match d.treatment {
+        OqTreatment::CountAsGap => "It is counted as a gap, so the result is INCOMPLETE.",
+        OqTreatment::Fail => "Its treatment is fail, so the verdict is FAIL.",
+        OqTreatment::Warn => "Its treatment is warn, so the verdict is at least WARN.",
+        OqTreatment::Ignore => "Its treatment is ignore, so it does not affect the outcome.",
+    }));
+    doc.finish()
 }
 
 /// The verdict and completeness: what raised the verdict, what the policy set aside, and what
@@ -182,12 +252,38 @@ pub fn verdict(s: &Session, format: Format) -> String {
         .filter(|v| v.decision.action != Action::Ignore)
     {
         raised += 1;
-        doc.item(Shown::own(format!(
+        let mut line = format!(
             "policy violation {} on {}: {}",
             v.policy_rule,
             subject(&v.subject),
             action(v.decision.action)
-        )));
+        );
+        // A capability violation cites the call sites it rests on (#51), each listed under it.
+        let mut sites = vec![];
+        if v.policy_rule.as_str().starts_with(CAPABILITY_DENY_PREFIX) {
+            sites = v
+                .evidence
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        EvidenceRef::Code {
+                            loc: Loc::CallSite(_),
+                            ..
+                        }
+                    )
+                })
+                .collect();
+            let n = sites.len();
+            line.push_str(&format!(
+                ", citing {n} call site{}",
+                if n == 1 { "" } else { "s" }
+            ));
+        }
+        doc.item(Shown::own(line));
+        for site in sites {
+            doc.sub_item(evidence(s, site));
+        }
     }
     for q in s
         .open_questions
@@ -215,10 +311,30 @@ pub fn verdict(s: &Session, format: Format) -> String {
         .iter()
         .filter(|f| f.decision.action == Action::Ignore)
         .collect();
-    if !ignored.is_empty() {
+    // An open question the policy ignores neither raises the verdict nor counts as a gap (#51).
+    let ignored_questions: Vec<&OpenQuestion> = s
+        .open_questions
+        .iter()
+        .filter(|q| q.decision.treatment == OqTreatment::Ignore)
+        .collect();
+    if !ignored.is_empty() || !ignored_questions.is_empty() {
         doc.section("Set aside by the policy");
         for f in ignored {
             doc.item(decision_item(f));
+        }
+        for q in ignored_questions {
+            let d = &q.decision;
+            let mut line = format!(
+                "open question {} ({}): {}, from {}",
+                q.id,
+                q.rule,
+                treatment(&d.treatment),
+                d.source
+            );
+            if let Some(reason) = &d.reason {
+                line.push_str(&format!("; reason: {reason}"));
+            }
+            doc.item(Shown::own(line));
         }
         doc.end();
     }
@@ -421,7 +537,30 @@ fn evidence(s: &Session, e: &EvidenceRef) -> Shown {
                 None => Shown::own(format!("content {artifact} (not recorded)")),
             }
         }
-        EvidenceRef::Code { slice, .. } => Shown::own(format!("code in {slice}")),
+        EvidenceRef::Code { slice, loc } => match loc {
+            // A call site, with the import it calls when the session records it (#51).
+            Loc::CallSite(id) => {
+                let called = s
+                    .code
+                    .iter()
+                    .filter(|c| c.slice == *slice)
+                    .flat_map(|c| &c.call_sites)
+                    .find(|c| c.id == *id)
+                    .and_then(|c| match &c.target {
+                        CallTarget::Import { symbol, .. } => Some(symbol),
+                        _ => None,
+                    });
+                match called {
+                    Some(symbol) => Shown::own(format!("call site {id} in {slice}, a call of "))
+                        .and_input(symbol),
+                    None => Shown::own(format!("call site {id} in {slice}")),
+                }
+            }
+            Loc::Symbol(name) => Shown::own("the symbol ")
+                .and_input(name)
+                .and(format!(" in {slice}")),
+            _ => Shown::own(format!("code in {slice}")),
+        },
         EvidenceRef::Config(c) => {
             Shown::own(format!("configuration {} line {}, key ", c.file, c.line)).and_input(&c.key)
         }

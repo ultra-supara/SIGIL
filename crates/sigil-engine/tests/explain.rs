@@ -271,3 +271,85 @@ fn a_probe_is_explained_in_the_coverage() {
         "the probe's limits are not stated:\n{text}"
     );
 }
+
+fn example_18() -> Session {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas/examples/session-v1/18-capability-policy.json");
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// #51: an open question is explained as a finding is: its rule, treatment, subject, why its
+/// condition is unknown, its evidence, what settles it, and its effect on the outcome.
+#[test]
+fn an_open_question_is_explained_too() {
+    let s = example_18();
+    let q = &s.open_questions[0];
+    let slice = s.binaries[0].slice.clone();
+    let text = explain::finding(&s, q.id.as_str(), Format::Text).unwrap();
+    for line in [
+        format!("Open question {}", q.id),
+        format!(
+            "Rule: binary.capability_call ({})",
+            sigil_engine::policy::catalog::CAPABILITY_SUMMARY
+        ),
+        "Treatment: count as gap, from policy:open_questions.default".to_string(),
+        format!("Subject: {slice}"),
+        "calls:posix.process_spawn: unknown, not modeled: calls that are not direct (through a \
+         function pointer, or from data)"
+            .to_string(),
+        format!("the symbol execve in {slice}"),
+        sigil_engine::policy::catalog::CAPABILITY_REMEDIATION.to_string(),
+        "It is counted as a gap, so the result is INCOMPLETE.".to_string(),
+    ] {
+        assert!(text.contains(&line), "{line}\n---\n{text}");
+    }
+    // An unknown ID names the findings and open questions there are.
+    let message = explain::finding(&s, "nope", Format::Text)
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains(q.id.as_str()), "{message}");
+}
+
+/// An open question the policy ignores is set aside by it, as an ignored finding is: the verdict
+/// says so, never a silent pass.
+#[test]
+fn an_ignored_open_question_is_set_aside_in_the_verdict() {
+    let mut s = example_18();
+    let q = &mut s.open_questions[0];
+    q.decision.treatment = OqTreatment::Ignore;
+    q.decision.reason = Some("accepted risk".to_string());
+    let id = q.id.clone();
+    let text = explain::verdict(&s, Format::Text);
+    assert!(text.contains("Set aside by the policy"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "open question {id} (binary.capability_call): ignore, from \
+             policy:open_questions.default; reason: accepted risk"
+        )),
+        "{text}"
+    );
+}
+
+/// #51: the verdict counts the call sites a capability violation cites, and lists each with the
+/// import it calls.
+#[test]
+fn a_capability_violation_counts_its_call_sites_in_the_verdict() {
+    let mut s = example_18();
+    let slice = s.binaries[0].slice.clone();
+    let text = explain::verdict(&s, Format::Text);
+    let site = format!("      call site cs:0x4d in {slice}, a call of connect\n");
+    assert!(
+        text.contains(&format!(
+            "policy violation policy:capabilities.deny.posix.network on {slice}: fail, citing 1 call site\n{site}"
+        )),
+        "{text}"
+    );
+    // Two call sites: the plural, and each listed.
+    let cited = s.policy_violations[0].evidence[0].clone();
+    s.policy_violations[0].evidence.push(cited);
+    let text = explain::verdict(&s, Format::Text);
+    assert!(
+        text.contains(&format!("fail, citing 2 call sites\n{site}{site}")),
+        "{text}"
+    );
+}

@@ -252,6 +252,10 @@ pub enum ValidationError {
     /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a; S3,
     /// PR-4c-2a).
     Code { at: String, why: String },
+    /// A capability violation or open question disagrees with the session's hints and code facts
+    /// (P1, P2; #51), or a session with one does not record the one capability table its binaries
+    /// were analyzed with (`at` is `knowledge`).
+    Capability { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -386,6 +390,7 @@ impl fmt::Display for ValidationError {
             Binary { slice, why } => write!(f, "binaries[{slice}]: {why}"),
             BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
             Code { at, why } => write!(f, "{at}: {why}"),
+            Capability { at, why } => write!(f, "{at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -813,6 +818,7 @@ impl<'a> Validator<'a> {
             }
         }
         self.findings_and_questions();
+        self.capabilities();
         self.outcome();
     }
 
@@ -3207,6 +3213,233 @@ impl<'a> Validator<'a> {
                 self.evidence(e, &at);
             }
             self.decision(&violation.decision, &at);
+        }
+    }
+
+    fn capability_error(&mut self, at: &str, why: impl Into<String>) {
+        self.errors.push(ValidationError::Capability {
+            at: at.to_string(),
+            why: why.into(),
+        });
+    }
+
+    /// P1 and P2 (#51): a capability violation (policy rule `policy:capabilities.deny.<feature>`)
+    /// cites every direct call site of the imports that its slice's `Import` hints give that
+    /// feature, each once, and nothing else; a capability open question (rule
+    /// `binary.capability_call`) cites every such import, each once, of a slice that calls none of
+    /// them directly. Both are judged by the session's own hints and code facts, never by a
+    /// capability table, and need the session to record the table it was analyzed with. Whether
+    /// the policy gave exactly these results is not the model's to say: `policy::verify` in the
+    /// engine re-evaluates the session under the policy.
+    fn capabilities(&mut self) {
+        use crate::finding::{
+            CAPABILITY_CONDITION_PREFIX, CAPABILITY_DENY_PREFIX, CAPABILITY_RULE,
+            CAPABILITY_TABLE_ID,
+        };
+        use crate::hint::Signal;
+        use crate::session::KnowledgeKind;
+        use crate::text::UntrustedText;
+        let s = self.s;
+        // A capability result is judged by the table the binaries were analyzed with, so the
+        // session records it (plan review P2-1).
+        let results = s
+            .policy_violations
+            .iter()
+            .any(|v| v.policy_rule.as_str().starts_with(CAPABILITY_DENY_PREFIX))
+            || s.open_questions
+                .iter()
+                .any(|q| q.rule.as_str() == CAPABILITY_RULE);
+        let tables = s
+            .knowledge
+            .iter()
+            .filter(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
+            .count();
+        if results && tables != 1 {
+            self.capability_error(
+                "knowledge",
+                format!(
+                    "a capability result needs the one capability table the binaries were \
+                     analyzed with (SignatureDb {CAPABILITY_TABLE_ID}); the session records {tables}"
+                ),
+            );
+        }
+        // The imports that each slice's `Import` hints give a feature.
+        let mut imports: BTreeMap<(&SliceId, &str), BTreeSet<&UntrustedText>> = BTreeMap::new();
+        for h in s.hints.iter().filter(|h| h.signal == Signal::Import) {
+            imports
+                .entry((&h.subject, h.feature.as_str()))
+                .or_default()
+                .insert(&h.value);
+        }
+        // Each slice's call sites of an import, by ID, gathered once: walking every slice's code
+        // for each result would grow with the square of the slices.
+        let mut by_slice: BTreeMap<&SliceId, BTreeMap<&str, &UntrustedText>> = BTreeMap::new();
+        for facts in &s.code {
+            for c in &facts.call_sites {
+                if let CallTarget::Import { symbol, .. } = &c.target {
+                    by_slice
+                        .entry(&facts.slice)
+                        .or_default()
+                        .insert(c.id.as_str(), symbol);
+                }
+            }
+        }
+        let calls = |slice: &SliceId| -> BTreeMap<&str, &UntrustedText> {
+            by_slice.get(slice).cloned().unwrap_or_default()
+        };
+        let none = BTreeSet::new();
+        let mut violated: BTreeSet<(&SliceId, &str)> = BTreeSet::new();
+        for v in &s.policy_violations {
+            let Some(feature) = v.policy_rule.as_str().strip_prefix(CAPABILITY_DENY_PREFIX) else {
+                continue;
+            };
+            let at = format!("policy_violations[{}]", v.policy_rule);
+            let Ref::Slice(slice) = &v.subject else {
+                self.capability_error(&at, "a capability violation's subject is a slice");
+                continue;
+            };
+            // Call site IDs are addresses, the same in many files: the slice tells them apart.
+            let at = format!("policy_violations[{} on {slice}]", v.policy_rule);
+            if !violated.insert((slice, feature)) {
+                self.capability_error(&at, format!("a second violation of {feature} on {slice}"));
+            }
+            if v.evidence.is_empty() {
+                self.capability_error(&at, "cites no call site");
+            }
+            let names = imports.get(&(slice, feature)).unwrap_or(&none);
+            let calls = calls(slice);
+            let mut cited = BTreeSet::new();
+            for e in &v.evidence {
+                match e {
+                    EvidenceRef::Code {
+                        slice: of,
+                        loc: Loc::CallSite(id),
+                    } if of == slice => {
+                        if !cited.insert(id.as_str()) {
+                            self.capability_error(&at, format!("cites {id} twice"));
+                        }
+                        match calls.get(id.as_str()) {
+                            Some(symbol) if names.contains(symbol) => {}
+                            Some(_) => self.capability_error(
+                                &at,
+                                format!(
+                                    "cites {id}, a call of an import that is not a {feature} one"
+                                ),
+                            ),
+                            None => self.capability_error(
+                                &at,
+                                format!("cites {id}, which is not a call site of an import"),
+                            ),
+                        }
+                    }
+                    _ => self.capability_error(
+                        &at,
+                        "cites something other than a call site of its slice",
+                    ),
+                }
+            }
+            // Every direct call of the feature's imports, each once (plan review P2-2).
+            for (id, symbol) in &calls {
+                if names.contains(symbol) && !cited.contains(id) {
+                    self.capability_error(
+                        &at,
+                        format!("does not cite {id}, a call of a {feature} import"),
+                    );
+                }
+            }
+        }
+        let mut asked: BTreeSet<(&SliceId, &str)> = BTreeSet::new();
+        for q in s
+            .open_questions
+            .iter()
+            .filter(|q| q.rule.as_str() == CAPABILITY_RULE)
+        {
+            let at = format!("open_questions[{}]", q.id);
+            let Ref::Slice(slice) = &q.subject else {
+                self.capability_error(&at, "a capability open question's subject is a slice");
+                continue;
+            };
+            let feature = match q.conditions.as_slice() {
+                [c] if matches!(c.state, CondState::Unknown { .. }) => {
+                    match c.id.as_str().strip_prefix(CAPABILITY_CONDITION_PREFIX) {
+                        Some(feature) if !feature.is_empty() => feature,
+                        _ => {
+                            self.capability_error(
+                                &at,
+                                format!(
+                                    "its condition is not {CAPABILITY_CONDITION_PREFIX}<feature>"
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+                }
+                _ => {
+                    self.capability_error(
+                        &at,
+                        "a capability open question has exactly one condition, unknown",
+                    );
+                    continue;
+                }
+            };
+            if !asked.insert((slice, feature)) {
+                self.capability_error(
+                    &at,
+                    format!("a second open question of {feature} on {slice}"),
+                );
+            }
+            if violated.contains(&(slice, feature)) {
+                self.capability_error(&at, format!("{slice} has a violation of {feature} too"));
+            }
+            let names = imports.get(&(slice, feature)).unwrap_or(&none);
+            if names.is_empty() {
+                self.capability_error(&at, format!("{slice} imports nothing of {feature}"));
+            }
+            if q.evidence.is_empty() {
+                self.capability_error(&at, "cites no import");
+            }
+            let mut cited = BTreeSet::new();
+            for e in &q.evidence {
+                match e {
+                    EvidenceRef::Code {
+                        slice: of,
+                        loc: Loc::Symbol(name),
+                    } if of == slice && names.contains(name) => {
+                        if !cited.insert(name) {
+                            self.capability_error(
+                                &at,
+                                format!("cites the import {} twice", name.terminal_line()),
+                            );
+                        }
+                    }
+                    _ => self.capability_error(
+                        &at,
+                        format!("cites something other than a {feature} import of its slice"),
+                    ),
+                }
+            }
+            // Every import of the feature, each once (plan review P2-2).
+            for name in names {
+                if !cited.contains(name) {
+                    self.capability_error(
+                        &at,
+                        format!(
+                            "does not cite {}, a {feature} import of its slice",
+                            name.terminal_line()
+                        ),
+                    );
+                }
+            }
+            for (id, symbol) in calls(slice) {
+                if names.contains(symbol) {
+                    self.capability_error(
+                        &at,
+                        format!(
+                            "{slice} calls a {feature} import at {id}: that is a violation, not a question"
+                        ),
+                    );
+                }
+            }
         }
     }
 

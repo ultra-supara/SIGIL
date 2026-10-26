@@ -257,6 +257,33 @@ fn every_unknown_or_malformed_input_is_fatal() {
             format!("{HEAD}[[components.deny]]\ncomponent = \"x\"\naction = \"fail\"\nreason = \"r\"\n"),
             |e| matches!(e, E::UnknownComponent(c) if c == "x"),
         ),
+        (
+            format!("{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"ignore\"\nreason = \"r\"\n"),
+            |e| matches!(e, E::BadCapabilityAction { feature } if feature == "posix.network"),
+        ),
+        (
+            format!(
+                "{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"r\"\n[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"warn\"\nreason = \"r\"\n"
+            ),
+            |e| matches!(e, E::DuplicateCapabilityDeny(f) if f == "posix.network"),
+        ),
+        (
+            format!("{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \" \"\n"),
+            |e| matches!(e, E::CapabilityDenyWithoutReason { feature } if feature == "posix.network"),
+        ),
+        (
+            format!("{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"r\"\nexpires = \"2027-01-01\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        // A misspelt table is refused, never read as a policy that denies nothing.
+        (
+            format!("{HEAD}[[capabilities.denied]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"r\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        (
+            format!("{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
         ("schema = \"sigil-policy/1\"\nname = \"\"\n".to_string(), |e| {
             matches!(e, E::BadName(_))
         }),
@@ -295,6 +322,92 @@ fn a_deny_entry_must_name_a_component_sigil_identifies() {
     }
     // A key that is not a valid component key at all is still an ID error, as before.
     assert!(matches!(fails(&deny(" ggml")), PolicyError::BadId(_)));
+}
+
+/// #51: a denial names a key of the capability-import table (`signatures/capabilities.toml`),
+/// whose imports have call sites to judge. Any other key would match nothing, silently.
+#[test]
+fn a_capability_denial_must_name_a_capability_import_key() {
+    let deny = |feature: &str| {
+        format!(
+            "{HEAD}[[capabilities.deny]]\nfeature = \"{feature}\"\naction = \"fail\"\nreason = \"not here\"\n"
+        )
+    };
+    let policy = Policy::load(&format!(
+        "{}[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"warn\"\nreason = \"r\"\n",
+        deny("posix.process_spawn")
+    ))
+    .unwrap();
+    let got: Vec<(&str, Action, &str)> = policy
+        .capabilities
+        .iter()
+        .map(|d| (d.feature.as_str(), d.action, d.reason.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("posix.process_spawn", Action::Fail, "not here"),
+            ("cxx.file_write", Action::Warn, "r"),
+        ]
+    );
+    let keys = "cxx.file_read, cxx.file_write, posix.anti_debug, posix.dynamic_loading, \
+                posix.environment_access, posix.file_read, posix.file_write, posix.network, \
+                posix.process_spawn";
+    for unknown in ["posix.netwrok", "network", "cxx.process_spawn"] {
+        let error = fails(&deny(unknown));
+        assert!(
+            matches!(&error, PolicyError::UnknownCapability { feature, .. } if feature == unknown)
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "capabilities.deny {unknown:?}: not a capability import; a policy can deny {keys}"
+            )
+        );
+    }
+    // A signature hint has no call sites to judge, and the error says so.
+    for signature in [
+        "go.process_spawn",
+        "ollama.device_discovery",
+        "rpc.code_present",
+    ] {
+        let error = fails(&deny(signature));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "capabilities.deny {signature:?}: not a capability import (go.*, ollama.*, and \
+                 rpc.* hints are names found in a file, with no call sites to judge); a policy \
+                 can deny {keys}"
+            )
+        );
+    }
+    // Every namespace of the embedded needle database is one the error names: a new one there
+    // is noticed here.
+    let db = sigil_engine::binary::needles::needles().unwrap();
+    for kind in [
+        sigil_engine::binary::needles::NeedleKind::Export,
+        sigil_engine::binary::needles::NeedleKind::GoFunction,
+        sigil_engine::binary::needles::NeedleKind::String,
+    ] {
+        for needle in db.of(kind) {
+            let error = fails(&deny(needle.feature.as_str()));
+            assert!(
+                error
+                    .to_string()
+                    .contains("hints are names found in a file"),
+                "{}: {error}",
+                needle.feature
+            );
+        }
+    }
+    // A key that is not a valid feature key at all is an ID error, as for components.
+    assert!(matches!(
+        fails(&deny(" posix.network")),
+        PolicyError::BadId(_)
+    ));
+    // Without the table, a policy denies no capability.
+    assert!(Policy::load(HEAD).unwrap().capabilities.is_empty());
+    assert!(Policy::builtin_default().unwrap().capabilities.is_empty());
 }
 
 #[test]
@@ -349,6 +462,7 @@ fn the_documented_example_loads() {
     let policy = Policy::load(&block).unwrap();
     assert_eq!(policy.rules.len(), 2);
     assert_eq!(policy.deny.len(), 1);
+    assert_eq!(policy.capabilities.len(), 1);
 }
 
 #[test]

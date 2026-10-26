@@ -38,7 +38,8 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         ReleaseBasisKind => "ReleaseBasisKind", BomModel => "BomModel", BomLayer => "BomLayer",
         BomBlob => "BomBlob", BomLicense => "BomLicense", BomArtifact => "BomArtifact",
         BomSlice => "BomSlice", BomComponent => "BomComponent", BomFinding => "BomFinding",
-        BomViolation => "BomViolation", CheckSummary => "CheckSummary",
+        BomViolation => "BomViolation", BomOpenQuestion => "BomOpenQuestion",
+        CheckSummary => "CheckSummary",
     ]
 }
 
@@ -71,15 +72,19 @@ fn every_example_validates_against_the_schema() {
     let schema = schema();
     let validator = validator_for(&schema, "AiBom");
     let all = examples();
-    assert_eq!(all.len(), 17);
+    assert_eq!(all.len(), 18);
     for (name, value) in all {
         assert_valid_against(&validator, &value, &name);
     }
 }
 
+/// Fields added later (#51): optional on read, where a missing list is empty, and written only
+/// when not empty, so an AI-BOM without open questions keeps its bytes.
+const OPTIONAL_ON_READ: &[(&str, &str)] = &[("AiBom", "open_questions")];
+
 #[test]
 fn rust_field_and_variant_names_equal_the_schema() {
-    let problems = schema_check::name_problems(&schema(), registered(), &[]);
+    let problems = schema_check::name_problems(&schema(), registered(), OPTIONAL_ON_READ);
     assert!(
         problems.is_empty(),
         "schema drift:\n{}",

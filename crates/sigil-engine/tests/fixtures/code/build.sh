@@ -61,6 +61,8 @@ gcc -O2 -fPIC -shared -fno-asynchronous-unwind-tables -fno-unwind-tables -o "$B/
 gcc -O2 -fPIC -shared -o "$B/dl.so" dl.c
 gcc -O2 -fPIC -shared -o "$B/ownplt.so" ownplt.c
 gcc -O2 -fPIC -shared -fno-semantic-interposition -o "$B/ownplt-direct.so" ownplt.c
+# #51: a direct call of execve, and one of connect.
+gcc -O2 -fPIC -shared -o "$B/spawn.so" spawn.c
 # The .S files are assembled by `as` into $T and then linked. `gcc x.S` would assemble a randomly
 # named temporary object, and ld names it in an STT_FILE symbol when the file has local symbols
 # (values.S, cfg.S), so the output would differ on every build.
@@ -345,6 +347,9 @@ expect "$f" take 1 'mov +0x[0-9a-f]+\(%rip\),%rdi +# [0-9a-f]+ <connect@'
 expect "$f" take 1 'jmp +[0-9a-f]+ <keep@plt>$'
 readelf -rW "$f" | grep -Eq ' R_X86_64_GLOB_DAT +0+ connect@' || fail "$f: no GLOB_DAT connect"
 grep -q '<connect@plt>' "$T/lst/$f.lst" && fail "$f: has a connect PLT stub"
+# spawn.so (#51): run calls execve's stub once, dial connect's.
+expect spawn.so run 1 'call +[0-9a-f]+ <execve@plt>$'
+expect spawn.so dial 1 "$CALL_CONNECT_PLT"
 # net-data.so: connect only in data (an R_X86_64_64 in .data.rel.ro), never in code.
 f=net-data.so
 grep -q connect "$T/lst/$f.lst" && fail "$f: code names connect"

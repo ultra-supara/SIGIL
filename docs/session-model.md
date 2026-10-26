@@ -238,6 +238,18 @@ The rule then yields an open question at most.
   - every condition is decided as its record settles (the table above);
   - a finding has every condition `Met` and evidence;
   - an open question has something open and nothing refuted;
+  - P1 (#51): a capability violation (policy rule `policy:capabilities.deny.<feature>`) is about a
+    slice and cites every call site of that slice whose target is an import the slice's `Import`
+    hints give the feature, each once, and nothing else, at least one; at most one per slice and
+    feature;
+  - P2 (#51): a capability open question (rule `binary.capability_call`) is about a slice, has one
+    unknown condition `calls:<feature>`, cites every import of the feature, each once, and nothing
+    else, at least one, of a slice that calls none of them directly and has no violation of the
+    feature; at most one per slice and feature;
+  - a session with a P1 or P2 result records one capability table (`SignatureDb`, id
+    `capabilities`): the one its binaries' hints and call sites were made with. These rules say
+    that the results agree with the session, not that its policy gave them: `sigil session
+    verify` checks that ([policy](policy.md#verifying-a-session-against-its-policy));
   - an identity status is the one its assertions support (PR-4c-1): `ReferenceMatched` needs a
     matched `KnownHash`; `Corroborated` a `CodeCheck` whose result is `Match`, and no matched
     `KnownHash`; `NameOnly` a `SelfName`, an `Embedded` value, or a `Required` assertion, and
@@ -518,7 +530,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | D: behavior | `RuleSupport`, `Support`, `LoadFacts`, `LoadFact`, `Tri`, `ProcessValue`, `ValueOrigin` | Per-rule support (recorded once) and per-file facts, with premises and value provenance |
 | Access | `WriteAccess`, `NodeAccess`, `CapabilityAccess`, `AccessConclusion` | Who can write where, from observed metadata |
 | Coverage | `Coverage`, `CoverageState` | What was checked and how far |
-| E: findings | `Condition`, `CondState`, `CondEvidence`, `ValueNeed`, `Settles`, `Finding`, `OpenQuestion`, `PolicyViolation` | Conditions that name their records; technical conclusions, open questions, and organizational violations, kept in separate lists |
+| E: findings | `Condition`, `CondState`, `CondEvidence`, `ValueNeed`, `Settles`, `Finding`, `OpenQuestion`, `PolicyViolation` | Conditions that name their records; technical conclusions, open questions (the analysis's, and the capability ones evaluation makes, #51), and organizational violations, kept in separate lists |
 | Policy and outcome | `PolicyDecision`, `OpenQuestionDecision`, `Outcome`, `Verdict`, `Completeness` | The policy's treatment, and the two independent results |
 | Text and IDs | `UntrustedText`, `ArtifactId`, `InstanceId`, `CheckId`, `RuleId`, `ProfileRef`, … | Escape-only display of input text. One newtype per identity domain |
 

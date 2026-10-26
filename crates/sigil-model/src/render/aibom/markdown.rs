@@ -8,7 +8,7 @@ use crate::artifact::ElfType;
 use crate::artifact::Format;
 
 use super::super::md::{self, esc, joined, section, table};
-use super::super::{action, identity_status, kind, mode, subject};
+use super::super::{action, identity_status, kind, mode, subject, treatment};
 use super::{AiBom, BomBlob, BomModel, ReleaseBasisKind};
 
 /// The report of `bom`. The same AI-BOM gives the same bytes.
@@ -24,6 +24,7 @@ pub fn markdown(bom: &AiBom) -> String {
     artifacts(&mut out, bom);
     findings(&mut out, bom);
     violations(&mut out, bom);
+    open_questions(&mut out, bom);
     coverage(&mut out, bom);
     out.push_str(&esc(
         "Projected from the session named by its SHA-256 above; the session holds the evidence for every line.",
@@ -264,6 +265,31 @@ fn violations(out: &mut String, bom: &AiBom) {
         })
         .collect();
     table(out, &["Policy rule", "Action", "Subject", "Reason"], rows);
+}
+
+/// The open questions, when there are any (#51).
+fn open_questions(out: &mut String, bom: &AiBom) {
+    if bom.open_questions.is_empty() {
+        return;
+    }
+    section(out, "Open questions");
+    let rows = bom
+        .open_questions
+        .iter()
+        .map(|q| {
+            vec![
+                esc(q.id.as_str()),
+                esc(q.rule.as_str()),
+                esc(treatment(&q.decision.treatment)),
+                esc(&subject(&q.subject)),
+            ]
+        })
+        .collect();
+    table(
+        out,
+        &["Open question", "Rule", "Treatment", "Subject"],
+        rows,
+    );
 }
 
 fn coverage(out: &mut String, bom: &AiBom) {

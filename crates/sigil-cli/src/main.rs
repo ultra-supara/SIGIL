@@ -6,8 +6,10 @@
 //!   runtime's API for its version (one request to a literal address, loopback unless
 //!   `--allow-remote`). It writes the session (or its Markdown) and a summary.
 //! - `session render` renders a saved session, as Markdown or as its AI-BOM v2.
-//! - `explain` explains a finding, the verdict, or the coverage of a saved session (#21).
-//! - `rules` lists the detection rules.
+//! - `session verify` checks that a saved session is what its policy gives (#51).
+//! - `explain` explains a finding or open question, the verdict, or the coverage of a saved
+//!   session (#21).
+//! - `rules` lists the detection rules, and the capabilities a policy can deny.
 //! - `binary inspect` inspects files directly: each one's digest, format, and container facts, in
 //!   one session (PR-4b-2a). With `--code`, it also records the direct call sites of capability
 //!   imports (PR-5a).
@@ -37,7 +39,7 @@ use sigil_engine::inspect::{
 };
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
-use sigil_engine::policy::catalog::RULES;
+use sigil_engine::policy::catalog::{self, RULES};
 use sigil_engine::policy::Policy;
 use sigil_engine::reference;
 use sigil_model::render::aibom::project;
@@ -85,10 +87,10 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
-    /// Explain a finding, the verdict, or the coverage of a saved session. Deterministic: the
-    /// same session gives the same text.
+    /// Explain a finding or open question, the verdict, or the coverage of a saved session.
+    /// Deterministic: the same session gives the same text.
     Explain(ExplainArgs),
-    /// List the detection rules.
+    /// List the detection rules, and the capabilities a policy can deny.
     Rules,
 }
 
@@ -233,6 +235,20 @@ enum FailOn {
 enum SessionCommand {
     /// Render a saved session.
     Render(RenderArgs),
+    /// Check that a saved session is what its policy gives: it names the policy, and evaluating
+    /// it again gives the same decisions, policy violations, open questions, and outcome. The
+    /// analysis and the policy time are the session's: this checks what the policy makes of
+    /// them, not them (inspect the files again for that).
+    Verify(VerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct VerifyArgs {
+    /// The session (JSON).
+    session: PathBuf,
+    /// The policy the session was evaluated with (default: the built-in policy).
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -271,7 +287,7 @@ struct ExplainArgs {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 struct Question {
-    /// Explain this finding: its rule, decision, evidence, and remediation.
+    /// Explain this finding or open question: its rule, decision, evidence, and remediation.
     #[arg(long, value_name = "ID")]
     finding: Option<String>,
     /// Explain the verdict and completeness.
@@ -308,6 +324,9 @@ fn main() -> ExitCode {
         Command::Session {
             command: SessionCommand::Render(args),
         } => render(&args).map(|()| 0),
+        Command::Session {
+            command: SessionCommand::Verify(args),
+        } => verify_session(&args).map(|()| 0),
         Command::Explain(args) => explain_session(&args).map(|()| 0),
         Command::Rules => rules().map(|()| 0),
     };
@@ -1246,15 +1265,10 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
     }
     let set = reference::official().map_err(|e| Failure::Run(format!("the embedded set: {e}")))?;
     let failure = |what: &str, errors: Vec<String>| {
-        let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
-        let more = match errors.len().saturating_sub(5) {
-            0 => String::new(),
-            n => format!(" (and {n} more)"),
-        };
         Failure::Run(format!(
-            "{}: {what} the embedded reference set: {}{more}",
+            "{}: {what} the embedded reference set: {}",
             shown_path(path),
-            first.join("; ")
+            first_five(&errors)
         ))
     };
     if !reference::names(session, set)
@@ -1271,6 +1285,58 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
     // PR-4c-2c: the release claims are recomputed from the rows, the binary facts, and the set.
     reference::verify_release_claims(session, set)
         .map_err(|e| failure("the session's release claims disagree with", e))
+}
+
+/// `session verify` (#51, plan review P2-2): `validate` checks that a session agrees with
+/// itself; this checks that it is what the policy gives, by evaluating it again
+/// (`policy::verify`). The session is loaded and re-verified as for `session render`.
+fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
+    // Validated here, so a bad session is an error as for `render`; `policy::verify` validates it
+    // again, as it does for every caller.
+    let session = load_session(&args.session)?;
+    reverify(&session, &args.session)?;
+    let policy = load_policy(args.policy.as_deref())?;
+    sigil_engine::policy::verify(&session, &policy).map_err(|errors| {
+        // A session another build made may differ by that build's data alone.
+        let build = tool_info().version;
+        let other = if session.tool.version == build {
+            String::new()
+        } else {
+            format!(
+                " (the session was made by SIGIL {}; this is {build})",
+                shown(&session.tool.version)
+            )
+        };
+        Failure::Run(format!(
+            "{} is not what the policy {} gives: {}{other}",
+            shown_path(&args.session),
+            shown(&policy.name),
+            first_five(&errors)
+        ))
+    })?;
+    // The policy time is the session's own, as is the analysis: say which one was used.
+    emit(
+        &format!(
+            "verified: {} is what the policy {} ({}) gives at {}: {} + {}\n",
+            shown_path(&args.session),
+            shown(&policy.name),
+            policy.sha256,
+            session.outcome.policy_time,
+            sigil_model::render::verdict(session.outcome.verdict),
+            sigil_model::render::completeness(&session.outcome.completeness)
+        ),
+        None,
+        &[],
+    )
+}
+
+/// The first five of `errors`, shown for a terminal and joined, then how many more there are.
+fn first_five(errors: &[String]) -> String {
+    let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
+    match errors.len().saturating_sub(5) {
+        0 => first.join("; "),
+        n => format!("{} (and {n} more)", first.join("; ")),
+    }
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
@@ -1314,6 +1380,18 @@ fn rules() -> Result<(), Failure> {
             r.summary
         ));
     }
+    // #51: the keys a `[[capabilities.deny]]` entry may name, and the rule of its open questions.
+    let keys = catalog::capabilities()
+        .map_err(|m| Failure::Run(format!("the embedded capability table is invalid: {m}")))?;
+    text.push_str("\nCapabilities a policy can deny ([[capabilities.deny]]):\n");
+    for key in keys {
+        text.push_str(&format!("  {key}\n"));
+    }
+    text.push_str(&format!(
+        "Its open questions: {} ({})\n",
+        sigil_model::CAPABILITY_RULE,
+        catalog::CAPABILITY_SUMMARY
+    ));
     emit(&text, None, &[])
 }
 

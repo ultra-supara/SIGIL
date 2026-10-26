@@ -6,7 +6,8 @@
 
 use crate::artifact::{FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs};
 use crate::coverage::Coverage;
-use crate::evidence::{EvidenceRef, Observability};
+use crate::evidence::{EvidenceRef, Loc, Observability};
+use crate::finding::{CondState, OpenQuestion};
 use crate::hint::{FeatureHint, Signal};
 use crate::model::{BlobLookup, Model};
 use crate::reference::{MemberResult, ARTIFACTS_RELEASE, INSTALL_ROOT};
@@ -21,7 +22,7 @@ use super::code::{
 use super::md::{self, esc, joined, section, table};
 use super::{
     action, active_feature, coverage_state, kind, mode, not_observable, open_claim, subject,
-    treatment,
+    treatment, unknown_reason,
 };
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
@@ -125,14 +126,28 @@ fn open_questions(out: &mut String, s: &Session) {
                 esc(q.rule.as_str()),
                 esc(treatment(&q.decision.treatment)),
                 esc(&subject(&q.subject)),
+                why(q),
             ]
         })
         .collect();
     table(
         out,
-        &["Open question", "Rule", "Treatment", "Subject"],
+        &["Open question", "Rule", "Treatment", "Subject", "Why"],
         rows,
     );
+}
+
+/// An open question's first unknown condition and why it is unknown (#51), escaped.
+fn why(q: &OpenQuestion) -> String {
+    q.conditions
+        .iter()
+        .find_map(|c| match &c.state {
+            CondState::Unknown { reason, .. } => {
+                Some(esc(&format!("{}: {}", c.id, unknown_reason(reason))))
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 fn policy_violations(out: &mut String, s: &Session) {
@@ -145,10 +160,55 @@ fn policy_violations(out: &mut String, s: &Session) {
                 esc(v.policy_rule.as_str()),
                 esc(action(v.decision.action)),
                 esc(&subject(&v.subject)),
+                evidence_cell(&v.evidence),
             ]
         })
         .collect();
-    table(out, &["Policy rule", "Action", "Subject"], rows);
+    table(out, &["Policy rule", "Action", "Subject", "Evidence"], rows);
+}
+
+/// How many evidence references a cell shows before `… and N more` (#51).
+const EVIDENCE_SHOWN: usize = 3;
+
+/// The first [`EVIDENCE_SHOWN`] evidence references in short form, then how many more (#51),
+/// escaped: a call site or function by its ID, an import by its name, a record by its ID.
+fn evidence_cell(evidence: &[EvidenceRef]) -> String {
+    let mut shown: Vec<String> = evidence
+        .iter()
+        .take(EVIDENCE_SHOWN)
+        .map(|e| match e {
+            EvidenceRef::Code { loc, slice } => match loc {
+                Loc::CallSite(id) => esc(id.as_str()),
+                Loc::Function(id) => esc(id.as_str()),
+                Loc::Symbol(name) => name.markdown_inline(),
+                Loc::VAddr(addr) => esc(&format!("{addr:#x} in {slice}")),
+                Loc::FileOffset(offset) => esc(&format!("offset {offset:#x} in {slice}")),
+                Loc::Section { name, offset } => format!(
+                    "{} {}",
+                    name.markdown_inline(),
+                    esc(&format!("+{offset:#x} in {slice}"))
+                ),
+            },
+            EvidenceRef::Artifact { artifact } => esc(artifact.as_str()),
+            EvidenceRef::Instance { instance } => esc(instance.as_str()),
+            EvidenceRef::Config(c) => esc(&format!("{}:{}", c.file, c.line)),
+            EvidenceRef::Process { process } => esc(&format!(
+                "process {} (start {})",
+                process.pid, process.start_ticks
+            )),
+            EvidenceRef::Value { value } => esc(value.as_str()),
+            EvidenceRef::Access { access } => esc(access.as_str()),
+            EvidenceRef::ProfileRule(r) => esc(&format!("{} of {}", r.rule, r.profile)),
+            EvidenceRef::Model { model } => esc(model.as_str()),
+            EvidenceRef::Listener { listener } => esc(listener.as_str()),
+            EvidenceRef::Probe { probe } => esc(probe.as_str()),
+        })
+        .collect();
+    let more = evidence.len().saturating_sub(EVIDENCE_SHOWN);
+    if more > 0 {
+        shown.push(esc(&format!("… and {more} more")));
+    }
+    shown.join(", ")
 }
 
 fn coverage(out: &mut String, s: &Session) {

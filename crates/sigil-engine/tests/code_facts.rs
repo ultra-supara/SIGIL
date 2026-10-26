@@ -1043,6 +1043,6 @@ fn a_code_request_never_changes_the_container() {
             seen += 1;
         }
     }
-    // 28 code fixtures, 7 ELF fixtures, and hello-universal's two slices.
-    assert!(seen >= 37, "{seen} slices");
+    // 29 code fixtures, 7 ELF fixtures, and hello-universal's two slices.
+    assert!(seen >= 38, "{seen} slices");
 }

@@ -1,12 +1,14 @@
 # Session examples (`sigil-session/1`)
 
 **Specification examples, not SIGIL measurements.** Nothing here was observed on a real system.
-Every file is labeled `tool.version: "0.0.0-example"` and uses synthetic hashes. The exception is
-`13-loader-slice-spec-example.json`, which reuses the values of the plan's §5.8 example (the
+Every file is labeled `tool.version: "0.0.0-example"` and uses synthetic hashes, with these
+exceptions. `13-loader-slice-spec-example.json` reuses the values of the plan's §5.8 example (the
 official Ollama v0.30.6 `libggml` hash and addresses found during PR-0 research) to show the
 intended shape. `16-binary-code.json` reuses the engine's results for its test fixture
 `suspicious_kernel-gcc-O2.o` (its hash, facts, hint, code facts, and bytes read); its path and
-stat are synthetic.
+stat are synthetic, and `18-capability-policy.json` adds a synthetic import to it. `15`, `16`,
+and `18` record the real SHA-256 of `crates/sigil-engine/signatures/capabilities.toml`, the
+capability table their hints were made with (#51).
 
 Each file is generated from a builder in `crates/sigil-model/tests/common/mod.rs` and is checked
 by `crates/sigil-model/tests/examples.rs`. Each must:
@@ -15,7 +17,9 @@ by `crates/sigil-model/tests/examples.rs`. Each must:
 - pass `Session::validate`.
 
 After an intended model change, regenerate them with
-`SIGIL_BLESS=1 cargo test -p sigil-model --test examples`.
+`SIGIL_BLESS=1 cargo test -p sigil-model --test examples`, then their AI-BOMs with
+`SIGIL_BLESS=1 cargo test -p sigil-model --test aibom`. The viewer's sample
+`site/viewer/samples/session-16-binary-code.json` is a copy of `16-binary-code.json`.
 
 | File | Shows |
 |---|---|
@@ -36,3 +40,4 @@ After an intended model change, regenerate them with
 | `15-binary-inspect` | `sigil binary inspect` of two files: a shared object with complete container facts, its `dlopen` and `getenv` imports as hints, the `ggml-base` claim its file name and SONAME give (`NameOnly`, version `0` from the SONAME), and a complete signature scan that found no signature; and a text file, `Unsupported` in both checks. One `binary.container` and one `binary.identity` entry each: PASS + INCOMPLETE |
 | `16-binary-code` | A binary inspection with code analysis (`request.code`) of one relocatable object: its `connect` import as a hint, the one direct call of `connect` with its function, `binary.code` `Complete` with its `binary_code_bytes` use, and `binary.identity` `Complete` (with the embedded database, no needle applies to it: a relocatable object has no dynamic symbols and no Go build info): PASS + COMPLETE |
 | `17-open-release` | An install whose `libllama-common.so.0.0.1` matches no reference and reports `LLAMA_COMMIT` `6f3a9f3de`, as the official v0.30.5, v0.30.6, and v0.30.7 files do: an open release claim, "consistent with" those three and resting on that commit, and `artifacts.release` `Partial`: PASS + INCOMPLETE |
+| `18-capability-policy` | Example 16's object with a second import, `execve`, that its code does not call directly (synthetic: the fixture imports only `connect`), evaluated under a policy that denies `posix.network` and `posix.process_spawn` (#51): the call of `connect` is a policy violation citing its call site, and `execve` an open question counted as a gap, since code analysis does not follow a call that is not direct: FAIL + INCOMPLETE |

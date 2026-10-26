@@ -102,19 +102,33 @@ fn re_evaluating_every_golden_example_reproduces_it() {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let mut s = expected.clone();
         scramble(&mut s);
-        let warnings = run(&mut s, "");
+        // Example 18 records the results of its denials (#51); every other example, none.
+        let body = if path.ends_with("18-capability-policy.json") {
+            EXAMPLE_18_POLICY
+        } else {
+            ""
+        };
+        let warnings = run(&mut s, body);
         assert!(warnings.is_empty());
         // Everything is reproduced, and the session records the policy that was applied.
         for k in &mut expected.knowledge {
             if k.kind == KnowledgeKind::Policy {
-                *k = policy_for(&s, "").knowledge();
+                *k = policy_for(&s, body).knowledge();
             }
         }
+        // In canonical form, as SIGIL writes a session: evaluation appends its capability open
+        // questions after the analysis's, and a saved session sorts them (#51).
+        s.canonicalize();
+        expected.canonicalize();
         assert_eq!(s, expected, "{}", path.display());
         seen += 1;
     }
-    assert_eq!(seen, 17);
+    assert_eq!(seen, 18);
 }
+
+/// The policy example 18 was evaluated under: it denies `posix.network` and
+/// `posix.process_spawn`.
+const EXAMPLE_18_POLICY: &str = "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"The runtime must not open connections\"\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\nreason = \"The runtime must not start processes\"\n";
 
 #[test]
 fn verdict_and_completeness_are_independent() {
@@ -710,4 +724,331 @@ fn an_install_root_removed_after_assembly_is_refused() {
         evaluate(&mut s, &policy, time),
         Err(EvaluateError::RequiredChecksChanged { .. })
     ));
+}
+
+// --- #51: capability denials ---------------------------------------------------------------------
+
+const DENY_NETWORK: &str =
+    "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"no network\"\n";
+const DENY_LOADING: &str = "[[capabilities.deny]]\nfeature = \"posix.dynamic_loading\"\naction = \"warn\"\nreason = \"no plugins\"\n";
+
+fn the_slice(s: &Session) -> SliceId {
+    s.binaries[0].slice.clone()
+}
+
+/// This build's capability-table entry, which a session with binary facts records.
+fn table() -> KnowledgeRef {
+    sigil_engine::code::data::signatures()
+        .unwrap()
+        .knowledge()
+        .clone()
+}
+
+/// Example `name`, analyzed with this build's capability table, as `binary inspect` records it.
+fn analyzed(name: &str) -> Session {
+    let mut s = example(name);
+    if !s
+        .knowledge
+        .iter()
+        .any(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
+    {
+        s.knowledge.push(table());
+    }
+    s
+}
+
+/// #51 spec §3: a slice that calls a denied capability's import directly is a violation, citing
+/// every such call site; a capability it does not import gives nothing.
+#[test]
+fn a_denied_capability_that_is_called_is_a_violation_citing_its_call_sites() {
+    // Example 16: suspicious_kernel-gcc-O2.o calls connect once (cs:0x4d).
+    let mut s = analyzed("16-binary-code");
+    let slice = the_slice(&s);
+    run(&mut s, DENY_NETWORK);
+    assert_eq!(s.policy_violations.len(), 1);
+    let v = &s.policy_violations[0];
+    assert_eq!(
+        v.policy_rule.as_str(),
+        "policy:capabilities.deny.posix.network"
+    );
+    assert_eq!(v.subject, Ref::Slice(slice.clone()));
+    assert_eq!(
+        v.evidence,
+        [EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::CallSite(CallId::new("cs:0x4d").unwrap()),
+        }]
+    );
+    assert_eq!(
+        (
+            v.decision.action,
+            v.decision.source.as_str(),
+            v.decision.reason.as_deref(),
+            v.decision.expires.as_ref()
+        ),
+        (
+            Action::Fail,
+            "policy:capabilities.deny.posix.network",
+            Some("no network"),
+            None
+        )
+    );
+    assert!(
+        s.open_questions.is_empty(),
+        "a call is a violation, not a question"
+    );
+    assert!(s.findings.is_empty(), "a policy violation is not a finding");
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+
+    // `warn` warns.
+    let mut s = analyzed("16-binary-code");
+    run(
+        &mut s,
+        "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"warn\"\nreason = \"r\"\n",
+    );
+    assert_eq!(s.outcome.verdict, Verdict::Warn);
+
+    // A capability the slice does not import gives nothing: no violation, no question.
+    let mut s = analyzed("16-binary-code");
+    run(
+        &mut s,
+        "[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\nreason = \"r\"\n",
+    );
+    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+}
+
+/// #51 spec §3 (D4): a slice that imports a denied capability with no direct call site of it is an
+/// open question, whatever `binary.code` says, never "absent".
+#[test]
+fn a_denied_capability_imported_without_a_call_site_is_an_open_question() {
+    // Example 15: libggml-base.so imports dlopen and getenv; no code analysis.
+    let mut s = analyzed("15-binary-inspect");
+    let slice = the_slice(&s);
+    run(&mut s, DENY_LOADING);
+    assert!(s.policy_violations.is_empty());
+    assert_eq!(s.open_questions.len(), 1);
+    let q = &s.open_questions[0];
+    assert_eq!(
+        q.id.as_str(),
+        format!("capability:posix.dynamic_loading@{slice}")
+    );
+    assert_eq!(q.rule.as_str(), CAPABILITY_RULE);
+    assert_eq!(q.subject, Ref::Slice(slice.clone()));
+    assert_eq!(
+        q.conditions,
+        [Condition {
+            id: CondId::new("calls:posix.dynamic_loading").unwrap(),
+            state: CondState::Unknown {
+                reason: UnknownReason::NotModeled {
+                    what: "calls in code that was not analyzed".into()
+                },
+                evidence: None,
+            },
+            unresolved: vec![],
+        }]
+    );
+    assert_eq!(
+        q.evidence,
+        [EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::Symbol(UntrustedText::new("dlopen")),
+        }]
+    );
+    assert_eq!(
+        (q.decision.treatment, q.decision.source.as_str()),
+        (OqTreatment::CountAsGap, "policy:open_questions.default")
+    );
+    // Counted as a gap: never a clean pass.
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    let Completeness::Incomplete { gaps, .. } = &s.outcome.completeness else {
+        panic!("{:?}", s.outcome.completeness);
+    };
+    assert_eq!(gaps, std::slice::from_ref(&q.id));
+
+    // The policy's treatment of open questions applies to it.
+    let mut s = analyzed("15-binary-inspect");
+    run(
+        &mut s,
+        &format!("{DENY_LOADING}[open_questions]\ndefault = \"fail\"\n"),
+    );
+    assert_eq!(s.open_questions[0].decision.treatment, OqTreatment::Fail);
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
+
+    // With code analysis complete and no call site, the question stays: a call that is not
+    // direct is not followed.
+    let mut s = analyzed("16-binary-code");
+    s.code.clear();
+    run(&mut s, DENY_NETWORK);
+    assert!(s.policy_violations.is_empty());
+    assert_eq!(
+        s.open_questions[0].conditions[0].state,
+        CondState::Unknown {
+            reason: UnknownReason::NotModeled {
+                what: "calls that are not direct (through a function pointer, or from data)".into()
+            },
+            evidence: None,
+        }
+    );
+}
+
+/// #51 spec §3 (D5): evaluation owns its capability results. Re-evaluating with another policy
+/// replaces them, keeps every other open question, and evaluating twice changes nothing.
+#[test]
+fn re_evaluation_replaces_the_capability_results_and_keeps_the_others() {
+    let mut s = analyzed("16-binary-code");
+    run(&mut s, DENY_NETWORK);
+    assert_eq!(s.policy_violations.len(), 1);
+    let once = s.clone();
+    run(&mut s, DENY_NETWORK);
+    assert_eq!(s, once, "evaluating twice changes nothing");
+    run(&mut s, "");
+    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+
+    let mut s = analyzed("15-binary-inspect");
+    run(&mut s, DENY_LOADING);
+    assert_eq!(s.open_questions.len(), 1);
+    let once = s.clone();
+    run(&mut s, DENY_LOADING);
+    assert_eq!(s, once, "a capability question re-evaluates to itself");
+    run(&mut s, "");
+    assert!(s.open_questions.is_empty());
+
+    // Example 7's loader question is the analysis's: a denial leaves it as it is.
+    let mut s = example("07-open-question");
+    let before = s.open_questions.clone();
+    run(&mut s, DENY_NETWORK);
+    assert_eq!(s.open_questions, before);
+}
+
+/// Plan review P2-1: under a capability denial, a session with binary facts is judged only when
+/// it records this build's capability table; otherwise it is refused and left unchanged, never a
+/// PASS on hints that another table made.
+#[test]
+fn a_session_not_analyzed_with_this_table_is_refused_under_a_capability_denial() {
+    let p = |s: &Session| policy_for(s, DENY_NETWORK);
+    // Recorded before #51: no table.
+    let mut s = analyzed("16-binary-code");
+    s.knowledge.retain(|k| k.kind != KnowledgeKind::SignatureDb);
+    let before = s.clone();
+    let time = s.outcome.policy_time.clone();
+    assert_eq!(
+        evaluate(&mut s, &p(&before), time.clone()),
+        Err(EvaluateError::CapabilityTable {
+            recorded: vec![],
+            embedded: table().sha256,
+        })
+    );
+    assert_eq!(s, before, "a refused evaluation changes nothing");
+    // Another table.
+    let other = Sha256Hex::new("e".repeat(64)).unwrap();
+    let mut t = analyzed("16-binary-code");
+    for k in &mut t.knowledge {
+        if k.kind == KnowledgeKind::SignatureDb {
+            k.sha256 = other.clone();
+        }
+    }
+    let err = evaluate(&mut t.clone(), &p(&t), time.clone()).unwrap_err();
+    assert_eq!(
+        err,
+        EvaluateError::CapabilityTable {
+            recorded: vec![other],
+            embedded: table().sha256,
+        }
+    );
+    assert!(err
+        .to_string()
+        .contains("analyze the files again with this build"));
+    // The table twice, even this build's: not exactly one table.
+    let mut twice = analyzed("16-binary-code");
+    twice.knowledge.push(table());
+    assert_eq!(
+        evaluate(&mut twice.clone(), &p(&twice), time.clone()),
+        Err(EvaluateError::CapabilityTable {
+            recorded: vec![table().sha256, table().sha256],
+            embedded: table().sha256,
+        })
+    );
+    // The entry's version only says which build wrote it: the SHA-256 is what is compared.
+    let mut older = analyzed("16-binary-code");
+    for k in &mut older.knowledge {
+        if k.kind == KnowledgeKind::SignatureDb {
+            k.version = "0.0.0".to_string();
+        }
+    }
+    run(&mut older, DENY_NETWORK);
+    assert_eq!(older.policy_violations.len(), 1);
+    // Without a denial, the same sessions re-evaluate as before.
+    let mut s = before;
+    run(&mut s, "");
+    run(&mut t, "");
+    // A session without binary facts used no table: a denial has nothing to judge.
+    let mut s = example("01-complete-pass");
+    run(&mut s, DENY_NETWORK);
+    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+}
+
+/// Plan review P2-1: the hints are the ones the table gives the import facts. `validate` cannot
+/// tell that one is missing; evaluation refuses such a session.
+#[test]
+fn import_hints_that_are_not_the_table_s_are_refused() {
+    let mut s = analyzed("16-binary-code");
+    s.hints.retain(|h| h.signal != Signal::Import);
+    s.validate().unwrap();
+    let time = s.outcome.policy_time.clone();
+    let before = s.clone();
+    let p = policy_for(&s, DENY_NETWORK);
+    let err = evaluate(&mut s, &p, time.clone()).unwrap_err();
+    assert_eq!(
+        err,
+        EvaluateError::CapabilityHints {
+            missing: 1,
+            extra: 0
+        }
+    );
+    assert!(err
+        .to_string()
+        .ends_with("analyze the files again with this build"));
+    assert_eq!(s, before, "a refused evaluation changes nothing");
+    let mut t = analyzed("16-binary-code");
+    let mut moved = t.hints[0].clone();
+    moved.feature = FeatureKey::new("posix.file_read").unwrap();
+    t.hints.push(moved);
+    assert_eq!(
+        evaluate(&mut t.clone(), &policy_for(&t, DENY_NETWORK), time),
+        Err(EvaluateError::CapabilityHints {
+            missing: 0,
+            extra: 1
+        })
+    );
+}
+
+/// A violation cites its call sites by ID, whatever order the code facts list them in, so a
+/// canonical session (whose call sites are sorted by their JSON) re-evaluates to the same bytes.
+#[test]
+fn a_violation_cites_its_call_sites_by_id() {
+    let mut s = analyzed("16-binary-code");
+    let mut first = s.code[0].call_sites[0].clone();
+    first.id = CallId::new("cs:0x10").unwrap();
+    first.addr = 0x10;
+    s.code[0].call_sites.push(first);
+    run(&mut s, DENY_NETWORK);
+    let slice = the_slice(&s);
+    let cited: Vec<&EvidenceRef> = s.policy_violations[0].evidence.iter().collect();
+    assert_eq!(
+        cited,
+        [
+            &EvidenceRef::Code {
+                slice: slice.clone(),
+                loc: Loc::CallSite(CallId::new("cs:0x10").unwrap()),
+            },
+            &EvidenceRef::Code {
+                slice,
+                loc: Loc::CallSite(CallId::new("cs:0x4d").unwrap()),
+            },
+        ]
+    );
 }

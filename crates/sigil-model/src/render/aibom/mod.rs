@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::{Arch, Format, ProcessExe, ProcessRef};
 use crate::evidence::Ref;
-use crate::finding::{FindingKind, Outcome, PolicyDecision, Severity};
+use crate::finding::{FindingKind, OpenQuestionDecision, Outcome, PolicyDecision, Severity};
 use crate::id::{
-    ArtifactId, CheckId, ComponentKey, FindingId, ModelId, PolicyRuleRef, ProcessRole, RuleId,
-    Sha256Hex, SliceId, Timestamp,
+    ArtifactId, CheckId, ComponentKey, FindingId, ModelId, OpenQuestionId, PolicyRuleRef,
+    ProcessRole, RuleId, Sha256Hex, SliceId, Timestamp,
 };
 use crate::identity::IdentityStatus;
 use crate::listener::Listener;
@@ -46,6 +46,10 @@ pub struct AiBom {
     pub artifacts: Vec<BomArtifact>,
     pub findings: Vec<BomFinding>,
     pub policy_violations: Vec<BomViolation>,
+    /// The session's open questions (#51). Optional on read and written only when not empty, so
+    /// an AI-BOM of a session without one keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_questions: Vec<BomOpenQuestion>,
     pub coverage: Vec<CheckSummary>,
 }
 
@@ -199,6 +203,17 @@ pub struct BomViolation {
     pub policy_rule: PolicyRuleRef,
     pub subject: Ref,
     pub decision: PolicyDecision,
+}
+
+/// An open question (#51): what is not settled, about what, and how the policy treats it. Its
+/// conditions and evidence are in the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BomOpenQuestion {
+    pub id: OpenQuestionId,
+    pub rule: RuleId,
+    pub subject: Ref,
+    pub decision: OpenQuestionDecision,
 }
 
 /// One check: whether it is required, whether it is closed, and its entries by state.

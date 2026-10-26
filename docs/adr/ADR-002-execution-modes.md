@@ -24,7 +24,7 @@ This ADR turns the promises into named contracts and states **exactly how each i
 
 | Mode | Purpose | CLI paths |
 |---|---|---|
-| **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `explain`, and `rules`, which read only a saved session or nothing |
+| **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `session verify`, `explain`, and `rules`, which read only a saved session (and a policy file) or nothing |
 | **observe** | static, plus reads of the documented `/proc` entries | `inspect ollama --mode observe` |
 | **active** | Explicitly requested features that contact something | `inspect ollama --active api-probe`, with `--mode static` or `--mode observe`. Off by default |
 
@@ -98,6 +98,7 @@ The filter is the `%process`, `%network`, `%file`, and `%desc` classes plus ever
 | `inspect ollama` on a store with a malformed manifest | Clean |
 | `inspect ollama --mode observe --out` (observe scope) | `/proc` reads match the allowlist; under the static scope the same trace fails C-6 |
 | `session render --out <new dir>/…` | Writes only the named file |
+| `session verify --policy <file>` | Clean; reads the session and the policy file, writes nothing |
 | `explain --verdict` | Clean |
 | `rules` | Clean |
 | `inspect ollama --active api-probe --api-addr <loopback server>` (answered) | Clean with that destination allowed; without it, the same trace breaks C-4 (the case really connects) |

@@ -61,7 +61,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 17);
+    assert_eq!(all.len(), 18);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -120,7 +120,11 @@ fn hostile_text_forms_no_markdown_or_html() {
     assert!(!md.lines().any(|l| l.starts_with("# heading")), "{md}");
     // Non-UTF-8 is shown as hex.
     assert!(md.contains(r"hex\:ff3c7c"), "{md}");
-    // Every table row has the cells of its header.
+    assert_rows_whole(&md);
+}
+
+/// Every table row of `md` has the cells of its header.
+fn assert_rows_whole(md: &str) {
     let mut cells = None;
     for line in md.lines() {
         if !line.starts_with('|') {
@@ -2239,4 +2243,97 @@ fn a_content_s_first_input_says_whether_it_was_scanned() {
         "{section}"
     );
     assert!(!section.contains(&md_esc(NOT_SCANNED)), "{section}");
+}
+
+/// #51: a policy violation's row shows its evidence, and an open question's row why it is open.
+#[test]
+fn a_violation_shows_its_evidence_and_an_open_question_why_it_is_open() {
+    let slice = format!("sha256\\:{KERNEL_HEX}\\#x86\\_64\\@0");
+    let md = render_session(&capability_policy());
+    assert!(md.contains(&format!(
+        "| Policy rule | Action | Subject | Evidence |\n|---|---|---|---|\n\
+         | policy\\:capabilities\\.deny\\.posix\\.network | fail | {slice} | cs\\:0x4d |\n"
+    )));
+    assert!(md.contains(&format!(
+        "| Open question | Rule | Treatment | Subject | Why |\n|---|---|---|---|---|\n\
+         | capability\\:posix\\.process\\_spawn\\@{slice} | binary\\.capability\\_call | count as gap \
+         | {slice} | calls\\:posix\\.process\\_spawn\\: not modeled\\: calls that are not direct \
+         \\(through a function pointer\\, or from data\\) |\n"
+    )));
+}
+
+/// The cells #51 adds escape what they show: a hostile import name, section name, and unknown
+/// reason form no Markdown or HTML, and every evidence form keeps its row whole.
+#[test]
+fn hostile_capability_cells_form_no_markdown_or_html() {
+    let mut s = capability_policy();
+    let slice = s.binaries[0].slice.clone();
+    let code = |loc: Loc| EvidenceRef::Code {
+        slice: slice.clone(),
+        loc,
+    };
+    s.policy_violations[0].evidence = vec![
+        code(Loc::Symbol(t(HOSTILE))),
+        code(Loc::Section {
+            name: t(HOSTILE),
+            offset: 0x10,
+        }),
+        code(Loc::VAddr(0x4d)),
+    ];
+    let mut second = s.policy_violations[0].clone();
+    second.evidence = vec![code(Loc::FileOffset(0x20))];
+    s.policy_violations.push(second);
+    let CondState::Unknown { reason, .. } = &mut s.open_questions[0].conditions[0].state else {
+        panic!("example 18's question is unknown");
+    };
+    *reason = UnknownReason::NotModeled {
+        what: HOSTILE.to_string(),
+    };
+    let md = render_session(&s);
+    for raw in ["<script>", "](http", "x|y", "`code`", "*b*", "_c_"] {
+        assert!(!md.contains(raw), "{raw:?} reached the report:\n{md}");
+    }
+    assert!(!md.contains('\u{202E}'));
+    assert!(!md.lines().any(|l| l.starts_with("# heading")), "{md}");
+    assert!(md.contains("0x4d in "), "{md}");
+    assert!(md.contains("offset 0x20 in "), "{md}");
+    assert!(md.contains("+0x10 in "), "{md}");
+    // Shown escaped, character for character.
+    assert!(md.contains(&t(HOSTILE).markdown_inline()), "{md}");
+    assert_rows_whole(&md);
+}
+
+/// #51: a cell shows the first three evidence references, then how many more there are; an
+/// import is shown by its name, escaped as any input.
+#[test]
+fn an_evidence_cell_shows_three_references_then_the_count() {
+    let mut s = capability_policy();
+    let slice = s.binaries[0].slice.clone();
+    s.policy_violations[0].evidence = vec![
+        EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::CallSite(id("cs:0x4d")),
+        },
+        EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::Symbol(t("exec|ve")),
+        },
+        EvidenceRef::Artifact {
+            artifact: slice.artifact(),
+        },
+        EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::Function(id("fn:0x40")),
+        },
+        EvidenceRef::Instance {
+            instance: id(KERNEL_INPUT),
+        },
+    ];
+    let md = render_session(&s);
+    assert!(
+        md.contains(&format!(
+            "| cs\\:0x4d, exec\\|ve, sha256\\:{KERNEL_HEX}, … and 2 more |\n"
+        )),
+        "{md}"
+    );
 }

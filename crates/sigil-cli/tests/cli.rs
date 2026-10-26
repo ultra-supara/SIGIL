@@ -601,6 +601,18 @@ fn rules_lists_the_catalog() {
     ] {
         assert!(r.stdout.contains(id), "{id}:\n{}", r.stdout);
     }
+    // #51: and the capabilities a policy can deny.
+    assert!(
+        r.stdout.contains(
+            "\nCapabilities a policy can deny ([[capabilities.deny]]):\n  cxx.file_read\n  \
+             cxx.file_write\n  posix.anti_debug\n  posix.dynamic_loading\n  \
+             posix.environment_access\n  posix.file_read\n  posix.file_write\n  posix.network\n  \
+             posix.process_spawn\nIts open questions: binary.capability_call (A slice imports a \
+             capability that the policy denies, with no direct call site of it)\n"
+        ),
+        "{}",
+        r.stdout
+    );
 }
 
 #[test]
@@ -2784,4 +2796,135 @@ fn an_nvidia_named_file_is_not_scanned_and_its_report_says_so() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(r.stdout.contains(&esc_md(NOT_SCANNED)), "{}", r.stdout);
     assert!(!r.stdout.contains(&esc_md(NO_SIGNATURES)), "{}", r.stdout);
+}
+
+// --- capability denials (#51) --------------------------------------------------------------------
+
+/// A policy file in `d` that denies `posix.process_spawn`.
+fn deny_spawn(d: &Path) -> PathBuf {
+    let path = d.join("deny-spawn.toml");
+    fs::write(
+        &path,
+        "schema = \"sigil-policy/1\"\nname = \"no-spawn\"\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\nreason = \"no processes\"\n",
+    )
+    .unwrap();
+    path
+}
+
+/// #51's acceptance criterion end to end: under a policy that denies `posix.process_spawn`, a file
+/// that calls `execve` FAILs (exit 3 with `--fail-on fail`), its report shows the violation with
+/// its call site, and a file that calls only `connect` passes.
+#[test]
+fn a_denied_capability_s_call_fails_binary_inspect() {
+    let d = TempDir::new().unwrap();
+    let policy = deny_spawn(d.path());
+    let spawn = code_fixture("spawn.so");
+    let r = binary(&[
+        &"--code",
+        &spawn,
+        &"--policy",
+        &policy,
+        &"--fail-on",
+        &"fail",
+        &"--format",
+        &"md",
+    ]);
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    let slice = format!("sha256:{}#x86_64@0", sha_of(&spawn));
+    let row = format!(
+        "| {} | fail | {} | {} |",
+        esc_md("policy:capabilities.deny.posix.process_spawn"),
+        esc_md(&slice),
+        esc_md("cs:0x1124")
+    );
+    assert!(r.stdout.contains(&row), "{row}\n{}", r.stdout);
+
+    let net = code_fixture("net-plt-gcc.so");
+    let r = binary(&[&"--code", &net, &"--policy", &policy, &"--fail-on", &"fail"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+}
+
+/// Without `--code`, the call is not known: an open question, INCOMPLETE (exit 4 with
+/// `--fail-on-incomplete`), never a pass; `explain --finding` explains it.
+#[test]
+fn without_code_a_denied_import_is_an_open_question_explain_can_explain() {
+    let d = TempDir::new().unwrap();
+    let policy = deny_spawn(d.path());
+    let spawn = code_fixture("spawn.so");
+    let r = binary(&[&spawn, &"--policy", &policy, &"--fail-on-incomplete"]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.open_questions.len(), 1);
+    let saved = d.path().join("session.json");
+    fs::write(&saved, &r.stdout).unwrap();
+    let id = s.open_questions[0].id.to_string();
+    let r = run(&[&"explain", &saved, &"--finding", &id]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains(
+            "calls:posix.process_spawn: unknown, not modeled: calls in code that was not analyzed"
+        ),
+        "{}",
+        r.stdout
+    );
+}
+
+/// Plan review P2-2: `session verify` says whether a saved session is what its policy gives. A
+/// session whose violation was removed and whose verdict was set to PASS is consistent in itself,
+/// so it still renders; it does not verify.
+#[test]
+fn session_verify_checks_a_session_against_its_policy() {
+    let d = TempDir::new().unwrap();
+    let policy = deny_spawn(d.path());
+    let spawn = code_fixture("spawn.so");
+    let r = binary(&[&"--code", &spawn, &"--policy", &policy]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let saved = d.path().join("session.json");
+    fs::write(&saved, &r.stdout).unwrap();
+    let time = session_of(&r).outcome.policy_time;
+    let r = run(&[&"session", &"verify", &saved, &"--policy", &policy]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        r.stdout,
+        format!(
+            "verified: {} is what the policy no-spawn ({}) gives at {time}: FAIL + COMPLETE\n",
+            saved.display(),
+            sha_of(&policy)
+        )
+    );
+
+    // The built-in policy is another policy.
+    let r = run(&[&"session", &"verify", &saved]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr
+            .contains("the session records the policy no-spawn sigil-policy/1 ("),
+        "{}",
+        r.stderr
+    );
+
+    // The violation removed and the verdict set to PASS.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&saved).unwrap()).unwrap();
+    v["policy_violations"] = serde_json::json!([]);
+    v["outcome"]["verdict"] = serde_json::json!("Pass");
+    let tampered = d.path().join("tampered.json");
+    fs::write(&tampered, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let r = run(&[&"session", &"render", &tampered]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let r = run(&[&"session", &"verify", &tampered, &"--policy", &policy]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr.contains(&format!(
+            "{} is not what the policy no-spawn gives: policy violations the policy gives, and \
+             the session lacks: policy:capabilities.deny.posix.process_spawn on sha256:{}#x86_64@0; \
+             the outcome is PASS + COMPLETE, and the policy gives FAIL + COMPLETE",
+            tampered.display(),
+            sha_of(&spawn)
+        )),
+        "{}",
+        r.stderr
+    );
 }

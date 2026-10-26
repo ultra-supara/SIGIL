@@ -1,0 +1,118 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "ff70ec8f704671d76559322c82e046f511845b8f4b79e1ca2c6139307273fcbf",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "deny-capabilities",
+      "version": "1",
+      "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+    }
+  },
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [],
+        "gaps": [
+          "capability:posix.process_spawn@sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a",
+      "size": 1248,
+      "format": {
+        "Elf": {
+          "kind": "Rel"
+        }
+      },
+      "paths": [
+        "/home/user/src/suspicious_kernel-gcc-O2.o"
+      ],
+      "slices": [
+        {
+          "id": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0"
+      },
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "The runtime must not open connections",
+        "expires": null
+      }
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "capability:posix.process_spawn@sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0"
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    }
+  ]
+}

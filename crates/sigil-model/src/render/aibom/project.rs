@@ -13,8 +13,8 @@ use crate::text::UntrustedText;
 
 use super::{
     AiBom, AiBomSchema, BomArtifact, BomBlob, BomComponent, BomFinding, BomLayer, BomLicense,
-    BomModel, BomProcess, BomRelease, BomRuntime, BomSlice, BomViolation, CheckSummary,
-    ReleaseBasisKind, SessionLink,
+    BomModel, BomOpenQuestion, BomProcess, BomRelease, BomRuntime, BomSlice, BomViolation,
+    CheckSummary, ReleaseBasisKind, SessionLink,
 };
 
 /// The coverage state names `CheckSummary.states` uses, one per `CoverageState` variant.
@@ -205,6 +205,16 @@ pub fn project(session: &Session, sha256: Sha256Hex) -> AiBom {
                 policy_rule: v.policy_rule.clone(),
                 subject: v.subject.clone(),
                 decision: v.decision.clone(),
+            })
+            .collect(),
+        open_questions: s
+            .open_questions
+            .iter()
+            .map(|q| BomOpenQuestion {
+                id: q.id.clone(),
+                rule: q.rule.clone(),
+                subject: q.subject.clone(),
+                decision: q.decision.clone(),
             })
             .collect(),
         coverage: coverage(s),

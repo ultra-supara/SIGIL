@@ -47,6 +47,7 @@ A session written before PR #76 has no `request.active` or `probes`. It hashes i
 | `artifacts` | each file content: SHA-256 id, size, format, the paths it was found at, and per architecture slice the components identified in it (with `IdentityStatus` and versions) |
 | `findings` | id, rule, kind, subject, summary, default severity, the policy decision, limits |
 | `policy_violations` | policy rule, subject, decision |
+| `open_questions` | id, rule, subject, decision; written only when the session has one (#51), so an AI-BOM without open questions keeps its bytes. A reader from before #51 refuses an AI-BOM that has them (unknown fields are refused) |
 | `coverage` | per check: whether it is required, whether it is closed, and its entries per coverage state |
 
 - Evidence, identity assertions, finding conditions, code facts, relations, and load facts are not copied. Follow `session.sha256` to the session for them.
@@ -63,6 +64,7 @@ A session written before PR #76 has no `request.active` or `probes`. It hashes i
 - artifacts;
 - findings;
 - policy violations;
+- open questions, when there are any;
 - coverage.
 
 The browser viewer uses it through wasm (`crates/sigil-wasm`), after checking the AI-BOM (`AiBom::validate`): coverage summaries may name only coverage states, each with entries, and `closed` must agree with them. An inconsistent AI-BOM is refused, not shown. The CLI's `--format md` renders the session itself, which has more detail.

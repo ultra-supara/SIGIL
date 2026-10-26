@@ -354,6 +354,22 @@ pub struct PolicyViolation {
     pub decision: PolicyDecision,
 }
 
+/// The rule of a capability open question (#51): a slice imports a capability that the policy
+/// denies (`[[capabilities.deny]]`) and has no direct call site of it. A policy rule, not a
+/// detection rule: it has no default severity, and only evaluation creates its open questions.
+pub const CAPABILITY_RULE: &str = "binary.capability_call";
+
+/// The prefix of a capability denial's policy rule (#51): `policy:capabilities.deny.<feature>`.
+pub const CAPABILITY_DENY_PREFIX: &str = "policy:capabilities.deny.";
+
+/// The prefix of the one condition of a capability open question (#51): `calls:<feature>`.
+pub const CAPABILITY_CONDITION_PREFIX: &str = "calls:";
+
+/// The knowledge ID of the capability-import table (#51): a session with binary facts records
+/// the table its hints and call sites were made with (`KnowledgeKind::SignatureDb`), and a
+/// capability result needs it.
+pub const CAPABILITY_TABLE_ID: &str = "capabilities";
+
 /// What the policy does with a finding or policy violation. `Ignore` keeps the entry in the
 /// output with its reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
