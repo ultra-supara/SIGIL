@@ -4,3 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  # wasm-pack's generated package manifest (currently no npm dependencies).
+  - package-ecosystem: "npm"
+    directory: "/site/viewer/pkg"
+    schedule:
+      interval: "weekly"
