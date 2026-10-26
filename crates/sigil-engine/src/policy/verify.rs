@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 
+use serde::Serialize;
 use sigil_model::render::{completeness, kind, severity, subject, verdict};
 use sigil_model::{KnowledgeKind, Session};
 
@@ -18,6 +19,8 @@ use super::{catalog, evaluate, Policy};
 /// Whether `session` is exactly what evaluating it under `policy` gives: `Ok`, or each difference
 /// in words.
 ///
+/// - The session is valid (`Session::validate`): a caller that has not validated it gets its
+///   errors as differences.
 /// - The session names the policy: its one `Policy` knowledge entry has the policy's name and
 ///   SHA-256.
 /// - Each finding's rule is in this build's rule catalog, with the kind and default severity the
@@ -38,6 +41,12 @@ use super::{catalog, evaluate, Policy};
 /// evidence, hints, call sites, coverage, the request) and the policy time are the session's:
 /// verify checks what the policy makes of them, not them.
 pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
+    if let Err(errors) = session.validate() {
+        return Err(errors
+            .iter()
+            .map(|e| format!("the session is not valid: {e}"))
+            .collect());
+    }
     let ours = policy.knowledge();
     let named: Vec<_> = session
         .knowledge
@@ -137,17 +146,24 @@ pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
 
 /// How two lists differ, each item by `name`: the ones the policy gives that the session lacks,
 /// the ones the session records otherwise, and the ones the policy does not give at all.
-fn differ<T: PartialEq>(
+fn differ<T: Serialize>(
     out: &mut Vec<String>,
     what: &str,
     recorded: &[T],
     given: &[T],
     name: impl Fn(&T) -> String,
 ) {
+    let (unrecorded, ungiven) = match (unmatched(given, recorded), unmatched(recorded, given)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => {
+            out.push(format!("{what} cannot be compared: {e}"));
+            return;
+        }
+    };
     let named = |list: &[T]| list.iter().map(&name).collect::<BTreeSet<String>>();
     let (recorded_names, given_names) = (named(recorded), named(given));
     let (mut missing, mut changed, mut extra) = (vec![], vec![], vec![]);
-    for x in given.iter().filter(|x| !recorded.contains(x)) {
+    for x in unrecorded {
         let n = name(x);
         if recorded_names.contains(&n) {
             changed.push(n);
@@ -155,7 +171,7 @@ fn differ<T: PartialEq>(
             missing.push(n);
         }
     }
-    for x in recorded.iter().filter(|x| !given.contains(x)) {
+    for x in ungiven {
         let n = name(x);
         if !given_names.contains(&n) {
             extra.push(n);
@@ -173,4 +189,35 @@ fn differ<T: PartialEq>(
             out.push(format!("{what} {how}: {}", list.join(", ")));
         }
     }
+}
+
+/// The items of `from` that `other` lacks, each counted as often as it occurs, compared by their
+/// JSON: both are sorted and walked once, so the comparison grows with the items, not their
+/// square (PR review).
+fn unmatched<'a, T: Serialize>(
+    from: &'a [T],
+    other: &[T],
+) -> Result<Vec<&'a T>, serde_json::Error> {
+    let mut a = from
+        .iter()
+        .map(|x| Ok((serde_json::to_string(x)?, x)))
+        .collect::<Result<Vec<(String, &T)>, serde_json::Error>>()?;
+    let mut b = other
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<String>, _>>()?;
+    a.sort_by(|x, y| x.0.cmp(&y.0));
+    b.sort();
+    let (mut j, mut out) = (0, vec![]);
+    for (key, item) in a {
+        while j < b.len() && b[j] < key {
+            j += 1;
+        }
+        if j < b.len() && b[j] == key {
+            j += 1;
+        } else {
+            out.push(item);
+        }
+    }
+    Ok(out)
 }

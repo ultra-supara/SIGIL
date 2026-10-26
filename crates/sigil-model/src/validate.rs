@@ -3271,17 +3271,21 @@ impl<'a> Validator<'a> {
                 .or_default()
                 .insert(&h.value);
         }
-        // Each slice's call sites of an import, by ID.
+        // Each slice's call sites of an import, by ID, gathered once: walking every slice's code
+        // for each result would grow with the square of the slices.
+        let mut by_slice: BTreeMap<&SliceId, BTreeMap<&str, &UntrustedText>> = BTreeMap::new();
+        for facts in &s.code {
+            for c in &facts.call_sites {
+                if let CallTarget::Import { symbol, .. } = &c.target {
+                    by_slice
+                        .entry(&facts.slice)
+                        .or_default()
+                        .insert(c.id.as_str(), symbol);
+                }
+            }
+        }
         let calls = |slice: &SliceId| -> BTreeMap<&str, &UntrustedText> {
-            s.code
-                .iter()
-                .filter(|c| c.slice == *slice)
-                .flat_map(|c| &c.call_sites)
-                .filter_map(|c| match &c.target {
-                    CallTarget::Import { symbol, .. } => Some((c.id.as_str(), symbol)),
-                    _ => None,
-                })
-                .collect()
+            by_slice.get(slice).cloned().unwrap_or_default()
         };
         let none = BTreeSet::new();
         let mut violated: BTreeSet<(&SliceId, &str)> = BTreeSet::new();

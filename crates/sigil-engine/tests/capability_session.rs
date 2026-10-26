@@ -440,3 +440,61 @@ fn a_session_from_before_a_table_change_is_refused_not_passed() {
     assert_eq!(judged.policy_violations[0].evidence.len(), 7);
     assert_eq!(judged.outcome.verdict, Verdict::Fail);
 }
+
+/// PR review: the hints are compared with the table's as counted lists, on every slice. Two
+/// inputs, two denials: the session as made passes the check; a missing hint, a hint of another
+/// feature, and a doubled hint are each refused, by count.
+#[test]
+fn hints_are_compared_with_their_counts_on_every_slice() {
+    let req = BinaryRequest {
+        paths: vec![fixture("spawn.so"), fixture("net-plt-gcc.so")],
+        budgets: NamedBudgets {
+            binary: BinaryBudgets {
+                code: Some(CodeBudgets::default()),
+                ..BinaryBudgets::default()
+            },
+            ..NamedBudgets::default()
+        },
+    };
+    let both = format!("{SPAWN_FAILS}{NETWORK_FAILS}");
+    let s = binary_session(
+        &req,
+        &policy(&both),
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    s.validate().unwrap();
+    assert_eq!(s.binaries.len(), 2);
+    assert_eq!(s.policy_violations.len(), 3, "{:?}", s.policy_violations);
+    let time = s.outcome.policy_time.clone();
+    let judged = |t: &Session| evaluate(&mut t.clone(), &policy(&both), time.clone());
+    assert!(judged(&s).is_ok());
+    let refused = |missing, extra| Err(EvaluateError::CapabilityHints { missing, extra });
+    // The second input's hint, doubled.
+    let second = s.binaries[1].slice.clone();
+    let mut doubled = s.clone();
+    let hint = doubled
+        .hints
+        .iter()
+        .find(|h| h.subject == second)
+        .unwrap()
+        .clone();
+    doubled.hints.push(hint);
+    assert_eq!(judged(&doubled), refused(0, 1));
+    // The first input's execve hint, gone.
+    let mut gone = s.clone();
+    gone.hints
+        .retain(|h| h.feature.as_str() != "posix.process_spawn");
+    assert_eq!(judged(&gone), refused(1, 0));
+    // A connect hint said to be another feature's.
+    let mut moved = s.clone();
+    let h = moved
+        .hints
+        .iter_mut()
+        .find(|h| h.subject == second)
+        .unwrap();
+    h.feature = FeatureKey::new("posix.file_read").unwrap();
+    assert_eq!(judged(&moved), refused(1, 1));
+}

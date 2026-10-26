@@ -26,17 +26,17 @@
 //! its violations are: each evaluation removes them and makes them again, with their conditions
 //! and evidence.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use sigil_model::{
-    Action, AssumptionAcceptance, AssumptionId, CallTarget, CheckId, Completeness, ComponentClaim,
-    ComponentKey, CondId, CondState, Condition, CoverageState, Date, EvidenceRef,
-    IdentityAssertion, IdentityStatus, InstanceContent, KnowledgeKind, Loc, OpenQuestion,
-    OpenQuestionDecision, OpenQuestionId, OqTreatment, Outcome, PolicyDecision, PolicyRuleRef,
-    PolicyViolation, Ref, RuleId, Session, Severity, Sha256Hex, Signal, SliceId, Timestamp,
-    UnknownReason, UntrustedText, Verdict, BINARY_CODE, CAPABILITY_CONDITION_PREFIX,
-    CAPABILITY_RULE, CAPABILITY_TABLE_ID,
+    Action, ArtifactId, AssumptionAcceptance, AssumptionId, CallId, CallTarget, CheckId,
+    Completeness, ComponentClaim, ComponentKey, CondId, CondState, Condition, CoverageState, Date,
+    EvidenceRef, FeatureHint, FeatureKey, IdentityAssertion, IdentityStatus, InstanceContent,
+    InstanceId, KnowledgeKind, Loc, OpenQuestion, OpenQuestionDecision, OpenQuestionId,
+    OqTreatment, Outcome, PolicyDecision, PolicyRuleRef, PolicyViolation, Ref, RuleId, Session,
+    Severity, Sha256Hex, Signal, SliceId, Timestamp, UnknownReason, UntrustedText, Verdict,
+    BINARY_CODE, CAPABILITY_CONDITION_PREFIX, CAPABILITY_RULE, CAPABILITY_TABLE_ID,
 };
 
 use super::{CapabilityDeny, Policy, ScopeInput};
@@ -305,29 +305,37 @@ fn capabilities(
     }
     pinned(session)?;
     let rule = RuleId::new(CAPABILITY_RULE).map_err(id_error)?;
+    // Each slice's imports of each feature, its call sites of an import, and its inputs'
+    // `binary.code` states, gathered once: walking the whole session for each slice and denial
+    // would grow with the square of the slices (PR review).
+    let mut imported: BTreeMap<(&SliceId, &FeatureKey), BTreeSet<&UntrustedText>> = BTreeMap::new();
+    for h in session.hints.iter().filter(|h| h.signal == Signal::Import) {
+        imported
+            .entry((&h.subject, &h.feature))
+            .or_default()
+            .insert(&h.value);
+    }
+    let mut calls: BTreeMap<&SliceId, Vec<(&CallId, &UntrustedText)>> = BTreeMap::new();
+    for facts in &session.code {
+        for c in &facts.call_sites {
+            if let CallTarget::Import { symbol, .. } = &c.target {
+                calls.entry(&facts.slice).or_default().push((&c.id, symbol));
+            }
+        }
+    }
+    let states = code_states(session);
     for slice in session.binaries.iter().map(|b| &b.slice) {
         for deny in &policy.capabilities {
-            let imports: BTreeSet<&UntrustedText> = session
-                .hints
-                .iter()
-                .filter(|h| {
-                    h.subject == *slice && h.signal == Signal::Import && h.feature == deny.feature
-                })
-                .map(|h| &h.value)
-                .collect();
-            if imports.is_empty() {
+            let Some(imports) = imported.get(&(slice, &deny.feature)) else {
                 continue;
-            }
+            };
             // By ID, so a canonical session re-evaluates to the same bytes.
-            let sites: Vec<EvidenceRef> = session
-                .code
-                .iter()
-                .filter(|c| c.slice == *slice)
-                .flat_map(|c| &c.call_sites)
-                .filter(|c| {
-                    matches!(&c.target, CallTarget::Import { symbol, .. } if imports.contains(symbol))
-                })
-                .map(|c| &c.id)
+            let sites: Vec<EvidenceRef> = calls
+                .get(slice)
+                .into_iter()
+                .flatten()
+                .filter(|(_, symbol)| imports.contains(symbol))
+                .map(|(id, _)| *id)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(|id| EvidenceRef::Code {
@@ -348,7 +356,10 @@ fn capabilities(
                     id: CondId::new(format!("{CAPABILITY_CONDITION_PREFIX}{}", deny.feature))
                         .map_err(id_error)?,
                     state: CondState::Unknown {
-                        reason: unknown_call(session, slice).map_err(id_error)?,
+                        reason: unknown_call(
+                            states.get(&slice.artifact()).map_or(&[], Vec::as_slice),
+                        )
+                        .map_err(id_error)?,
                         evidence: None,
                     },
                     unresolved: vec![],
@@ -391,22 +402,57 @@ fn pinned(session: &Session) -> Result<(), EvaluateError> {
             embedded: embedded.clone(),
         });
     }
+    // Compared as sorted lists, each hint as often as it is recorded: a duplicate is a difference,
+    // and the comparison grows with the hints, not their square (PR review).
     let derived = hints::derive(&session.binaries).map_err(EvaluateError::Signatures)?;
-    let derived: Vec<_> = derived
-        .iter()
-        .filter(|h| h.signal == Signal::Import)
-        .collect();
-    let recorded: Vec<_> = session
-        .hints
-        .iter()
-        .filter(|h| h.signal == Signal::Import)
-        .collect();
-    let missing = derived.iter().filter(|h| !recorded.contains(h)).count();
-    let extra = recorded.iter().filter(|h| !derived.contains(h)).count();
+    let derived = import_keys(&derived);
+    let recorded = import_keys(&session.hints);
+    let (missing, extra) = surplus(&derived, &recorded);
     if missing + extra > 0 {
         return Err(EvaluateError::CapabilityHints { missing, extra });
     }
     Ok(())
+}
+
+/// The `Import` hints of `hints`, each as the fields that make it, sorted.
+fn import_keys(hints: &[FeatureHint]) -> Vec<(&str, &str, &[u8], String)> {
+    let mut keys: Vec<_> = hints
+        .iter()
+        .filter(|h| h.signal == Signal::Import)
+        .map(|h| {
+            (
+                h.subject.as_str(),
+                h.feature.as_str(),
+                h.value.as_bytes(),
+                format!("{:?}", h.at),
+            )
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// How many items of the sorted lists `a` and `b` the other lacks, each counted as often as it
+/// occurs: `(in a only, in b only)`.
+fn surplus<T: Ord>(a: &[T], b: &[T]) -> (usize, usize) {
+    let (mut i, mut j, mut only_a, mut only_b) = (0, 0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => {
+                only_a += 1;
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                only_b += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    (only_a + a.len() - i, only_b + b.len() - j)
 }
 
 fn violation(deny: &CapabilityDeny, slice: &SliceId, sites: Vec<EvidenceRef>) -> PolicyViolation {
@@ -423,24 +469,36 @@ fn violation(deny: &CapabilityDeny, slice: &SliceId, sites: Vec<EvidenceRef>) ->
     }
 }
 
-/// Why a call of a slice's import is not known (#51 spec §3), by the `binary.code` entries of the
-/// instances whose content is the slice's artifact: none (no code analysis), one that is not
-/// `Complete`, or every one `Complete` (a call that is not direct is not followed).
-fn unknown_call(session: &Session, slice: &SliceId) -> Result<UnknownReason, sigil_model::IdError> {
-    let artifact = slice.artifact();
-    let placed: BTreeSet<_> = session
+/// The `binary.code` states of each artifact's inputs (#51 spec §3): of the coverage entries of
+/// the instances whose content is that artifact.
+fn code_states(session: &Session) -> BTreeMap<&ArtifactId, Vec<&CoverageState>> {
+    let artifact_of: BTreeMap<&InstanceId, &ArtifactId> = session
         .instances
         .iter()
-        .filter(|i| matches!(&i.content, InstanceContent::Read { artifact: a } if *a == artifact))
-        .map(|i| &i.id)
+        .filter_map(|i| match &i.content {
+            InstanceContent::Read { artifact } => Some((&i.id, artifact)),
+            _ => None,
+        })
         .collect();
-    let states: Vec<&CoverageState> = session
+    let mut states: BTreeMap<&ArtifactId, Vec<&CoverageState>> = BTreeMap::new();
+    for c in session
         .coverage
         .iter()
         .filter(|c| c.check.as_str() == BINARY_CODE)
-        .filter(|c| matches!(&c.scope, Ref::Instance(i) if placed.contains(i)))
-        .map(|c| &c.state)
-        .collect();
+    {
+        if let Ref::Instance(i) = &c.scope {
+            if let Some(artifact) = artifact_of.get(i) {
+                states.entry(artifact).or_default().push(&c.state);
+            }
+        }
+    }
+    states
+}
+
+/// Why a call of a slice's import is not known (#51 spec §3), by the `binary.code` states of the
+/// slice's inputs: none (no code analysis), one that is not `Complete`, or every one `Complete`
+/// (a call that is not direct is not followed).
+fn unknown_call(states: &[&CoverageState]) -> Result<UnknownReason, sigil_model::IdError> {
     Ok(if states.is_empty() {
         UnknownReason::NotModeled {
             what: "calls in code that was not analyzed".into(),

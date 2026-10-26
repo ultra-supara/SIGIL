@@ -206,6 +206,29 @@ fn a_finding_s_rule_is_this_build_s() {
     );
 }
 
+/// PR review: `verify` judges only a valid session, whoever calls it: a session that does not
+/// agree with itself gets its validation errors as differences.
+#[test]
+fn an_invalid_session_does_not_verify() {
+    let p = Policy::load(DENY_SPAWN).unwrap();
+    let mut s = spawn(&p);
+    let v = s.policy_violations[0].clone();
+    s.policy_violations.push(v);
+    let errors = verify(&s, &p).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.starts_with("the session is not valid: ")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("a second violation of posix.process_spawn")),
+        "{errors:?}"
+    );
+}
+
 #[test]
 fn a_session_the_policy_cannot_judge_does_not_verify() {
     // Made before #51: no capability table, so a denial cannot judge it.
