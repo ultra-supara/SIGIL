@@ -37,7 +37,7 @@ use sigil_engine::inspect::{
 };
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
-use sigil_engine::policy::catalog::RULES;
+use sigil_engine::policy::catalog::{self, RULES};
 use sigil_engine::policy::Policy;
 use sigil_engine::reference;
 use sigil_model::render::aibom::project;
@@ -271,7 +271,7 @@ struct ExplainArgs {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 struct Question {
-    /// Explain this finding: its rule, decision, evidence, and remediation.
+    /// Explain this finding or open question: its rule, decision, evidence, and remediation.
     #[arg(long, value_name = "ID")]
     finding: Option<String>,
     /// Explain the verdict and completeness.
@@ -1313,6 +1313,12 @@ fn rules() -> Result<(), Failure> {
             severity(r.default),
             r.summary
         ));
+    }
+    // #51: the keys a `[[capabilities.deny]]` entry may name.
+    let keys = catalog::capabilities().map_err(Failure::Run)?;
+    text.push_str("\nCapabilities a policy can deny ([[capabilities.deny]]):\n");
+    for key in keys {
+        text.push_str(&format!("  {key}\n"));
     }
     emit(&text, None, &[])
 }

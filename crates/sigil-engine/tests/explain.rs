@@ -271,3 +271,56 @@ fn a_probe_is_explained_in_the_coverage() {
         "the probe's limits are not stated:\n{text}"
     );
 }
+
+fn example_18() -> Session {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas/examples/session-v1/18-capability-policy.json");
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// #51: an open question is explained as a finding is: its rule, treatment, subject, why its
+/// condition is unknown, its evidence, what settles it, and its effect on the outcome.
+#[test]
+fn an_open_question_is_explained_too() {
+    let s = example_18();
+    let q = &s.open_questions[0];
+    let slice = s.binaries[0].slice.clone();
+    let text = explain::finding(&s, q.id.as_str(), Format::Text).unwrap();
+    for line in [
+        format!("Open question {}", q.id),
+        format!(
+            "Rule: binary.capability_call ({})",
+            sigil_engine::policy::catalog::CAPABILITY_SUMMARY
+        ),
+        "Treatment: count as gap, from policy:open_questions.default".to_string(),
+        format!("Subject: {slice}"),
+        "calls:posix.process_spawn: unknown, not modeled: calls that are not direct (through a \
+         function pointer, or from data)"
+            .to_string(),
+        format!("the symbol execve in {slice}"),
+        sigil_engine::policy::catalog::CAPABILITY_REMEDIATION.to_string(),
+        "It is counted as a gap, so the result is INCOMPLETE.".to_string(),
+    ] {
+        assert!(text.contains(&line), "{line}\n---\n{text}");
+    }
+    // An unknown ID names the findings and open questions there are.
+    let message = explain::finding(&s, "nope", Format::Text)
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains(q.id.as_str()), "{message}");
+}
+
+/// #51: the verdict counts the call sites a capability violation cites, and the evidence names the
+/// call site's import.
+#[test]
+fn a_capability_violation_counts_its_call_sites_in_the_verdict() {
+    let s = example_18();
+    let slice = s.binaries[0].slice.clone();
+    let text = explain::verdict(&s, Format::Text);
+    assert!(
+        text.contains(&format!(
+            "policy violation policy:capabilities.deny.posix.network on {slice}: fail, citing 1 call site"
+        )),
+        "{text}"
+    );
+}

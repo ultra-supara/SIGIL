@@ -2,7 +2,9 @@
 //! the assumptions (plan §4.7, §6.3, §8). Each later PR adds the rules and scopes its collectors
 //! produce.
 
-use sigil_model::{FindingKind, Severity};
+use sigil_model::{FeatureKey, FindingKind, Severity};
+
+use crate::code::data::signatures;
 
 /// A detection rule and its technical defaults. Policy can change what is done with a finding,
 /// never these.
@@ -179,4 +181,22 @@ pub fn is_check(check: &str) -> bool {
 
 pub fn assumption(id: &str) -> Option<&'static AssumptionInfo> {
     ASSUMPTIONS.iter().find(|a| a.id == id)
+}
+
+/// The summary of the capability rule, `binary.capability_call` (#51). It is a policy rule, not a
+/// detection rule, so it is not in [`RULES`]: it has no default severity, and only a
+/// `[[capabilities.deny]]` entry makes its violations and open questions.
+pub const CAPABILITY_SUMMARY: &str =
+    "A slice imports a capability that the policy denies, with no direct call site of it";
+
+/// What settles a capability open question (#51): fixed text, as each rule's remediation.
+pub const CAPABILITY_REMEDIATION: &str = "Analyze the code with `sigil binary inspect --code` if \
+it was not: a direct call of one of these imports makes this a policy violation. If the code calls \
+none of them directly, the question stays, since a call through a function pointer or from data is \
+not followed: remove the imports, or treat open questions otherwise in the policy, with a reason.";
+
+/// The capabilities a policy can deny (#51): the keys of the capability-import table, sorted.
+/// `Err` only if the embedded table is invalid.
+pub fn capabilities() -> Result<Vec<&'static FeatureKey>, String> {
+    Ok(signatures()?.features())
 }
