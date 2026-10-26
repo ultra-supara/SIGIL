@@ -41,7 +41,14 @@ fn every_binary_inspection_example_carries_the_claims_the_engine_derives() {
         assert_eq!(session.components, derived.components, "{}", path.display());
         checked.push(path.file_stem().unwrap().to_string_lossy().into_owned());
     }
-    assert_eq!(checked, ["15-binary-inspect", "16-binary-code"]);
+    assert_eq!(
+        checked,
+        [
+            "15-binary-inspect",
+            "16-binary-code",
+            "18-capability-policy"
+        ]
+    );
 }
 
 /// Example 12 is a specification example, without binary facts. With the facts it describes

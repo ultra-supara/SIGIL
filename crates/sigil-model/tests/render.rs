@@ -61,7 +61,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 17);
+    assert_eq!(all.len(), 18);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -2239,4 +2239,56 @@ fn a_content_s_first_input_says_whether_it_was_scanned() {
         "{section}"
     );
     assert!(!section.contains(&md_esc(NOT_SCANNED)), "{section}");
+}
+
+/// #51: a policy violation's row shows its evidence, and an open question's row why it is open.
+#[test]
+fn a_violation_shows_its_evidence_and_an_open_question_why_it_is_open() {
+    let slice = format!("sha256\\:{KERNEL_HEX}\\#x86\\_64\\@0");
+    let md = render_session(&capability_policy());
+    assert!(md.contains(&format!(
+        "| Policy rule | Action | Subject | Evidence |\n|---|---|---|---|\n\
+         | policy\\:capabilities\\.deny\\.posix\\.network | fail | {slice} | cs\\:0x4d |\n"
+    )));
+    assert!(md.contains(&format!(
+        "| Open question | Rule | Treatment | Subject | Why |\n|---|---|---|---|---|\n\
+         | capability\\:posix\\.process\\_spawn\\@{slice} | binary\\.capability\\_call | count as gap \
+         | {slice} | calls\\:posix\\.process\\_spawn\\: not modeled\\: calls that are not direct \
+         \\(through a function pointer\\, or from data\\) |\n"
+    )));
+}
+
+/// #51: a cell shows the first three evidence references, then how many more there are; an
+/// import is shown by its name, escaped as any input.
+#[test]
+fn an_evidence_cell_shows_three_references_then_the_count() {
+    let mut s = capability_policy();
+    let slice = s.binaries[0].slice.clone();
+    s.policy_violations[0].evidence = vec![
+        EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::CallSite(id("cs:0x4d")),
+        },
+        EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::Symbol(t("exec|ve")),
+        },
+        EvidenceRef::Artifact {
+            artifact: slice.artifact(),
+        },
+        EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: Loc::Function(id("fn:0x40")),
+        },
+        EvidenceRef::Instance {
+            instance: id(KERNEL_INPUT),
+        },
+    ];
+    let md = render_session(&s);
+    assert!(
+        md.contains(&format!(
+            "| cs\\:0x4d, exec\\|ve, sha256\\:{KERNEL_HEX}, … and 2 more |\n"
+        )),
+        "{md}"
+    );
 }

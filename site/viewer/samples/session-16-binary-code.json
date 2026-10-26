@@ -7,6 +7,12 @@
       "id": "default",
       "version": "1",
       "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "capabilities",
+      "version": "0.1.0",
+      "sha256": "432f71b2a3c5f25663e699d5447db24b27590a4dad5ed1186b0f30ac89b26944"
     }
   ],
   "request": {

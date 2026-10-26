@@ -1,5 +1,6 @@
 //! Every golden session example carries exactly the feature hints the engine derives from its
-//! binary facts (PR-5a-2 plan P-g): an example shows what a run writes.
+//! binary facts (PR-5a-2 plan P-g), and one with binary facts records the capability table they
+//! were made with (#51): an example shows what a run writes.
 
 use std::path::Path;
 
@@ -14,7 +15,7 @@ fn every_session_example_carries_the_hints_the_engine_derives() {
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect();
     names.sort();
-    assert_eq!(names.len(), 17, "{names:?}");
+    assert_eq!(names.len(), 18, "{names:?}");
     for path in names {
         let session: Session =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -24,5 +25,16 @@ fn every_session_example_carries_the_hints_the_engine_derives() {
         let mut recorded = session.hints.clone();
         recorded.sort_by_cached_key(key);
         assert_eq!(recorded, derived, "{}", path.display());
+        let table = sigil_engine::code::data::signatures().unwrap().knowledge();
+        let tables: Vec<_> = session
+            .knowledge
+            .iter()
+            .filter(|k| k.kind == sigil_model::KnowledgeKind::SignatureDb)
+            .collect();
+        if session.binaries.is_empty() {
+            assert!(tables.is_empty(), "{}", path.display());
+        } else {
+            assert_eq!(tables, [table], "{}", path.display());
+        }
     }
 }

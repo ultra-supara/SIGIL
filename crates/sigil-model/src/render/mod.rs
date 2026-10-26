@@ -8,7 +8,7 @@ pub mod markdown;
 mod md;
 
 use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
-use crate::evidence::{Loc, NotObservable, Ref};
+use crate::evidence::{Loc, NotObservable, Ref, UnknownReason};
 use crate::finding::{Action, Completeness, FindingKind, OqTreatment, Severity, Verdict};
 use crate::hint::Signal;
 use crate::identity::IdentityStatus;
@@ -428,6 +428,19 @@ pub fn not_observable(n: NotObservable) -> &'static str {
         NotObservable::ModeDisabled => "not read in this mode",
         NotObservable::NamespaceMismatch => "another namespace",
         NotObservable::ReadIncomplete => "read incompletely",
+    }
+}
+
+/// Why a condition is unknown, as reports show it (#51).
+pub fn unknown_reason(r: &UnknownReason) -> String {
+    match r {
+        UnknownReason::InsufficientEvidence => "the evidence settles neither way".to_string(),
+        UnknownReason::PremiseUnresolved => "a premise is not established".to_string(),
+        UnknownReason::NotObservable(why) => format!("not observable ({})", not_observable(*why)),
+        UnknownReason::NotModeled { what } => format!("not modeled: {what}"),
+        UnknownReason::RunTimeDependent { what } => format!("decided at run time: {what}"),
+        UnknownReason::RequiresActive { what } => format!("needs an active observation: {what}"),
+        UnknownReason::CheckIncomplete { check } => format!("{check} did not close"),
     }
 }
 

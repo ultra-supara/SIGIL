@@ -225,6 +225,23 @@ pub fn instance(
     }
 }
 
+/// The SHA-256 of `crates/sigil-engine/signatures/capabilities.toml` (#51): the capability table
+/// a session with binary facts records. The engine's `example_hints` checks it against the table
+/// the engine embeds.
+pub const CAPABILITY_TABLE_HEX: &str =
+    "432f71b2a3c5f25663e699d5447db24b27590a4dad5ed1186b0f30ac89b26944";
+
+/// Records the capability table the engine's binary analysis makes hints and call sites with
+/// (#51), as `sigil binary inspect` does.
+pub fn add_capability_table(s: &mut Session) {
+    s.knowledge.push(KnowledgeRef {
+        kind: KnowledgeKind::SignatureDb,
+        id: CAPABILITY_TABLE_ID.to_string(),
+        version: "0.1.0".to_string(),
+        sha256: id(CAPABILITY_TABLE_HEX),
+    });
+}
+
 pub fn add_knowledge(s: &mut Session, kind: KnowledgeKind, kid: &str, version: &str, byte: u8) {
     s.knowledge.push(KnowledgeRef {
         kind,
@@ -1457,6 +1474,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("15-binary-inspect", binary_inspect()),
         ("16-binary-code", binary_code()),
         ("17-open-release", open_release()),
+        ("18-capability-policy", capability_policy()),
     ]
 }
 
@@ -1623,12 +1641,14 @@ pub const ELF_INPUT: &str = "inst:binary-1/libggml-base.so";
 pub const TEXT_INPUT: &str = "inst:binary-2/NOTES.txt";
 
 /// Example 15: `sigil binary inspect` of two files (PR-4b-2a). The first is a shared object with
-/// complete container facts, the hints of its capability imports (`dlopen`, `getenv`), the claim
-/// its file name and SONAME give (`ggml-base`, `NameOnly`; PR-4c-1), and a complete signature
-/// scan (PR-4c-2a); the second is a text file SIGIL does not parse. PASS + INCOMPLETE.
+/// complete container facts, the hints of its capability imports (`dlopen`, `getenv`) and the
+/// capability table they were made with (#51), the claim its file name and SONAME give
+/// (`ggml-base`, `NameOnly`; PR-4c-1), and a complete signature scan (PR-4c-2a); the second is a
+/// text file SIGIL does not parse. PASS + INCOMPLETE.
 pub fn binary_inspect() -> Session {
     let mut s = base(&[BINARY_CONTAINER, BINARY_IDENTITY]);
     s.request.audit = ids(&["binary"]);
+    add_capability_table(&mut s);
     s.request.budgets = BTreeMap::from([
         (BINARY_BYTES.to_string(), 64 << 30),
         ("binary_imports".to_string(), 4096),
@@ -1881,14 +1901,15 @@ pub const KERNEL_INPUT: &str = "inst:binary-1/suspicious_kernel-gcc-O2.o";
 pub const KERNEL_HEX: &str = "aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a";
 
 /// Example 16: `sigil binary inspect` of one relocatable object, with code analysis (PR-5a spec
-/// §5.3). The hash, container facts, hint, code facts, and `binary_code_bytes` use are what the
-/// engine records for the fixture `suspicious_kernel-gcc-O2.o`; the path and the stat are
-/// synthetic. Its one function, `kernel`, calls `connect(0, 0, 0)`. In a relocatable object an
-/// address is a file offset: `.text` starts at 0x40. Its signature scan is complete: no needle
-/// applies to it (PR-4c-2a). PASS + COMPLETE.
+/// §5.3). The hash, container facts, hint, code facts, capability table (#51), and
+/// `binary_code_bytes` use are what the engine records for the fixture
+/// `suspicious_kernel-gcc-O2.o`; the path and the stat are synthetic. Its one function, `kernel`,
+/// calls `connect(0, 0, 0)`. In a relocatable object an address is a file offset: `.text` starts
+/// at 0x40. Its signature scan is complete: no needle applies to it (PR-4c-2a). PASS + COMPLETE.
 pub fn binary_code() -> Session {
     let mut s = base(&[BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY]);
     s.request.audit = ids(&["binary", "binary_code"]);
+    add_capability_table(&mut s);
     s.request.code = true;
     s.request.budgets = BTreeMap::from([
         (BINARY_BYTES.to_string(), 64 << 30),
@@ -1999,5 +2020,80 @@ pub fn binary_code() -> Session {
             CoverageState::Complete,
         ),
     ]);
+    s
+}
+
+/// The reason example 18's policy gives for denying `posix.network` (#51).
+pub const NO_CONNECTIONS: &str = "The runtime must not open connections";
+
+/// Example 18 (#51): example 16's object with a second import, `execve` (a
+/// `posix.process_spawn` hint), that its code does not call directly, evaluated under a policy
+/// that denies `posix.network` and `posix.process_spawn` (`fail`). The call of `connect` is a
+/// policy violation citing its call site; `execve` is an open question counted as a gap, since
+/// code analysis does not follow a call that is not direct. Synthetic: the fixture imports only
+/// `connect`. FAIL + INCOMPLETE.
+pub fn capability_policy() -> Session {
+    let mut s = binary_code();
+    let slice = s.binaries[0].slice.clone();
+    if let ContainerFacts::Elf(elf) = &mut s.binaries[0].container {
+        elf.imports.push(ElfImport {
+            name: t("execve"),
+            version: None,
+            weak: false,
+        });
+    }
+    s.hints.push(FeatureHint {
+        subject: slice.clone(),
+        feature: id("posix.process_spawn"),
+        signal: Signal::Import,
+        value: t("execve"),
+        at: Loc::Symbol(t("execve")),
+    });
+    let network: PolicyRuleRef = id("policy:capabilities.deny.posix.network");
+    s.policy_violations.push(PolicyViolation {
+        policy_rule: network.clone(),
+        subject: Ref::Slice(slice.clone()),
+        evidence: vec![EvidenceRef::Code {
+            slice: slice.clone(),
+            loc: loc_cs("cs:0x4d"),
+        }],
+        decision: PolicyDecision {
+            action: Action::Fail,
+            source: network,
+            reason: Some(NO_CONNECTIONS.into()),
+            expires: None,
+        },
+    });
+    let question: OpenQuestionId = id(&format!("capability:posix.process_spawn@{slice}"));
+    s.open_questions.push(OpenQuestion {
+        id: question.clone(),
+        rule: id(CAPABILITY_RULE),
+        subject: Ref::Slice(slice.clone()),
+        conditions: vec![Condition {
+            id: id("calls:posix.process_spawn"),
+            state: CondState::Unknown {
+                reason: UnknownReason::NotModeled {
+                    what: "calls that are not direct (through a function pointer, or from data)"
+                        .into(),
+                },
+                evidence: None,
+            },
+            unresolved: vec![],
+        }],
+        evidence: vec![EvidenceRef::Code {
+            slice,
+            loc: Loc::Symbol(t("execve")),
+        }],
+        decision: OpenQuestionDecision {
+            treatment: OqTreatment::CountAsGap,
+            source: id("policy:open_questions.default"),
+            reason: None,
+        },
+    });
+    s.outcome.verdict = Verdict::Fail;
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![],
+        gaps: vec![question],
+    };
     s
 }

@@ -59,7 +59,7 @@ fn every_session_example_projects_to_its_committed_aibom() {
         fs::create_dir_all(&dir).unwrap();
     }
     let examples = session_examples();
-    assert_eq!(examples.len(), 17);
+    assert_eq!(examples.len(), 18);
     for (name, s) in &examples {
         let bom = project(s, sha(s));
         let text = json(&bom);
@@ -638,4 +638,34 @@ fn the_closing_states_are_those_that_can_close_a_check() {
             "{state:?}"
         );
     }
+}
+
+/// #51: the AI-BOM lists the session's open questions, and an AI-BOM of a session without one
+/// has no `open_questions` key at all.
+#[test]
+fn open_questions_are_listed_and_absent_when_there_are_none() {
+    let s = capability_policy();
+    let bom = project(&s, sha(&s));
+    assert_eq!(bom.open_questions.len(), 1);
+    let (b, q) = (&bom.open_questions[0], &s.open_questions[0]);
+    assert_eq!(
+        (&b.id, &b.rule, &b.subject, &b.decision),
+        (&q.id, &q.rule, &q.subject, &q.decision)
+    );
+    let md = markdown(&bom);
+    assert!(md.contains(&format!(
+        "## Open questions\n\n| Open question | Rule | Treatment | Subject |\n|---|---|---|---|\n\
+         | capability\\:posix\\.process\\_spawn\\@sha256\\:{KERNEL_HEX}\\#x86\\_64\\@0 \
+         | binary\\.capability\\_call | count as gap | sha256\\:{KERNEL_HEX}\\#x86\\_64\\@0 |\n"
+    )));
+
+    let s = binary_code();
+    let bom = project(&s, sha(&s));
+    assert!(bom.open_questions.is_empty());
+    let value: serde_json::Value = serde_json::from_str(&json(&bom)).unwrap();
+    assert!(value.get("open_questions").is_none(), "{value}");
+    assert!(!markdown(&bom).contains("## Open questions"));
+    // Read back without the key, it is empty.
+    let read: render::aibom::AiBom = serde_json::from_str(&json(&bom)).unwrap();
+    assert!(read.open_questions.is_empty());
 }

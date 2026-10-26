@@ -90,6 +90,23 @@
   ],
   "findings": [],
   "policy_violations": [],
+  "open_questions": [
+    {
+      "id": "oq:loader.search_path_untrusted_creator@exe_dir/llama-server (per model)",
+      "rule": "loader.search_path_untrusted_creator",
+      "subject": {
+        "SearchPath": {
+          "role": "llama-server (per model)",
+          "search_path": "exe_dir"
+        }
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
   "coverage": [
     {
       "check": "artifacts.discovery",

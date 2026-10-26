@@ -102,19 +102,29 @@ fn re_evaluating_every_golden_example_reproduces_it() {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let mut s = expected.clone();
         scramble(&mut s);
-        let warnings = run(&mut s, "");
+        // Example 18 records the results of its denials (#51); every other example, none.
+        let body = if path.ends_with("18-capability-policy.json") {
+            EXAMPLE_18_POLICY
+        } else {
+            ""
+        };
+        let warnings = run(&mut s, body);
         assert!(warnings.is_empty());
         // Everything is reproduced, and the session records the policy that was applied.
         for k in &mut expected.knowledge {
             if k.kind == KnowledgeKind::Policy {
-                *k = policy_for(&s, "").knowledge();
+                *k = policy_for(&s, body).knowledge();
             }
         }
         assert_eq!(s, expected, "{}", path.display());
         seen += 1;
     }
-    assert_eq!(seen, 17);
+    assert_eq!(seen, 18);
 }
+
+/// The policy example 18 was evaluated under: it denies `posix.network` and
+/// `posix.process_spawn`.
+const EXAMPLE_18_POLICY: &str = "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"The runtime must not open connections\"\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\nreason = \"The runtime must not start processes\"\n";
 
 #[test]
 fn verdict_and_completeness_are_independent() {
