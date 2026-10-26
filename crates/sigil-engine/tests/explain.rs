@@ -310,17 +310,26 @@ fn an_open_question_is_explained_too() {
     assert!(message.contains(q.id.as_str()), "{message}");
 }
 
-/// #51: the verdict counts the call sites a capability violation cites, and the evidence names the
-/// call site's import.
+/// #51: the verdict counts the call sites a capability violation cites, and lists each with the
+/// import it calls.
 #[test]
 fn a_capability_violation_counts_its_call_sites_in_the_verdict() {
-    let s = example_18();
+    let mut s = example_18();
     let slice = s.binaries[0].slice.clone();
     let text = explain::verdict(&s, Format::Text);
+    let site = format!("      call site cs:0x4d in {slice}, a call of connect\n");
     assert!(
         text.contains(&format!(
-            "policy violation policy:capabilities.deny.posix.network on {slice}: fail, citing 1 call site"
+            "policy violation policy:capabilities.deny.posix.network on {slice}: fail, citing 1 call site\n{site}"
         )),
+        "{text}"
+    );
+    // Two call sites: the plural, and each listed.
+    let cited = s.policy_violations[0].evidence[0].clone();
+    s.policy_violations[0].evidence.push(cited);
+    let text = explain::verdict(&s, Format::Text);
+    assert!(
+        text.contains(&format!("fail, citing 2 call sites\n{site}{site}")),
         "{text}"
     );
 }

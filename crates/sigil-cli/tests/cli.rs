@@ -607,7 +607,8 @@ fn rules_lists_the_catalog() {
             "\nCapabilities a policy can deny ([[capabilities.deny]]):\n  cxx.file_read\n  \
              cxx.file_write\n  posix.anti_debug\n  posix.dynamic_loading\n  \
              posix.environment_access\n  posix.file_read\n  posix.file_write\n  posix.network\n  \
-             posix.process_spawn\n"
+             posix.process_spawn\nIts open questions: binary.capability_call (A slice imports a \
+             capability that the policy denies, with no direct call site of it)\n"
         ),
         "{}",
         r.stdout

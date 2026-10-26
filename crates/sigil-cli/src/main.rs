@@ -1314,12 +1314,18 @@ fn rules() -> Result<(), Failure> {
             r.summary
         ));
     }
-    // #51: the keys a `[[capabilities.deny]]` entry may name.
-    let keys = catalog::capabilities().map_err(Failure::Run)?;
+    // #51: the keys a `[[capabilities.deny]]` entry may name, and the rule of its open questions.
+    let keys = catalog::capabilities()
+        .map_err(|m| Failure::Run(format!("the embedded capability table is invalid: {m}")))?;
     text.push_str("\nCapabilities a policy can deny ([[capabilities.deny]]):\n");
     for key in keys {
         text.push_str(&format!("  {key}\n"));
     }
+    text.push_str(&format!(
+        "Its open questions: {} ({})\n",
+        sigil_model::CAPABILITY_RULE,
+        catalog::CAPABILITY_SUMMARY
+    ));
     emit(&text, None, &[])
 }
 

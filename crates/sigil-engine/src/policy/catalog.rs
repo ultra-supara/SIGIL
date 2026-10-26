@@ -191,9 +191,10 @@ pub const CAPABILITY_SUMMARY: &str =
 
 /// What settles a capability open question (#51): fixed text, as each rule's remediation.
 pub const CAPABILITY_REMEDIATION: &str = "Analyze the code with `sigil binary inspect --code` if \
-it was not: a direct call of one of these imports makes this a policy violation. If the code calls \
-none of them directly, the question stays, since a call through a function pointer or from data is \
-not followed: remove the imports, or treat open questions otherwise in the policy, with a reason.";
+it was not (x86-64 ELF code only; an installation's code is not analyzed yet): a direct call of one \
+of these imports makes this a policy violation. If the code calls none of them directly, the \
+question stays, since a call through a function pointer or from data is not followed: remove the \
+imports, or change the policy's treatment of open questions.";
 
 /// The capabilities a policy can deny (#51): the keys of the capability-import table, sorted.
 /// `Err` only if the embedded table is invalid.

@@ -177,7 +177,7 @@ fn open_question(s: &Session, q: &OpenQuestion, format: Format) -> String {
     let d = &q.decision;
     let mut decided = format!("{}, from {}", treatment(&d.treatment), d.source);
     if let Some(reason) = &d.reason {
-        decided.push_str(&format!(": {reason}"));
+        decided.push_str(&format!("; reason: {reason}"));
     }
     doc.field("Treatment", Shown::own(decided));
     doc.field("Subject", Shown::own(subject(&q.subject)));
@@ -258,9 +258,10 @@ pub fn verdict(s: &Session, format: Format) -> String {
             subject(&v.subject),
             action(v.decision.action)
         );
-        // A capability violation cites the call sites it rests on (#51).
+        // A capability violation cites the call sites it rests on (#51), each listed under it.
+        let mut sites = vec![];
         if v.policy_rule.as_str().starts_with(CAPABILITY_DENY_PREFIX) {
-            let n = v
+            sites = v
                 .evidence
                 .iter()
                 .filter(|e| {
@@ -272,13 +273,17 @@ pub fn verdict(s: &Session, format: Format) -> String {
                         }
                     )
                 })
-                .count();
+                .collect();
+            let n = sites.len();
             line.push_str(&format!(
                 ", citing {n} call site{}",
                 if n == 1 { "" } else { "s" }
             ));
         }
         doc.item(Shown::own(line));
+        for site in sites {
+            doc.sub_item(evidence(s, site));
+        }
     }
     for q in s
         .open_questions
