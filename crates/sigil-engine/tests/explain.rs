@@ -310,8 +310,6 @@ fn an_open_question_is_explained_too() {
     assert!(message.contains(q.id.as_str()), "{message}");
 }
 
-/// #51: the verdict counts the call sites a capability violation cites, and lists each with the
-/// import it calls.
 /// An open question the policy ignores is set aside by it, as an ignored finding is: the verdict
 /// says so, never a silent pass.
 #[test]
@@ -332,6 +330,8 @@ fn an_ignored_open_question_is_set_aside_in_the_verdict() {
     );
 }
 
+/// #51: the verdict counts the call sites a capability violation cites, and lists each with the
+/// import it calls.
 #[test]
 fn a_capability_violation_counts_its_call_sites_in_the_verdict() {
     let mut s = example_18();
