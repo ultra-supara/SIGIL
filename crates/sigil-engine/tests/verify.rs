@@ -8,8 +8,12 @@ use std::path::PathBuf;
 
 use sigil_engine::binary::BinaryBudgets;
 use sigil_engine::code::CodeBudgets;
+use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::named::NamedBudgets;
-use sigil_engine::inspect::{binary_session, BinaryRequest};
+use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
+use sigil_engine::inspect::{
+    binary_session, store_session, ActiveInput, BinaryRequest, StoreRequest,
+};
 use sigil_engine::policy::{verify, Policy};
 use sigil_model::*;
 
@@ -98,14 +102,113 @@ fn a_changed_decision_and_another_policy_are_named() {
     let errors = verify(&s, &default).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert!(
-        errors[0].starts_with("the session records the policy no-spawn ("),
+        errors[0].starts_with("the session records the policy no-spawn sigil-policy/1 ("),
         "{errors:?}"
+    );
+}
+
+/// Task 7 review: a violation the policy does not give, and a session that does not name the
+/// policy once, are named too.
+#[test]
+fn a_fabricated_violation_and_a_missing_policy_entry_are_named() {
+    let p = Policy::load(DENY_SPAWN).unwrap();
+    let mut s = spawn(&p);
+    let slice = s.binaries[0].slice.clone();
+    // A violation of posix.network, citing connect's real call: consistent, and not the policy's.
+    let mut fabricated = s.policy_violations[0].clone();
+    let rule = PolicyRuleRef::new("policy:capabilities.deny.posix.network").unwrap();
+    fabricated.policy_rule = rule.clone();
+    fabricated.decision.source = rule;
+    fabricated.evidence = vec![EvidenceRef::Code {
+        slice: slice.clone(),
+        loc: Loc::CallSite(CallId::new("cs:0x1148").unwrap()),
+    }];
+    s.policy_violations.push(fabricated);
+    s.validate().unwrap();
+    assert_eq!(
+        verify(&s, &p),
+        Err(vec![format!(
+            "policy violations the session has, and the policy does not give: \
+             policy:capabilities.deny.posix.network on {slice}"
+        )])
+    );
+
+    let mut s = spawn(&p);
+    s.knowledge.retain(|k| k.kind != KnowledgeKind::Policy);
+    let errors = verify(&s, &p).unwrap_err();
+    assert!(
+        errors[0].starts_with("the session records the policy none, not no-spawn sigil-policy/1 ("),
+        "{errors:?}"
+    );
+}
+
+/// Task 7 review: a finding's default decision rests on its rule's default severity, which the
+/// session only records. One downgraded from FAIL to WARN validates and re-evaluates to itself;
+/// this build's catalog says otherwise.
+#[test]
+fn a_finding_s_rule_is_this_build_s() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let d = dir.path();
+    let config = common::blob(d, b"{}");
+    let weights = common::blob(d, b"weights");
+    let license = common::blob(d, b"MIT");
+    common::manifest(
+        d,
+        common::LIB,
+        Some(&config),
+        &[
+            (common::MODEL_MEDIA, &weights),
+            (LICENSE_MEDIA_TYPE, &license),
+        ],
+    );
+    std::fs::write(
+        d.join(format!("blobs/sha256-{}", common::hex(b"weights"))),
+        b"tampered",
+    )
+    .unwrap();
+    let req = StoreRequest {
+        models_dir: d.to_path_buf(),
+        model_filter: None,
+        budgets: FsBudgets::default(),
+        manifest_limit: DEFAULT_MANIFEST_LIMIT,
+        install: None,
+    };
+    let p = Policy::builtin_default().unwrap();
+    let s = store_session(
+        &req,
+        &ActiveInput::default(),
+        &p,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    s.validate().unwrap();
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
+    assert_eq!(verify(&s, &p), Ok(()));
+
+    let mut t = s.clone();
+    let f = &mut t.findings[0];
+    assert_eq!(f.rule.as_str(), "model.blob_digest_mismatch");
+    f.default_severity = Severity::Warn;
+    f.decision.action = Action::Warn;
+    t.outcome.verdict = Verdict::Warn;
+    t.outcome.confirmed_failures = 0;
+    t.outcome.confirmed_warnings = 1;
+    t.validate().unwrap();
+    assert_eq!(
+        verify(&t, &p),
+        Err(vec![format!(
+            "finding {}: the session records rule model.blob_digest_mismatch as integrity warn, \
+             and this build's catalog as integrity fail",
+            t.findings[0].id
+        )])
     );
 }
 
 #[test]
 fn a_session_the_policy_cannot_judge_does_not_verify() {
-    // Made before #51: no capability table. The default policy judges it; a denial cannot.
+    // Made before #51: no capability table, so a denial cannot judge it.
     let p = Policy::load(DENY_SPAWN).unwrap();
     let mut s = spawn(&p);
     s.knowledge.retain(|k| k.kind != KnowledgeKind::SignatureDb);

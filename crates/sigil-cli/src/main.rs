@@ -234,7 +234,9 @@ enum SessionCommand {
     /// Render a saved session.
     Render(RenderArgs),
     /// Check that a saved session is what its policy gives: it names the policy, and evaluating
-    /// it again gives the same decisions, policy violations, open questions, and outcome.
+    /// it again gives the same decisions, policy violations, open questions, and outcome. The
+    /// analysis and the policy time are the session's: this checks what the policy makes of
+    /// them, not them (inspect the files again for that).
     Verify(VerifyArgs),
 }
 
@@ -1261,15 +1263,10 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
     }
     let set = reference::official().map_err(|e| Failure::Run(format!("the embedded set: {e}")))?;
     let failure = |what: &str, errors: Vec<String>| {
-        let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
-        let more = match errors.len().saturating_sub(5) {
-            0 => String::new(),
-            n => format!(" (and {n} more)"),
-        };
         Failure::Run(format!(
-            "{}: {what} the embedded reference set: {}{more}",
+            "{}: {what} the embedded reference set: {}",
             shown_path(path),
-            first.join("; ")
+            first_five(&errors)
         ))
     };
     if !reference::names(session, set)
@@ -1296,28 +1293,46 @@ fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
     reverify(&session, &args.session)?;
     let policy = load_policy(args.policy.as_deref())?;
     sigil_engine::policy::verify(&session, &policy).map_err(|errors| {
-        let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
-        let more = match errors.len().saturating_sub(5) {
-            0 => String::new(),
-            n => format!(" (and {n} more)"),
+        // A session another build made may differ by that build's data alone.
+        let build = tool_info().version;
+        let other = if session.tool.version == build {
+            String::new()
+        } else {
+            format!(
+                " (the session was made by SIGIL {}; this is {build})",
+                shown(&session.tool.version)
+            )
         };
         Failure::Run(format!(
-            "{} is not what the policy {} gives: {}{more}",
+            "{} is not what the policy {} gives: {}{other}",
             shown_path(&args.session),
             shown(&policy.name),
-            first.join("; ")
+            first_five(&errors)
         ))
     })?;
+    // The policy time is the session's own, as is the analysis: say which one was used.
     emit(
         &format!(
-            "verified: {} is what the policy {} ({}) gives\n",
+            "verified: {} is what the policy {} ({}) gives at {}: {} + {}\n",
             shown_path(&args.session),
             shown(&policy.name),
-            policy.sha256
+            policy.sha256,
+            session.outcome.policy_time,
+            sigil_model::render::verdict(session.outcome.verdict),
+            sigil_model::render::completeness(&session.outcome.completeness)
         ),
         None,
         &[],
     )
+}
+
+/// The first five of `errors`, shown for a terminal and joined, then how many more there are.
+fn first_five(errors: &[String]) -> String {
+    let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
+    match errors.len().saturating_sub(5) {
+        0 => first.join("; "),
+        n => format!("{} (and {n} more)", first.join("; ")),
+    }
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {

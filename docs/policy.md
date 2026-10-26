@@ -284,9 +284,14 @@ was removed and whose verdict was set to PASS still validates. `session verify`:
   policy violation that the policy gives and the session lacks or records otherwise, each one the
   policy does not give, and an outcome that differs.
 
-It prints `verified: <SESSION> is what the policy <name> (<sha256>) gives` and exits 0, or names
-the differences and exits 1. What the policy gives is what this build gives: component denials
-are matched through its component database, and capability denials need its capability table.
+It also checks that each finding's rule is in this build's rule catalog with the kind and default
+severity the session records. It prints `verified: <SESSION> is what the policy <name> (<sha256>)
+gives at <policy_time>: <verdict> + <completeness>` and exits 0, or names the differences and
+exits 1. What the policy gives is what this build gives: component denials are matched through
+its component database, and capability denials need its capability table. The analysis
+(findings, their conditions and evidence, hints, call sites, coverage, the request) and the policy
+time are the session's: `session verify` checks what the policy makes of them, not them. Only
+inspecting the files again checks the analysis.
 Validation does not check what a decision, a capability open question's ID, or an unknown
 condition's reason should be; `session verify` does, by evaluating again.
 

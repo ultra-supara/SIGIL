@@ -4,20 +4,25 @@
 //! every direct call of its feature's imports, a gap is an open question of the session, and so
 //! on. It cannot know what a policy should have decided, since a session records its policy's name
 //! and SHA-256, not its rules: one whose violation was removed and whose outcome was set to PASS
-//! still validates. [`verify`] evaluates a copy under the policy and compares.
+//! still validates. [`verify`] evaluates a copy under the policy and compares. It checks what the
+//! policy makes of the recorded analysis at the recorded policy time, not the analysis itself:
+//! only inspecting the files again does that.
 
 use std::collections::BTreeSet;
 
-use sigil_model::render::{completeness, subject, verdict};
+use sigil_model::render::{completeness, kind, severity, subject, verdict};
 use sigil_model::{KnowledgeKind, Session};
 
-use super::{evaluate, Policy};
+use super::{catalog, evaluate, Policy};
 
 /// Whether `session` is exactly what evaluating it under `policy` gives: `Ok`, or each difference
 /// in words.
 ///
 /// - The session names the policy: its one `Policy` knowledge entry has the policy's name and
 ///   SHA-256.
+/// - Each finding's rule is in this build's rule catalog, with the kind and default severity the
+///   session records: a finding's default decision rests on them, and the session only records
+///   them.
 /// - Evaluating a copy under the policy, at the session's recorded `policy_time`, succeeds: a
 ///   session the policy cannot judge (other required checks, another capability table) is a
 ///   difference.
@@ -26,7 +31,9 @@ use super::{evaluate, Policy};
 ///
 /// What the policy gives is what this build gives: component denials are matched through its
 /// component database and capability denials judged with its capability table, so a session that
-/// a build with other data made may differ.
+/// a build with other data made may differ. The analysis (findings, their conditions and
+/// evidence, hints, call sites, coverage, the request) and the policy time are the session's:
+/// verify checks what the policy makes of them, not them.
 pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
     let ours = policy.knowledge();
     let named: Vec<_> = session
@@ -37,7 +44,7 @@ pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
     if named.as_slice() != [&ours] {
         let shown: Vec<String> = named
             .iter()
-            .map(|k| format!("{} ({})", k.id, k.sha256))
+            .map(|k| format!("{} {} ({})", k.id, k.version, k.sha256))
             .collect();
         let shown = if shown.is_empty() {
             "none".to_string()
@@ -45,18 +52,40 @@ pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
             shown.join(", ")
         };
         return Err(vec![format!(
-            "the session records the policy {shown}, not {} ({})",
-            ours.id, ours.sha256
+            "the session records the policy {shown}, not {} {} ({})",
+            ours.id, ours.version, ours.sha256
         )]);
+    }
+    let mut differences = vec![];
+    for f in &session.findings {
+        match catalog::rule(f.rule.as_str()) {
+            None => differences.push(format!(
+                "finding {}: rule {} is not in this build's rule catalog",
+                f.id, f.rule
+            )),
+            Some(r) if r.kind != f.kind || r.default != f.default_severity => {
+                differences.push(format!(
+                    "finding {}: the session records rule {} as {} {}, and this build's catalog \
+                     as {} {}",
+                    f.id,
+                    f.rule,
+                    kind(f.kind),
+                    severity(f.default_severity),
+                    kind(r.kind),
+                    severity(r.default)
+                ))
+            }
+            Some(_) => {}
+        }
     }
     let mut given = session.clone();
     if let Err(e) = evaluate(&mut given, policy, session.outcome.policy_time.clone()) {
-        return Err(vec![format!("the policy cannot evaluate the session: {e}")]);
+        differences.push(format!("the policy cannot evaluate the session: {e}"));
+        return Err(differences);
     }
     let mut recorded = session.clone();
     recorded.canonicalize();
     given.canonicalize();
-    let mut differences = vec![];
     differ(
         &mut differences,
         "findings",
@@ -86,11 +115,12 @@ pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
                 completeness(&s.outcome.completeness)
             )
         };
-        differences.push(format!(
-            "the outcome is {}, and the policy gives {}",
-            words(&recorded),
-            words(&given)
-        ));
+        let (is, gives) = (words(&recorded), words(&given));
+        differences.push(if is == gives {
+            format!("the outcome's gaps or counts are not what the policy gives ({is})")
+        } else {
+            format!("the outcome is {is}, and the policy gives {gives}")
+        });
     }
     if differences.is_empty() && recorded != given {
         differences.push("the session differs from what the policy gives".to_string());

@@ -2883,12 +2883,13 @@ fn session_verify_checks_a_session_against_its_policy() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     let saved = d.path().join("session.json");
     fs::write(&saved, &r.stdout).unwrap();
+    let time = session_of(&r).outcome.policy_time;
     let r = run(&[&"session", &"verify", &saved, &"--policy", &policy]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert_eq!(
         r.stdout,
         format!(
-            "verified: {} is what the policy no-spawn ({}) gives\n",
+            "verified: {} is what the policy no-spawn ({}) gives at {time}: FAIL + COMPLETE\n",
             saved.display(),
             sha_of(&policy)
         )
@@ -2899,7 +2900,7 @@ fn session_verify_checks_a_session_against_its_policy() {
     assert_eq!(r.code, 1, "{}", r.stdout);
     assert!(
         r.stderr
-            .contains("the session records the policy no-spawn ("),
+            .contains("the session records the policy no-spawn sigil-policy/1 ("),
         "{}",
         r.stderr
     );
