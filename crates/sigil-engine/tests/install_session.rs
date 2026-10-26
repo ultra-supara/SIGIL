@@ -287,6 +287,12 @@ fn without_an_install_the_default_requires_nothing_new_and_a_custom_policy_is_sk
         .knowledge
         .iter()
         .all(|k| k.kind != KnowledgeKind::ReferenceManifest));
+    // #51: no binary facts, so no capability table either.
+    assert!(s.binaries.is_empty());
+    assert!(s
+        .knowledge
+        .iter()
+        .all(|k| k.kind != KnowledgeKind::SignatureDb));
 
     let custom = Policy::load(
         "schema = \"sigil-policy/1\"\nname = \"c\"\n[scope]\naudit = [\"model_store\", \"runtime_artifacts\"]\n",

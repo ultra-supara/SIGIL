@@ -736,7 +736,7 @@ fn analyzed(name: &str) -> Session {
     if !s
         .knowledge
         .iter()
-        .any(|k| k.kind == KnowledgeKind::SignatureDb)
+        .any(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
     {
         s.knowledge.push(table());
     }
@@ -897,6 +897,9 @@ fn re_evaluation_replaces_the_capability_results_and_keeps_the_others() {
     let mut s = analyzed("15-binary-inspect");
     run(&mut s, DENY_LOADING);
     assert_eq!(s.open_questions.len(), 1);
+    let once = s.clone();
+    run(&mut s, DENY_LOADING);
+    assert_eq!(s, once, "a capability question re-evaluates to itself");
     run(&mut s, "");
     assert!(s.open_questions.is_empty());
 
@@ -945,6 +948,25 @@ fn a_session_not_analyzed_with_this_table_is_refused_under_a_capability_denial()
     assert!(err
         .to_string()
         .contains("analyze the files again with this build"));
+    // The table twice, even this build's: not exactly one table.
+    let mut twice = analyzed("16-binary-code");
+    twice.knowledge.push(table());
+    assert_eq!(
+        evaluate(&mut twice.clone(), &p(&twice), time.clone()),
+        Err(EvaluateError::CapabilityTable {
+            recorded: vec![table().sha256, table().sha256],
+            embedded: table().sha256,
+        })
+    );
+    // The entry's version only says which build wrote it: the SHA-256 is what is compared.
+    let mut older = analyzed("16-binary-code");
+    for k in &mut older.knowledge {
+        if k.kind == KnowledgeKind::SignatureDb {
+            k.version = "0.0.0".to_string();
+        }
+    }
+    run(&mut older, DENY_NETWORK);
+    assert_eq!(older.policy_violations.len(), 1);
     // Without a denial, the same sessions re-evaluate as before.
     let mut s = before;
     run(&mut s, "");
@@ -963,13 +985,20 @@ fn import_hints_that_are_not_the_table_s_are_refused() {
     s.hints.retain(|h| h.signal != Signal::Import);
     s.validate().unwrap();
     let time = s.outcome.policy_time.clone();
+    let before = s.clone();
+    let p = policy_for(&s, DENY_NETWORK);
+    let err = evaluate(&mut s, &p, time.clone()).unwrap_err();
     assert_eq!(
-        evaluate(&mut s.clone(), &policy_for(&s, DENY_NETWORK), time.clone()),
-        Err(EvaluateError::CapabilityHints {
+        err,
+        EvaluateError::CapabilityHints {
             missing: 1,
             extra: 0
-        })
+        }
     );
+    assert!(err
+        .to_string()
+        .ends_with("analyze the files again with this build"));
+    assert_eq!(s, before, "a refused evaluation changes nothing");
     let mut t = analyzed("16-binary-code");
     let mut moved = t.hints[0].clone();
     moved.feature = FeatureKey::new("posix.file_read").unwrap();

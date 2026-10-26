@@ -535,7 +535,6 @@ fn unopened(root: &RootId, e: RootError) -> StoreFacts {
     }
 }
 
-/// The budgets in effect, by the names `BudgetUse` reports.
 /// The capability table's knowledge entry (#51), which a session with binary facts records: a
 /// capability denial is judged only on a session made with the evaluating build's table.
 fn capability_table() -> Result<KnowledgeRef, InspectError> {
@@ -545,6 +544,7 @@ fn capability_table() -> Result<KnowledgeRef, InspectError> {
         .clone())
 }
 
+/// The budgets in effect, by the names `BudgetUse` reports.
 fn budgets(req: &StoreRequest) -> BTreeMap<String, u64> {
     let b = req.budgets;
     BTreeMap::from([

@@ -6,23 +6,25 @@
 //!   decides which conditions an assumption may settle. The session assembler records both in the
 //!   session before the analysis.
 //! - **Decisions over its results:** what evaluation sets. That is the decision of each finding
-//!   and open question, the policy violations, the outcome, and the record of which policy was
-//!   applied.
+//!   and open question, the policy violations, the capability open questions (#51), the outcome,
+//!   and the record of which policy was applied.
 //!
 //! [`evaluate`] refuses a policy whose inputs differ from those the session was analyzed with,
 //! because only a new analysis can update the technical conclusions. The same entry point serves
-//! the first evaluation and a later re-evaluation. Findings, open questions, their conditions and
-//! evidence, and `default_severity` are never touched. An ignored finding stays, with its reason.
+//! the first evaluation and a later re-evaluation. The analysis's findings and open questions,
+//! their conditions and evidence, and `default_severity` are never touched. An ignored finding
+//! stays, with its reason.
 //!
-//! A deny entry is matched through the embedded component database of the build that evaluates,
-//! so a session re-evaluated by a build with other names may gain or lose violations (the same
-//! build is deterministic).
+//! A component deny entry (`[[components.deny]]`) is matched through the embedded component
+//! database of the build that evaluates, so a session re-evaluated by a build with other names may
+//! gain or lose violations (the same build is deterministic).
 //!
-//! A capability denial (#51) is matched through the session's own hints and code facts, which its
-//! binaries were analyzed with the capability table it records: a build with the same table gives
-//! the same results, and a build with another one refuses to judge the session, which must be
-//! analyzed again. Its open questions (rule `binary.capability_call`) are evaluation's, as its
-//! violations are: each evaluation removes them and makes them again.
+//! A capability denial (`[[capabilities.deny]]`, #51) is matched through the session's own hints
+//! and code facts, made with the capability table the session records: a build with the same
+//! table gives the same results, and a build with another one refuses to judge the session, which
+//! must be analyzed again. Its open questions (rule `binary.capability_call`) are evaluation's, as
+//! its violations are: each evaluation removes them and makes them again, with their conditions
+//! and evidence.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -52,7 +54,9 @@ pub enum PolicyWarning {
 /// Why a session cannot be evaluated with a policy. [`evaluate`] leaves the session unchanged when
 /// it returns one of these. For `AssumptionsChanged` and `RequiredChecksChanged`, the policy would
 /// change the analysis itself, not only the decisions over it, so the session must be analyzed
-/// again with this policy; `ComponentDatabase` is an internal error.
+/// again with this policy. For `CapabilityTable` and `CapabilityHints` (#51), the session's
+/// binaries were not analyzed with this build's capability table, so they must be analyzed again
+/// with this build. `ComponentDatabase`, `CapabilityId`, and `Signatures` are internal errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluateError {
     /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
@@ -111,11 +115,11 @@ impl fmt::Display for EvaluateError {
                 write!(f, "a capability result's ID could not be made: {m}")
             }
             EvaluateError::CapabilityTable { recorded, embedded } => {
-                let recorded = if recorded.is_empty() {
-                    "no recorded capability table".to_string()
-                } else {
-                    let shown: Vec<&str> = recorded.iter().map(Sha256Hex::as_str).collect();
-                    format!("the capability table {}", shown.join(", "))
+                let shown: Vec<&str> = recorded.iter().map(Sha256Hex::as_str).collect();
+                let recorded = match shown.as_slice() {
+                    [] => "no recorded capability table".to_string(),
+                    [one] => format!("the capability table {one}"),
+                    many => format!("{} capability tables ({})", many.len(), many.join(", ")),
                 };
                 write!(
                     f,
@@ -127,7 +131,8 @@ impl fmt::Display for EvaluateError {
             EvaluateError::CapabilityHints { missing, extra } => write!(
                 f,
                 "the policy denies capabilities, and the session's import hints are not the ones \
-                 its capability table gives its imports ({missing} missing, {extra} not given)"
+                 its capability table gives its imports ({missing} missing, {extra} not given): \
+                 analyze the files again with this build"
             ),
             EvaluateError::Signatures(m) => {
                 write!(f, "the embedded capability table is invalid: {m}")
