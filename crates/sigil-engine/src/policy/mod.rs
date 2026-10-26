@@ -2,9 +2,9 @@
 //!
 //! A policy says which audit scopes are required (and so which checks must be closed), how open
 //! questions count, which assumptions a finding may rest on, how individual rules are treated, who
-//! is trusted, and which components are denied. Loading is strict: an unknown key, rule, scope,
-//! check, assumption, or denied component, a malformed date, and `ignore` without a reason are
-//! all fatal, so a typo never silently weakens a policy.
+//! is trusted, and which components and capabilities are denied. Loading is strict: an unknown
+//! key, rule, scope, check, assumption, denied component, or denied capability, a malformed date,
+//! and `ignore` without a reason are all fatal, so a typo never silently weakens a policy.
 //!
 //! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
 //! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy
@@ -16,7 +16,8 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 use sigil_model::{
     Action, AssumptionAcceptance, AssumptionId, AuditScope, CheckId, ComponentKey, Date,
-    KnowledgeKind, KnowledgeRef, Mode, OqTreatment, PolicyRuleRef, RuleId, Sha256Hex,
+    FeatureKey, KnowledgeKind, KnowledgeRef, Mode, OqTreatment, PolicyRuleRef, RuleId, Sha256Hex,
+    CAPABILITY_DENY_PREFIX,
 };
 
 pub mod catalog;
@@ -26,6 +27,7 @@ mod raw;
 pub use evaluate::{evaluate, outcome, EvaluateError, PolicyWarning};
 
 use crate::analyze::components::components;
+use crate::code::data::signatures;
 
 /// The schema line every policy starts with.
 pub const SCHEMA: &str = "sigil-policy/1";
@@ -101,6 +103,8 @@ pub struct Policy {
     pub rules: BTreeMap<RuleId, RuleOverride>,
     pub trust: Trust,
     pub deny: Vec<ComponentDeny>,
+    /// The capabilities denied (`[[capabilities.deny]]`, #51), in file order.
+    pub capabilities: Vec<CapabilityDeny>,
     /// The decision sources, validated when the policy is loaded so that evaluation cannot fail.
     pub(crate) sources: Sources,
 }
@@ -188,6 +192,19 @@ pub struct ComponentDeny {
     pub(crate) source: PolicyRuleRef,
 }
 
+/// An organizational ban on a capability (#51): a slice that calls one of its imports directly is a
+/// `PolicyViolation`, and one that imports it without a direct call site an open question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityDeny {
+    /// A key of the capability-import table, e.g. `posix.process_spawn`.
+    pub feature: FeatureKey,
+    /// `Warn` or `Fail`.
+    pub action: Action,
+    pub reason: String,
+    /// `policy:capabilities.deny.<feature>`
+    pub(crate) source: PolicyRuleRef,
+}
+
 /// Why a policy did not load. Every variant is fatal (exit code 1 in the CLI).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
@@ -221,6 +238,21 @@ pub enum PolicyError {
     UnknownComponent(String),
     /// The embedded component database is invalid (`the_embedded_database_parses` rules it out).
     ComponentDatabase(String),
+    /// A capability denial whose feature is not a key of the capability-import table: it would
+    /// match no import (#51). `known` is the table's keys.
+    UnknownCapability {
+        feature: String,
+        known: Vec<String>,
+    },
+    BadCapabilityAction {
+        feature: String,
+    },
+    CapabilityDenyWithoutReason {
+        feature: String,
+    },
+    DuplicateCapabilityDeny(String),
+    /// The embedded capability table is invalid (`the_embedded_signatures_parse` rules it out).
+    Signatures(String),
     BadId(String),
 }
 
@@ -256,6 +288,32 @@ impl fmt::Display for PolicyError {
                 write!(f, "components.deny {c:?}: not a component SIGIL identifies")
             }
             ComponentDatabase(m) => write!(f, "the embedded component database is invalid: {m}"),
+            UnknownCapability { feature, known } => {
+                // A signature namespace's hints are names found in a file, not imports.
+                let signature = ["go.", "ollama.", "rpc."]
+                    .iter()
+                    .any(|p| feature.starts_with(p));
+                write!(
+                    f,
+                    "capabilities.deny {feature:?}: not a capability import{}; a policy can deny {}",
+                    if signature {
+                        " (go.*, ollama.*, and rpc.* hints are names found in a file, with no call \
+                         sites to judge)"
+                    } else {
+                        ""
+                    },
+                    known.join(", ")
+                )
+            }
+            BadCapabilityAction { feature } => write!(
+                f,
+                "capabilities.deny {feature:?}: action must be \"warn\" or \"fail\""
+            ),
+            CapabilityDenyWithoutReason { feature } => {
+                write!(f, "capabilities.deny {feature:?}: needs a reason")
+            }
+            DuplicateCapabilityDeny(c) => write!(f, "capabilities.deny names {c:?} twice"),
+            Signatures(m) => write!(f, "the embedded capability table is invalid: {m}"),
             BadId(m) => write!(f, "{m}"),
         }
     }
@@ -411,6 +469,44 @@ impl Policy {
                 source,
             });
         }
+        let mut capabilities: Vec<CapabilityDeny> = vec![];
+        for entry in raw.capabilities.deny {
+            let feature = id(FeatureKey::new(entry.feature.as_str()))?;
+            // Fail closed: a key the capability table does not list would match no import.
+            let known = signatures().map_err(PolicyError::Signatures)?.features();
+            if !known.contains(&&feature) {
+                return Err(PolicyError::UnknownCapability {
+                    feature: entry.feature,
+                    known: known.iter().map(ToString::to_string).collect(),
+                });
+            }
+            if capabilities.iter().any(|d| d.feature == feature) {
+                return Err(PolicyError::DuplicateCapabilityDeny(entry.feature));
+            }
+            let action = match entry.action {
+                raw::RawAction::Fail => Action::Fail,
+                raw::RawAction::Warn => Action::Warn,
+                raw::RawAction::Ignore => {
+                    return Err(PolicyError::BadCapabilityAction {
+                        feature: entry.feature,
+                    })
+                }
+            };
+            if entry.reason.trim().is_empty() {
+                return Err(PolicyError::CapabilityDenyWithoutReason {
+                    feature: entry.feature,
+                });
+            }
+            let source = id(PolicyRuleRef::new(format!(
+                "{CAPABILITY_DENY_PREFIX}{feature}"
+            )))?;
+            capabilities.push(CapabilityDeny {
+                feature,
+                action,
+                reason: entry.reason,
+                source,
+            });
+        }
         let sources = Sources {
             assumptions: id(PolicyRuleRef::new("policy:assumptions.accept"))?,
             open_questions: id(PolicyRuleRef::new("policy:open_questions.default"))?,
@@ -443,6 +539,7 @@ impl Policy {
                 extra_groups,
             },
             deny,
+            capabilities,
             sources,
         })
     }

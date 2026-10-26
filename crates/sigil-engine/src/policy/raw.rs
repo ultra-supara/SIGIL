@@ -21,6 +21,9 @@ pub(super) struct RawPolicy {
     pub trust: RawTrust,
     #[serde(default)]
     pub components: RawComponents,
+    /// Added in #51: optional, so older policy files load unchanged.
+    #[serde(default)]
+    pub capabilities: RawCapabilities,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -152,6 +155,21 @@ pub(super) struct RawComponents {
 #[serde(deny_unknown_fields)]
 pub(super) struct RawDeny {
     pub component: String,
+    pub action: RawAction,
+    pub reason: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawCapabilities {
+    #[serde(default)]
+    pub deny: Vec<RawCapabilityDeny>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawCapabilityDeny {
+    pub feature: String,
     pub action: RawAction,
     pub reason: String,
 }

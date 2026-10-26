@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
-use sigil_model::FeatureKey;
+use sha2::{Digest, Sha256};
+use sigil_model::{FeatureKey, KnowledgeKind, KnowledgeRef, Sha256Hex, CAPABILITY_TABLE_ID};
 
 const CAPABILITIES: &str = include_str!("../../signatures/capabilities.toml");
 const NORETURN: &str = include_str!("../../signatures/noreturn.toml");
@@ -25,6 +26,8 @@ pub struct Capability {
 #[derive(Debug)]
 pub struct Signatures {
     capabilities: BTreeMap<Vec<u8>, Capability>,
+    /// The capability table's knowledge entry (#51).
+    table: KnowledgeRef,
     noreturn_prefixes: Vec<Vec<u8>>,
     noreturn_names: Vec<Vec<u8>>,
 }
@@ -106,8 +109,16 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
     if raw.prefixes.iter().chain(&raw.names).any(String::is_empty) {
         return Err("noreturn.toml: an empty prefix or name".to_string());
     }
+    let sha256 = Sha256Hex::new(format!("{:x}", Sha256::digest(capabilities.as_bytes())))
+        .map_err(|e| format!("capabilities.toml: {e}"))?;
     Ok(Signatures {
         capabilities: table,
+        table: KnowledgeRef {
+            kind: KnowledgeKind::SignatureDb,
+            id: CAPABILITY_TABLE_ID.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            sha256,
+        },
         noreturn_prefixes: raw.prefixes.into_iter().map(String::into_bytes).collect(),
         noreturn_names: raw.names.into_iter().map(String::into_bytes).collect(),
     })
@@ -134,6 +145,21 @@ impl Signatures {
     /// How many names the table has.
     pub fn count(&self) -> usize {
         self.capabilities.len()
+    }
+
+    /// The table's feature keys, sorted, each once: what a policy can deny (#51).
+    pub fn features(&self) -> Vec<&FeatureKey> {
+        let keys: std::collections::BTreeSet<&FeatureKey> =
+            self.capabilities.values().map(|c| &c.feature).collect();
+        keys.into_iter().collect()
+    }
+
+    /// The capability table's knowledge entry (#51): the SHA-256 of the embedded
+    /// `capabilities.toml`, under the ID `capabilities`, with SIGIL's version. A session with
+    /// binary facts records it, since its hints and call sites were made with this table, and a
+    /// capability denial is judged only on a session that records this build's.
+    pub fn knowledge(&self) -> &KnowledgeRef {
+        &self.table
     }
 }
 
@@ -483,6 +509,45 @@ mod tests {
             assert!(exports.contains_key(name), "not a libstdc++ export: {name}");
             assert!(s.capability(name.as_bytes()).is_none(), "{name}");
         }
+    }
+
+    #[test]
+    fn the_features_are_the_table_s_keys_sorted_once_each() {
+        let s = signatures().unwrap();
+        let got: Vec<&str> = s.features().iter().map(|f| f.as_str()).collect();
+        assert_eq!(
+            got,
+            [
+                "cxx.file_read",
+                "cxx.file_write",
+                "posix.anti_debug",
+                "posix.dynamic_loading",
+                "posix.environment_access",
+                "posix.file_read",
+                "posix.file_write",
+                "posix.network",
+                "posix.process_spawn",
+            ]
+        );
+    }
+
+    /// #51: the entry names the embedded table by its SHA-256, so another text is another entry.
+    #[test]
+    fn the_table_s_knowledge_entry_is_its_sha256() {
+        let k = signatures().unwrap().knowledge();
+        assert_eq!(k.kind, KnowledgeKind::SignatureDb);
+        assert_eq!(k.id, "capabilities");
+        assert_eq!(k.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            k.sha256.as_str(),
+            format!("{:x}", Sha256::digest(CAPABILITIES.as_bytes()))
+        );
+        let other = parse(
+            &CAPABILITIES.replace("POSIX.1-2024", "POSIX.1-2017"),
+            NORETURN,
+        )
+        .unwrap();
+        assert_ne!(other.knowledge().sha256, k.sha256);
     }
 
     #[test]
