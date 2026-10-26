@@ -72,6 +72,7 @@ fn results(s: &Session) -> (Vec<(String, Ref)>, Vec<String>) {
     )
 }
 
+/// Why the session's first open question is open.
 fn unknown(s: &Session) -> &UnknownReason {
     match &s.open_questions[0].conditions[0].state {
         CondState::Unknown { reason, .. } => reason,
@@ -137,6 +138,31 @@ fn each_denied_capability_is_its_own_violation() {
     );
 }
 
+/// A tail jump to a denied import is a direct call too: net-pie's `main` ends in
+/// `jmp <connect@plt>` (cs:0x1054), and it FAILs as a `call` does.
+#[test]
+fn a_tail_jump_to_a_denied_import_is_a_violation() {
+    let s = inspect("net-pie", true, NETWORK_FAILS);
+    let slice = s.binaries[0].slice.clone();
+    let site = CallId::new("cs:0x1054").unwrap();
+    let kind = s
+        .code
+        .iter()
+        .flat_map(|c| &c.call_sites)
+        .find(|c| c.id == site)
+        .map(|c| c.kind);
+    assert_eq!(kind, Some(CallKind::TailJump));
+    assert_eq!(s.policy_violations.len(), 1);
+    assert_eq!(
+        s.policy_violations[0].evidence,
+        [EvidenceRef::Code {
+            slice,
+            loc: Loc::CallSite(site),
+        }]
+    );
+    assert_eq!(s.outcome.verdict, Verdict::Fail);
+}
+
 /// #51 D4: an import of a denied capability without a direct call site is an open question,
 /// whatever code analysis says, with the reason it is not known.
 #[test]
@@ -163,6 +189,8 @@ fn an_import_without_a_direct_call_site_is_an_open_question() {
 
     // net-addr.so: connect's address is taken; binary.code Partial.
     let s = inspect("net-addr.so", true, NETWORK_FAILS);
+    assert!(s.policy_violations.is_empty());
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
     assert_eq!(
         unknown(&s),
         &UnknownReason::CheckIncomplete {
@@ -185,10 +213,15 @@ fn an_import_without_a_direct_call_site_is_an_open_question() {
         }
     );
     assert_eq!(s.outcome.verdict, Verdict::Pass);
-    assert!(matches!(
-        s.outcome.completeness,
-        Completeness::Incomplete { .. }
-    ));
+    let Completeness::Incomplete {
+        missing_required,
+        gaps,
+    } = &s.outcome.completeness
+    else {
+        panic!("{:?}", s.outcome.completeness);
+    };
+    assert!(missing_required.is_empty());
+    assert_eq!(gaps, std::slice::from_ref(&s.open_questions[0].id));
 }
 
 /// Each slice's reason is its own input's `binary.code`: in one inspection, net-data.so's
@@ -299,10 +332,18 @@ fn an_installation_s_denied_imports_are_open_questions() {
         s.open_questions[0].subject,
         Ref::Slice(s.binaries[0].slice.clone())
     );
-    assert!(matches!(
-        s.outcome.completeness,
-        Completeness::Incomplete { .. }
-    ));
+    assert_eq!(
+        unknown(&s),
+        &UnknownReason::NotModeled {
+            what: "calls in code that was not analyzed".into()
+        }
+    );
+    // A synthetic install is INCOMPLETE anyway (its release is not established): the question
+    // is what this test pins, as the one gap.
+    let Completeness::Incomplete { gaps, .. } = &s.outcome.completeness else {
+        panic!("{:?}", s.outcome.completeness);
+    };
+    assert_eq!(gaps, std::slice::from_ref(&s.open_questions[0].id));
 
     // Without the denial, the same installation has no capability result.
     let s = store_session(
@@ -314,7 +355,11 @@ fn an_installation_s_denied_imports_are_open_questions() {
         common::policy_time(),
     )
     .unwrap();
+    s.validate().unwrap();
     assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+    if let Completeness::Incomplete { gaps, .. } = &s.outcome.completeness {
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
 }
 
 /// Plan review P2-1: PR #103 recorded no `cxx.*` hints for libstdc++'s imports (#104 mapped
@@ -367,6 +412,8 @@ fn a_session_from_before_a_table_change_is_refused_not_passed() {
     }
     old.knowledge
         .retain(|k| k.kind != KnowledgeKind::SignatureDb);
+    // The fixture's only call sites are those 9 imports' (cxx_capabilities.rs).
+    assert!(old.code.iter().all(|c| c.call_sites.is_empty()));
     old.validate().unwrap();
     let before = old.clone();
     let time = old.outcome.policy_time.clone();
