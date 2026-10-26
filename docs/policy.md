@@ -72,6 +72,15 @@ a direct call is not proof that there is none. Without code analysis (`binary in
 question. The capabilities a policy can deny are the keys of the capability-import table
 (`sigil rules` lists them); allowing one is not listing it.
 
+A denial sees imports of the table's functions and the direct calls of them, nothing else: a file
+that reaches the capability without importing one (a statically linked Go program that starts
+processes through its own system calls, say) gives no result (#48). An open question's treatment
+is the `[open_questions]` one, not the denial's action, so a `warn` denial of an import that is
+never called directly still makes the result INCOMPLETE while open questions count as gaps. A file
+whose import list is longer than `binary_imports` is read up to that budget, and a denied import
+past it gives nothing; `binary.container` is then `Partial`, which keeps the result INCOMPLETE as
+long as the policy requires that check (the default does).
+
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
 `[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy
 written before `install_audit` existed loads unchanged, and adds nothing for an installation.
@@ -278,6 +287,8 @@ was removed and whose verdict was set to PASS still validates. `session verify`:
 It prints `verified: <SESSION> is what the policy <name> (<sha256>) gives` and exits 0, or names
 the differences and exits 1. What the policy gives is what this build gives: component denials
 are matched through its component database, and capability denials need its capability table.
+Validation does not check what a decision, a capability open question's ID, or an unknown
+condition's reason should be; `session verify` does, by evaluating again.
 
 ## What is fatal
 

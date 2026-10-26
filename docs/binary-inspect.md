@@ -615,7 +615,8 @@ file that calls a denied capability. An import of it without a direct call site 
 question, counted as a gap by default, so the result is INCOMPLETE: without `--code` the code was
 not analyzed, and with it a call through a function pointer or from data is not followed. In the
 Markdown, a violation's row lists its evidence (the call sites) and an open question's row why it
-is open. `sigil explain --finding <id>` explains either.
+is open. `sigil explain --finding <id>` explains an open question, and `sigil explain --verdict`
+lists each violation's call sites with the import each calls.
 
 The session records the capability table its hints and call sites were made with (a `SignatureDb`
 knowledge entry `capabilities`, with the table's SHA-256). A later build with another table
