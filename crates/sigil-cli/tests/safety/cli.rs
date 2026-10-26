@@ -663,6 +663,23 @@ fn session_render_writes_only_its_out() {
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
 }
 
+/// #51: `session verify` reads the session (and the built-in policy, embedded) and writes
+/// nothing.
+#[test]
+fn session_verify_writes_nothing() {
+    if !require_tracer("session_verify_writes_nothing") {
+        return;
+    }
+    let fx = fixture();
+    let session = saved_session(&fx);
+    let args = os(&[&"session", &"verify", &session]);
+    let r = run("session-verify", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(r.stdout.starts_with("verified: "), "{}", r.stdout);
+    assert_read_under(&r, &session);
+    assert_clean(&r, &policy(&fx, &[], &["runtime"]));
+}
+
 #[test]
 fn explain_the_verdict() {
     if !require_tracer("explain_the_verdict") {

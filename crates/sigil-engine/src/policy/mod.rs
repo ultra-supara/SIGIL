@@ -23,8 +23,10 @@ use sigil_model::{
 pub mod catalog;
 mod evaluate;
 mod raw;
+mod verify;
 
 pub use evaluate::{evaluate, outcome, EvaluateError, PolicyWarning};
+pub use verify::verify;
 
 use crate::analyze::components::components;
 use crate::code::data::signatures;

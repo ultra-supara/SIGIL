@@ -2870,3 +2870,60 @@ fn without_code_a_denied_import_is_an_open_question_explain_can_explain() {
         r.stdout
     );
 }
+
+/// Plan review P2-2: `session verify` says whether a saved session is what its policy gives. A
+/// session whose violation was removed and whose verdict was set to PASS is consistent in itself,
+/// so it still renders; it does not verify.
+#[test]
+fn session_verify_checks_a_session_against_its_policy() {
+    let d = TempDir::new().unwrap();
+    let policy = deny_spawn(d.path());
+    let spawn = code_fixture("spawn.so");
+    let r = binary(&[&"--code", &spawn, &"--policy", &policy]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let saved = d.path().join("session.json");
+    fs::write(&saved, &r.stdout).unwrap();
+    let r = run(&[&"session", &"verify", &saved, &"--policy", &policy]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        r.stdout,
+        format!(
+            "verified: {} is what the policy no-spawn ({}) gives\n",
+            saved.display(),
+            sha_of(&policy)
+        )
+    );
+
+    // The built-in policy is another policy.
+    let r = run(&[&"session", &"verify", &saved]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr
+            .contains("the session records the policy no-spawn ("),
+        "{}",
+        r.stderr
+    );
+
+    // The violation removed and the verdict set to PASS.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&saved).unwrap()).unwrap();
+    v["policy_violations"] = serde_json::json!([]);
+    v["outcome"]["verdict"] = serde_json::json!("Pass");
+    let tampered = d.path().join("tampered.json");
+    fs::write(&tampered, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let r = run(&[&"session", &"render", &tampered]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let r = run(&[&"session", &"verify", &tampered, &"--policy", &policy]);
+    assert_eq!(r.code, 1, "{}", r.stdout);
+    assert!(
+        r.stderr.contains(&format!(
+            "{} is not what the policy no-spawn gives: policy violations the policy gives, and \
+             the session lacks: policy:capabilities.deny.posix.process_spawn on sha256:{}#x86_64@0; \
+             the outcome is PASS + COMPLETE, and the policy gives FAIL + COMPLETE",
+            tampered.display(),
+            sha_of(&spawn)
+        )),
+        "{}",
+        r.stderr
+    );
+}

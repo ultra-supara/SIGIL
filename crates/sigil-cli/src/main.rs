@@ -233,6 +233,18 @@ enum FailOn {
 enum SessionCommand {
     /// Render a saved session.
     Render(RenderArgs),
+    /// Check that a saved session is what its policy gives: it names the policy, and evaluating
+    /// it again gives the same decisions, policy violations, open questions, and outcome.
+    Verify(VerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct VerifyArgs {
+    /// The session (JSON).
+    session: PathBuf,
+    /// The policy the session was evaluated with (default: the built-in policy).
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -308,6 +320,9 @@ fn main() -> ExitCode {
         Command::Session {
             command: SessionCommand::Render(args),
         } => render(&args).map(|()| 0),
+        Command::Session {
+            command: SessionCommand::Verify(args),
+        } => verify_session(&args).map(|()| 0),
         Command::Explain(args) => explain_session(&args).map(|()| 0),
         Command::Rules => rules().map(|()| 0),
     };
@@ -1271,6 +1286,38 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
     // PR-4c-2c: the release claims are recomputed from the rows, the binary facts, and the set.
     reference::verify_release_claims(session, set)
         .map_err(|e| failure("the session's release claims disagree with", e))
+}
+
+/// `session verify` (#51, plan review P2-2): `validate` checks that a session agrees with
+/// itself; this checks that it is what the policy gives, by evaluating it again
+/// (`policy::verify`). The session is loaded and re-verified as for `session render`.
+fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
+    let session = load_session(&args.session)?;
+    reverify(&session, &args.session)?;
+    let policy = load_policy(args.policy.as_deref())?;
+    sigil_engine::policy::verify(&session, &policy).map_err(|errors| {
+        let first: Vec<String> = errors.iter().take(5).map(|e| shown(e)).collect();
+        let more = match errors.len().saturating_sub(5) {
+            0 => String::new(),
+            n => format!(" (and {n} more)"),
+        };
+        Failure::Run(format!(
+            "{} is not what the policy {} gives: {}{more}",
+            shown_path(&args.session),
+            shown(&policy.name),
+            first.join("; ")
+        ))
+    })?;
+    emit(
+        &format!(
+            "verified: {} is what the policy {} ({}) gives\n",
+            shown_path(&args.session),
+            shown(&policy.name),
+            policy.sha256
+        ),
+        None,
+        &[],
+    )
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
