@@ -275,6 +275,11 @@ fn every_unknown_or_malformed_input_is_fatal() {
             format!("{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"r\"\nexpires = \"2027-01-01\"\n"),
             |e| matches!(e, E::Syntax(_)),
         ),
+        // A misspelt table is refused, never read as a policy that denies nothing.
+        (
+            format!("{HEAD}[[capabilities.denied]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"r\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
         (
             format!("{HEAD}[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\n"),
             |e| matches!(e, E::Syntax(_)),
@@ -375,6 +380,25 @@ fn a_capability_denial_must_name_a_capability_import_key() {
                  can deny {keys}"
             )
         );
+    }
+    // Every namespace of the embedded needle database is one the error names: a new one there
+    // is noticed here.
+    let db = sigil_engine::binary::needles::needles().unwrap();
+    for kind in [
+        sigil_engine::binary::needles::NeedleKind::Export,
+        sigil_engine::binary::needles::NeedleKind::GoFunction,
+        sigil_engine::binary::needles::NeedleKind::String,
+    ] {
+        for needle in db.of(kind) {
+            let error = fails(&deny(needle.feature.as_str()));
+            assert!(
+                error
+                    .to_string()
+                    .contains("hints are names found in a file"),
+                "{}: {error}",
+                needle.feature
+            );
+        }
     }
     // A key that is not a valid feature key at all is an ID error, as for components.
     assert!(matches!(

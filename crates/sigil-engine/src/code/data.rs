@@ -155,9 +155,10 @@ impl Signatures {
     }
 
     /// The capability table's knowledge entry (#51): the SHA-256 of the embedded
-    /// `capabilities.toml`, under the ID `capabilities`, with SIGIL's version. A session with
-    /// binary facts records it, since its hints and call sites were made with this table, and a
-    /// capability denial is judged only on a session that records this build's.
+    /// `capabilities.toml`, under the ID `capabilities`, with sigil-engine's version (which only
+    /// says which build wrote it: evaluation compares the SHA-256). A session with binary facts
+    /// records it, since its hints and call sites were made with this table, and a capability
+    /// denial is judged only on a session that records this build's.
     pub fn knowledge(&self) -> &KnowledgeRef {
         &self.table
     }
