@@ -616,11 +616,12 @@ file that calls a capability denied with `fail` (`--fail-on warn` for one denied
 import of it without a direct call site is an open question, counted as a gap by default, so the
 result is INCOMPLETE (`--fail-on-incomplete` exits 4): without `--code` the code was not analyzed,
 with it a call through a function pointer or from data is not followed, and when `binary.code`
-did not close (`Partial`, or a Mach-O file) the scan was incomplete. A denial sees only the names
-its key lists in [the capability table](#capabilities-and-code---code). In the Markdown, a
-violation's row lists its first three call sites, then how many more, and an open question's row
-why it is open. `sigil explain --finding <id>` explains an open question, and `sigil explain
---verdict` lists each violation's call sites with the import each calls.
+did not close (`Partial`, or `Unsupported`: a Mach-O file, an ELF of another machine, an x32 or
+big-endian ELF) code analysis was incomplete. A denial sees only the names its key lists in
+[the capability table](#capabilities-and-code---code). In the Markdown, a violation's row lists
+its first three call sites, then how many more, and an open question's row why it is open.
+`sigil explain --finding <id>` explains an open question, and `sigil explain --verdict` lists each
+violation's call sites with the import each calls.
 
 The session records the capability table its hints and call sites were made with (a `SignatureDb`
 knowledge entry `capabilities`, with the table's SHA-256). A later build with another table
