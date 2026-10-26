@@ -17,19 +17,30 @@
 //! A deny entry is matched through the embedded component database of the build that evaluates,
 //! so a session re-evaluated by a build with other names may gain or lose violations (the same
 //! build is deterministic).
+//!
+//! A capability denial (#51) is matched through the session's own hints and code facts, which its
+//! binaries were analyzed with the capability table it records: a build with the same table gives
+//! the same results, and a build with another one refuses to judge the session, which must be
+//! analyzed again. Its open questions (rule `binary.capability_call`) are evaluation's, as its
+//! violations are: each evaluation removes them and makes them again.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
 use sigil_model::{
-    Action, AssumptionAcceptance, AssumptionId, CheckId, Completeness, ComponentClaim,
-    ComponentKey, CoverageState, Date, EvidenceRef, IdentityAssertion, IdentityStatus,
-    KnowledgeKind, OpenQuestionDecision, OqTreatment, Outcome, PolicyDecision, PolicyRuleRef,
-    PolicyViolation, Ref, RuleId, Session, Severity, Timestamp, Verdict,
+    Action, AssumptionAcceptance, AssumptionId, CallTarget, CheckId, Completeness, ComponentClaim,
+    ComponentKey, CondId, CondState, Condition, CoverageState, Date, EvidenceRef,
+    IdentityAssertion, IdentityStatus, InstanceContent, KnowledgeKind, Loc, OpenQuestion,
+    OpenQuestionDecision, OpenQuestionId, OqTreatment, Outcome, PolicyDecision, PolicyRuleRef,
+    PolicyViolation, Ref, RuleId, Session, Severity, Sha256Hex, Signal, SliceId, Timestamp,
+    UnknownReason, UntrustedText, Verdict, BINARY_CODE, CAPABILITY_CONDITION_PREFIX,
+    CAPABILITY_RULE, CAPABILITY_TABLE_ID,
 };
 
-use super::{Policy, ScopeInput};
+use super::{CapabilityDeny, Policy, ScopeInput};
 use crate::analyze::components::{components, ComponentDb};
+use crate::analyze::hints;
+use crate::code::data::signatures;
 
 /// Something the operator should know about how the policy applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +68,24 @@ pub enum EvaluateError {
     /// The embedded component database, which a deny entry is matched through (PR-4c-2b), is
     /// invalid. Its test `the_embedded_database_parses` rules this out.
     ComponentDatabase(String),
+    /// An ID of a capability result could not be made (#51): an internal error, since its parts
+    /// are IDs the session and policy already hold.
+    CapabilityId(String),
+    /// The policy denies a capability, and the session's binaries were not analyzed with this
+    /// build's capability table (#51, plan review P2-1): `recorded` lists the SHA-256 of each
+    /// table the session records (none for a session made before #51). Its hints and call sites
+    /// name only that table's imports, so the session must be analyzed again with this build.
+    CapabilityTable {
+        recorded: Vec<Sha256Hex>,
+        embedded: Sha256Hex,
+    },
+    /// The policy denies a capability, and the session's `Import` hints are not the ones its
+    /// capability table gives its import facts (#51): how many are missing, and how many the
+    /// table does not give. `validate` checks that a hint names a real import, not that every
+    /// import has its hint, so evaluation does.
+    CapabilityHints { missing: usize, extra: usize },
+    /// The embedded capability table is invalid: an internal error that its tests rule out.
+    Signatures(String),
 }
 
 impl fmt::Display for EvaluateError {
@@ -78,6 +107,31 @@ impl fmt::Display for EvaluateError {
             EvaluateError::ComponentDatabase(m) => {
                 write!(f, "the embedded component database is invalid: {m}")
             }
+            EvaluateError::CapabilityId(m) => {
+                write!(f, "a capability result's ID could not be made: {m}")
+            }
+            EvaluateError::CapabilityTable { recorded, embedded } => {
+                let recorded = if recorded.is_empty() {
+                    "no recorded capability table".to_string()
+                } else {
+                    let shown: Vec<&str> = recorded.iter().map(Sha256Hex::as_str).collect();
+                    format!("the capability table {}", shown.join(", "))
+                };
+                write!(
+                    f,
+                    "the policy denies capabilities, and the session's binaries were analyzed with \
+                     {recorded}, not this build's ({embedded}): their hints and call sites name \
+                     only that table's imports, so analyze the files again with this build"
+                )
+            }
+            EvaluateError::CapabilityHints { missing, extra } => write!(
+                f,
+                "the policy denies capabilities, and the session's import hints are not the ones \
+                 its capability table gives its imports ({missing} missing, {extra} not given)"
+            ),
+            EvaluateError::Signatures(m) => {
+                write!(f, "the embedded capability table is invalid: {m}")
+            }
         }
     }
 }
@@ -92,7 +146,9 @@ impl std::error::Error for EvaluateError {}
 /// differ from those recorded in the session ([`EvaluateError`]). Required checks are compared as
 /// sets, so a session saved as canonical JSON and loaded again re-evaluates with the same policy.
 /// It also fails, without changing `session`, when the policy has a deny entry and the embedded
-/// component database is invalid (an internal error that the database's tests rule out).
+/// component database is invalid (an internal error that the database's tests rule out), and,
+/// when the policy denies a capability, for a session with binary facts that does not record this
+/// build's capability table or whose `Import` hints are not the ones that table gives (#51).
 pub fn evaluate(
     session: &mut Session,
     policy: &Policy,
@@ -123,6 +179,7 @@ pub fn evaluate(
     } else {
         Some(components().map_err(EvaluateError::ComponentDatabase)?)
     };
+    let (capability_violations, capability_questions) = capabilities(session, policy)?;
 
     // The policy's own entry replaces any earlier one, in place.
     let at = session
@@ -175,6 +232,12 @@ pub fn evaluate(
         };
     }
 
+    // The capability questions of an earlier evaluation are replaced (#51); the analysis's own
+    // questions stay.
+    session
+        .open_questions
+        .retain(|q| q.rule.as_str() != CAPABILITY_RULE);
+    session.open_questions.extend(capability_questions);
     for question in &mut session.open_questions {
         question.decision = OpenQuestionDecision {
             treatment: policy.open_questions.treatment,
@@ -212,9 +275,180 @@ pub fn evaluate(
                 })
         })
         .collect();
+    session.policy_violations.extend(capability_violations);
 
     session.outcome = outcome(session, policy_time);
     Ok(warnings)
+}
+
+/// What `policy`'s capability denials give on `session` (#51 spec §3), for each slice of its
+/// binaries and each denial in file order: nothing when the slice's `Import` hints give the
+/// feature no import; a violation citing every direct call site of those imports, by ID, when
+/// there is one; otherwise an open question, whatever `binary.code` says (a call that is not
+/// direct is not followed). The questions' decisions are set with the others'. Refused for a
+/// session that does not record this build's table, or whose hints are not the table's
+/// ([`pinned`]).
+fn capabilities(
+    session: &Session,
+    policy: &Policy,
+) -> Result<(Vec<PolicyViolation>, Vec<OpenQuestion>), EvaluateError> {
+    let id_error = |e: sigil_model::IdError| EvaluateError::CapabilityId(e.to_string());
+    let mut violations = vec![];
+    let mut questions = vec![];
+    if policy.capabilities.is_empty() || session.binaries.is_empty() {
+        return Ok((violations, questions));
+    }
+    pinned(session)?;
+    let rule = RuleId::new(CAPABILITY_RULE).map_err(id_error)?;
+    for slice in session.binaries.iter().map(|b| &b.slice) {
+        for deny in &policy.capabilities {
+            let imports: BTreeSet<&UntrustedText> = session
+                .hints
+                .iter()
+                .filter(|h| {
+                    h.subject == *slice && h.signal == Signal::Import && h.feature == deny.feature
+                })
+                .map(|h| &h.value)
+                .collect();
+            if imports.is_empty() {
+                continue;
+            }
+            // By ID, so a canonical session re-evaluates to the same bytes.
+            let sites: Vec<EvidenceRef> = session
+                .code
+                .iter()
+                .filter(|c| c.slice == *slice)
+                .flat_map(|c| &c.call_sites)
+                .filter(|c| {
+                    matches!(&c.target, CallTarget::Import { symbol, .. } if imports.contains(symbol))
+                })
+                .map(|c| &c.id)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|id| EvidenceRef::Code {
+                    slice: slice.clone(),
+                    loc: Loc::CallSite(id.clone()),
+                })
+                .collect();
+            if !sites.is_empty() {
+                violations.push(violation(deny, slice, sites));
+                continue;
+            }
+            questions.push(OpenQuestion {
+                id: OpenQuestionId::new(format!("capability:{}@{slice}", deny.feature))
+                    .map_err(id_error)?,
+                rule: rule.clone(),
+                subject: Ref::Slice(slice.clone()),
+                conditions: vec![Condition {
+                    id: CondId::new(format!("{CAPABILITY_CONDITION_PREFIX}{}", deny.feature))
+                        .map_err(id_error)?,
+                    state: CondState::Unknown {
+                        reason: unknown_call(session, slice).map_err(id_error)?,
+                        evidence: None,
+                    },
+                    unresolved: vec![],
+                }],
+                evidence: imports
+                    .iter()
+                    .map(|name| EvidenceRef::Code {
+                        slice: slice.clone(),
+                        loc: Loc::Symbol((*name).clone()),
+                    })
+                    .collect(),
+                decision: OpenQuestionDecision {
+                    treatment: policy.open_questions.treatment,
+                    source: policy.sources.open_questions.clone(),
+                    reason: policy.open_questions.reason.clone(),
+                },
+            });
+        }
+    }
+    Ok((violations, questions))
+}
+
+/// Whether `session`, which has binary facts, was analyzed with this build's capability table
+/// (#51, plan review P2-1): it records exactly one entry of it, with the embedded table's SHA-256,
+/// and its `Import` hints are the ones the table gives its import facts. A session saved before
+/// a table change lacks the hints of names added since, and its code facts their call sites, so
+/// a denial judged on it would miss them.
+fn pinned(session: &Session) -> Result<(), EvaluateError> {
+    let sig = signatures().map_err(EvaluateError::Signatures)?;
+    let embedded = &sig.knowledge().sha256;
+    let recorded: Vec<Sha256Hex> = session
+        .knowledge
+        .iter()
+        .filter(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
+        .map(|k| k.sha256.clone())
+        .collect();
+    if recorded.as_slice() != std::slice::from_ref(embedded) {
+        return Err(EvaluateError::CapabilityTable {
+            recorded,
+            embedded: embedded.clone(),
+        });
+    }
+    let derived = hints::derive(&session.binaries).map_err(EvaluateError::Signatures)?;
+    let derived: Vec<_> = derived
+        .iter()
+        .filter(|h| h.signal == Signal::Import)
+        .collect();
+    let recorded: Vec<_> = session
+        .hints
+        .iter()
+        .filter(|h| h.signal == Signal::Import)
+        .collect();
+    let missing = derived.iter().filter(|h| !recorded.contains(h)).count();
+    let extra = recorded.iter().filter(|h| !derived.contains(h)).count();
+    if missing + extra > 0 {
+        return Err(EvaluateError::CapabilityHints { missing, extra });
+    }
+    Ok(())
+}
+
+fn violation(deny: &CapabilityDeny, slice: &SliceId, sites: Vec<EvidenceRef>) -> PolicyViolation {
+    PolicyViolation {
+        policy_rule: deny.source.clone(),
+        subject: Ref::Slice(slice.clone()),
+        evidence: sites,
+        decision: PolicyDecision {
+            action: deny.action,
+            source: deny.source.clone(),
+            reason: Some(deny.reason.clone()),
+            expires: None,
+        },
+    }
+}
+
+/// Why a call of a slice's import is not known (#51 spec §3), by the `binary.code` entries of the
+/// instances whose content is the slice's artifact: none (no code analysis), one that is not
+/// `Complete`, or every one `Complete` (a call that is not direct is not followed).
+fn unknown_call(session: &Session, slice: &SliceId) -> Result<UnknownReason, sigil_model::IdError> {
+    let artifact = slice.artifact();
+    let placed: BTreeSet<_> = session
+        .instances
+        .iter()
+        .filter(|i| matches!(&i.content, InstanceContent::Read { artifact: a } if *a == artifact))
+        .map(|i| &i.id)
+        .collect();
+    let states: Vec<&CoverageState> = session
+        .coverage
+        .iter()
+        .filter(|c| c.check.as_str() == BINARY_CODE)
+        .filter(|c| matches!(&c.scope, Ref::Instance(i) if placed.contains(i)))
+        .map(|c| &c.state)
+        .collect();
+    Ok(if states.is_empty() {
+        UnknownReason::NotModeled {
+            what: "calls in code that was not analyzed".into(),
+        }
+    } else if states.iter().all(|s| matches!(s, CoverageState::Complete)) {
+        UnknownReason::NotModeled {
+            what: "calls that are not direct (through a function pointer, or from data)".into(),
+        }
+    } else {
+        UnknownReason::CheckIncomplete {
+            check: CheckId::new(BINARY_CODE)?,
+        }
+    })
 }
 
 /// The components a claim is named as (PR-4c-2b spec §6): its own, and the one each of its

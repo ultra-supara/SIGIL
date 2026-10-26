@@ -278,6 +278,10 @@ fn assemble(
     budgets.extend(active.budgets.clone());
     let mut hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
     hints.extend(hints::from_scans(&scans));
+    // #51: the binaries' hints and call sites were made with this capability table.
+    if !binaries.is_empty() {
+        knowledge.push(capability_table()?);
+    }
     // PR-4c-1: from the facts above; nothing more is read.
     let components = identity::derive(&instances, &binaries, &reference_matches)
         .map_err(InspectError::Internal)?;
@@ -401,7 +405,12 @@ pub fn binary_session(
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
-        knowledge: vec![],
+        // #51: the binaries' hints and call sites were made with this capability table.
+        knowledge: if facts.binaries.is_empty() {
+            vec![]
+        } else {
+            vec![capability_table()?]
+        },
         request: RunRequest {
             mode: Mode::Static,
             roots: facts.roots,
@@ -527,6 +536,15 @@ fn unopened(root: &RootId, e: RootError) -> StoreFacts {
 }
 
 /// The budgets in effect, by the names `BudgetUse` reports.
+/// The capability table's knowledge entry (#51), which a session with binary facts records: a
+/// capability denial is judged only on a session made with the evaluating build's table.
+fn capability_table() -> Result<KnowledgeRef, InspectError> {
+    Ok(crate::code::data::signatures()
+        .map_err(InspectError::Internal)?
+        .knowledge()
+        .clone())
+}
+
 fn budgets(req: &StoreRequest) -> BTreeMap<String, u64> {
     let b = req.budgets;
     BTreeMap::from([
