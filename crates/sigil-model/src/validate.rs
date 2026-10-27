@@ -27,7 +27,7 @@
 //!   not evaluate policy: it never decides an action, a treatment, or which checks are required.
 //!   It only refuses a session whose verdict, counts, or completeness contradict what it records.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
@@ -51,6 +51,7 @@ use crate::id::{
 use crate::identity::{
     is_commit, ComponentClaim, IdentityAssertion, IdentityStatus, ReleaseBasis, ReportedCommit,
 };
+use crate::index::{OrderedMap, SessionIndex, SessionLookup};
 use crate::load::ValueOrigin;
 use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
@@ -403,7 +404,7 @@ impl fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 impl ValidationError {
-    fn code(at: &str, why: impl Into<String>) -> Self {
+    fn code(at: &(impl fmt::Display + ?Sized), why: impl Into<String>) -> Self {
         ValidationError::Code {
             at: at.to_string(),
             why: why.into(),
@@ -414,7 +415,8 @@ impl ValidationError {
 impl Session {
     /// Checks the invariants described in the module documentation. Returns every violation.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
-        let mut v = Validator::new(self);
+        let index = SessionIndex::new(self);
+        let mut v = Validator::new(self, &index);
         v.run();
         if v.errors.is_empty() {
             Ok(())
@@ -424,22 +426,83 @@ impl Session {
     }
 }
 
+/// A session whose invariants have been checked, held behind immutable access. Consumers that
+/// require valid input can accept this type without validating the same session again.
+///
+/// The contained session cannot be edited while retaining the validation proof:
+/// ```compile_fail
+/// fn edit(checked: sigil_model::ValidatedSession) {
+///     checked.as_session().outcome.confirmed_failures = 0;
+/// }
+/// ```
+#[derive(Debug)]
+pub struct ValidatedSession {
+    session: Session,
+}
+
+impl ValidatedSession {
+    pub fn new(session: Session) -> Result<Self, Vec<ValidationError>> {
+        session.validate()?;
+        Ok(Self { session })
+    }
+
+    pub fn as_session(&self) -> &Session {
+        &self.session
+    }
+
+    /// Recover the editable session. Further edits require validation again before it can be
+    /// passed to a consumer of `ValidatedSession`.
+    pub fn into_inner(self) -> Session {
+        self.session
+    }
+}
+
+/// Most slices have very few functions or calls. Avoid a heap allocation for the common
+/// empty/single-ID case, while retaining hashed membership for larger tables.
+#[derive(Default)]
+enum IdSet<'a> {
+    #[default]
+    Empty,
+    One(&'a str),
+    Many(HashSet<&'a str>),
+}
+
+impl<'a> IdSet<'a> {
+    fn insert(&mut self, id: &'a str) -> bool {
+        match self {
+            Self::Empty => *self = Self::One(id),
+            Self::One(first) if *first == id => return false,
+            Self::One(first) => *self = Self::Many(HashSet::from([*first, id])),
+            Self::Many(ids) => return ids.insert(id),
+        }
+        true
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::One(first) => *first == id,
+            Self::Many(ids) => ids.contains(id),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CodeIndex<'a> {
-    functions: BTreeSet<&'a str>,
-    calls: BTreeSet<&'a str>,
+    functions: IdSet<'a>,
+    calls: IdSet<'a>,
 }
 
 /// What I1 looks up, built once per validation: the reference rows by reference, release, and
 /// member (in session order), and each placement whose content was read, with its artifact.
 struct RowIndex<'a> {
-    rows: BTreeMap<(&'a RefSetId, &'a str, &'a str), Vec<&'a ReferenceMatch>>,
-    held: BTreeSet<(&'a InstanceId, &'a ArtifactId)>,
+    rows: HashMap<(&'a RefSetId, &'a str, &'a str), Vec<&'a ReferenceMatch>>,
+    held: HashSet<(&'a InstanceId, &'a ArtifactId)>,
 }
 
 impl<'a> RowIndex<'a> {
     fn new(s: &'a Session) -> Self {
-        let mut rows: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let mut rows: HashMap<_, Vec<_>> = HashMap::new();
         for r in &s.reference_matches {
             rows.entry((&r.reference, r.release.as_str(), r.member.as_str()))
                 .or_default()
@@ -459,21 +522,18 @@ impl<'a> RowIndex<'a> {
 
 struct Validator<'a> {
     s: &'a Session,
+    index: &'a SessionIndex<'a>,
     errors: Vec<ValidationError>,
-    roots: BTreeSet<&'a str>,
-    artifacts: BTreeSet<&'a str>,
-    slices: BTreeSet<&'a str>,
-    instances: BTreeSet<&'a str>,
-    models: BTreeSet<&'a str>,
-    listeners: BTreeSet<&'a str>,
-    probes: BTreeSet<&'a str>,
-    values: BTreeSet<&'a str>,
-    access: BTreeSet<&'a str>,
-    assumptions: BTreeSet<&'a str>,
-    profiles: BTreeSet<String>,
-    refsets: BTreeSet<&'a str>,
+    models: IdSet<'a>,
+    listeners: IdSet<'a>,
+    probes: IdSet<'a>,
+    values: IdSet<'a>,
+    access: IdSet<'a>,
+    assumptions: IdSet<'a>,
+    profiles: HashSet<String>,
+    refsets: HashSet<&'a str>,
     processes: Vec<&'a ProcessRef>,
-    code: BTreeMap<&'a str, CodeIndex<'a>>,
+    code: HashMap<&'a str, CodeIndex<'a>>,
 }
 
 /// The target `address:port` names, when `address` is the canonical text of a specified IP
@@ -489,8 +549,8 @@ fn unique<'a>(
     errors: &mut Vec<ValidationError>,
     kind: &'static str,
     ids: impl Iterator<Item = &'a str>,
-) -> BTreeSet<&'a str> {
-    let mut seen = BTreeSet::new();
+) -> IdSet<'a> {
+    let mut seen = IdSet::default();
     for id in ids {
         if !seen.insert(id) {
             errors.push(ValidationError::DuplicateId {
@@ -508,7 +568,7 @@ fn unique_keys(
     kind: &'static str,
     keys: impl Iterator<Item = String>,
 ) {
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::new();
     for key in keys {
         if seen.contains(&key) {
             errors.push(ValidationError::DuplicateId { kind, id: key });
@@ -519,30 +579,19 @@ fn unique_keys(
 }
 
 impl<'a> Validator<'a> {
-    fn new(s: &'a Session) -> Self {
+    fn new(s: &'a Session, index: &'a SessionIndex<'a>) -> Self {
         let mut errors = vec![];
-        let roots = unique(
-            &mut errors,
-            "root",
-            s.request.roots.iter().map(|r| r.id.as_str()),
-        );
-        let artifacts = unique(
-            &mut errors,
-            "artifact",
-            s.artifacts.iter().map(|a| a.id.as_str()),
-        );
-        let slices = unique(
-            &mut errors,
-            "slice",
-            s.artifacts
-                .iter()
-                .flat_map(|a| a.slices.iter().map(|sl| sl.id.as_str())),
-        );
-        let instances = unique(
-            &mut errors,
-            "instance",
-            s.instances.iter().map(|i| i.id.as_str()),
-        );
+        for (kind, duplicates) in [
+            ("root", &index.duplicate_roots),
+            ("artifact", &index.duplicate_artifacts),
+            ("slice", &index.duplicate_slices),
+            ("instance", &index.duplicate_instances),
+        ] {
+            errors.extend(duplicates.iter().map(|id| ValidationError::DuplicateId {
+                kind,
+                id: (*id).to_string(),
+            }));
+        }
         let models = unique(&mut errors, "model", s.models.iter().map(|m| m.id.as_str()));
         let listeners = unique(
             &mut errors,
@@ -590,7 +639,7 @@ impl<'a> Validator<'a> {
             .map(|k| k.id.as_str())
             .collect();
         let processes = s.processes.iter().map(|p| &p.process).collect();
-        let mut code = BTreeMap::new();
+        let mut code = HashMap::with_capacity(s.code.len());
         for facts in &s.code {
             let index = CodeIndex {
                 functions: unique(
@@ -608,11 +657,8 @@ impl<'a> Validator<'a> {
         }
         Validator {
             s,
+            index,
             errors,
-            roots,
-            artifacts,
-            slices,
-            instances,
             models,
             listeners,
             probes,
@@ -697,13 +743,17 @@ impl<'a> Validator<'a> {
                 )
             }),
         );
-        unique_keys(
-            errors,
-            "coverage",
-            s.coverage
-                .iter()
-                .map(|c| format!("{} on {:?}", c.check, c.scope)),
-        );
+        // Coverage's key is the check and the full typed scope. Format its diagnostic only
+        // for duplicates; valid sessions need neither cloned IDs nor Debug strings here.
+        let mut coverage = HashSet::with_capacity(s.coverage.len());
+        for c in &s.coverage {
+            if !coverage.insert((&c.check, &c.scope)) {
+                errors.push(ValidationError::DuplicateId {
+                    kind: "coverage",
+                    id: format!("{} on {:?}", c.check, c.scope),
+                });
+            }
+        }
         for record in &s.access {
             unique_keys(
                 errors,
@@ -725,7 +775,7 @@ impl<'a> Validator<'a> {
         self.probes();
         self.probe_coverage();
         for value in &s.values {
-            let at = format!("values[{}]", value.id);
+            let at = format_args!("values[{}]", value.id);
             self.origin(&value.origin, &at);
             if let crate::load::TriValue::Unknown { reason } = &value.value {
                 self.reason(reason, &at);
@@ -733,7 +783,7 @@ impl<'a> Validator<'a> {
         }
         self.components();
         for release in &s.releases {
-            let at = format!("releases[{}]", release.product);
+            let at = format_args!("releases[{}]", release.product);
             if release.candidates.is_empty() {
                 self.empty("ReleaseClaim.candidates", &at);
             }
@@ -763,7 +813,7 @@ impl<'a> Validator<'a> {
         self.import_hints();
         self.signature_hints();
         for hint in &s.hints {
-            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
+            let at = format_args!("hints[{} on {}]", hint.feature, hint.subject);
             self.slice(&hint.subject, &at);
             self.loc(&hint.subject, &hint.at, &at);
         }
@@ -777,21 +827,21 @@ impl<'a> Validator<'a> {
             self.rule_support(record);
         }
         for binding in &s.bindings {
-            let at = format!("bindings[{} @ {}]", binding.site.call, binding.process_role);
+            let at = format_args!("bindings[{} @ {}]", binding.site.call, binding.process_role);
             self.call_ref(&binding.site.slice, binding.site.call.as_str(), &at);
             self.instance(&binding.analyzed_definer, &at);
             self.binding_state(&binding.state, &at);
         }
         self.loads();
         for record in &s.access {
-            let at = format!("access[{}]", record.id);
+            let at = format_args!("access[{}]", record.id);
             match &record.runtime {
                 PrincipalClaim::Value { value } => self.value(value.as_str(), &at),
                 PrincipalClaim::Unknown { reason } => self.reason(reason, &at),
             }
         }
         for coverage in &s.coverage {
-            let at = format!("coverage[{}]", coverage.check);
+            let at = format_args!("coverage[{}]", coverage.check);
             self.subject(&coverage.scope, &at);
             match &coverage.state {
                 CoverageState::NotPresent { evidence, .. } => {
@@ -824,7 +874,7 @@ impl<'a> Validator<'a> {
 
     // --- reference helpers --------------------------------------------------------------------
 
-    fn dangling(&mut self, kind: &'static str, id: &str, at: &str) {
+    fn dangling(&mut self, kind: &'static str, id: &str, at: &(impl fmt::Display + ?Sized)) {
         self.errors.push(ValidationError::Dangling {
             kind,
             id: id.to_string(),
@@ -832,88 +882,88 @@ impl<'a> Validator<'a> {
         });
     }
 
-    fn empty(&mut self, what: &'static str, at: &str) {
+    fn empty(&mut self, what: &'static str, at: &(impl fmt::Display + ?Sized)) {
         self.errors.push(ValidationError::Empty {
             what,
             at: at.to_string(),
         });
     }
 
-    fn artifact(&mut self, id: &ArtifactId, at: &str) {
-        if !self.artifacts.contains(id.as_str()) {
+    fn artifact(&mut self, id: &ArtifactId, at: &(impl fmt::Display + ?Sized)) {
+        if !self.index.artifacts.contains_key(id.as_str()) {
             self.dangling("artifact", id.as_str(), at);
         }
     }
 
-    fn slice(&mut self, id: &SliceId, at: &str) {
-        if !self.slices.contains(id.as_str()) {
+    fn slice(&mut self, id: &SliceId, at: &(impl fmt::Display + ?Sized)) {
+        if !self.index.slices.contains_key(id.as_str()) {
             self.dangling("slice", id.as_str(), at);
         }
     }
 
-    fn instance(&mut self, id: &InstanceId, at: &str) {
-        if !self.instances.contains(id.as_str()) {
+    fn instance(&mut self, id: &InstanceId, at: &(impl fmt::Display + ?Sized)) {
+        if !self.index.instances.contains_key(id.as_str()) {
             self.dangling("instance", id.as_str(), at);
         }
     }
 
-    fn listener(&mut self, id: &ListenerId, at: &str) {
+    fn listener(&mut self, id: &ListenerId, at: &(impl fmt::Display + ?Sized)) {
         if !self.listeners.contains(id.as_str()) {
             self.dangling("listener", id.as_str(), at);
         }
     }
 
-    fn probe(&mut self, id: &ProbeId, at: &str) {
+    fn probe(&mut self, id: &ProbeId, at: &(impl fmt::Display + ?Sized)) {
         if !self.probes.contains(id.as_str()) {
             self.dangling("probe", id.as_str(), at);
         }
     }
 
-    fn model(&mut self, id: &ModelId, at: &str) {
+    fn model(&mut self, id: &ModelId, at: &(impl fmt::Display + ?Sized)) {
         if !self.models.contains(id.as_str()) {
             self.dangling("model", id.as_str(), at);
         }
     }
 
-    fn value(&mut self, id: &str, at: &str) {
+    fn value(&mut self, id: &str, at: &(impl fmt::Display + ?Sized)) {
         if !self.values.contains(id) {
             self.dangling("value", id, at);
         }
     }
 
-    fn profile(&mut self, profile: &ProfileRef, at: &str) {
+    fn profile(&mut self, profile: &ProfileRef, at: &(impl fmt::Display + ?Sized)) {
         if !self.profiles.contains(profile.as_str()) {
             self.dangling("profile", profile.as_str(), at);
         }
     }
 
-    fn refset(&mut self, id: &str, at: &str) {
+    fn refset(&mut self, id: &str, at: &(impl fmt::Display + ?Sized)) {
         if !self.refsets.contains(id) {
             self.dangling("reference manifest", id, at);
         }
     }
 
-    fn assumption(&mut self, id: &AssumptionId, at: &str) {
+    fn assumption(&mut self, id: &AssumptionId, at: &(impl fmt::Display + ?Sized)) {
         if !self.assumptions.contains(id.as_str()) {
             self.dangling("assumption", id.as_str(), at);
         }
     }
 
-    fn process(&mut self, process: &ProcessRef, at: &str) {
+    fn process(&mut self, process: &ProcessRef, at: &(impl fmt::Display + ?Sized)) {
         if !self.processes.contains(&process) {
             self.dangling("process", &process.pid.to_string(), at);
         }
     }
 
-    fn config(&mut self, config: &ConfigRef, at: &str) {
+    fn config(&mut self, config: &ConfigRef, at: &(impl fmt::Display + ?Sized)) {
         self.instance(&config.file, at);
     }
 
-    fn profile_rule(&mut self, rule: &ProfileRuleRef, at: &str) {
+    fn profile_rule(&mut self, rule: &ProfileRuleRef, at: &(impl fmt::Display + ?Sized)) {
         self.profile(&rule.profile, at);
     }
 
-    fn function(&mut self, slice: &SliceId, id: &str, at: &str) {
+    fn function(&mut self, slice: &SliceId, id: &str, at: &(impl fmt::Display + ?Sized)) {
         let known = self
             .code
             .get(slice.as_str())
@@ -923,7 +973,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn call_ref(&mut self, slice: &SliceId, id: &str, at: &str) {
+    fn call_ref(&mut self, slice: &SliceId, id: &str, at: &(impl fmt::Display + ?Sized)) {
         self.slice(slice, at);
         let known = self
             .code
@@ -934,7 +984,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn loc(&mut self, slice: &SliceId, loc: &Loc, at: &str) {
+    fn loc(&mut self, slice: &SliceId, loc: &Loc, at: &(impl fmt::Display + ?Sized)) {
         match loc {
             Loc::Function(f) => self.function(slice, f.as_str(), at),
             Loc::CallSite(c) => self.call_ref(slice, c.as_str(), at),
@@ -942,7 +992,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn evidence(&mut self, evidence: &EvidenceRef, at: &str) {
+    fn evidence(&mut self, evidence: &EvidenceRef, at: &(impl fmt::Display + ?Sized)) {
         match evidence {
             EvidenceRef::Artifact { artifact } => self.artifact(artifact, at),
             EvidenceRef::Code { slice, loc } => {
@@ -965,11 +1015,11 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn subject(&mut self, subject: &Ref, at: &str) {
+    fn subject(&mut self, subject: &Ref, at: &(impl fmt::Display + ?Sized)) {
         match subject {
             Ref::Audit | Ref::Role(_) | Ref::SearchPath { .. } => {}
             Ref::Root(root) => {
-                if !self.roots.contains(root.as_str()) {
+                if !self.index.roots.contains_key(root.as_str()) {
                     self.dangling("root", root.as_str(), at);
                 }
             }
@@ -983,7 +1033,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn reason(&mut self, reason: &UnknownReason, _at: &str) {
+    fn reason(&mut self, reason: &UnknownReason, _at: &(impl fmt::Display + ?Sized)) {
         // Every UnknownReason is self-contained; `CheckIncomplete` may name any check, required
         // or not, so there is nothing to resolve.
         let _ = reason;
@@ -995,7 +1045,9 @@ impl<'a> Validator<'a> {
         let s = self.s;
         for artifact in &s.artifacts {
             for slice in &artifact.slices {
-                if SliceId::from_parts(&artifact.id, slice.arch, slice.offset) != slice.id
+                if !slice
+                    .id
+                    .matches_parts(&artifact.id, slice.arch, slice.offset)
                     || slice.size == 0
                     || slice
                         .offset
@@ -1009,8 +1061,8 @@ impl<'a> Validator<'a> {
             }
         }
         for instance in &s.instances {
-            let at = format!("instances[{}]", instance.id);
-            if !self.roots.contains(instance.root.as_str()) {
+            let at = format_args!("instances[{}]", instance.id);
+            if !self.index.roots.contains_key(instance.root.as_str()) {
                 self.dangling("root", instance.root.as_str(), &at);
             }
             if let InstanceContent::Read { artifact } = &instance.content {
@@ -1051,9 +1103,10 @@ impl<'a> Validator<'a> {
     /// a license is the text read from the license layer's blob.
     fn models(&mut self) {
         let s = self.s;
-        let placed = |id: &InstanceId| s.instances.iter().find(|i| i.id == *id);
+        let index = self.index;
+        let placed = |id: &InstanceId| index.instances.get(id.as_str()).copied();
         for model in &s.models {
-            let at = format!("models[{}]", model.id);
+            let at = format_args!("models[{}]", model.id);
             self.instance(&model.manifest, &at);
             let manifest_root = placed(&model.manifest).map(|i| &i.root);
             for layer in &model.layers {
@@ -1076,7 +1129,7 @@ impl<'a> Validator<'a> {
                     (Some(_), None) => true,
                     (Some(hex), Some(inst)) => {
                         // The path as discovered: the root's path, then `blobs/sha256-<hex>`.
-                        let root_path = s.request.roots.iter().find(|r| r.id == inst.root);
+                        let root_path = index.roots.get(inst.root.as_str());
                         let at_its_path = root_path.is_none_or(|root| {
                             let mut expected = root.path.as_bytes().to_vec();
                             while expected.last() == Some(&b'/') {
@@ -1119,7 +1172,7 @@ impl<'a> Validator<'a> {
     fn listeners(&mut self) {
         let s = self.s;
         for listener in &s.listeners {
-            let at = format!("listeners[{}]", listener.id);
+            let at = format_args!("listeners[{}]", listener.id);
             if listener.address.parse::<core::net::IpAddr>().is_err() {
                 self.errors.push(ValidationError::ListenerAddressInvalid {
                     listener: listener.id.clone(),
@@ -1274,7 +1327,7 @@ impl<'a> Validator<'a> {
     fn processes(&mut self) {
         let s = self.s;
         for obs in &s.processes {
-            let at = format!("processes[{}]", obs.process.pid);
+            let at = format_args!("processes[{}]", obs.process.pid);
             if let ProcessExe::Instance { instance } = &obs.exe {
                 self.instance(instance, &at);
             }
@@ -1282,7 +1335,7 @@ impl<'a> Validator<'a> {
                 if mapping.process != obs.process {
                     self.errors.push(ValidationError::MappingOfAnotherProcess {
                         pid: mapping.process.pid,
-                        at: at.clone(),
+                        at: at.to_string(),
                     });
                 }
                 if let Some(instance) = &mapping.instance {
@@ -1293,7 +1346,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn origin(&mut self, origin: &ValueOrigin, at: &str) {
+    fn origin(&mut self, origin: &ValueOrigin, at: &(impl fmt::Display + ?Sized)) {
         match origin {
             ValueOrigin::Configured { file, .. } => self.config(file, at),
             ValueOrigin::PredictedLaunch { from, .. } => {
@@ -1317,7 +1370,7 @@ impl<'a> Validator<'a> {
         let s = self.s;
         let index = RowIndex::new(s);
         for claim in &s.components {
-            let at = format!("components[{} on {}]", claim.component, claim.subject);
+            let at = format_args!("components[{} on {}]", claim.component, claim.subject);
             self.slice(&claim.subject, &at);
             // A self-name, an embedded value, or a `Required` name.
             let mut named = false;
@@ -1452,6 +1505,12 @@ impl<'a> Validator<'a> {
             .iter()
             .filter(|i| Some(&i.root) == install.as_ref())
             .collect();
+        let mut placements_by_id = HashMap::new();
+        let mut placement_paths = HashSet::new();
+        for i in &placements {
+            placements_by_id.entry(&i.id).or_insert(*i);
+            placement_paths.insert(i.path.as_bytes());
+        }
         let state = |check: &str| {
             s.coverage
                 .iter()
@@ -1460,7 +1519,7 @@ impl<'a> Validator<'a> {
         };
         let discovery_complete =
             matches!(state(ARTIFACTS_DISCOVERY), Some(CoverageState::Complete));
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::new();
         for row in &s.reference_matches {
             let error = |why| ValidationError::ReferenceRow {
                 release: row.release.clone(),
@@ -1486,9 +1545,9 @@ impl<'a> Validator<'a> {
                             .push(error("Absent while discovery is not complete"));
                         // V8
                     }
-                    if placements
-                        .iter()
-                        .any(|i| Some(i.path.as_bytes()) == at_member.as_deref())
+                    if at_member
+                        .as_deref()
+                        .is_some_and(|path| placement_paths.contains(path))
                     {
                         self.errors
                             .push(error("Absent, but a placement is at the member's path"));
@@ -1496,7 +1555,7 @@ impl<'a> Validator<'a> {
                     }
                 }
                 (Some(id), false) => {
-                    let Some(i) = placements.iter().find(|i| i.id == *id) else {
+                    let Some(i) = placements_by_id.get(id) else {
                         self.errors
                             .push(error("the instance is not a placement of the install root")); // V2
                         continue;
@@ -1545,7 +1604,7 @@ impl<'a> Validator<'a> {
             macho_architecture, ContainerFacts, DataValue, MachOLibrary, ARTIFACTS_CONTAINER,
             FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP, LOAD_DYLIB_GAP_PREFIX, MH_OBJECT,
         };
-        use crate::relation::{DeclKind, Relation};
+        use crate::relation::DeclKind;
         let s = self.s;
         let state = |check: &str| {
             s.coverage
@@ -1554,36 +1613,34 @@ impl<'a> Validator<'a> {
                 .map(|c| &c.state)
         };
         let limit = s.request.budgets.get("binary_imports").copied();
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::new();
         for facts in &s.binaries {
             let mut why = vec![];
             if !seen.insert(&facts.slice) {
                 why.push("one record per slice".to_string()); // B1
             }
-            let artifact = s
-                .artifacts
-                .iter()
-                .find(|a| a.slices.iter().any(|x| x.id == facts.slice));
-            let Some(artifact) = artifact else {
+            let Some((artifact_position, artifact, slice)) =
+                self.index.slices.get(facts.slice.as_str()).copied()
+            else {
                 why.push("not a slice of the session".to_string()); // B1
                 self.binary_errors(facts.slice.as_str(), why);
                 continue;
             };
+            let declarations = self
+                .index
+                .declarations
+                .get(facts.slice.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             match &facts.container {
                 ContainerFacts::Elf(elf) => {
                     if !matches!(artifact.format, crate::artifact::Format::Elf { .. }) {
                         why.push("ELF facts of something that is not an ELF artifact".to_string());
                     }
-                    let mut declared: Vec<&crate::text::UntrustedText> = s
-                        .relations
+                    let mut declared: Vec<&crate::text::UntrustedText> = declarations
                         .iter()
-                        .filter_map(|r| match r {
-                            Relation::Declares {
-                                from,
-                                needed,
-                                kind: DeclKind::ElfNeeded,
-                            } if *from == facts.slice => Some(needed),
-                            _ => None,
+                        .filter_map(|(kind, needed)| {
+                            (*kind == DeclKind::ElfNeeded).then_some(*needed)
                         })
                         .collect();
                     let total = declared.len();
@@ -1598,13 +1655,10 @@ impl<'a> Validator<'a> {
                                 .to_string(),
                         );
                     }
-                    if s.relations.iter().any(|relation| {
-                        matches!(
-                            relation,
-                            Relation::Declares { from, kind, .. }
-                                if *from == facts.slice && *kind != DeclKind::ElfNeeded
-                        )
-                    }) {
+                    if declarations
+                        .iter()
+                        .any(|(kind, _)| *kind != DeclKind::ElfNeeded)
+                    {
                         why.push("a dependency relation has the wrong ELF kind".to_string());
                     }
                     if elf.imports.windows(2).any(|w| w[0] >= w[1]) {
@@ -1700,12 +1754,7 @@ impl<'a> Validator<'a> {
                         0x0100_000c => crate::artifact::Arch::Aarch64,
                         _ => crate::artifact::Arch::Other,
                     };
-                    if artifact
-                        .slices
-                        .iter()
-                        .find(|slice| slice.id == facts.slice)
-                        .is_some_and(|slice| slice.arch != expected_arch)
-                    {
+                    if slice.arch != expected_arch {
                         why.push(
                             "Mach-O CPU type disagrees with the slice architecture".to_string(),
                         );
@@ -1723,18 +1772,11 @@ impl<'a> Validator<'a> {
                                 "its header disagrees with its fat table entry without the gap {FAT_CPU_MISMATCH_GAP:?}"
                             ));
                         }
-                        let twice = s.binaries.iter().any(|other| {
-                            other.slice != facts.slice
-                                && artifact.slices.iter().any(|x| x.id == other.slice)
-                                && matches!(
-                                    &other.container,
-                                    ContainerFacts::MachO(o)
-                                        if o.fat_cpu_type
-                                            .zip(o.fat_cpu_subtype)
-                                            .map(|(t, st)| macho_architecture(t, st))
-                                            == Some(table)
-                                )
-                        });
+                        let twice = self
+                            .index
+                            .fat_architectures
+                            .get(&(artifact_position, table))
+                            .is_some_and(|slices| slices.len() > 1);
                         if twice && !facts.gaps.iter().any(|g| g == FAT_DUPLICATE_ARCH_GAP) {
                             why.push(format!(
                                 "its architecture listed twice in the fat table without the gap {FAT_DUPLICATE_ARCH_GAP:?}"
@@ -1744,16 +1786,10 @@ impl<'a> Validator<'a> {
                     if facts.go.is_some() {
                         why.push("Mach-O facts cannot contain Go build info".to_string());
                     }
-                    let mut declared: Vec<&crate::text::UntrustedText> = s
-                        .relations
+                    let mut declared: Vec<&crate::text::UntrustedText> = declarations
                         .iter()
-                        .filter_map(|r| match r {
-                            Relation::Declares {
-                                from,
-                                needed,
-                                kind: DeclKind::MachOLoadDylib,
-                            } if *from == facts.slice => Some(needed),
-                            _ => None,
+                        .filter_map(|(kind, needed)| {
+                            (*kind == DeclKind::MachOLoadDylib).then_some(*needed)
                         })
                         .collect();
                     let total = declared.len();
@@ -1769,13 +1805,10 @@ impl<'a> Validator<'a> {
                                 .to_string(),
                         );
                     }
-                    if s.relations.iter().any(|relation| {
-                        matches!(
-                            relation,
-                            Relation::Declares { from, kind, .. }
-                                if *from == facts.slice && *kind != DeclKind::MachOLoadDylib
-                        )
-                    }) {
+                    if declarations
+                        .iter()
+                        .any(|(kind, _)| *kind != DeclKind::MachOLoadDylib)
+                    {
                         why.push("a dependency relation has the wrong Mach-O kind".to_string());
                     }
                     // B4
@@ -1805,12 +1838,18 @@ impl<'a> Validator<'a> {
                         .gaps
                         .iter()
                         .any(|g| g.starts_with(LOAD_DYLIB_GAP_PREFIX));
+                    let mut load_positions = HashMap::new();
+                    for (position, name) in macho.load_dylibs.iter().enumerate() {
+                        load_positions.entry(name).or_insert(position);
+                    }
                     let misplaced = |ordinal: u32, name: Option<&crate::text::UntrustedText>| {
                         let at = ordinal as usize;
                         at == 0
                             || match name {
                                 Some(n) if all_kept => macho.load_dylibs.get(at - 1) != Some(n),
-                                Some(n) => !macho.load_dylibs.iter().take(at).any(|d| d == n),
+                                Some(n) => {
+                                    load_positions.get(n).is_none_or(|position| *position >= at)
+                                }
                                 None => all_kept,
                             }
                     };
@@ -1848,7 +1887,7 @@ impl<'a> Validator<'a> {
                     InstanceContent::Read { artifact } => Some(artifact),
                     _ => None,
                 })
-                .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+                .filter_map(|id| self.index.artifacts.get(id.as_str()).copied())
                 .filter(|a| {
                     matches!(
                         a.format,
@@ -1868,7 +1907,7 @@ impl<'a> Validator<'a> {
             let covered = has_slices
                 && slices
                     .iter()
-                    .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
+                    .all(|slice| self.index.binaries.contains_key(slice.as_str()));
             let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
             if !(discovery && covered && clean) {
                 self.errors.push(ValidationError::Binary {
@@ -1890,7 +1929,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn input_error(&mut self, at: &str, why: impl Into<String>) {
+    fn input_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
         self.errors.push(ValidationError::BinaryInput {
             at: at.to_string(),
             why: why.into(),
@@ -1904,13 +1943,16 @@ impl<'a> Validator<'a> {
     fn binary_inputs(&mut self) {
         use crate::artifact::DiscoverySource;
         use crate::binary_input::{
-            expected_binary_container, is_binary_inspection, is_binary_root, ExpectedContainer,
-            BINARY_CONTAINER, BINARY_ROOT_PREFIX,
+            container, is_binary_inspection, is_binary_root, ExpectedContainer, BINARY_CONTAINER,
+            BINARY_ROOT_PREFIX,
         };
-        use crate::coverage::Coverage;
         use crate::render::{coverage_state, subject};
         use crate::session::Mode;
         let s = self.s;
+        let lookup = SessionLookup {
+            session: s,
+            index: Some(self.index),
+        };
         for root in &s.request.roots {
             if root.id.as_str().starts_with(BINARY_ROOT_PREFIX) && !is_binary_root(&root.id) {
                 self.input_error(
@@ -1920,9 +1962,6 @@ impl<'a> Validator<'a> {
             }
         }
         // B9: every entry is scoped to the instance of a binary root.
-        let instances: BTreeMap<&InstanceId, &FileInstance> =
-            s.instances.iter().map(|i| (&i.id, i)).collect();
-        let mut per_instance: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
         for c in s
             .coverage
             .iter()
@@ -1935,8 +1974,8 @@ impl<'a> Validator<'a> {
                 );
                 continue;
             };
-            match instances.get(at) {
-                Some(i) if is_binary_root(&i.root) => per_instance.entry(at).or_default().push(c),
+            match self.index.last_instances.get(at.as_str()) {
+                Some(i) if is_binary_root(&i.root) => {}
                 _ => self.input_error(
                     at.as_str(),
                     "binary.container on something that is not a binary input",
@@ -1969,16 +2008,15 @@ impl<'a> Validator<'a> {
         if !s.models.is_empty() {
             self.input_error("models", "a binary inspection has no model");
         }
-        let mut by_root: BTreeMap<&RootId, Vec<&FileInstance>> = BTreeMap::new();
-        for i in &s.instances {
-            by_root.entry(&i.root).or_default().push(i);
-        }
         for root in r.roots.iter().filter(|root| is_binary_root(&root.id)) {
-            let inputs = by_root.get(&root.id).map(Vec::as_slice).unwrap_or_default();
-            let [i] = inputs else {
+            let inputs = self.index.by_root.get(root.id.as_str());
+            let Some(i) = inputs.and_then(|entries| entries.unique()) else {
                 self.input_error(
                     root.id.as_str(),
-                    format!("{} instances; a binary root has exactly one", inputs.len()),
+                    format!(
+                        "{} instances; a binary root has exactly one",
+                        inputs.map_or(0, |entries| entries.count)
+                    ),
                 );
                 continue;
             };
@@ -1990,22 +2028,24 @@ impl<'a> Validator<'a> {
                 self.input_error(at, "an input is discovered by Argument only");
             }
             // B9: exactly one entry, in the state the input implies.
-            let entries = per_instance
-                .get(&i.id)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let [c] = entries else {
+            let entries = self
+                .index
+                .last_instances
+                .get(i.id.as_str())
+                .filter(|i| is_binary_root(&i.root))
+                .and_then(|_| self.index.containers.get(i.id.as_str()));
+            let Some(c) = entries.and_then(|entries| entries.unique()) else {
                 self.input_error(
                     at,
                     format!(
                         "{} binary.container entries; an input has exactly one",
-                        entries.len()
+                        entries.map_or(0, |entries| entries.count)
                     ),
                 );
                 continue;
             };
             let shown = |state: &CoverageState| coverage_state(state).terminal();
-            match expected_binary_container(s, i) {
+            match container(&lookup, i) {
                 Err(why) => self.input_error(at, why),
                 Ok(expected) if !expected.admits(&c.state) => {
                     let why = match &expected {
@@ -2026,7 +2066,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn code_error(&mut self, at: &str, why: impl Into<String>) {
+    fn code_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
         self.errors.push(ValidationError::code(at, why));
     }
 
@@ -2047,13 +2087,13 @@ impl<'a> Validator<'a> {
     ///
     /// [`expected_binary_code`]: crate::binary_input::expected_binary_code
     fn code_coverage(&mut self) {
-        use crate::binary_input::{
-            expected_binary_code, is_binary_inspection, is_binary_root, BINARY_CODE,
-            BINARY_CODE_BYTES,
-        };
-        use crate::coverage::Coverage;
+        use crate::binary_input::{code, is_binary_inspection, BINARY_CODE, BINARY_CODE_BYTES};
         use crate::render::subject;
         let s = self.s;
+        let lookup = SessionLookup {
+            session: s,
+            index: Some(self.index),
+        };
         let binary = is_binary_inspection(&s.request);
         // C1
         if s.request.code && !binary {
@@ -2063,28 +2103,24 @@ impl<'a> Validator<'a> {
             self.code_error("code", "a binary inspection's code facts need request.code");
         }
         // C2: every entry needs request.code, and is scoped to an input's instance.
-        let inputs: BTreeMap<&InstanceId, &FileInstance> = s
-            .instances
-            .iter()
-            .filter(|i| is_binary_root(&i.root))
-            .map(|i| (&i.id, i))
-            .collect();
-        let mut per_input: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
         for c in s
             .coverage
             .iter()
             .filter(|c| c.check.as_str() == BINARY_CODE)
         {
-            let at = format!("coverage[{BINARY_CODE} on {}]", subject(&c.scope));
             if !s.request.code {
-                self.code_error(&at, "binary.code without request.code");
+                self.code_error(
+                    &format_args!("coverage[{BINARY_CODE} on {}]", subject(&c.scope)),
+                    "binary.code without request.code",
+                );
                 continue;
             }
             match &c.scope {
-                Ref::Instance(i) if inputs.contains_key(i) => {
-                    per_input.entry(i).or_default().push(c)
-                }
-                _ => self.code_error(&at, "binary.code must be scoped to an input's instance"),
+                Ref::Instance(i) if self.index.binary_inputs.contains_key(i.as_str()) => {}
+                _ => self.code_error(
+                    &format_args!("coverage[{BINARY_CODE} on {}]", subject(&c.scope)),
+                    "binary.code must be scoped to an input's instance",
+                ),
             }
         }
         if !(binary && s.request.code) {
@@ -2096,23 +2132,23 @@ impl<'a> Validator<'a> {
                 format!("request.code without a {BINARY_CODE_BYTES} budget"),
             );
         }
-        let mut analyzed: BTreeSet<&SliceId> = BTreeSet::new();
-        for i in inputs.values() {
-            let at = format!("coverage[{BINARY_CODE} on {}]", i.id);
+        let mut analyzed_artifacts = HashSet::with_capacity(self.index.binary_inputs.len());
+        for i in &self.index.ordered_binary_inputs {
+            let at = format_args!("coverage[{BINARY_CODE} on {}]", i.id);
             // C2: exactly one entry.
-            let entries = per_input.get(&i.id).map(Vec::as_slice).unwrap_or_default();
-            let [c] = entries else {
+            let entries = self.index.code_coverage.get(i.id.as_str());
+            let Some(c) = entries.and_then(|entries| entries.unique()) else {
                 self.code_error(
                     &at,
                     format!(
                         "{} binary.code entries; an input has exactly one",
-                        entries.len()
+                        entries.map_or(0, |entries| entries.count)
                     ),
                 );
                 continue;
             };
             // C3. An input that cannot be judged has its error from B9 or the budget above.
-            if let Ok(expected) = expected_binary_code(s, i) {
+            if let Ok(expected) = code(&lookup, i) {
                 if let Err(why) = expected.admits(c) {
                     self.code_error(&at, why);
                 }
@@ -2122,15 +2158,17 @@ impl<'a> Validator<'a> {
                 CoverageState::Complete | CoverageState::Partial { .. }
             ) {
                 if let InstanceContent::Read { artifact } = &i.content {
-                    let slices = s
-                        .artifacts
-                        .iter()
-                        .filter(|a| a.id == *artifact)
-                        .flat_map(|a| a.slices.iter().map(|x| &x.id));
-                    analyzed.extend(slices);
+                    analyzed_artifacts.insert(artifact.as_str());
                 }
             }
         }
+        // C4 includes slices of all artifacts with an analyzed ID, including duplicates.
+        let analyzed: HashSet<&SliceId> = s
+            .artifacts
+            .iter()
+            .filter(|a| analyzed_artifacts.contains(a.id.as_str()))
+            .flat_map(|a| a.slices.iter().map(|slice| &slice.id))
+            .collect();
         // C4
         for facts in &s.code {
             if !analyzed.contains(&facts.slice) {
@@ -2148,37 +2186,22 @@ impl<'a> Validator<'a> {
     ///
     /// [`MachOLibrary::looked_up`]: crate::binary::MachOLibrary::looked_up
     fn import_hints(&mut self) {
-        use crate::binary::ContainerFacts;
         use crate::hint::Signal;
         let s = self.s;
         for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
-            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
-            if hint.at != Loc::Symbol(hint.value.clone()) {
+            let at = format_args!("hints[{} on {}]", hint.feature, hint.subject);
+            if !matches!(&hint.at, Loc::Symbol(value) if value == &hint.value) {
                 self.code_error(&at, "an import hint's at must be Symbol(value)");
             }
             // Whether the value is an import of the slice, and, on a Mach-O slice, one whose
             // library is looked up.
-            let (imported, looked_up) = match s
-                .binaries
-                .iter()
-                .find(|b| b.slice == hint.subject)
-                .map(|b| &b.container)
-            {
-                Some(ContainerFacts::Elf(elf)) => {
-                    (elf.imports.iter().any(|i| i.name == hint.value), true)
-                }
-                Some(ContainerFacts::MachO(macho)) => {
-                    let named = || macho.imports.iter().filter(|i| i.name == hint.value);
-                    (
-                        named().next().is_some(),
-                        named().any(|i| i.library.looked_up()),
-                    )
-                }
-                None => (false, true),
-            };
-            if !imported {
+            let imported = self
+                .index
+                .imports
+                .get(&(hint.subject.as_str(), &hint.value));
+            if imported.is_none() {
                 self.code_error(&at, "the value is not an import of its slice");
-            } else if !looked_up {
+            } else if imported == Some(&false) {
                 self.code_error(
                     &at,
                     "the value is a Mach-O import whose library is not looked up (only libSystem's, \
@@ -2204,29 +2227,23 @@ impl<'a> Validator<'a> {
     fn identity_coverage(&mut self) {
         use crate::binary::ARTIFACTS_IDENTITY;
         use crate::binary_input::{
-            expected_binary_container, expected_binary_identity, is_binary_root, ExpectedContainer,
-            BINARY_IDENTITY, BINARY_SCAN_BYTES,
+            container, identity, ExpectedContainer, BINARY_IDENTITY, BINARY_SCAN_BYTES,
         };
         use crate::coverage::{Coverage, SkipReason};
         use crate::render::{coverage_state, subject};
         let s = self.s;
+        let lookup = SessionLookup {
+            session: s,
+            index: Some(self.index),
+        };
         // S1. An instance of a binary root makes the session a binary inspection (B10).
-        let inputs: BTreeMap<&InstanceId, &FileInstance> = s
-            .instances
-            .iter()
-            .filter(|i| is_binary_root(&i.root))
-            .map(|i| (&i.id, i))
-            .collect();
-        let mut per_input: BTreeMap<&InstanceId, Vec<&Coverage>> = BTreeMap::new();
         for c in s
             .coverage
             .iter()
             .filter(|c| c.check.as_str() == BINARY_IDENTITY)
         {
             match &c.scope {
-                Ref::Instance(i) if inputs.contains_key(i) => {
-                    per_input.entry(i).or_default().push(c)
-                }
+                Ref::Instance(i) if self.index.binary_inputs.contains_key(i.as_str()) => {}
                 _ => self.input_error(
                     &format!("coverage[{BINARY_IDENTITY} on {}]", subject(&c.scope)),
                     "binary.identity must be scoped to an input's instance",
@@ -2236,18 +2253,18 @@ impl<'a> Validator<'a> {
         // Every session since PR-4c-2a records `binary_scan_bytes` and an entry for each input;
         // one written before has neither.
         let scanned = s.request.budgets.contains_key(BINARY_SCAN_BYTES);
-        for (id, i) in &inputs {
-            let at = format!("coverage[{BINARY_IDENTITY} on {id}]");
-            let entries = per_input.get(id).map(Vec::as_slice).unwrap_or_default();
-            let c = match entries {
-                [c] => c,
-                [] if !scanned => continue,
+        for i in &self.index.ordered_binary_inputs {
+            let at = format_args!("coverage[{BINARY_IDENTITY} on {}]", i.id);
+            let entries = self.index.identity_coverage.get(i.id.as_str());
+            let c = match entries.and_then(|entries| entries.unique()) {
+                Some(c) => c,
+                None if entries.is_none() && !scanned => continue,
                 _ => {
                     self.input_error(
                         &at,
                         format!(
                             "{} binary.identity entries; an input has {}",
-                            entries.len(),
+                            entries.map_or(0, |entries| entries.count),
                             if scanned {
                                 "exactly one"
                             } else {
@@ -2258,7 +2275,7 @@ impl<'a> Validator<'a> {
                     continue;
                 }
             };
-            match expected_binary_identity(s, i) {
+            match identity(&lookup, i) {
                 Ok(expected) => {
                     if let Err(why) = expected.admits(c) {
                         self.input_error(&at, why);
@@ -2266,12 +2283,7 @@ impl<'a> Validator<'a> {
                 }
                 // B9 reports an input whose container it cannot judge, and an input over
                 // `binary_bytes` whose `binary.container` entry it does not admit.
-                Err(why)
-                    if matches!(
-                        expected_binary_container(s, i),
-                        Ok(ExpectedContainer::Exactly(_))
-                    ) =>
-                {
+                Err(why) if matches!(container(&lookup, i), Ok(ExpectedContainer::Exactly(_))) => {
                     self.input_error(&at, why)
                 }
                 Err(_) => {}
@@ -2317,7 +2329,7 @@ impl<'a> Validator<'a> {
                     "{ARTIFACTS_IDENTITY} must be scoped to the install root"
                 )),
                 CoverageState::Complete => {
-                    if !install_scanned(s) {
+                    if !install_scanned(&lookup) {
                         why.push(format!(
                             "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, a linked ELF's dynamic symbols were not read, or a returned value was not read"
                         ));
@@ -2346,7 +2358,7 @@ impl<'a> Validator<'a> {
         use crate::hint::Signal;
         let s = self.s;
         // The slices of the inputs not scanned.
-        let unscanned: BTreeSet<&SliceId> = s
+        let unscanned: HashSet<&SliceId> = s
             .coverage
             .iter()
             .filter(|c| {
@@ -2354,27 +2366,27 @@ impl<'a> Validator<'a> {
                     && matches!(c.state, CoverageState::OutOfScope { .. })
             })
             .filter_map(|c| match &c.scope {
-                Ref::Instance(id) => s.instances.iter().find(|i| i.id == *id),
+                Ref::Instance(id) => self.index.instances.get(id.as_str()).copied(),
                 _ => None,
             })
             .filter_map(|i| match &i.content {
                 InstanceContent::Read { artifact } => {
-                    s.artifacts.iter().find(|a| a.id == *artifact)
+                    self.index.artifacts.get(artifact.as_str()).copied()
                 }
                 InstanceContent::NotRead { .. } => None,
             })
             .flat_map(|a| a.slices.iter().map(|x| &x.id))
             .collect();
         for hint in &s.hints {
-            let at = format!("hints[{} on {}]", hint.feature, hint.subject);
-            let facts = s.binaries.iter().find(|b| b.slice == hint.subject);
+            let at = format_args!("hints[{} on {}]", hint.feature, hint.subject);
+            let facts = self.index.binaries.get(hint.subject.as_str());
             let elf = facts.is_some_and(|b| matches!(b.container, ContainerFacts::Elf(_)));
             let section = match &hint.at {
                 Loc::Section { name, .. } => Some(name.as_bytes()),
                 _ => None,
             };
             let why = match hint.signal {
-                Signal::Export if hint.at != Loc::Symbol(hint.value.clone()) => {
+                Signal::Export if !matches!(&hint.at, Loc::Symbol(value) if value == &hint.value) => {
                     Some("an export hint's at must be Symbol(value)")
                 }
                 Signal::GoFunction if section != Some(b".gopclntab") => {
@@ -2538,7 +2550,7 @@ impl<'a> Validator<'a> {
     /// Resolves the calls `value` names, and checks its shape (C5), at every level. Every value
     /// in code facts goes through here: call arguments, indirect targets, predicate-check atoms,
     /// and guard comparisons.
-    fn arg(&mut self, slice: &SliceId, value: &ArgValue, at: &str) {
+    fn arg(&mut self, slice: &SliceId, value: &ArgValue, at: &(impl fmt::Display + ?Sized)) {
         for why in c5(value) {
             self.code_error(at, why);
         }
@@ -2558,7 +2570,12 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn check_result(&mut self, slice: &SliceId, result: &CheckResult, at: &str) {
+    fn check_result(
+        &mut self,
+        slice: &SliceId,
+        result: &CheckResult,
+        at: &(impl fmt::Display + ?Sized),
+    ) {
         if let CheckResult::Unknown { reason } = result {
             match reason {
                 CheckUnknown::DecodeFailure(loc) | CheckUnknown::UnresolvedIndirectJump(loc) => {
@@ -2575,10 +2592,10 @@ impl<'a> Validator<'a> {
 
     fn code_facts(&mut self, facts: &CodeFacts) {
         let slice = &facts.slice;
-        let at = format!("code[{slice}]");
+        let at = format_args!("code[{slice}]");
         self.slice(slice, &at);
         for call in &facts.call_sites {
-            let at = format!("code[{slice}].call_sites[{}]", call.id);
+            let at = format_args!("code[{slice}].call_sites[{}]", call.id);
             self.function(slice, call.caller.as_str(), &at);
             for arg in &call.args {
                 self.arg(slice, arg, &at);
@@ -2587,19 +2604,11 @@ impl<'a> Validator<'a> {
                 self.arg(slice, value, &at);
             }
         }
-        let calls = |list: &[crate::id::CallId]| {
-            list.iter()
-                .map(|c| c.as_str().to_string())
-                .collect::<Vec<_>>()
-        };
         for check in &facts.predicate_checks {
-            let at = format!("code[{slice}].predicate_checks[{}]", check.function);
+            let at = format_args!("code[{slice}].predicate_checks[{}]", check.function);
             self.function(slice, check.function.as_str(), &at);
-            for call in calls(&check.iteration_calls)
-                .iter()
-                .chain(calls(&check.target_calls).iter())
-            {
-                self.call_ref(slice, call, &at);
+            for call in check.iteration_calls.iter().chain(&check.target_calls) {
+                self.call_ref(slice, call.as_str(), &at);
             }
             for atom in &check.atoms {
                 self.arg(slice, &atom.value, &at);
@@ -2615,29 +2624,29 @@ impl<'a> Validator<'a> {
             );
         }
         for check in &facts.close_checks {
-            let at = format!("code[{slice}].close_checks[{}]", check.function);
+            let at = format_args!("code[{slice}].close_checks[{}]", check.function);
             self.function(slice, check.function.as_str(), &at);
             for list in [
                 &check.open_calls,
                 &check.close_calls,
                 &check.iteration_calls,
             ] {
-                for call in calls(list) {
-                    self.call_ref(slice, &call, &at);
+                for call in list {
+                    self.call_ref(slice, call.as_str(), &at);
                 }
             }
             self.check_result(slice, &check.result, &at);
         }
         for region in &facts.guard_regions {
-            let at = format!(
+            let at = format_args!(
                 "code[{slice}].guard_regions[{} -> {}]",
                 region.function, region.to
             );
             self.function(slice, region.function.as_str(), &at);
             self.loc(slice, &region.from, &at);
             self.call_ref(slice, region.to.as_str(), &at);
-            for call in calls(&region.indirect) {
-                self.call_ref(slice, &call, &at);
+            for call in &region.indirect {
+                self.call_ref(slice, call.as_str(), &at);
             }
             for guard in &region.guards {
                 if let crate::code::GuardCond::Compare { value, .. } = &guard.cond {
@@ -2646,7 +2655,7 @@ impl<'a> Validator<'a> {
             }
         }
         for mapping in &facts.param_mappings {
-            let at = format!("code[{slice}].param_mappings[{}]", mapping.function);
+            let at = format_args!("code[{slice}].param_mappings[{}]", mapping.function);
             self.function(slice, mapping.function.as_str(), &at);
             for e in &mapping.evidence {
                 self.evidence(e, &at);
@@ -2662,12 +2671,12 @@ impl<'a> Validator<'a> {
             Relation::Candidate {
                 from, candidate, ..
             } => {
-                let at = format!("relations[Candidate {candidate} for {from}]");
+                let at = format_args!("relations[Candidate {candidate} for {from}]");
                 self.slice(from, &at);
                 self.instance(candidate, &at);
             }
             Relation::SymbolCandidate { site, definer, .. } => {
-                let at = format!("relations[SymbolCandidate {}]", site.call);
+                let at = format_args!("relations[SymbolCandidate {}]", site.call);
                 self.call_ref(&site.slice, site.call.as_str(), &at);
                 self.slice(&definer.slice, &at);
                 self.function(&definer.slice, definer.function.as_str(), &at);
@@ -2677,11 +2686,11 @@ impl<'a> Validator<'a> {
                 slice,
                 obligations,
             } => {
-                let at = format!("relations[ProfileMatch {profile} on {slice}]");
+                let at = format_args!("relations[ProfileMatch {profile} on {slice}]");
                 self.profile(profile, &at);
                 self.slice(slice, &at);
                 for obligation in obligations {
-                    let at = format!("{at}.obligations[{}]", obligation.id);
+                    let at = format_args!("{at}.obligations[{}]", obligation.id);
                     if obligation.result == ObligationState::Pass && obligation.at.is_empty() {
                         self.empty("ObligationResult.at", &at);
                     }
@@ -2698,7 +2707,7 @@ impl<'a> Validator<'a> {
                 basis,
                 unresolved,
             } => {
-                let at = format!("relations[SearchPath {search_path} @ {role}]");
+                let at = format_args!("relations[SearchPath {search_path} @ {role}]");
                 self.profile_rule(rule, &at);
                 self.same_rule(rule, basis, &at);
                 match dir {
@@ -2715,7 +2724,7 @@ impl<'a> Validator<'a> {
                 basis,
                 unresolved,
             } => {
-                let at = format!("relations[Spawns {parent} -> {child}]");
+                let at = format_args!("relations[Spawns {parent} -> {child}]");
                 self.profile_rule(rule, &at);
                 self.same_rule(rule, basis, &at);
                 self.premises(basis, unresolved, &at);
@@ -2755,7 +2764,7 @@ impl<'a> Validator<'a> {
         slice: &SliceId,
         obligation: &ObligationId,
         expected: ObligationState,
-        at: &str,
+        at: &(impl fmt::Display + ?Sized),
     ) {
         if self.obligation_state(profile, slice, obligation) != Some(expected) {
             self.errors
@@ -2775,7 +2784,7 @@ impl<'a> Validator<'a> {
         slice: &SliceId,
         obligation: &ObligationId,
         result: &CheckResult,
-        at: &str,
+        at: &(impl fmt::Display + ?Sized),
     ) {
         let expected = match result {
             CheckResult::Match => ObligationState::Pass,
@@ -2800,7 +2809,7 @@ impl<'a> Validator<'a> {
             slice,
             support,
         } = record;
-        let at = format!("rule_support[{profile} {rule} on {slice}]");
+        let at = format_args!("rule_support[{profile} {rule} on {slice}]");
         self.profile(profile, &at);
         self.slice(slice, &at);
         let must_pass: &[ObligationId] = match support {
@@ -2832,7 +2841,7 @@ impl<'a> Validator<'a> {
                 }
                 if verified_rule != rule {
                     self.errors
-                        .push(ValidationError::RuleMismatch { at: at.clone() });
+                        .push(ValidationError::RuleMismatch { at: at.to_string() });
                 }
                 &[]
             }
@@ -2853,7 +2862,11 @@ impl<'a> Validator<'a> {
     }
 
     /// The rule support `key` names.
-    fn rule_support_of(&mut self, key: &RuleSupportRef, at: &str) -> Option<&'a RuleSupport> {
+    fn rule_support_of(
+        &mut self,
+        key: &RuleSupportRef,
+        at: &(impl fmt::Display + ?Sized),
+    ) -> Option<&'a RuleSupport> {
         let s = self.s;
         let record = s.rule_support_of(key);
         if record.is_none() {
@@ -2862,7 +2875,7 @@ impl<'a> Validator<'a> {
         record
     }
 
-    fn basis(&mut self, basis: &Basis, at: &str) {
+    fn basis(&mut self, basis: &Basis, at: &(impl fmt::Display + ?Sized)) {
         match basis {
             Basis::Observed { .. } => {}
             Basis::Derived { inputs, .. } => {
@@ -2882,7 +2895,12 @@ impl<'a> Validator<'a> {
 
     /// Weakest link (plan §4.4.7, AC-12): a fact resting on a `FeatureMatch` carries its
     /// unverified premises as unresolved, so it is never stronger than the support.
-    fn premises(&mut self, basis: &Basis, unresolved: &[PremiseId], at: &str) {
+    fn premises(
+        &mut self,
+        basis: &Basis,
+        unresolved: &[PremiseId],
+        at: &(impl fmt::Display + ?Sized),
+    ) {
         self.basis(basis, at);
         if let Basis::Modeled(key) = basis {
             if let Some(record) = self.s.rule_support_of(key) {
@@ -2892,13 +2910,23 @@ impl<'a> Validator<'a> {
     }
 
     /// Every unverified premise of a `FeatureMatch` is among `unresolved`.
-    fn carried(&mut self, support: &Support, unresolved: &[PremiseId], at: &str) {
+    fn carried(
+        &mut self,
+        support: &Support,
+        unresolved: &[PremiseId],
+        at: &(impl fmt::Display + ?Sized),
+    ) {
         if let Support::FeatureMatch { unverified, .. } = support {
             self.all_carried(unverified, unresolved, at);
         }
     }
 
-    fn all_carried(&mut self, premises: &[PremiseId], unresolved: &[PremiseId], at: &str) {
+    fn all_carried(
+        &mut self,
+        premises: &[PremiseId],
+        unresolved: &[PremiseId],
+        at: &(impl fmt::Display + ?Sized),
+    ) {
         for premise in premises {
             if !unresolved.contains(premise) {
                 self.errors.push(ValidationError::PremiseDropped {
@@ -2910,7 +2938,12 @@ impl<'a> Validator<'a> {
     }
 
     /// A relation that names a profile rule and rests on a modeled basis names one rule.
-    fn same_rule(&mut self, rule: &ProfileRuleRef, basis: &Basis, at: &str) {
+    fn same_rule(
+        &mut self,
+        rule: &ProfileRuleRef,
+        basis: &Basis,
+        at: &(impl fmt::Display + ?Sized),
+    ) {
         if let Basis::Modeled(key) = basis {
             if key.profile != rule.profile || key.rule != rule.rule {
                 self.errors
@@ -2932,7 +2965,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn tri<T>(&mut self, tri: &Tri<T>, at: &str) {
+    fn tri<T>(&mut self, tri: &Tri<T>, at: &(impl fmt::Display + ?Sized)) {
         match tri {
             Tri::Yes {
                 basis, unresolved, ..
@@ -2942,7 +2975,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn binding_state(&mut self, state: &BindingState, at: &str) {
+    fn binding_state(&mut self, state: &BindingState, at: &(impl fmt::Display + ?Sized)) {
         match state {
             BindingState::Verified { scope } => {
                 for instance in scope {
@@ -2958,7 +2991,7 @@ impl<'a> Validator<'a> {
     fn loads(&mut self) {
         let s = self.s;
         for load in &s.loads {
-            let at = format!("loads[{} @ {}]", load.instance, load.context.process_role);
+            let at = format_args!("loads[{} @ {}]", load.instance, load.context.process_role);
             self.instance(&load.instance, &at);
             self.tri(&load.candidate, &format!("{at}.candidate"));
             self.tri(&load.would_evaluate, &format!("{at}.would_evaluate"));
@@ -3028,10 +3061,10 @@ impl<'a> Validator<'a> {
         &mut self,
         evidence: &CondEvidence,
         condition: &Condition,
-        at: &str,
+        at: &(impl fmt::Display + ?Sized),
     ) -> Option<Settles> {
         let s = self.s;
-        let at_condition = format!("{at}.conditions[{}]", condition.id);
+        let at_condition = format_args!("{at}.conditions[{}]", condition.id);
         match evidence {
             CondEvidence::Behavior(key) => {
                 if let Some(record) = self.rule_support_of(key, at) {
@@ -3075,7 +3108,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn condition(&mut self, condition: &Condition, at: &str) {
+    fn condition(&mut self, condition: &Condition, at: &(impl fmt::Display + ?Sized)) {
         let error = |make: fn(String, CondId) -> ValidationError| {
             make(at.to_string(), condition.id.clone())
         };
@@ -3124,7 +3157,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn conditions(&mut self, conditions: &[Condition], at: &str) {
+    fn conditions(&mut self, conditions: &[Condition], at: &(impl fmt::Display + ?Sized)) {
         if conditions.is_empty() {
             self.empty("conditions", at);
         }
@@ -3138,7 +3171,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn decision(&mut self, decision: &PolicyDecision, at: &str) {
+    fn decision(&mut self, decision: &PolicyDecision, at: &(impl fmt::Display + ?Sized)) {
         if decision.action == Action::Ignore
             && decision
                 .reason
@@ -3153,7 +3186,7 @@ impl<'a> Validator<'a> {
     fn findings_and_questions(&mut self) {
         let s = self.s;
         for finding in &s.findings {
-            let at = format!("findings[{}]", finding.id);
+            let at = format_args!("findings[{}]", finding.id);
             self.subject(&finding.subject, &at);
             self.conditions(&finding.conditions, &at);
             for condition in &finding.conditions {
@@ -3175,7 +3208,7 @@ impl<'a> Validator<'a> {
             self.decision(&finding.decision, &at);
         }
         for question in &s.open_questions {
-            let at = format!("open_questions[{}]", question.id);
+            let at = format_args!("open_questions[{}]", question.id);
             self.subject(&question.subject, &at);
             self.conditions(&question.conditions, &at);
             for condition in &question.conditions {
@@ -3203,11 +3236,11 @@ impl<'a> Validator<'a> {
                 && d.reason.as_deref().is_none_or(|r| r.trim().is_empty())
             {
                 self.errors
-                    .push(ValidationError::IgnoreWithoutReason { at: at.clone() });
+                    .push(ValidationError::IgnoreWithoutReason { at: at.to_string() });
             }
         }
         for violation in &s.policy_violations {
-            let at = format!("policy_violations[{}]", violation.policy_rule);
+            let at = format_args!("policy_violations[{}]", violation.policy_rule);
             self.subject(&violation.subject, &at);
             for e in &violation.evidence {
                 self.evidence(e, &at);
@@ -3216,7 +3249,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn capability_error(&mut self, at: &str, why: impl Into<String>) {
+    fn capability_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
         self.errors.push(ValidationError::Capability {
             at: at.to_string(),
             why: why.into(),
@@ -3264,16 +3297,18 @@ impl<'a> Validator<'a> {
             );
         }
         // The imports that each slice's `Import` hints give a feature.
-        let mut imports: BTreeMap<(&SliceId, &str), BTreeSet<&UntrustedText>> = BTreeMap::new();
+        let mut imports: HashMap<(&SliceId, &str), OrderedMap<&UntrustedText, ()>> =
+            HashMap::with_capacity(s.hints.len());
         for h in s.hints.iter().filter(|h| h.signal == Signal::Import) {
             imports
                 .entry((&h.subject, h.feature.as_str()))
                 .or_default()
-                .insert(&h.value);
+                .insert(&h.value, ());
         }
         // Each slice's call sites of an import, by ID, gathered once: walking every slice's code
         // for each result would grow with the square of the slices.
-        let mut by_slice: BTreeMap<&SliceId, BTreeMap<&str, &UntrustedText>> = BTreeMap::new();
+        let mut by_slice: HashMap<&SliceId, OrderedMap<&str, &UntrustedText>> =
+            HashMap::with_capacity(s.code.len());
         for facts in &s.code {
             for c in &facts.call_sites {
                 if let CallTarget::Import { symbol, .. } = &c.target {
@@ -3284,22 +3319,22 @@ impl<'a> Validator<'a> {
                 }
             }
         }
-        let calls = |slice: &SliceId| -> BTreeMap<&str, &UntrustedText> {
-            by_slice.get(slice).cloned().unwrap_or_default()
-        };
-        let none = BTreeSet::new();
-        let mut violated: BTreeSet<(&SliceId, &str)> = BTreeSet::new();
+        let no_calls = OrderedMap::default();
+        let calls = |slice: &SliceId| by_slice.get(slice).unwrap_or(&no_calls);
+        let none = OrderedMap::default();
+        let mut violated: HashSet<(&SliceId, &str)> =
+            HashSet::with_capacity(s.policy_violations.len());
         for v in &s.policy_violations {
             let Some(feature) = v.policy_rule.as_str().strip_prefix(CAPABILITY_DENY_PREFIX) else {
                 continue;
             };
-            let at = format!("policy_violations[{}]", v.policy_rule);
+            let at = format_args!("policy_violations[{}]", v.policy_rule);
             let Ref::Slice(slice) = &v.subject else {
                 self.capability_error(&at, "a capability violation's subject is a slice");
                 continue;
             };
             // Call site IDs are addresses, the same in many files: the slice tells them apart.
-            let at = format!("policy_violations[{} on {slice}]", v.policy_rule);
+            let at = format_args!("policy_violations[{} on {slice}]", v.policy_rule);
             if !violated.insert((slice, feature)) {
                 self.capability_error(&at, format!("a second violation of {feature} on {slice}"));
             }
@@ -3308,7 +3343,7 @@ impl<'a> Validator<'a> {
             }
             let names = imports.get(&(slice, feature)).unwrap_or(&none);
             let calls = calls(slice);
-            let mut cited = BTreeSet::new();
+            let mut cited = IdSet::default();
             for e in &v.evidence {
                 match e {
                     EvidenceRef::Code {
@@ -3319,7 +3354,7 @@ impl<'a> Validator<'a> {
                             self.capability_error(&at, format!("cites {id} twice"));
                         }
                         match calls.get(id.as_str()) {
-                            Some(symbol) if names.contains(symbol) => {}
+                            Some(symbol) if names.get(symbol).is_some() => {}
                             Some(_) => self.capability_error(
                                 &at,
                                 format!(
@@ -3339,8 +3374,8 @@ impl<'a> Validator<'a> {
                 }
             }
             // Every direct call of the feature's imports, each once (plan review P2-2).
-            for (id, symbol) in &calls {
-                if names.contains(symbol) && !cited.contains(id) {
+            for (id, symbol) in calls.iter() {
+                if names.get(symbol).is_some() && !cited.contains(id) {
                     self.capability_error(
                         &at,
                         format!("does not cite {id}, a call of a {feature} import"),
@@ -3348,13 +3383,13 @@ impl<'a> Validator<'a> {
                 }
             }
         }
-        let mut asked: BTreeSet<(&SliceId, &str)> = BTreeSet::new();
+        let mut asked: HashSet<(&SliceId, &str)> = HashSet::with_capacity(s.open_questions.len());
         for q in s
             .open_questions
             .iter()
             .filter(|q| q.rule.as_str() == CAPABILITY_RULE)
         {
-            let at = format!("open_questions[{}]", q.id);
+            let at = format_args!("open_questions[{}]", q.id);
             let Ref::Slice(slice) = &q.subject else {
                 self.capability_error(&at, "a capability open question's subject is a slice");
                 continue;
@@ -3404,7 +3439,7 @@ impl<'a> Validator<'a> {
                     EvidenceRef::Code {
                         slice: of,
                         loc: Loc::Symbol(name),
-                    } if of == slice && names.contains(name) => {
+                    } if of == slice && names.get(name).is_some() => {
                         if !cited.insert(name) {
                             self.capability_error(
                                 &at,
@@ -3419,7 +3454,7 @@ impl<'a> Validator<'a> {
                 }
             }
             // Every import of the feature, each once (plan review P2-2).
-            for name in names {
+            for (name, ()) in names.iter() {
                 if !cited.contains(name) {
                     self.capability_error(
                         &at,
@@ -3430,8 +3465,8 @@ impl<'a> Validator<'a> {
                     );
                 }
             }
-            for (id, symbol) in calls(slice) {
-                if names.contains(symbol) {
+            for (id, symbol) in calls(slice).iter() {
+                if names.get(symbol).is_some() {
                     self.capability_error(
                         &at,
                         format!(
@@ -3643,12 +3678,12 @@ fn c5(value: &ArgValue) -> Vec<String> {
 /// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
 /// [`SCAN_NAME_NOT_READ`]: crate::binary_input::SCAN_NAME_NOT_READ
 /// [`returned_value_gap`]: crate::binary_input::returned_value_gap
-fn install_scanned(s: &Session) -> bool {
+fn install_scanned(lookup: &SessionLookup<'_>) -> bool {
     use crate::artifact::Format;
     use crate::binary_input::{
-        any_returns, exports_unread, name_and_hash_only, no_sections_gap, unread_returns,
-        NoSectionsGap,
+        any_returns, exports_unread, no_sections_gap, unread_returns, NoSectionsGap,
     };
+    let s = lookup.session;
     let discovery = s
         .coverage
         .iter()
@@ -3662,7 +3697,7 @@ fn install_scanned(s: &Session) -> bool {
             InstanceContent::Read { artifact } => Some(artifact),
             InstanceContent::NotRead { .. } => None,
         })
-        .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+        .filter_map(|id| lookup.artifact(id))
         .filter(|a| {
             matches!(
                 a.format,
@@ -3676,15 +3711,12 @@ fn install_scanned(s: &Session) -> bool {
         };
         !a.slices.is_empty()
             && a.slices.iter().all(|x| {
-                s.binaries
-                    .iter()
-                    .find(|b| b.slice == x.id)
-                    .is_some_and(|b| {
-                        (no_sections_gap(b) != NoSectionsGap::Must
-                            && !exports_unread(b, kind)
-                            && unread_returns(b).is_empty())
-                            || (name_and_hash_only(s, &x.id) && !any_returns(b))
-                    })
+                lookup.binary(&x.id).is_some_and(|b| {
+                    (no_sections_gap(b) != NoSectionsGap::Must
+                        && !exports_unread(b, kind)
+                        && unread_returns(b).is_empty())
+                        || (lookup.name_and_hash_only(&x.id) && !any_returns(b))
+                })
             })
     });
     discovery && scanned

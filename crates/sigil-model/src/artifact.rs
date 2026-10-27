@@ -189,7 +189,7 @@ pub enum DiscoverySource {
 }
 
 /// A process, guarded against PID reuse by its start time and boot ID.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessRef {
     pub pid: u32,

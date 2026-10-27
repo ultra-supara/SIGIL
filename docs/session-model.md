@@ -282,6 +282,70 @@ It does **not**:
 Those belong to the engine and its collectors (PR-3a and later). The engine computes decisions and
 the outcome from a policy: see [`docs/policy.md`](policy.md).
 
+## Validation cost
+
+Validation builds borrowed indexes once per call for roots, artifacts, slices, instances,
+binary facts, import names, dependency declarations, all three input coverage checks, and fat
+Mach-O architectures. Membership-only indexes use the standard library's randomized hash
+maps/sets, with capacity reserved from the session. Checks share those indexes instead of
+repeatedly building the same ID sets or walking the whole session. Sorted traversal remains
+where diagnostics depend on it. For repeated binary inputs of fixed size, these paths take
+expected O(N log N) work and O(N) auxiliary space; they no longer do O(N²) lookups.
+
+The hot path also avoids diagnostic strings on success, cloned call lists, and temporary
+per-input collections. Empty/singleton function, call, and capability tables stay inline;
+larger capability tables keep sorted keys. Coverage uniqueness uses the borrowed check and
+full typed scope, formatting a key only for a duplicate. Identity checks fold the slice facts
+in one pass. Public single-input expected-coverage helpers keep their signatures and do not
+allocate a session-wide index.
+
+Invalid sessions still report the same errors in the same order. First-record lookups keep
+the first match; B9 keeps its last-instance lookup, while C2/S1 keep the last binary instance
+and report errors in ID order. Rules that inspect all matching records, including C4 and fat
+Mach-O architecture checks, still consider duplicate records. Regression tests pin these
+distinctions and the order of missing-call diagnostics.
+
+`ValidatedSession::new` consumes and validates a session, exposing only an immutable
+`as_session` reference. The CLI's `session verify` passes this value to
+`policy::verify_validated`, so it validates once. `into_inner` returns editable data that must
+be validated again. The existing `policy::verify(&Session, ...)` continues to validate its
+input, and both entry points perform the same policy checks and comparisons. A compile-fail
+doctest checks that the validated data cannot be edited through its accessor.
+
+Reproduce the #109 scaling measurement with the existing ignored benchmark:
+
+```sh
+cargo test --locked -p sigil-engine --test capability_session \
+  capability_evaluation_scales_with_the_slices -- --ignored --nocapture
+```
+
+It repeats example 16 under distinct artifact, input, and root IDs, and prints `evaluate`,
+`validate`, and `policy::verify` times. Representative debug measurements with Rust 1.93.0 on
+Linux x86-64, comparing `6d1dfe4`, the first indexed version (`ccb128c`), and the final version:
+
+| Binary inputs | Before | First indexes | Final |
+|---|---:|---:|---:|
+| 500 | 60.93 ms | 22.45 ms | 14.50 ms |
+| 1,000 | 220.53 ms | 44.64 ms | 29.20 ms |
+| 2,000 | 845.40 ms | 93.30 ms | 62.24 ms |
+| 4,000 | 3,430 ms | 215.92 ms | 134.62 ms |
+
+Doubling from 2,000 to 4,000 inputs takes **2.16×**, compared with **4.06×** before;
+4,000-input validation is about **25.5× faster**. These are local timings, not CI thresholds.
+Adding `--release` to the command measures the optimized build.
+
+A separate release profile using the same fixture builder and policy, timing 15 validations
+after evaluation and taking the median, compared `ccb128c` with the final version. At 4,000
+inputs it fell from **43.20 ms to 16.51 ms (2.62× faster)**; at 16,000, from 212.51 ms to
+113.32 ms. Valgrind's allocation totals for that harness with zero versus one validation at
+4,000 inputs give **313,584 → 78 allocations (99.98% fewer)** and **27,925,826 → 6,284,695
+allocated bytes (77.50% fewer)**. These deltas include the fixed measurement/reporting overhead;
+they measure total allocated bytes, not peak resident memory.
+
+Compatibility was also checked against the prior implementation on 12,605 generated inputs:
+3,709 valid sessions, 4,854 invalid sessions, and 4,042 deserialization errors. All validation
+errors (including their order and text) and public expected-coverage results matched.
+
 ## Example: FAIL and INCOMPLETE
 
 This excerpt of `schemas/examples/session-v1/04-fail-incomplete.json` is a specification example,

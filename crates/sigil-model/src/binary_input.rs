@@ -13,8 +13,8 @@ use crate::artifact::{
 };
 use crate::binary::{BinaryFacts, ContainerFacts, DataValue, DYNSYM_UNREAD_GAPS};
 use crate::coverage::{Coverage, CoverageState};
-use crate::evidence::Ref;
-use crate::id::{RootId, SliceId};
+use crate::id::RootId;
+use crate::index::SessionLookup;
 use crate::session::{RunRequest, Session};
 use crate::text::UntrustedText;
 
@@ -184,6 +184,20 @@ pub fn expected_binary_container(
     s: &Session,
     i: &FileInstance,
 ) -> Result<ExpectedContainer, String> {
+    container(
+        &SessionLookup {
+            session: s,
+            index: None,
+        },
+        i,
+    )
+}
+
+pub(crate) fn container(
+    lookup: &SessionLookup<'_>,
+    i: &FileInstance,
+) -> Result<ExpectedContainer, String> {
+    let s = lookup.session;
     let artifact = match &i.content {
         InstanceContent::NotRead {
             why: NotReadReason::BudgetExceeded,
@@ -213,10 +227,8 @@ pub fn expected_binary_container(
         Stability::Vanished => return error(BINARY_VANISHED),
         Stability::NoChangeDetected => {}
     }
-    let a = s
-        .artifacts
-        .iter()
-        .find(|a| a.id == *artifact)
+    let a = lookup
+        .artifact(artifact)
         .ok_or("its artifact is not in the session")?;
     if !matches!(
         a.format,
@@ -231,7 +243,7 @@ pub fn expected_binary_container(
         missing.push(BINARY_NOT_PARSED.to_string());
     }
     for slice in &a.slices {
-        match s.binaries.iter().find(|b| b.slice == slice.id) {
+        match lookup.binary(&slice.id) {
             Some(b) => missing.extend(b.gaps.iter().cloned()),
             None => missing.push(BINARY_NOT_PARSED.to_string()),
         }
@@ -249,18 +261,11 @@ pub fn expected_binary_container(
 /// the state of its one `binary.container` entry, which B9 must admit, since its `used` is the
 /// engine's count. `Err` for an input [`expected_binary_container`] cannot judge, or one over
 /// `binary_bytes` without exactly such an entry.
-fn container_state(s: &Session, i: &FileInstance) -> Result<CoverageState, String> {
-    match expected_binary_container(s, i)? {
+fn container_state(lookup: &SessionLookup<'_>, i: &FileInstance) -> Result<CoverageState, String> {
+    match container(lookup, i)? {
         expected @ ExpectedContainer::OverBytes { .. } => {
-            let entries: Vec<&Coverage> = s
-                .coverage
-                .iter()
-                .filter(|c| {
-                    c.check.as_str() == BINARY_CONTAINER && c.scope == Ref::Instance(i.id.clone())
-                })
-                .collect();
-            match entries.as_slice() {
-                [c] if expected.admits(&c.state) => Ok(c.state.clone()),
+            match lookup.container_entry(&i.id) {
+                Some(c) if expected.admits(&c.state) => Ok(c.state.clone()),
                 _ => Err(format!(
                     "an input over {BINARY_BYTES} needs one {BINARY_CONTAINER} entry in the state it implies"
                 )),
@@ -297,45 +302,46 @@ impl ExpectedCode {
     pub fn admits(&self, c: &Coverage) -> Result<(), String> {
         use crate::render::coverage_state;
         let shown = |state: &CoverageState| coverage_state(state).terminal();
-        let is = shown(&c.state);
+        let is = || shown(&c.state);
         let no_budget = || match c.budget {
             None => Ok(()),
             Some(_) => Err(format!(
-                "binary.code is {is} and names a budget, but the input's code is not read"
+                "binary.code is {} and names a budget, but the input's code is not read",
+                is()
             )),
         };
         match self {
             ExpectedCode::Exactly(state) if c.state != *state => Err(format!(
-                "binary.code is {is}, but the input implies {}",
-                shown(state)
+                "binary.code is {}, but the input implies {}",
+                is(), shown(state)
             )),
             ExpectedCode::Exactly(_) => no_budget(),
             ExpectedCode::Analyzable { limit, parsed } => match &c.state {
                 CoverageState::Unsupported { what } if what == CODE_UNSUPPORTED => no_budget(),
                 CoverageState::Complete if !parsed => Err(format!(
-                    "binary.code is {is}, but a slice of the input was not parsed"
+                    "binary.code is {}, but a slice of the input was not parsed", is()
                 )),
                 CoverageState::Complete | CoverageState::Partial { .. } => match &c.budget {
                     None => Err(format!(
-                        "binary.code is {is} without a {BINARY_CODE_BYTES} budget"
+                        "binary.code is {} without a {BINARY_CODE_BYTES} budget", is()
                     )),
                     Some(b) if b.budget != BINARY_CODE_BYTES => Err(format!(
-                        "binary.code is {is}, but its budget is {}, not {BINARY_CODE_BYTES}",
-                        UntrustedText::new(b.budget.as_str()).terminal_line()
+                        "binary.code is {}, but its budget is {}, not {BINARY_CODE_BYTES}",
+                        is(), UntrustedText::new(b.budget.as_str()).terminal_line()
                     )),
                     Some(b) if b.limit != *limit => Err(format!(
-                        "binary.code is {is}, but its {BINARY_CODE_BYTES} limit is {}, not the request's {limit}",
-                        b.limit
+                        "binary.code is {}, but its {BINARY_CODE_BYTES} limit is {}, not the request's {limit}",
+                        is(), b.limit
                     )),
                     Some(b) if b.used > b.limit => Err(format!(
-                        "binary.code is {is}, but it used {} of {BINARY_CODE_BYTES}, over the limit {}",
-                        b.used, b.limit
+                        "binary.code is {}, but it used {} of {BINARY_CODE_BYTES}, over the limit {}",
+                        is(), b.used, b.limit
                     )),
                     Some(_) => Ok(()),
                 },
                 _ => Err(format!(
-                    "binary.code is {is}, but the input implies complete or partial with {BINARY_CODE_BYTES} ({limit}), or {}",
-                    shown(&CoverageState::Unsupported {
+                    "binary.code is {}, but the input implies complete or partial with {BINARY_CODE_BYTES} ({limit}), or {}",
+                    is(), shown(&CoverageState::Unsupported {
                         what: CODE_UNSUPPORTED.to_string()
                     })
                 )),
@@ -351,10 +357,21 @@ impl ExpectedCode {
 /// needs that entry's `used`), an analyzable input without a `binary_code_bytes` budget, or a
 /// session without `request.code`.
 pub fn expected_binary_code(s: &Session, i: &FileInstance) -> Result<ExpectedCode, String> {
+    code(
+        &SessionLookup {
+            session: s,
+            index: None,
+        },
+        i,
+    )
+}
+
+pub(crate) fn code(lookup: &SessionLookup<'_>, i: &FileInstance) -> Result<ExpectedCode, String> {
+    let s = lookup.session;
     if !s.request.code {
         return Err("no binary.code without request.code".to_string());
     }
-    let state = container_state(s, i)?;
+    let state = container_state(lookup, i)?;
     if !matches!(
         state,
         CoverageState::Complete | CoverageState::Partial { .. }
@@ -364,10 +381,8 @@ pub fn expected_binary_code(s: &Session, i: &FileInstance) -> Result<ExpectedCod
     let InstanceContent::Read { artifact } = &i.content else {
         return Err("an input not read has no container to analyze".to_string());
     };
-    let a = s
-        .artifacts
-        .iter()
-        .find(|a| a.id == *artifact)
+    let a = lookup
+        .artifact(artifact)
         .ok_or("its artifact is not in the session")?;
     if !matches!(a.format, Format::Elf { .. }) || a.slices.iter().any(|x| x.arch != Arch::X86_64) {
         return Ok(ExpectedCode::Exactly(CoverageState::Unsupported {
@@ -380,10 +395,7 @@ pub fn expected_binary_code(s: &Session, i: &FileInstance) -> Result<ExpectedCod
         .get(BINARY_CODE_BYTES)
         .copied()
         .ok_or_else(|| format!("request.code without a {BINARY_CODE_BYTES} budget"))?;
-    let parsed = !a.slices.is_empty()
-        && a.slices
-            .iter()
-            .all(|x| s.binaries.iter().any(|b| b.slice == x.id));
+    let parsed = !a.slices.is_empty() && a.slices.iter().all(|x| lookup.binary(&x.id).is_some());
     Ok(ExpectedCode::Analyzable { limit, parsed })
 }
 
@@ -492,14 +504,6 @@ pub(crate) fn unread_returns(b: &BinaryFacts) -> Vec<String> {
 /// Whether `b`'s facts have a return (PR-4c-2b): only a scan reads one.
 pub(crate) fn any_returns(b: &BinaryFacts) -> bool {
     matches!(&b.container, ContainerFacts::Elf(elf) if !elf.returns.is_empty())
-}
-
-/// Whether a claim on `slice` names a component identified by name and hash only
-/// ([`NAME_AND_HASH_ONLY`]; ADR-010).
-pub(crate) fn name_and_hash_only(s: &Session, slice: &SliceId) -> bool {
-    s.components
-        .iter()
-        .any(|c| c.subject == *slice && NAME_AND_HASH_ONLY.contains(&c.component.as_str()))
 }
 
 impl ExpectedIdentity {
@@ -618,7 +622,21 @@ impl ExpectedIdentity {
 /// needles. Each `Unknown` return of the input's facts must be listed as its
 /// [`returned_value_gap`] (PR-4c-2b).
 pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<ExpectedIdentity, String> {
-    let state = container_state(s, i)?;
+    identity(
+        &SessionLookup {
+            session: s,
+            index: None,
+        },
+        i,
+    )
+}
+
+pub(crate) fn identity(
+    lookup: &SessionLookup<'_>,
+    i: &FileInstance,
+) -> Result<ExpectedIdentity, String> {
+    let s = lookup.session;
+    let state = container_state(lookup, i)?;
     if !matches!(
         state,
         CoverageState::Complete | CoverageState::Partial { .. }
@@ -628,10 +646,8 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
     let InstanceContent::Read { artifact } = &i.content else {
         return Err("an input not read has no container to scan".to_string());
     };
-    let a = s
-        .artifacts
-        .iter()
-        .find(|a| a.id == *artifact)
+    let a = lookup
+        .artifact(artifact)
         .ok_or("its artifact is not in the session")?;
     let kind = match a.format {
         Format::MachO | Format::MachOFat => {
@@ -642,10 +658,23 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         Format::Elf { kind } => kind,
         _ => return Ok(ExpectedIdentity::Exactly(state)),
     };
-    let parsed = !a.slices.is_empty()
-        && a.slices
-            .iter()
-            .all(|x| s.binaries.iter().any(|b| b.slice == x.id));
+    let mut no_sections = NoSectionsGap::Never;
+    let mut has_unread_exports = false;
+    let mut admits_no_gopclntab = false;
+    let mut gaps = Vec::new();
+    let mut has_returns = false;
+    let mut parsed = !a.slices.is_empty();
+    for slice in &a.slices {
+        let Some(facts) = lookup.binary(&slice.id) else {
+            parsed = false;
+            break;
+        };
+        no_sections = no_sections.max(no_sections_gap(facts));
+        has_unread_exports |= exports_unread(facts, kind);
+        admits_no_gopclntab |= no_gopclntab_admitted(facts);
+        gaps.extend(unread_returns(facts));
+        has_returns |= any_returns(facts);
+    }
     if !parsed {
         return Ok(ExpectedIdentity::Exactly(CoverageState::Partial {
             missing: vec![BINARY_NOT_PARSED.to_string()],
@@ -657,28 +686,15 @@ pub fn expected_binary_identity(s: &Session, i: &FileInstance) -> Result<Expecte
         .get(BINARY_SCAN_BYTES)
         .copied()
         .ok_or_else(|| format!("an ELF input without a {BINARY_SCAN_BYTES} budget"))?;
-    let facts: Vec<&BinaryFacts> = a
-        .slices
-        .iter()
-        .filter_map(|x| s.binaries.iter().find(|b| b.slice == x.id))
-        .collect();
-    let no_sections = facts
-        .iter()
-        .map(|b| no_sections_gap(b))
-        .max()
-        .unwrap_or(NoSectionsGap::Never);
+    gaps.sort();
+    gaps.dedup();
     Ok(ExpectedIdentity::Scanned {
         limit,
-        name_and_hash_only: a.slices.iter().any(|x| name_and_hash_only(s, &x.id)),
+        name_and_hash_only: a.slices.iter().any(|x| lookup.name_and_hash_only(&x.id)),
         no_sections,
-        exports_unread: facts.iter().any(|b| exports_unread(b, kind)),
-        no_gopclntab_admitted: facts.iter().any(|b| no_gopclntab_admitted(b)),
-        unread_returns: {
-            let mut gaps: Vec<String> = facts.iter().flat_map(|b| unread_returns(b)).collect();
-            gaps.sort();
-            gaps.dedup();
-            gaps
-        },
-        any_returns: facts.iter().any(|b| any_returns(b)),
+        exports_unread: has_unread_exports,
+        no_gopclntab_admitted: admits_no_gopclntab,
+        unread_returns: gaps,
+        any_returns: has_returns,
     })
 }

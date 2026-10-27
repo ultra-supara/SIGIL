@@ -493,6 +493,31 @@ fn p1_and_p2_cite_every_call_site_or_import_once() {
     common::assert_valid(&cited(&["dlsym", "dlopen"]));
 }
 
+#[test]
+fn missing_call_diagnostics_follow_id_order_even_when_calls_are_recorded_otherwise() {
+    let (mut s, slice) = called();
+    for (id, addr) in [("cs:0x90", 0x90), ("cs:0x10", 0x10)] {
+        let mut extra = s.code[0].call_sites[0].clone();
+        extra.id = CallId::new(id).unwrap();
+        extra.addr = addr;
+        s.code[0].call_sites.push(extra);
+    }
+    with_violation(
+        &mut s,
+        violation("posix.network", Ref::Slice(slice.clone()), vec![]),
+    );
+    let at = format!("policy_violations[policy:capabilities.deny.posix.network on {slice}]");
+    assert_eq!(
+        capability_errors(&s),
+        vec![
+            format!("{at}: cites no call site"),
+            format!("{at}: does not cite cs:0x10, a call of a posix.network import"),
+            format!("{at}: does not cite cs:0x4d, a call of a posix.network import"),
+            format!("{at}: does not cite cs:0x90, a call of a posix.network import"),
+        ]
+    );
+}
+
 /// Plan review P2-1: a capability result is judged by the table the binaries were analyzed with,
 /// so it needs the session's one entry of it.
 #[test]

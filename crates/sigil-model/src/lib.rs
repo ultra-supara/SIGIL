@@ -34,6 +34,7 @@ pub mod finding;
 pub mod hint;
 pub mod id;
 pub mod identity;
+mod index;
 pub mod listener;
 pub mod load;
 pub mod model;
@@ -125,4 +126,4 @@ pub use session::{
     Session, ToolInfo,
 };
 pub use text::UntrustedText;
-pub use validate::ValidationError;
+pub use validate::{ValidatedSession, ValidationError};

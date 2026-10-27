@@ -26,7 +26,7 @@ mod raw;
 mod verify;
 
 pub use evaluate::{evaluate, outcome, EvaluateError, PolicyWarning};
-pub use verify::verify;
+pub use verify::{verify, verify_validated};
 
 use crate::analyze::components::components;
 use crate::code::data::signatures;
