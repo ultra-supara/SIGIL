@@ -126,4 +126,4 @@ pub use session::{
     Session, ToolInfo,
 };
 pub use text::UntrustedText;
-pub use validate::ValidationError;
+pub use validate::{ValidatedSession, ValidationError};

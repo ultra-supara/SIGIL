@@ -14,7 +14,7 @@ use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::inspect::{
     binary_session, store_session, ActiveInput, BinaryRequest, StoreRequest,
 };
-use sigil_engine::policy::{verify, Policy};
+use sigil_engine::policy::{verify, verify_validated, Policy};
 use sigil_model::*;
 
 const DENY_SPAWN: &str = "schema = \"sigil-policy/1\"\nname = \"no-spawn\"\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\nreason = \"no processes\"\n";
@@ -75,6 +75,28 @@ fn a_removed_violation_validates_but_does_not_verify() {
             "the outcome is PASS + COMPLETE, and the policy gives FAIL + COMPLETE".to_string(),
         ])
     );
+}
+
+#[test]
+fn validated_verification_keeps_policy_checks_and_ordered_differences() {
+    let policy = Policy::load(DENY_SPAWN).unwrap();
+    let other = Policy::builtin_default().unwrap();
+    let original = spawn(&policy);
+    let mut removed = original.clone();
+    removed.policy_violations.clear();
+    removed.outcome.verdict = Verdict::Pass;
+    let mut changed = original.clone();
+    changed.policy_violations[0].decision.action = Action::Warn;
+    changed.outcome.verdict = Verdict::Warn;
+    for session in [original, removed, changed] {
+        let checked = ValidatedSession::new(session).unwrap();
+        for policy in [&policy, &other] {
+            assert_eq!(
+                verify_validated(&checked, policy),
+                verify(checked.as_session(), policy)
+            );
+        }
+    }
 }
 
 #[test]

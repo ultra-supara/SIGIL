@@ -4,11 +4,14 @@
 //! validation reports duplicates but continues checking the rest of the session. Collections
 //! used by rules that inspect *all* matching records retain those records instead.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::borrow::Borrow;
+use std::collections::{hash_map::Entry, BTreeMap, HashMap, HashSet};
 
 use crate::artifact::{Artifact, FileInstance, Slice};
 use crate::binary::{macho_architecture, BinaryFacts, ContainerFacts};
-use crate::binary_input::{BINARY_CONTAINER, NAME_AND_HASH_ONLY};
+use crate::binary_input::{
+    is_binary_root, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY, NAME_AND_HASH_ONLY,
+};
 use crate::coverage::Coverage;
 use crate::evidence::Ref;
 use crate::id::SliceId;
@@ -16,56 +19,198 @@ use crate::relation::{DeclKind, Relation};
 use crate::session::{ScanRoot, Session};
 use crate::text::UntrustedText;
 
+/// Small per-slice capability tables keep their first entry inline. Larger tables retain
+/// sorted traversal: missing-import/call diagnostics must still appear in key order.
+#[derive(Default)]
+pub(crate) enum OrderedMap<K, V> {
+    #[default]
+    Empty,
+    One((K, V)),
+    Many(BTreeMap<K, V>),
+}
+
+impl<K: Ord, V> OrderedMap<K, V> {
+    pub fn insert(&mut self, key: K, value: V) {
+        match self {
+            Self::Empty => *self = Self::One((key, value)),
+            Self::One((old, v)) if *old == key => *v = value,
+            Self::One(_) => {
+                let Self::One(first) = std::mem::replace(self, Self::Empty) else {
+                    unreachable!()
+                };
+                *self = Self::Many(BTreeMap::from([first, (key, value)]));
+            }
+            Self::Many(map) => {
+                map.insert(key, value);
+            }
+        }
+    }
+
+    pub fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+    {
+        match self {
+            Self::Empty => None,
+            Self::One((k, v)) => (k.borrow() == key).then_some(v),
+            Self::Many(map) => map.get(key),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        let (one, many) = match self {
+            Self::Empty => (None, None),
+            Self::One(entry) => (Some(entry), None),
+            Self::Many(map) => (None, Some(map)),
+        };
+        one.into_iter()
+            .map(|(k, v)| (k, v))
+            .chain(many.into_iter().flat_map(|map| map.iter()))
+    }
+}
+
+/// Rules which require exactly one record need its count and first entry, not a heap-allocated
+/// list. Retain the count on invalid sessions too, for the existing diagnostics.
+pub(crate) struct Occurrences<'a, T> {
+    pub first: &'a T,
+    pub count: usize,
+}
+
+impl<'a, T> Occurrences<'a, T> {
+    pub fn unique(&self) -> Option<&'a T> {
+        (self.count == 1).then_some(self.first)
+    }
+}
+
+fn record<'a, T>(map: &mut HashMap<&'a str, Occurrences<'a, T>>, id: &'a str, value: &'a T) {
+    map.entry(id)
+        .and_modify(|entry| entry.count += 1)
+        .or_insert(Occurrences {
+            first: value,
+            count: 1,
+        });
+}
+
+fn first<'a, T>(
+    map: &mut HashMap<&'a str, T>,
+    id: &'a str,
+    value: T,
+    duplicates: &mut Vec<&'a str>,
+) {
+    match map.entry(id) {
+        Entry::Vacant(entry) => {
+            entry.insert(value);
+        }
+        Entry::Occupied(_) => duplicates.push(id),
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct SessionIndex<'a> {
-    pub roots: BTreeMap<&'a str, &'a ScanRoot>,
-    pub artifacts: BTreeMap<&'a str, &'a Artifact>,
-    pub instances: BTreeMap<&'a str, &'a FileInstance>,
-    pub binaries: BTreeMap<&'a str, &'a BinaryFacts>,
+    pub roots: HashMap<&'a str, &'a ScanRoot>,
+    pub artifacts: HashMap<&'a str, &'a Artifact>,
+    pub instances: HashMap<&'a str, &'a FileInstance>,
+    pub binaries: HashMap<&'a str, &'a BinaryFacts>,
     /// First artifact and first slice with this ID, including the artifact's position.
-    pub slices: BTreeMap<&'a str, (usize, &'a Artifact, &'a Slice)>,
-    /// All slices of every artifact with this ID (C4 also examines duplicate artifacts).
-    pub artifact_slices: BTreeMap<&'a str, BTreeSet<&'a SliceId>>,
-    pub containers: BTreeMap<&'a str, Vec<&'a Coverage>>,
-    pub name_and_hash_only: BTreeSet<&'a str>,
+    pub slices: HashMap<&'a str, (usize, &'a Artifact, &'a Slice)>,
+    pub duplicate_roots: Vec<&'a str>,
+    pub duplicate_artifacts: Vec<&'a str>,
+    pub duplicate_slices: Vec<&'a str>,
+    pub duplicate_instances: Vec<&'a str>,
+    /// B9 examines the last instance of an ID. C2/S1 instead examine the last *binary* instance
+    /// of that ID, and report errors in ID order. Other lookups above keep the first instance.
+    pub last_instances: HashMap<&'a str, &'a FileInstance>,
+    pub binary_inputs: HashMap<&'a str, &'a FileInstance>,
+    pub ordered_binary_inputs: Vec<&'a FileInstance>,
+    pub by_root: HashMap<&'a str, Occurrences<'a, FileInstance>>,
+    pub containers: HashMap<&'a str, Occurrences<'a, Coverage>>,
+    pub code_coverage: HashMap<&'a str, Occurrences<'a, Coverage>>,
+    pub identity_coverage: HashMap<&'a str, Occurrences<'a, Coverage>>,
+    pub name_and_hash_only: HashSet<&'a str>,
     /// Import name -> whether at least one matching import's library is looked up.
-    pub imports: BTreeMap<&'a str, BTreeMap<&'a UntrustedText, bool>>,
-    pub declarations: BTreeMap<&'a str, Vec<(DeclKind, &'a UntrustedText)>>,
+    pub imports: HashMap<(&'a str, &'a UntrustedText), bool>,
+    pub declarations: HashMap<&'a str, Vec<(DeclKind, &'a UntrustedText)>>,
     /// Distinct slice IDs per artifact position and fat-table architecture. All binary facts,
     /// including duplicate records, contribute; two records of one slice do not make it twice.
-    pub fat_architectures: BTreeMap<(usize, (i32, u32)), BTreeSet<&'a str>>,
+    pub fat_architectures: HashMap<(usize, (i32, u32)), HashSet<&'a str>>,
 }
 
 impl<'a> SessionIndex<'a> {
     pub fn new(s: &'a Session) -> Self {
-        let mut index = Self::default();
+        let mut coverage_counts = [0; 3];
+        for coverage in &s.coverage {
+            if matches!(coverage.scope, Ref::Instance(_)) {
+                match coverage.check.as_str() {
+                    BINARY_CONTAINER => coverage_counts[0] += 1,
+                    BINARY_CODE => coverage_counts[1] += 1,
+                    BINARY_IDENTITY => coverage_counts[2] += 1,
+                    _ => {}
+                }
+            }
+        }
+        let mut index = Self {
+            roots: HashMap::with_capacity(s.request.roots.len()),
+            artifacts: HashMap::with_capacity(s.artifacts.len()),
+            slices: HashMap::with_capacity(s.artifacts.iter().map(|a| a.slices.len()).sum()),
+            instances: HashMap::with_capacity(s.instances.len()),
+            last_instances: HashMap::with_capacity(s.instances.len()),
+            binary_inputs: HashMap::with_capacity(
+                s.instances
+                    .iter()
+                    .filter(|i| is_binary_root(&i.root))
+                    .count(),
+            ),
+            by_root: HashMap::with_capacity(s.request.roots.len()),
+            binaries: HashMap::with_capacity(s.binaries.len()),
+            containers: HashMap::with_capacity(coverage_counts[0]),
+            code_coverage: HashMap::with_capacity(coverage_counts[1]),
+            identity_coverage: HashMap::with_capacity(coverage_counts[2]),
+            ..Self::default()
+        };
         for root in &s.request.roots {
-            index.roots.entry(root.id.as_str()).or_insert(root);
+            first(
+                &mut index.roots,
+                root.id.as_str(),
+                root,
+                &mut index.duplicate_roots,
+            );
         }
         for (position, artifact) in s.artifacts.iter().enumerate() {
-            index
-                .artifacts
-                .entry(artifact.id.as_str())
-                .or_insert(artifact);
-            let all = index
-                .artifact_slices
-                .entry(artifact.id.as_str())
-                .or_default();
+            first(
+                &mut index.artifacts,
+                artifact.id.as_str(),
+                artifact,
+                &mut index.duplicate_artifacts,
+            );
             for slice in &artifact.slices {
-                index
-                    .slices
-                    .entry(slice.id.as_str())
-                    .or_insert((position, artifact, slice));
-                all.insert(&slice.id);
+                first(
+                    &mut index.slices,
+                    slice.id.as_str(),
+                    (position, artifact, slice),
+                    &mut index.duplicate_slices,
+                );
             }
         }
         for instance in &s.instances {
-            index
-                .instances
-                .entry(instance.id.as_str())
-                .or_insert(instance);
+            first(
+                &mut index.instances,
+                instance.id.as_str(),
+                instance,
+                &mut index.duplicate_instances,
+            );
+            index.last_instances.insert(instance.id.as_str(), instance);
+            record(&mut index.by_root, instance.root.as_str(), instance);
+            if is_binary_root(&instance.root) {
+                index.binary_inputs.insert(instance.id.as_str(), instance);
+            }
         }
-        let mut architectures: BTreeMap<&str, BTreeSet<(i32, u32)>> = BTreeMap::new();
+        index.ordered_binary_inputs = index.binary_inputs.values().copied().collect();
+        index.ordered_binary_inputs.sort_unstable_by_key(|i| &i.id);
+        let mut architectures: HashMap<&str, HashSet<(i32, u32)>> = HashMap::new();
         for facts in &s.binaries {
             index.binaries.entry(facts.slice.as_str()).or_insert(facts);
             if let ContainerFacts::MachO(macho) = &facts.container {
@@ -90,30 +235,40 @@ impl<'a> SessionIndex<'a> {
                 }
             }
         }
+        index.imports.reserve(
+            index
+                .binaries
+                .values()
+                .map(|facts| match &facts.container {
+                    ContainerFacts::Elf(elf) => elf.imports.len(),
+                    ContainerFacts::MachO(macho) => macho.imports.len(),
+                })
+                .sum(),
+        );
         for (slice, facts) in &index.binaries {
-            let imports = index.imports.entry(*slice).or_default();
             match &facts.container {
                 ContainerFacts::Elf(elf) => {
                     for import in &elf.imports {
-                        imports.insert(&import.name, true);
+                        index.imports.insert((*slice, &import.name), true);
                     }
                 }
                 ContainerFacts::MachO(macho) => {
                     for import in &macho.imports {
-                        *imports.entry(&import.name).or_default() |= import.library.looked_up();
+                        *index.imports.entry((*slice, &import.name)).or_default() |=
+                            import.library.looked_up();
                     }
                 }
             }
         }
         for coverage in &s.coverage {
-            if coverage.check.as_str() == BINARY_CONTAINER {
-                if let Ref::Instance(instance) = &coverage.scope {
-                    index
-                        .containers
-                        .entry(instance.as_str())
-                        .or_default()
-                        .push(coverage);
-                }
+            if let Ref::Instance(instance) = &coverage.scope {
+                let entries = match coverage.check.as_str() {
+                    BINARY_CONTAINER => &mut index.containers,
+                    BINARY_CODE => &mut index.code_coverage,
+                    BINARY_IDENTITY => &mut index.identity_coverage,
+                    _ => continue,
+                };
+                record(entries, instance.as_str(), coverage);
             }
         }
         for claim in &s.components {
@@ -158,10 +313,7 @@ impl<'a> SessionLookup<'a> {
 
     pub fn container_entry(&self, instance: &crate::id::InstanceId) -> Option<&'a Coverage> {
         match self.index {
-            Some(index) => match index.containers.get(instance.as_str())?.as_slice() {
-                [entry] => Some(entry),
-                _ => None,
-            },
+            Some(index) => index.containers.get(instance.as_str())?.unique(),
             None => {
                 let mut entries = self.session.coverage.iter().filter(|c| {
                     c.check.as_str() == BINARY_CONTAINER

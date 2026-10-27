@@ -437,6 +437,14 @@ impl SliceId {
         SliceId(format!("{}#{}@{}", artifact.as_str(), arch.name(), offset))
     }
 
+    /// Compare validated ID parts without allocating the expected ID. Construction and
+    /// deserialization already require the canonical decimal representation of the offset.
+    pub(crate) fn matches_parts(&self, artifact: &ArtifactId, arch: Arch, offset: u64) -> bool {
+        split_slice(&self.0).is_some_and(|(a, name, start)| {
+            a == artifact.as_str() && name == arch.name() && start.parse::<u64>() == Ok(offset)
+        })
+    }
+
     /// The artifact this slice belongs to.
     pub fn artifact(&self) -> ArtifactId {
         let artifact = self.0.split_once('#').map_or(self.0.as_str(), |(a, _)| a);

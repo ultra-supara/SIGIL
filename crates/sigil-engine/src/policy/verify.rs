@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 use sigil_model::render::{completeness, kind, severity, subject, verdict};
-use sigil_model::{KnowledgeKind, Session};
+use sigil_model::{KnowledgeKind, Session, ValidatedSession};
 
 use super::{catalog, evaluate, Policy};
 
@@ -47,6 +47,17 @@ pub fn verify(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
             .map(|e| format!("the session is not valid: {e}"))
             .collect());
     }
+    verify_analysis(session, policy)
+}
+
+/// Verify the policy result of a session that has already passed model validation. The
+/// immutable `ValidatedSession` guarantees that the analysis has not changed since validation;
+/// the policy checks and comparisons are exactly those of [`verify`].
+pub fn verify_validated(session: &ValidatedSession, policy: &Policy) -> Result<(), Vec<String>> {
+    verify_analysis(session.as_session(), policy)
+}
+
+fn verify_analysis(session: &Session, policy: &Policy) -> Result<(), Vec<String>> {
     let ours = policy.knowledge();
     let named: Vec<_> = session
         .knowledge

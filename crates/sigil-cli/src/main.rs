@@ -51,9 +51,9 @@ use sigil_model::render::{
 use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
     Completeness, Coverage, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode,
-    ReleaseBasis, ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText, Verdict,
-    ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES,
-    INSTALL_ROOT,
+    ReleaseBasis, ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText,
+    ValidatedSession, Verdict, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES,
+    BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
 };
 use sigil_probe::{
     probe_version, ProbeOptions, MAX_CONNECT_TIMEOUT, MAX_IO_DEADLINE, MAX_RESPONSE,
@@ -1291,12 +1291,11 @@ fn reverify(session: &Session, path: &Path) -> Result<(), Failure> {
 /// itself; this checks that it is what the policy gives, by evaluating it again
 /// (`policy::verify`). The session is loaded and re-verified as for `session render`.
 fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
-    // Validated here, so a bad session is an error as for `render`; `policy::verify` validates it
-    // again, as it does for every caller.
-    let session = load_session(&args.session)?;
-    reverify(&session, &args.session)?;
+    let checked = load_session(&args.session)?;
+    let session = checked.as_session();
+    reverify(session, &args.session)?;
     let policy = load_policy(args.policy.as_deref())?;
-    sigil_engine::policy::verify(&session, &policy).map_err(|errors| {
+    sigil_engine::policy::verify_validated(&checked, &policy).map_err(|errors| {
         // A session another build made may differ by that build's data alone.
         let build = tool_info().version;
         let other = if session.tool.version == build {
@@ -1341,30 +1340,32 @@ fn first_five(errors: &[String]) -> String {
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
     let target = args.out.as_deref().map(out_target).transpose()?;
-    let session = load_session(&args.session)?;
-    reverify(&session, &args.session)?;
+    let checked = load_session(&args.session)?;
+    let session = checked.as_session();
+    reverify(session, &args.session)?;
     let document = match args.format {
-        RenderFormat::Md => render_session(&session),
-        RenderFormat::Aibom => aibom_json(&session)?.0,
+        RenderFormat::Md => render_session(session),
+        RenderFormat::Aibom => aibom_json(session)?.0,
     };
     emit(&document, target.as_ref(), &[])
 }
 
 fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
     let target = args.out.as_deref().map(out_target).transpose()?;
-    let session = load_session(&args.session)?;
-    reverify(&session, &args.session)?;
+    let checked = load_session(&args.session)?;
+    let session = checked.as_session();
+    reverify(session, &args.session)?;
     let format = match args.format {
         TextFormat::Text => ExplainFormat::Text,
         TextFormat::Md => ExplainFormat::Markdown,
     };
     let q = &args.question;
     let mut text = if let Some(id) = &q.finding {
-        explain::finding(&session, id, format).map_err(|e| Failure::Run(e.to_string()))?
+        explain::finding(session, id, format).map_err(|e| Failure::Run(e.to_string()))?
     } else if q.verdict {
-        explain::verdict(&session, format)
+        explain::verdict(session, format)
     } else {
-        explain::coverage(&session, format)
+        explain::coverage(session, format)
     };
     text.push('\n');
     emit(&text, target.as_ref(), &[])
@@ -1396,7 +1397,7 @@ fn rules() -> Result<(), Failure> {
 }
 
 /// A saved session: JSON, schema `sigil-session/1`, and valid.
-fn load_session(path: &Path) -> Result<Session, Failure> {
+fn load_session(path: &Path) -> Result<ValidatedSession, Failure> {
     let name = shown_path(path);
     let text = fs::read_to_string(path)
         .map_err(|e| Failure::Run(format!("{name} cannot be read: {e}")))?;
@@ -1423,7 +1424,7 @@ fn load_session(path: &Path) -> Result<Session, Failure> {
             shown(&e.to_string())
         ))
     })?;
-    session.validate().map_err(|errors| {
+    ValidatedSession::new(session).map_err(|errors| {
         let first: Vec<String> = errors
             .iter()
             .take(5)
@@ -1434,8 +1435,7 @@ fn load_session(path: &Path) -> Result<Session, Failure> {
             errors.len(),
             first.join("; ")
         ))
-    })?;
-    Ok(session)
+    })
 }
 
 // --- output -----------------------------------------------------------------------------------

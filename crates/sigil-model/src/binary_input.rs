@@ -302,45 +302,46 @@ impl ExpectedCode {
     pub fn admits(&self, c: &Coverage) -> Result<(), String> {
         use crate::render::coverage_state;
         let shown = |state: &CoverageState| coverage_state(state).terminal();
-        let is = shown(&c.state);
+        let is = || shown(&c.state);
         let no_budget = || match c.budget {
             None => Ok(()),
             Some(_) => Err(format!(
-                "binary.code is {is} and names a budget, but the input's code is not read"
+                "binary.code is {} and names a budget, but the input's code is not read",
+                is()
             )),
         };
         match self {
             ExpectedCode::Exactly(state) if c.state != *state => Err(format!(
-                "binary.code is {is}, but the input implies {}",
-                shown(state)
+                "binary.code is {}, but the input implies {}",
+                is(), shown(state)
             )),
             ExpectedCode::Exactly(_) => no_budget(),
             ExpectedCode::Analyzable { limit, parsed } => match &c.state {
                 CoverageState::Unsupported { what } if what == CODE_UNSUPPORTED => no_budget(),
                 CoverageState::Complete if !parsed => Err(format!(
-                    "binary.code is {is}, but a slice of the input was not parsed"
+                    "binary.code is {}, but a slice of the input was not parsed", is()
                 )),
                 CoverageState::Complete | CoverageState::Partial { .. } => match &c.budget {
                     None => Err(format!(
-                        "binary.code is {is} without a {BINARY_CODE_BYTES} budget"
+                        "binary.code is {} without a {BINARY_CODE_BYTES} budget", is()
                     )),
                     Some(b) if b.budget != BINARY_CODE_BYTES => Err(format!(
-                        "binary.code is {is}, but its budget is {}, not {BINARY_CODE_BYTES}",
-                        UntrustedText::new(b.budget.as_str()).terminal_line()
+                        "binary.code is {}, but its budget is {}, not {BINARY_CODE_BYTES}",
+                        is(), UntrustedText::new(b.budget.as_str()).terminal_line()
                     )),
                     Some(b) if b.limit != *limit => Err(format!(
-                        "binary.code is {is}, but its {BINARY_CODE_BYTES} limit is {}, not the request's {limit}",
-                        b.limit
+                        "binary.code is {}, but its {BINARY_CODE_BYTES} limit is {}, not the request's {limit}",
+                        is(), b.limit
                     )),
                     Some(b) if b.used > b.limit => Err(format!(
-                        "binary.code is {is}, but it used {} of {BINARY_CODE_BYTES}, over the limit {}",
-                        b.used, b.limit
+                        "binary.code is {}, but it used {} of {BINARY_CODE_BYTES}, over the limit {}",
+                        is(), b.used, b.limit
                     )),
                     Some(_) => Ok(()),
                 },
                 _ => Err(format!(
-                    "binary.code is {is}, but the input implies complete or partial with {BINARY_CODE_BYTES} ({limit}), or {}",
-                    shown(&CoverageState::Unsupported {
+                    "binary.code is {}, but the input implies complete or partial with {BINARY_CODE_BYTES} ({limit}), or {}",
+                    is(), shown(&CoverageState::Unsupported {
                         what: CODE_UNSUPPORTED.to_string()
                     })
                 )),
@@ -657,7 +658,23 @@ pub(crate) fn identity(
         Format::Elf { kind } => kind,
         _ => return Ok(ExpectedIdentity::Exactly(state)),
     };
-    let parsed = !a.slices.is_empty() && a.slices.iter().all(|x| lookup.binary(&x.id).is_some());
+    let mut no_sections = NoSectionsGap::Never;
+    let mut has_unread_exports = false;
+    let mut admits_no_gopclntab = false;
+    let mut gaps = Vec::new();
+    let mut has_returns = false;
+    let mut parsed = !a.slices.is_empty();
+    for slice in &a.slices {
+        let Some(facts) = lookup.binary(&slice.id) else {
+            parsed = false;
+            break;
+        };
+        no_sections = no_sections.max(no_sections_gap(facts));
+        has_unread_exports |= exports_unread(facts, kind);
+        admits_no_gopclntab |= no_gopclntab_admitted(facts);
+        gaps.extend(unread_returns(facts));
+        has_returns |= any_returns(facts);
+    }
     if !parsed {
         return Ok(ExpectedIdentity::Exactly(CoverageState::Partial {
             missing: vec![BINARY_NOT_PARSED.to_string()],
@@ -669,28 +686,15 @@ pub(crate) fn identity(
         .get(BINARY_SCAN_BYTES)
         .copied()
         .ok_or_else(|| format!("an ELF input without a {BINARY_SCAN_BYTES} budget"))?;
-    let facts: Vec<&BinaryFacts> = a
-        .slices
-        .iter()
-        .filter_map(|x| lookup.binary(&x.id))
-        .collect();
-    let no_sections = facts
-        .iter()
-        .map(|b| no_sections_gap(b))
-        .max()
-        .unwrap_or(NoSectionsGap::Never);
+    gaps.sort();
+    gaps.dedup();
     Ok(ExpectedIdentity::Scanned {
         limit,
         name_and_hash_only: a.slices.iter().any(|x| lookup.name_and_hash_only(&x.id)),
         no_sections,
-        exports_unread: facts.iter().any(|b| exports_unread(b, kind)),
-        no_gopclntab_admitted: facts.iter().any(|b| no_gopclntab_admitted(b)),
-        unread_returns: {
-            let mut gaps: Vec<String> = facts.iter().flat_map(|b| unread_returns(b)).collect();
-            gaps.sort();
-            gaps.dedup();
-            gaps
-        },
-        any_returns: facts.iter().any(|b| any_returns(b)),
+        exports_unread: has_unread_exports,
+        no_gopclntab_admitted: admits_no_gopclntab,
+        unread_returns: gaps,
+        any_returns: has_returns,
     })
 }

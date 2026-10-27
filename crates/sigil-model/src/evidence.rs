@@ -239,7 +239,7 @@ pub enum Observability {
 }
 
 /// The subject a coverage entry, finding, open question, or policy violation is about.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Ref {
     /// The whole requested audit (scope-wide checks such as discovery).
