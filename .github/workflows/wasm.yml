@@ -9,9 +9,10 @@ name: Viewer wasm
 #   1. Behaviour: every sample's Markdown and HTML from the committed bundle equal the native
 #      render, and every invalid sample gives its manifest's error (ci/check-committed-wasm.mjs).
 #   2. Reproducibility: ci/build-viewer-wasm.sh rebuilds the bundle with the pinned rustc
-#      (ci/viewer-wasm-toolchain), wasm-pack 0.15.0, wasm-bindgen from Cargo.lock, and
-#      CARGO_HOME remapped. Every file must equal the committed one byte for byte (`.js` and
-#      `.wasm` included), and the `.wasm` must stay within 500 KB gzipped.
+#      (ci/viewer-wasm-toolchain), rust-src, wasm-pack 0.15.0, wasm-bindgen from Cargo.lock,
+#      Binaryen (ci/viewer-wasm-opt-version), and remapped paths. Every file must equal the
+#      committed one byte for byte (`.js` and `.wasm` included). The `.wasm` must stay within
+#      500 KiB gzipped (warning above 90%).
 #   3. The viewer's state (load, failure, latest-wins) passes its node tests.
 on:
   push:
@@ -23,6 +24,9 @@ on:
       - 'schemas/**'
       - 'ci/check-committed-wasm.mjs'
       - 'ci/build-viewer-wasm.sh'
+      - 'ci/install-viewer-wasm-opt.sh'
+      - 'ci/viewer-wasm-opt-version'
+      - 'ci/viewer-wasm-opt.sha256'
       - 'ci/viewer-wasm-toolchain'
       - 'ci/viewer-state.test.mjs'
       - 'Cargo.toml'
@@ -36,6 +40,9 @@ on:
       - 'schemas/**'
       - 'ci/check-committed-wasm.mjs'
       - 'ci/build-viewer-wasm.sh'
+      - 'ci/install-viewer-wasm-opt.sh'
+      - 'ci/viewer-wasm-opt-version'
+      - 'ci/viewer-wasm-opt.sha256'
       - 'ci/viewer-wasm-toolchain'
       - 'ci/viewer-state.test.mjs'
       - 'Cargo.toml'
@@ -82,8 +89,9 @@ jobs:
       # (ci/build-viewer-wasm.sh refuses any other).
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
-          toolchain: 1.93.0
+          toolchain: nightly-2026-01-20
           targets: wasm32-unknown-unknown
+          components: rust-src
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: '. -> target'
@@ -106,27 +114,37 @@ jobs:
         run: node --test ci/viewer-state.test.mjs
       - name: Install wasm-pack (pinned)
         run: cargo install wasm-pack --version 0.15.0 --locked
+      - name: Install wasm-opt (pinned release and archive digest)
+        run: |
+          ci/install-viewer-wasm-opt.sh "$RUNNER_TEMP/viewer-binaryen"
+          echo "$RUNNER_TEMP/viewer-binaryen/binaryen-version_$(cat ci/viewer-wasm-opt-version)/bin" >> "$GITHUB_PATH"
       - name: Reproducibility — a rebuild equals the committed bundle, byte for byte
         run: |
           set -euo pipefail
           ci/build-viewer-wasm.sh /tmp/rebuilt
           if ! diff -r site/viewer/pkg /tmp/rebuilt; then
-            echo "::error::the committed site/viewer/pkg/ differs from a reproducible rebuild. Run ci/build-viewer-wasm.sh (rustc $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0) and commit site/viewer/pkg/."
+            echo "::error::the committed site/viewer/pkg/ differs from a reproducible rebuild. Follow ci/viewer-wasm-build.md and commit site/viewer/pkg/."
             exit 1
           fi
+      - name: Bundle size — warn above 90%, fail above 500 KiB
+        run: |
+          set -euo pipefail
           size=$(stat -c '%s' site/viewer/pkg/sigil_wasm_bg.wasm)
           gz=$(gzip -c site/viewer/pkg/sigil_wasm_bg.wasm | wc -c)
           max_gz=$((500 * 1024))
+          warn_gz=$((max_gz * 90 / 100))
           {
             echo "## Viewer wasm bundle"
             echo
-            echo "Reproducible: every file equals a fresh build (rustc $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0)."
+            echo "Pinned build: $(cat ci/viewer-wasm-toolchain), wasm-pack 0.15.0, wasm-opt $(cat ci/viewer-wasm-opt-version); byte equality checked by the preceding step."
             echo
-            echo "| .wasm bytes | .wasm gzipped | budget (gzipped) |"
-            echo "|---|---|---|"
-            echo "| $size | $gz | $max_gz |"
+            echo "| .wasm bytes | .wasm gzipped | warning above (90%) | budget (gzipped) | headroom |"
+            echo "|---|---|---|---|---|"
+            echo "| $size | $gz | $warn_gz | $max_gz | $((max_gz - gz)) |"
           } >>"$GITHUB_STEP_SUMMARY"
           if [ "$gz" -gt "$max_gz" ]; then
-            echo "::error::the wasm bundle exceeds 500 KB gzipped ($gz > $max_gz)"
+            echo "::error::the wasm bundle exceeds 500 KiB gzipped ($gz > $max_gz)"
             exit 1
+          elif [ "$gz" -gt "$warn_gz" ]; then
+            echo "::warning::the wasm bundle exceeds 90% of the 500 KiB gzip budget ($gz > $warn_gz); $((max_gz - gz)) bytes remain."
           fi

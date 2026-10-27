@@ -220,6 +220,8 @@ cargo test --workspace --locked
 
 The syscall safety suite needs Linux, `strace`, and a C compiler. Run `SIGIL_SAFETY_REQUIRED=1 cargo test --locked -p sigil-cli --test safety` to require those checks rather than allowing them to skip when prerequisites are missing. CI also checks schemas, saved-session examples, WebAssembly builds, and the committed viewer bundle.
 
+Changes to the model or browser bindings also require rebuilding `site/viewer/pkg/`. Follow the [viewer wasm build guide](ci/viewer-wasm-build.md) for its pinned toolchain, size settings, and verification commands.
+
 ## What's next
 
 The next steps build on the existing container, identity, and direct-call analysis: dependency resolution and backend loading, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned.

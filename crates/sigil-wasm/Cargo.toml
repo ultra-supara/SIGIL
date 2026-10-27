@@ -19,4 +19,5 @@ name = "render_sample"
 path = "examples/render_sample.rs"
 
 [package.metadata.wasm-pack.profile.release]
+# ci/build-viewer-wasm.sh runs the explicitly pinned Binaryen pass sequence afterwards.
 wasm-opt = false
