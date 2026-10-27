@@ -282,6 +282,44 @@ It does **not**:
 Those belong to the engine and its collectors (PR-3a and later). The engine computes decisions and
 the outcome from a policy: see [`docs/policy.md`](policy.md).
 
+## Validation cost
+
+Validation builds borrowed indexes once per call for roots, artifacts, slices, instances,
+binary facts, import names, dependency declarations, container coverage, and fat Mach-O
+architectures. The binary-input rules share these lookups with the expected-coverage helpers.
+For repeated inputs of fixed size, these paths use O(N log N) work with `BTreeMap`/`BTreeSet`,
+instead of searching the whole session for every input or hint. The public single-input
+helpers keep their existing signatures and do not allocate a session-wide index.
+
+Invalid sessions still report the same errors in the same order. Lookups that previously
+selected the first matching record continue to do so after reporting duplicate IDs. Rules
+that inspect all matching records, including C4 and fat-table architecture checks, retain all
+of them. Duplicate-ID and fat Mach-O regression tests pin these distinctions.
+
+Reproduce the #109 scaling measurement with the existing ignored benchmark:
+
+```sh
+cargo test --locked -p sigil-engine --test capability_session \
+  capability_evaluation_scales_with_the_slices -- --ignored --nocapture
+```
+
+It repeats example 16 under distinct artifact, input, and root IDs, and prints `evaluate`,
+`validate`, and `policy::verify` times. Representative debug measurements with Rust 1.93.0 on
+Linux x86-64, comparing `6d1dfe4` with the indexed validator:
+
+| Binary inputs | Before: validate | After: validate |
+|---|---:|---:|
+| 500 | 60.93 ms | 22.45 ms |
+| 1,000 | 220.53 ms | 44.64 ms |
+| 2,000 | 845.40 ms | 93.30 ms |
+| 4,000 | 3,430 ms | 215.92 ms |
+
+Doubling from 2,000 to 4,000 inputs takes **2.31×**, compared with **4.06×** before;
+4,000-input validation is about **15.9× faster**. These are local timings, not CI thresholds.
+Compatibility was also checked against the prior implementation on 12,605 generated inputs:
+3,709 valid sessions, 4,854 invalid sessions, and 4,042 deserialization errors. All validation
+errors (including their order and text) and public expected-coverage results matched.
+
 ## Example: FAIL and INCOMPLETE
 
 This excerpt of `schemas/examples/session-v1/04-fail-incomplete.json` is a specification example,

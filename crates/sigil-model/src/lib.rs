@@ -34,6 +34,7 @@ pub mod finding;
 pub mod hint;
 pub mod id;
 pub mod identity;
+mod index;
 pub mod listener;
 pub mod load;
 pub mod model;

@@ -440,6 +440,86 @@ fn b2_fat_slices_of_one_architecture_have_its_gap() {
     assert_eq!(s.validate(), Ok(()));
 }
 
+#[test]
+fn b2_duplicate_facts_of_one_slice_do_not_count_as_two_fat_architectures() {
+    let mut s = fat_base();
+    s.binaries.push(s.binaries[0].clone());
+    assert_eq!(
+        common::errors(&s),
+        vec![ValidationError::Binary {
+            slice: s.binaries[0].slice.to_string(),
+            why: "one record per slice".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn b2_fat_architectures_are_grouped_by_the_actual_artifact_even_when_ids_repeat() {
+    let mut s = fat_base();
+    s.artifacts[0].slices[0].size = 0x8_0000;
+    let mut later = s.artifacts[0].clone();
+    let mut second = later.slices[0].clone();
+    second.offset = 0x8_0000;
+    second.id = SliceId::from_parts(&later.id, second.arch, second.offset);
+    later.slices.push(second.clone());
+    s.artifacts.push(later);
+    let mut facts = s.binaries[0].clone();
+    facts.slice = second.id.clone();
+    s.binaries.push(facts);
+    // Only the second artifact has two slices. The first slice is found in the first
+    // artifact, whose table has one entry, so its facts do not need the duplicate gap.
+    assert_eq!(
+        common::errors(&s),
+        vec![
+            ValidationError::DuplicateId {
+                kind: "artifact",
+                id: s.artifacts[0].id.to_string(),
+            },
+            ValidationError::DuplicateId {
+                kind: "slice",
+                id: s.artifacts[0].slices[0].id.to_string(),
+            },
+            ValidationError::Binary {
+                slice: second.id.to_string(),
+                why: format!(
+                    "its architecture listed twice in the fat table without the gap {:?}",
+                    sigil_model::FAT_DUPLICATE_ARCH_GAP
+                ),
+            },
+        ]
+    );
+}
+
+#[test]
+fn b2_all_facts_of_another_slice_contribute_to_fat_architecture_checks() {
+    let mut s = fat_base();
+    s.artifacts[0].slices[0].size = 0x8_0000;
+    let mut second = s.artifacts[0].slices[0].clone();
+    second.offset = 0x8_0000;
+    second.id = SliceId::from_parts(&s.artifacts[0].id, second.arch, second.offset);
+    s.artifacts[0].slices.push(second.clone());
+    s.binaries.push(BinaryFacts {
+        slice: second.id.clone(),
+        container: macho_facts(X86_64, 8, (X86_64, 8)),
+        go: None,
+        gaps: vec![],
+    });
+    common::assert_valid(&s);
+    // A later record for that same slice names the first slice's architecture. Although the
+    // record is itself a duplicate, B2 must still consider it when checking the first slice.
+    let mut duplicate = s.binaries[0].clone();
+    duplicate.slice = second.id;
+    s.binaries.push(duplicate);
+    let errors = common::errors(&s);
+    assert!(matches!(&errors[0], ValidationError::Binary { slice, why }
+        if slice == s.binaries[0].slice.as_str() && why.contains("architecture listed twice")));
+    assert!(matches!(&errors[1], ValidationError::Binary { why, .. }
+        if why == "one record per slice"));
+    assert!(matches!(&errors[2], ValidationError::Binary { slice, why }
+        if slice == s.binaries[2].slice.as_str() && why.contains("architecture listed twice")));
+    assert_eq!(errors.len(), 3);
+}
+
 // --- Returned values (PR-4c-2b) ----------------------------------------------------------------
 
 fn returned(function: &str, value: &str, at: u64) -> FunctionReturn {

@@ -51,6 +51,7 @@ use crate::id::{
 use crate::identity::{
     is_commit, ComponentClaim, IdentityAssertion, IdentityStatus, ReleaseBasis, ReportedCommit,
 };
+use crate::index::{SessionIndex, SessionLookup};
 use crate::load::ValueOrigin;
 use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
@@ -414,7 +415,8 @@ impl ValidationError {
 impl Session {
     /// Checks the invariants described in the module documentation. Returns every violation.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
-        let mut v = Validator::new(self);
+        let index = SessionIndex::new(self);
+        let mut v = Validator::new(self, &index);
         v.run();
         if v.errors.is_empty() {
             Ok(())
@@ -459,6 +461,7 @@ impl<'a> RowIndex<'a> {
 
 struct Validator<'a> {
     s: &'a Session,
+    index: &'a SessionIndex<'a>,
     errors: Vec<ValidationError>,
     roots: BTreeSet<&'a str>,
     artifacts: BTreeSet<&'a str>,
@@ -519,7 +522,7 @@ fn unique_keys(
 }
 
 impl<'a> Validator<'a> {
-    fn new(s: &'a Session) -> Self {
+    fn new(s: &'a Session, index: &'a SessionIndex<'a>) -> Self {
         let mut errors = vec![];
         let roots = unique(
             &mut errors,
@@ -608,6 +611,7 @@ impl<'a> Validator<'a> {
         }
         Validator {
             s,
+            index,
             errors,
             roots,
             artifacts,
@@ -1051,7 +1055,8 @@ impl<'a> Validator<'a> {
     /// a license is the text read from the license layer's blob.
     fn models(&mut self) {
         let s = self.s;
-        let placed = |id: &InstanceId| s.instances.iter().find(|i| i.id == *id);
+        let index = self.index;
+        let placed = |id: &InstanceId| index.instances.get(id.as_str()).copied();
         for model in &s.models {
             let at = format!("models[{}]", model.id);
             self.instance(&model.manifest, &at);
@@ -1076,7 +1081,7 @@ impl<'a> Validator<'a> {
                     (Some(_), None) => true,
                     (Some(hex), Some(inst)) => {
                         // The path as discovered: the root's path, then `blobs/sha256-<hex>`.
-                        let root_path = s.request.roots.iter().find(|r| r.id == inst.root);
+                        let root_path = index.roots.get(inst.root.as_str());
                         let at_its_path = root_path.is_none_or(|root| {
                             let mut expected = root.path.as_bytes().to_vec();
                             while expected.last() == Some(&b'/') {
@@ -1452,6 +1457,12 @@ impl<'a> Validator<'a> {
             .iter()
             .filter(|i| Some(&i.root) == install.as_ref())
             .collect();
+        let mut placements_by_id = BTreeMap::new();
+        let mut placement_paths = BTreeSet::new();
+        for i in &placements {
+            placements_by_id.entry(&i.id).or_insert(*i);
+            placement_paths.insert(i.path.as_bytes());
+        }
         let state = |check: &str| {
             s.coverage
                 .iter()
@@ -1486,9 +1497,9 @@ impl<'a> Validator<'a> {
                             .push(error("Absent while discovery is not complete"));
                         // V8
                     }
-                    if placements
-                        .iter()
-                        .any(|i| Some(i.path.as_bytes()) == at_member.as_deref())
+                    if at_member
+                        .as_deref()
+                        .is_some_and(|path| placement_paths.contains(path))
                     {
                         self.errors
                             .push(error("Absent, but a placement is at the member's path"));
@@ -1496,7 +1507,7 @@ impl<'a> Validator<'a> {
                     }
                 }
                 (Some(id), false) => {
-                    let Some(i) = placements.iter().find(|i| i.id == *id) else {
+                    let Some(i) = placements_by_id.get(id) else {
                         self.errors
                             .push(error("the instance is not a placement of the install root")); // V2
                         continue;
@@ -1545,7 +1556,7 @@ impl<'a> Validator<'a> {
             macho_architecture, ContainerFacts, DataValue, MachOLibrary, ARTIFACTS_CONTAINER,
             FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP, LOAD_DYLIB_GAP_PREFIX, MH_OBJECT,
         };
-        use crate::relation::{DeclKind, Relation};
+        use crate::relation::DeclKind;
         let s = self.s;
         let state = |check: &str| {
             s.coverage
@@ -1560,30 +1571,28 @@ impl<'a> Validator<'a> {
             if !seen.insert(&facts.slice) {
                 why.push("one record per slice".to_string()); // B1
             }
-            let artifact = s
-                .artifacts
-                .iter()
-                .find(|a| a.slices.iter().any(|x| x.id == facts.slice));
-            let Some(artifact) = artifact else {
+            let Some((artifact_position, artifact, slice)) =
+                self.index.slices.get(facts.slice.as_str()).copied()
+            else {
                 why.push("not a slice of the session".to_string()); // B1
                 self.binary_errors(facts.slice.as_str(), why);
                 continue;
             };
+            let declarations = self
+                .index
+                .declarations
+                .get(facts.slice.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             match &facts.container {
                 ContainerFacts::Elf(elf) => {
                     if !matches!(artifact.format, crate::artifact::Format::Elf { .. }) {
                         why.push("ELF facts of something that is not an ELF artifact".to_string());
                     }
-                    let mut declared: Vec<&crate::text::UntrustedText> = s
-                        .relations
+                    let mut declared: Vec<&crate::text::UntrustedText> = declarations
                         .iter()
-                        .filter_map(|r| match r {
-                            Relation::Declares {
-                                from,
-                                needed,
-                                kind: DeclKind::ElfNeeded,
-                            } if *from == facts.slice => Some(needed),
-                            _ => None,
+                        .filter_map(|(kind, needed)| {
+                            (*kind == DeclKind::ElfNeeded).then_some(*needed)
                         })
                         .collect();
                     let total = declared.len();
@@ -1598,13 +1607,10 @@ impl<'a> Validator<'a> {
                                 .to_string(),
                         );
                     }
-                    if s.relations.iter().any(|relation| {
-                        matches!(
-                            relation,
-                            Relation::Declares { from, kind, .. }
-                                if *from == facts.slice && *kind != DeclKind::ElfNeeded
-                        )
-                    }) {
+                    if declarations
+                        .iter()
+                        .any(|(kind, _)| *kind != DeclKind::ElfNeeded)
+                    {
                         why.push("a dependency relation has the wrong ELF kind".to_string());
                     }
                     if elf.imports.windows(2).any(|w| w[0] >= w[1]) {
@@ -1700,12 +1706,7 @@ impl<'a> Validator<'a> {
                         0x0100_000c => crate::artifact::Arch::Aarch64,
                         _ => crate::artifact::Arch::Other,
                     };
-                    if artifact
-                        .slices
-                        .iter()
-                        .find(|slice| slice.id == facts.slice)
-                        .is_some_and(|slice| slice.arch != expected_arch)
-                    {
+                    if slice.arch != expected_arch {
                         why.push(
                             "Mach-O CPU type disagrees with the slice architecture".to_string(),
                         );
@@ -1723,18 +1724,11 @@ impl<'a> Validator<'a> {
                                 "its header disagrees with its fat table entry without the gap {FAT_CPU_MISMATCH_GAP:?}"
                             ));
                         }
-                        let twice = s.binaries.iter().any(|other| {
-                            other.slice != facts.slice
-                                && artifact.slices.iter().any(|x| x.id == other.slice)
-                                && matches!(
-                                    &other.container,
-                                    ContainerFacts::MachO(o)
-                                        if o.fat_cpu_type
-                                            .zip(o.fat_cpu_subtype)
-                                            .map(|(t, st)| macho_architecture(t, st))
-                                            == Some(table)
-                                )
-                        });
+                        let twice = self
+                            .index
+                            .fat_architectures
+                            .get(&(artifact_position, table))
+                            .is_some_and(|slices| slices.len() > 1);
                         if twice && !facts.gaps.iter().any(|g| g == FAT_DUPLICATE_ARCH_GAP) {
                             why.push(format!(
                                 "its architecture listed twice in the fat table without the gap {FAT_DUPLICATE_ARCH_GAP:?}"
@@ -1744,16 +1738,10 @@ impl<'a> Validator<'a> {
                     if facts.go.is_some() {
                         why.push("Mach-O facts cannot contain Go build info".to_string());
                     }
-                    let mut declared: Vec<&crate::text::UntrustedText> = s
-                        .relations
+                    let mut declared: Vec<&crate::text::UntrustedText> = declarations
                         .iter()
-                        .filter_map(|r| match r {
-                            Relation::Declares {
-                                from,
-                                needed,
-                                kind: DeclKind::MachOLoadDylib,
-                            } if *from == facts.slice => Some(needed),
-                            _ => None,
+                        .filter_map(|(kind, needed)| {
+                            (*kind == DeclKind::MachOLoadDylib).then_some(*needed)
                         })
                         .collect();
                     let total = declared.len();
@@ -1769,13 +1757,10 @@ impl<'a> Validator<'a> {
                                 .to_string(),
                         );
                     }
-                    if s.relations.iter().any(|relation| {
-                        matches!(
-                            relation,
-                            Relation::Declares { from, kind, .. }
-                                if *from == facts.slice && *kind != DeclKind::MachOLoadDylib
-                        )
-                    }) {
+                    if declarations
+                        .iter()
+                        .any(|(kind, _)| *kind != DeclKind::MachOLoadDylib)
+                    {
                         why.push("a dependency relation has the wrong Mach-O kind".to_string());
                     }
                     // B4
@@ -1805,12 +1790,18 @@ impl<'a> Validator<'a> {
                         .gaps
                         .iter()
                         .any(|g| g.starts_with(LOAD_DYLIB_GAP_PREFIX));
+                    let mut load_positions = BTreeMap::new();
+                    for (position, name) in macho.load_dylibs.iter().enumerate() {
+                        load_positions.entry(name).or_insert(position);
+                    }
                     let misplaced = |ordinal: u32, name: Option<&crate::text::UntrustedText>| {
                         let at = ordinal as usize;
                         at == 0
                             || match name {
                                 Some(n) if all_kept => macho.load_dylibs.get(at - 1) != Some(n),
-                                Some(n) => !macho.load_dylibs.iter().take(at).any(|d| d == n),
+                                Some(n) => {
+                                    load_positions.get(n).is_none_or(|position| *position >= at)
+                                }
                                 None => all_kept,
                             }
                     };
@@ -1848,7 +1839,7 @@ impl<'a> Validator<'a> {
                     InstanceContent::Read { artifact } => Some(artifact),
                     _ => None,
                 })
-                .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+                .filter_map(|id| self.index.artifacts.get(id.as_str()).copied())
                 .filter(|a| {
                     matches!(
                         a.format,
@@ -1868,7 +1859,7 @@ impl<'a> Validator<'a> {
             let covered = has_slices
                 && slices
                     .iter()
-                    .all(|slice| s.binaries.iter().any(|f| f.slice == **slice));
+                    .all(|slice| self.index.binaries.contains_key(slice.as_str()));
             let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
             if !(discovery && covered && clean) {
                 self.errors.push(ValidationError::Binary {
@@ -1904,13 +1895,17 @@ impl<'a> Validator<'a> {
     fn binary_inputs(&mut self) {
         use crate::artifact::DiscoverySource;
         use crate::binary_input::{
-            expected_binary_container, is_binary_inspection, is_binary_root, ExpectedContainer,
-            BINARY_CONTAINER, BINARY_ROOT_PREFIX,
+            container, is_binary_inspection, is_binary_root, ExpectedContainer, BINARY_CONTAINER,
+            BINARY_ROOT_PREFIX,
         };
         use crate::coverage::Coverage;
         use crate::render::{coverage_state, subject};
         use crate::session::Mode;
         let s = self.s;
+        let lookup = SessionLookup {
+            session: s,
+            index: Some(self.index),
+        };
         for root in &s.request.roots {
             if root.id.as_str().starts_with(BINARY_ROOT_PREFIX) && !is_binary_root(&root.id) {
                 self.input_error(
@@ -2005,7 +2000,7 @@ impl<'a> Validator<'a> {
                 continue;
             };
             let shown = |state: &CoverageState| coverage_state(state).terminal();
-            match expected_binary_container(s, i) {
+            match container(&lookup, i) {
                 Err(why) => self.input_error(at, why),
                 Ok(expected) if !expected.admits(&c.state) => {
                     let why = match &expected {
@@ -2048,12 +2043,15 @@ impl<'a> Validator<'a> {
     /// [`expected_binary_code`]: crate::binary_input::expected_binary_code
     fn code_coverage(&mut self) {
         use crate::binary_input::{
-            expected_binary_code, is_binary_inspection, is_binary_root, BINARY_CODE,
-            BINARY_CODE_BYTES,
+            code, is_binary_inspection, is_binary_root, BINARY_CODE, BINARY_CODE_BYTES,
         };
         use crate::coverage::Coverage;
         use crate::render::subject;
         let s = self.s;
+        let lookup = SessionLookup {
+            session: s,
+            index: Some(self.index),
+        };
         let binary = is_binary_inspection(&s.request);
         // C1
         if s.request.code && !binary {
@@ -2096,7 +2094,7 @@ impl<'a> Validator<'a> {
                 format!("request.code without a {BINARY_CODE_BYTES} budget"),
             );
         }
-        let mut analyzed: BTreeSet<&SliceId> = BTreeSet::new();
+        let mut analyzed_artifacts = BTreeSet::new();
         for i in inputs.values() {
             let at = format!("coverage[{BINARY_CODE} on {}]", i.id);
             // C2: exactly one entry.
@@ -2112,7 +2110,7 @@ impl<'a> Validator<'a> {
                 continue;
             };
             // C3. An input that cannot be judged has its error from B9 or the budget above.
-            if let Ok(expected) = expected_binary_code(s, i) {
+            if let Ok(expected) = code(&lookup, i) {
                 if let Err(why) = expected.admits(c) {
                     self.code_error(&at, why);
                 }
@@ -2122,15 +2120,15 @@ impl<'a> Validator<'a> {
                 CoverageState::Complete | CoverageState::Partial { .. }
             ) {
                 if let InstanceContent::Read { artifact } = &i.content {
-                    let slices = s
-                        .artifacts
-                        .iter()
-                        .filter(|a| a.id == *artifact)
-                        .flat_map(|a| a.slices.iter().map(|x| &x.id));
-                    analyzed.extend(slices);
+                    analyzed_artifacts.insert(artifact.as_str());
                 }
             }
         }
+        let analyzed: BTreeSet<&SliceId> = analyzed_artifacts
+            .into_iter()
+            .filter_map(|id| self.index.artifact_slices.get(id))
+            .flat_map(|slices| slices.iter().copied())
+            .collect();
         // C4
         for facts in &s.code {
             if !analyzed.contains(&facts.slice) {
@@ -2148,7 +2146,6 @@ impl<'a> Validator<'a> {
     ///
     /// [`MachOLibrary::looked_up`]: crate::binary::MachOLibrary::looked_up
     fn import_hints(&mut self) {
-        use crate::binary::ContainerFacts;
         use crate::hint::Signal;
         let s = self.s;
         for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
@@ -2158,27 +2155,14 @@ impl<'a> Validator<'a> {
             }
             // Whether the value is an import of the slice, and, on a Mach-O slice, one whose
             // library is looked up.
-            let (imported, looked_up) = match s
-                .binaries
-                .iter()
-                .find(|b| b.slice == hint.subject)
-                .map(|b| &b.container)
-            {
-                Some(ContainerFacts::Elf(elf)) => {
-                    (elf.imports.iter().any(|i| i.name == hint.value), true)
-                }
-                Some(ContainerFacts::MachO(macho)) => {
-                    let named = || macho.imports.iter().filter(|i| i.name == hint.value);
-                    (
-                        named().next().is_some(),
-                        named().any(|i| i.library.looked_up()),
-                    )
-                }
-                None => (false, true),
-            };
-            if !imported {
+            let imported = self
+                .index
+                .imports
+                .get(hint.subject.as_str())
+                .and_then(|names| names.get(&hint.value));
+            if imported.is_none() {
                 self.code_error(&at, "the value is not an import of its slice");
-            } else if !looked_up {
+            } else if imported == Some(&false) {
                 self.code_error(
                     &at,
                     "the value is a Mach-O import whose library is not looked up (only libSystem's, \
@@ -2204,12 +2188,16 @@ impl<'a> Validator<'a> {
     fn identity_coverage(&mut self) {
         use crate::binary::ARTIFACTS_IDENTITY;
         use crate::binary_input::{
-            expected_binary_container, expected_binary_identity, is_binary_root, ExpectedContainer,
-            BINARY_IDENTITY, BINARY_SCAN_BYTES,
+            container, identity, is_binary_root, ExpectedContainer, BINARY_IDENTITY,
+            BINARY_SCAN_BYTES,
         };
         use crate::coverage::{Coverage, SkipReason};
         use crate::render::{coverage_state, subject};
         let s = self.s;
+        let lookup = SessionLookup {
+            session: s,
+            index: Some(self.index),
+        };
         // S1. An instance of a binary root makes the session a binary inspection (B10).
         let inputs: BTreeMap<&InstanceId, &FileInstance> = s
             .instances
@@ -2258,7 +2246,7 @@ impl<'a> Validator<'a> {
                     continue;
                 }
             };
-            match expected_binary_identity(s, i) {
+            match identity(&lookup, i) {
                 Ok(expected) => {
                     if let Err(why) = expected.admits(c) {
                         self.input_error(&at, why);
@@ -2266,12 +2254,7 @@ impl<'a> Validator<'a> {
                 }
                 // B9 reports an input whose container it cannot judge, and an input over
                 // `binary_bytes` whose `binary.container` entry it does not admit.
-                Err(why)
-                    if matches!(
-                        expected_binary_container(s, i),
-                        Ok(ExpectedContainer::Exactly(_))
-                    ) =>
-                {
+                Err(why) if matches!(container(&lookup, i), Ok(ExpectedContainer::Exactly(_))) => {
                     self.input_error(&at, why)
                 }
                 Err(_) => {}
@@ -2317,7 +2300,7 @@ impl<'a> Validator<'a> {
                     "{ARTIFACTS_IDENTITY} must be scoped to the install root"
                 )),
                 CoverageState::Complete => {
-                    if !install_scanned(s) {
+                    if !install_scanned(&lookup) {
                         why.push(format!(
                             "{ARTIFACTS_IDENTITY} is Complete, but discovery is not Complete, an install binary is a Mach-O, a slice has no facts, a Go ELF has no section headers, a linked ELF's dynamic symbols were not read, or a returned value was not read"
                         ));
@@ -2354,12 +2337,12 @@ impl<'a> Validator<'a> {
                     && matches!(c.state, CoverageState::OutOfScope { .. })
             })
             .filter_map(|c| match &c.scope {
-                Ref::Instance(id) => s.instances.iter().find(|i| i.id == *id),
+                Ref::Instance(id) => self.index.instances.get(id.as_str()).copied(),
                 _ => None,
             })
             .filter_map(|i| match &i.content {
                 InstanceContent::Read { artifact } => {
-                    s.artifacts.iter().find(|a| a.id == *artifact)
+                    self.index.artifacts.get(artifact.as_str()).copied()
                 }
                 InstanceContent::NotRead { .. } => None,
             })
@@ -2367,7 +2350,7 @@ impl<'a> Validator<'a> {
             .collect();
         for hint in &s.hints {
             let at = format!("hints[{} on {}]", hint.feature, hint.subject);
-            let facts = s.binaries.iter().find(|b| b.slice == hint.subject);
+            let facts = self.index.binaries.get(hint.subject.as_str());
             let elf = facts.is_some_and(|b| matches!(b.container, ContainerFacts::Elf(_)));
             let section = match &hint.at {
                 Loc::Section { name, .. } => Some(name.as_bytes()),
@@ -3643,12 +3626,12 @@ fn c5(value: &ArgValue) -> Vec<String> {
 /// [`SCAN_NO_SECTIONS`]: crate::binary_input::SCAN_NO_SECTIONS
 /// [`SCAN_NAME_NOT_READ`]: crate::binary_input::SCAN_NAME_NOT_READ
 /// [`returned_value_gap`]: crate::binary_input::returned_value_gap
-fn install_scanned(s: &Session) -> bool {
+fn install_scanned(lookup: &SessionLookup<'_>) -> bool {
     use crate::artifact::Format;
     use crate::binary_input::{
-        any_returns, exports_unread, name_and_hash_only, no_sections_gap, unread_returns,
-        NoSectionsGap,
+        any_returns, exports_unread, no_sections_gap, unread_returns, NoSectionsGap,
     };
+    let s = lookup.session;
     let discovery = s
         .coverage
         .iter()
@@ -3662,7 +3645,7 @@ fn install_scanned(s: &Session) -> bool {
             InstanceContent::Read { artifact } => Some(artifact),
             InstanceContent::NotRead { .. } => None,
         })
-        .filter_map(|id| s.artifacts.iter().find(|a| a.id == *id))
+        .filter_map(|id| lookup.artifact(id))
         .filter(|a| {
             matches!(
                 a.format,
@@ -3676,15 +3659,12 @@ fn install_scanned(s: &Session) -> bool {
         };
         !a.slices.is_empty()
             && a.slices.iter().all(|x| {
-                s.binaries
-                    .iter()
-                    .find(|b| b.slice == x.id)
-                    .is_some_and(|b| {
-                        (no_sections_gap(b) != NoSectionsGap::Must
-                            && !exports_unread(b, kind)
-                            && unread_returns(b).is_empty())
-                            || (name_and_hash_only(s, &x.id) && !any_returns(b))
-                    })
+                lookup.binary(&x.id).is_some_and(|b| {
+                    (no_sections_gap(b) != NoSectionsGap::Must
+                        && !exports_unread(b, kind)
+                        && unread_returns(b).is_empty())
+                        || (lookup.name_and_hash_only(&x.id) && !any_returns(b))
+                })
             })
     });
     discovery && scanned
