@@ -123,10 +123,7 @@ Current analysis boundaries:
 - **Code analysis is x86-64 ELF only**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
 - **`--code` is available on `binary inspect`.** Installation inspection collects container facts, identities, and hints; it does not yet analyze call sites. Inspect an installation's individual files with `binary inspect --code` when needed.
 - **Mach-O support covers containers and imports**, including per-architecture slices in universal files. Identity scans and code analysis remain unsupported, so these required checks leave the default result incomplete.
-- **Capability mappings cover specific names.** POSIX, libstdc++, and libc++ import mappings are
-  listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints
-  do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used
-  as capability-denial keys.
+- **Capability mappings cover specific names.** POSIX, libstdc++, and libc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
 
 ## Apply a policy
 

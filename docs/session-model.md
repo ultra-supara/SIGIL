@@ -908,7 +908,7 @@ The schema leaves these fields out of `required`. Every other field is required 
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`. A validation rule can refuse one too: by C6, a build from before #105 refuses a session with a `cxx.*` hint on a Mach-O import bound to `/usr/lib/libc++.1.dylib`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet
