@@ -1,0 +1,11 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ arm64-macos ]
+install-name:    '/usr/lib/libc++.1.dylib'
+current-version: 1700
+exports:
+  - targets:     [ arm64-macos ]
+    symbols:     [ __ZNSt3__14__fs10filesystem13__permissionsERKNS1_4pathENS1_5permsENS1_12perm_optionsEPNS_10error_codeE,
+                   __ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE,
+                   _connect ]
+...

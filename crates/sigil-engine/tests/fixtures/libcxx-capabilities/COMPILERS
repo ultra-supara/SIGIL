@@ -1,0 +1,10 @@
+clang++-22: Debian clang version 22.1.8 (1+b2)
+ld.lld-22: Debian LLD 22.1.8 (compatible with GNU linkers)
+ld64.lld-22: Debian LLD 22.1.8
+llvm-nm-22: Debian LLVM version 22.1.8
+llvm-cxxfilt-22: Debian LLVM version 22.1.8
+llvm-readelf-22: Debian LLVM version 22.1.8
+llvm-otool-22: Debian LLVM version 22.1.8
+llvm-objdump-22: Debian LLVM version 22.1.8
+link: /usr/lib/x86_64-linux-gnu/libc++.so.1.0 sha256:4d3465410e3307cf78ef78505a3de816aed9c9796c1102ad93ea7984893f8f6f
+load: /usr/lib/x86_64-linux-gnu/libc++.so.1.0 sha256:4d3465410e3307cf78ef78505a3de816aed9c9796c1102ad93ea7984893f8f6f
