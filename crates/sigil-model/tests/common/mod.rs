@@ -229,7 +229,7 @@ pub fn instance(
 /// a session with binary facts records. The engine's `example_hints` checks it against the table
 /// the engine embeds.
 pub const CAPABILITY_TABLE_HEX: &str =
-    "c6adb5e28b74c655ff6702e1bc9a45fb268811f8d98970297559d04d11cba8ff";
+    "2620e766e87f4ecc97f2bc24d3cd0e10cb538ca8c0ece532d69afaaf0ac7215c";
 
 /// Records the capability table the engine's binary analysis makes hints and call sites with
 /// (#51), as `sigil binary inspect` does.

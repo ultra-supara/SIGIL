@@ -205,8 +205,8 @@ symbols = [
 # std::__1::__fs::filesystem that take an error_code* (null for the overload that throws), so a
 # program imports the helper whichever overload it calls: __remove, __remove_all, __rename,
 # __create_directory (with and without the path whose attributes the new directory takes),
-# __create_directories, __create_symlink, __create_hard_link, __create_directory_symlink,
-# __copy, __copy_file, __copy_symlink, __resize_file. Of the streams, libc++ exports only
+# __create_directories, __create_symlink, __create_hard_link, __create_directory_symlink, __copy,
+# __copy_file, __copy_symlink, __resize_file. Of the streams' functions, libc++ exports only
 # ifstream's and ofstream's open, for char, with a const char* or a string.
 # source: "libc++ 22.1.8: <demangled form>", as llvm-cxxfilt 22.1.8 prints it. arity: the
 # parameters, plus this for open. macho_dylib: libc++'s; an import bound to libc++ is looked up

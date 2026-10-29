@@ -110,13 +110,13 @@ looked up at run time, and a raw system call are not imports.
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
 | `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name, and its `open`; libc++'s `std::basic_ifstream<char>::open` |
-| `cxx.file_write` | libstdc++'s `std::filesystem` functions `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open`; libc++'s helpers for the same twelve functions (`std::__1::__fs::filesystem::__remove`, ...) and `std::basic_ofstream<char>::open` |
+| `cxx.file_write` | libstdc++'s `std::filesystem` functions `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open`; libc++'s helpers for the same twelve functions (`std::__1::__fs::filesystem::__remove`, …) and `std::basic_ofstream<char>::open` |
 
 Each entry of `crates/sigil-engine/signatures/capabilities.toml` names its source: POSIX.1-2024 for
-the libc names (Linux and macOS `ptrace(2)` for `ptrace`), and, for a C++ name, the libstdc++ symbol
-version that exports it (`GLIBCXX_3.4.26`) and its demangled form, with `[C1]` or `[C2]` after a
-constructor, and, for a libc++ name, `libc++ 22.1.8` and its demangled form. Each group also names
-the dylib a Mach-O import of its names must be bound to (`macho_dylib`).
+the libc names (Linux and macOS `ptrace(2)` for `ptrace`), and, for a libstdc++ name, the libstdc++
+symbol version that exports it (`GLIBCXX_3.4.26`) and its demangled form, with `[C1]` or `[C2]`
+after a constructor, and, for a libc++ name, `libc++ 22.1.8` and its demangled form. Each group also
+names the dylib a Mach-O import of its names must be bound to (`macho_dylib`).
 
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
 imports kept within `binary_imports` give hints: when a file has more, the report says that the
@@ -157,8 +157,8 @@ Some names stay unmapped:
 - every other `std::filesystem` function: a query (`file_size`, `canonical`, …), or
   `current_path(p)`, which changes the working directory, not a file;
 - the streams' default and move constructors: they open no file;
-- other C++ libraries: Android's `std::__ndk1` and Chromium's `std::__Cr` (usually linked
-  statically, so never imported), Boost, Qt, Poco.
+- libc++ built with another ABI namespace (Android's `std::__ndk1`, Chromium's `std::__Cr`), whose
+  names differ, and other C++ libraries (Boost, Qt, Poco).
 
 A missing `cxx.*` hint is not absence. A stream constructor that the compiler inlines leaves
 `basic_filebuf::open`, which is unmapped, as the only import that opens the file (its destructor and
@@ -177,14 +177,14 @@ declarations in the inline namespace `std::__1`, and declares `std::filesystem`'
 over exported helpers in `std::__1::__fs::filesystem` that take an `std::error_code*` (null for the
 overload that throws). A program imports the helper whichever overload it calls:
 `std::filesystem::remove(p)` imports
-`_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE`. The table has the 13 helpers
-of the twelve write functions (`__create_directory` twice: with and without the path whose
-attributes the new directory takes) as `cxx.file_write`. Of the streams, libc++ 22.1.8 exports only
+`_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE`. The table has the 13 helpers of
+the twelve write functions (`__create_directory` twice: with and without the path whose attributes
+the new directory takes) as `cxx.file_write`. Of the streams' functions, libc++ 22.1.8 exports only
 `std::basic_ifstream<char>::open` (`cxx.file_read`) and `std::basic_ofstream<char>::open`
-(`cxx.file_write`), each for a `const char*` and a `std::string`: 17 names, measured against
-libc++ 22.1.8 (`libc++.so.1`; the fixture's `libcxx-exports.tsv`). On a Mach-O slice they are
-looked up when bound to `/usr/lib/libc++.1.dylib`, by flat lookup, or in an object file; an import
-bound to libc++ is looked up for these names only, so `_connect` from libc++ gives no hint.
+(`cxx.file_write`), each for a `const char*` and a `std::string`: 17 names (`libc++.so.1`; the
+fixture's `libcxx-exports.tsv`). On a Mach-O slice they are looked up when bound to
+`/usr/lib/libc++.1.dylib`, by flat lookup, or in an object file; an import bound to libc++ is looked
+up for these names only, so `_connect` from libc++ gives no hint.
 
 A libc++ stream's constructor is inline and opens the file through
 `std::basic_filebuf<char>::open`, which stays unmapped (the mode decides read or write): so
