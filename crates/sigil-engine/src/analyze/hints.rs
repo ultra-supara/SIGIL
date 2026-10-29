@@ -3,40 +3,50 @@
 //! analysis (`binary inspect --code`, PR-5a) adds the call sites. Signature hints (PR-4c-2a): one
 //! per needle the scan found.
 
-use sigil_model::{BinaryFacts, ContainerFacts, FeatureHint, Loc, Signal, SliceId, UntrustedText};
+use sigil_model::{
+    BinaryFacts, ContainerFacts, FeatureHint, Loc, MachOLibrary, Signal, SliceId, UntrustedText,
+};
 
 use crate::binary::scan::ScanOutcome;
-use crate::code::data::signatures;
+use crate::code::data::{signatures, Capability};
 
 /// The hints of `binaries`, sorted by (slice, feature, name). An ELF import is looked up in the
-/// capability table by its name. A Mach-O import (PR-4c-3b) is looked up only when its library is
-/// ([`MachOLibrary::looked_up`]: libSystem, flat lookup, or an object file's), by its name with one
-/// leading `_` stripped; a name without one is not looked up. Either hint's value is the name as
-/// the file has it. `Err` only if the embedded signatures are invalid.
-///
-/// [`MachOLibrary::looked_up`]: sigil_model::MachOLibrary::looked_up
+/// capability table by its name. A Mach-O import (PR-4c-3b) is looked up by its name with one
+/// leading `_` stripped (a name without one is not looked up), and gives its entry's hint only
+/// when its library is the entry's `macho_dylib` (#105), or it was found by flat lookup, or it is
+/// an object file's ([`looked_up_for`]). Either hint's value is the name as the file has it.
+/// `Err` only if the embedded signatures are invalid.
 pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
     let sig = signatures()?;
     let mut out = vec![];
     for b in binaries {
-        // Each import: its name, and the name the table is looked up by.
-        let imports: Vec<(&UntrustedText, &[u8])> = match &b.container {
+        // Each import: its name, the name the table is looked up by, and a Mach-O import's
+        // library.
+        let imports: Vec<(&UntrustedText, &[u8], Option<&MachOLibrary>)> = match &b.container {
             ContainerFacts::Elf(elf) => elf
                 .imports
                 .iter()
-                .map(|i| (&i.name, i.name.as_bytes()))
+                .map(|i| (&i.name, i.name.as_bytes(), None))
                 .collect(),
             ContainerFacts::MachO(macho) => macho
                 .imports
                 .iter()
-                .filter(|i| i.library.looked_up() == sigil_model::LookedUp::All)
-                .filter_map(|i| Some((&i.name, i.name.as_bytes().strip_prefix(b"_")?)))
+                .filter_map(|i| {
+                    Some((
+                        &i.name,
+                        i.name.as_bytes().strip_prefix(b"_")?,
+                        Some(&i.library),
+                    ))
+                })
                 .collect(),
         };
-        for (name, key) in imports {
+        for (name, key, library) in imports {
             let Some(cap) = sig.capability(key) else {
                 continue;
             };
+            if library.is_some_and(|l| !looked_up_for(l, cap)) {
+                continue;
+            }
             out.push(FeatureHint {
                 subject: b.slice.clone(),
                 feature: cap.feature.clone(),
@@ -56,6 +66,19 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
     // An import needed at two versions, or from two libraries looked up, is one hint.
     out.dedup();
     Ok(out)
+}
+
+/// Whether a Mach-O import of `library` gives `cap`'s hint (#105): one found by flat lookup, or an
+/// object file's, always does; one bound to a dylib only when that dylib is `cap.macho_dylib`.
+/// Another dylib's `_connect` is that dylib's function, not POSIX `connect`.
+fn looked_up_for(library: &MachOLibrary, cap: &Capability) -> bool {
+    match library {
+        MachOLibrary::FlatLookup | MachOLibrary::Unbound => true,
+        MachOLibrary::Dylib {
+            name: Some(name), ..
+        } => name.as_bytes() == cap.macho_dylib.as_bytes(),
+        _ => false,
+    }
 }
 
 /// The signature hints of `scans` (PR-4c-2a): one per needle found, in the order of `scans`
@@ -85,7 +108,7 @@ mod tests {
     use super::*;
     use sigil_model::{
         BinaryFacts, ContainerFacts, ElfFacts, ElfImport, MachOFacts, MachOImport, MachOLibrary,
-        SliceId, UntrustedText, LIBSYSTEM,
+        SliceId, UntrustedText, LIBCXX, LIBSYSTEM,
     };
 
     fn facts(slice: &str, imports: &[(&str, Option<&str>)]) -> BinaryFacts {
@@ -302,6 +325,24 @@ mod tests {
     const LIBCXX_REMOVE: &str =
         "__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE";
 
+    /// libc++'s `std::filesystem::remove` helper, as an ELF names it (#105).
+    const ELF_LIBCXX_REMOVE: &str =
+        "_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE";
+
+    fn libcxx(ordinal: u32) -> MachOLibrary {
+        MachOLibrary::Dylib {
+            ordinal,
+            name: Some(UntrustedText::new(LIBCXX)),
+        }
+    }
+
+    fn got(hints: &[FeatureHint]) -> Vec<(&str, &str)> {
+        hints
+            .iter()
+            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
+            .collect()
+    }
+
     #[test]
     fn a_cxx_import_is_a_hint_beside_the_posix_ones() {
         let hints = derive(&[facts(
@@ -344,8 +385,8 @@ mod tests {
                 "_ZNSt10filesystem6statusERKNS_7__cxx114pathE",
                 // No file opened.
                 "_ZNSt14basic_ifstreamIcSt11char_traitsIcEEC1Ev",
-                // libc++'s remove, as an ELF names it.
-                "_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE",
+                // libc++'s filebuf open (#105): the mode decides read or write.
+                "_ZNSt3__113basic_filebufIcNS_11char_traitsIcEEE4openEPKcj",
                 // A version is not part of the name.
                 "_ZNSt10filesystem6removeERKNS_7__cxx114pathE@GLIBCXX_3.4.26",
             ]),
@@ -354,8 +395,60 @@ mod tests {
         assert!(hints.is_empty(), "{hints:?}");
     }
 
+    /// #105: an ELF import of a libc++ name is a hint by its name alone.
     #[test]
-    fn a_macho_cxx_import_is_looked_up_by_its_library_as_any_other() {
+    fn an_elf_libcxx_import_is_a_hint_by_its_name() {
+        let hints = derive(&[facts(SLICE, &names(&[ELF_LIBCXX_REMOVE, "connect"]))]).unwrap();
+        assert_eq!(
+            got(&hints),
+            [
+                ("cxx.file_write", ELF_LIBCXX_REMOVE),
+                ("posix.network", "connect")
+            ]
+        );
+    }
+
+    /// #105: a Mach-O import bound to a dylib is looked up for the names whose entries name that
+    /// dylib; one found by flat lookup, or an object file's, for every name.
+    #[test]
+    fn a_macho_import_is_looked_up_for_the_names_of_its_dylib() {
+        let libfoo = MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new("@rpath/libfoo.dylib")),
+        };
+        // libc++'s remove: from libc++, by flat lookup, in an object file.
+        for library in [libcxx(2), MachOLibrary::FlatLookup, MachOLibrary::Unbound] {
+            let hints = derive(&[macho(&[(LIBCXX_REMOVE, library.clone())])]).unwrap();
+            assert_eq!(
+                got(&hints),
+                [("cxx.file_write", LIBCXX_REMOVE)],
+                "{library:?}"
+            );
+        }
+        // Not from libc++: libSystem's, another dylib's, one whose dylib was not kept, …
+        for library in [
+            libsystem(),
+            libfoo.clone(),
+            MachOLibrary::Dylib {
+                ordinal: 2,
+                name: None,
+            },
+            MachOLibrary::SelfImage,
+            MachOLibrary::MainExecutable,
+            MachOLibrary::WeakLookup,
+        ] {
+            assert!(
+                derive(&[macho(&[(LIBCXX_REMOVE, library.clone())])])
+                    .unwrap()
+                    .is_empty(),
+                "{library:?}"
+            );
+        }
+        // A POSIX name from libc++ is libc++'s function, not POSIX's.
+        assert!(derive(&[macho(&[("_connect", libcxx(2))])])
+            .unwrap()
+            .is_empty());
+        // libstdc++'s names stay libSystem's: not libc++'s, nor a libstdc++ dylib's.
         let remove = format!("_{REMOVE}");
         let libstdcxx = MachOLibrary::Dylib {
             ordinal: 2,
@@ -363,27 +456,32 @@ mod tests {
                 "/opt/homebrew/lib/gcc/current/libstdc++.6.dylib",
             )),
         };
-        let libcxx = MachOLibrary::Dylib {
-            ordinal: 3,
-            name: Some(UntrustedText::new("/usr/lib/libc++.1.dylib")),
-        };
-        // An object file's and a flat lookup's are looked up; another dylib's is not, and libc++'s
-        // names are not in the table.
+        for library in [libcxx(2), libstdcxx] {
+            assert!(
+                derive(&[macho(&[(&remove, library.clone())])])
+                    .unwrap()
+                    .is_empty(),
+                "{library:?}"
+            );
+        }
+        for library in [libsystem(), MachOLibrary::FlatLookup, MachOLibrary::Unbound] {
+            let hints = derive(&[macho(&[(&remove, library.clone())])]).unwrap();
+            assert_eq!(
+                got(&hints),
+                [("cxx.file_write", remove.as_str())],
+                "{library:?}"
+            );
+        }
+    }
+
+    /// #105: one name from libc++ and by flat lookup is one hint.
+    #[test]
+    fn a_libcxx_name_from_libcxx_and_by_flat_lookup_is_one_hint() {
         let hints = derive(&[macho(&[
-            (&remove, MachOLibrary::Unbound),
-            (&remove, MachOLibrary::FlatLookup),
-            (&remove, libstdcxx.clone()),
-            (LIBCXX_REMOVE, libcxx),
-            (LIBCXX_REMOVE, MachOLibrary::Unbound),
+            (LIBCXX_REMOVE, libcxx(2)),
+            (LIBCXX_REMOVE, MachOLibrary::FlatLookup),
         ])])
         .unwrap();
-        let got: Vec<(&str, &str)> = hints
-            .iter()
-            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
-            .collect();
-        assert_eq!(got, [("cxx.file_write", remove.as_str())]);
-        assert!(derive(&[macho(&[(&remove, libstdcxx)])])
-            .unwrap()
-            .is_empty());
+        assert_eq!(got(&hints), [("cxx.file_write", LIBCXX_REMOVE)]);
     }
 }

@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use sigil_model::{FeatureKey, KnowledgeKind, KnowledgeRef, Sha256Hex, CAPABILITY_TABLE_ID};
+use sigil_model::{
+    FeatureKey, KnowledgeKind, KnowledgeRef, Sha256Hex, CAPABILITY_TABLE_ID, LIBCXX, LIBSYSTEM,
+};
 
 const CAPABILITIES: &str = include_str!("../../signatures/capabilities.toml");
 const NORETURN: &str = include_str!("../../signatures/noreturn.toml");
@@ -20,6 +22,10 @@ pub struct Capability {
     /// Where the name and its meaning come from: a standard, or the library that exports it
     /// (PR-4c-3c). Not blank, and not written to sessions.
     pub source: String,
+    /// The dylib a Mach-O import of this name must be bound to for a hint (#105): [`LIBSYSTEM`]
+    /// or [`LIBCXX`]. An import found by flat lookup, and an object file's, are looked up for
+    /// every name; an ELF import, by its name alone.
+    pub macho_dylib: &'static str,
 }
 
 /// The parsed data.
@@ -42,6 +48,7 @@ struct RawCapabilities {
 #[serde(deny_unknown_fields)]
 struct RawCapability {
     feature: String,
+    macho_dylib: String,
     symbols: Vec<RawSymbol>,
 }
 
@@ -77,6 +84,15 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
     let mut table = BTreeMap::new();
     for c in raw.capability {
         let feature = FeatureKey::new(c.feature).map_err(|e| format!("capabilities.toml: {e}"))?;
+        let macho_dylib = match c.macho_dylib.as_str() {
+            LIBSYSTEM => LIBSYSTEM,
+            LIBCXX => LIBCXX,
+            other => {
+                return Err(format!(
+                    "capabilities.toml: {feature}: macho_dylib {other:?} is neither libSystem nor libc++"
+                ))
+            }
+        };
         for s in c.symbols {
             if s.name.is_empty() {
                 return Err(format!("capabilities.toml: {feature}: an empty name"));
@@ -98,6 +114,7 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
                 feature: feature.clone(),
                 arity: s.arity,
                 source,
+                macho_dylib,
             };
             if table.insert(s.name.clone().into_bytes(), entry).is_some() {
                 return Err(format!("capabilities.toml: {:?} listed twice", s.name));
@@ -167,6 +184,7 @@ impl Signatures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sigil_model::LookedUp;
 
     /// Spec §4.3: v0.1's names, by feature, with their arities.
     const TABLE: [(&str, &str, u8); 28] = [
@@ -292,6 +310,27 @@ mod tests {
         ("_ZNSt14basic_ofstreamIwSt11char_traitsIwEE4openERKSsSt13_Ios_Openmode", "cxx.file_write", 3),
     ];
 
+    /// The #105 spec's Appendix A: libc++ 22.1.8's names, by feature, with their arities.
+    const LIBCXX_NAMES: [(&str, &str, u8); 17] = [
+        ("_ZNSt3__114basic_ifstreamIcNS_11char_traitsIcEEE4openEPKcj", "cxx.file_read", 3),
+        ("_ZNSt3__114basic_ifstreamIcNS_11char_traitsIcEEE4openERKNS_12basic_stringIcS2_NS_9allocatorIcEEEEj", "cxx.file_read", 3),
+        ("_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE", "cxx.file_write", 2),
+        ("_ZNSt3__14__fs10filesystem12__remove_allERKNS1_4pathEPNS_10error_codeE", "cxx.file_write", 2),
+        ("_ZNSt3__14__fs10filesystem8__renameERKNS1_4pathES4_PNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__14__fs10filesystem18__create_directoryERKNS1_4pathEPNS_10error_codeE", "cxx.file_write", 2),
+        ("_ZNSt3__14__fs10filesystem18__create_directoryERKNS1_4pathES4_PNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__14__fs10filesystem20__create_directoriesERKNS1_4pathEPNS_10error_codeE", "cxx.file_write", 2),
+        ("_ZNSt3__14__fs10filesystem16__create_symlinkERKNS1_4pathES4_PNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__14__fs10filesystem18__create_hard_linkERKNS1_4pathES4_PNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__14__fs10filesystem26__create_directory_symlinkERKNS1_4pathES4_PNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__14__fs10filesystem6__copyERKNS1_4pathES4_NS1_12copy_optionsEPNS_10error_codeE", "cxx.file_write", 4),
+        ("_ZNSt3__14__fs10filesystem11__copy_fileERKNS1_4pathES4_NS1_12copy_optionsEPNS_10error_codeE", "cxx.file_write", 4),
+        ("_ZNSt3__14__fs10filesystem14__copy_symlinkERKNS1_4pathES4_PNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__14__fs10filesystem13__resize_fileERKNS1_4pathEmPNS_10error_codeE", "cxx.file_write", 3),
+        ("_ZNSt3__114basic_ofstreamIcNS_11char_traitsIcEEE4openEPKcj", "cxx.file_write", 3),
+        ("_ZNSt3__114basic_ofstreamIcNS_11char_traitsIcEEE4openERKNS_12basic_stringIcS2_NS_9allocatorIcEEEEj", "cxx.file_write", 3),
+    ];
+
     /// The PR-4c-3c spec's Appendix B: every name but `ptrace` is in POSIX.1-2024.
     fn posix_source(name: &str) -> String {
         if name == "ptrace" {
@@ -312,6 +351,7 @@ mod tests {
                     feature: FeatureKey::new(feature).unwrap(),
                     arity,
                     source: posix_source(name),
+                    macho_dylib: LIBSYSTEM,
                 }),
                 "{name}"
             );
@@ -319,8 +359,16 @@ mod tests {
         for (name, feature, arity) in CXX {
             let cap = s.capability(name.as_bytes());
             assert_eq!(
-                cap.map(|c| (c.feature.as_str(), c.arity)),
-                Some((feature, arity)),
+                cap.map(|c| (c.feature.as_str(), c.arity, c.macho_dylib)),
+                Some((feature, arity, LIBSYSTEM)),
+                "{name}"
+            );
+        }
+        for (name, feature, arity) in LIBCXX_NAMES {
+            let cap = s.capability(name.as_bytes());
+            assert_eq!(
+                cap.map(|c| (c.feature.as_str(), c.arity, c.macho_dylib)),
+                Some((feature, arity, LIBCXX)),
                 "{name}"
             );
         }
@@ -334,8 +382,9 @@ mod tests {
             .is_none());
         // The wchar_t streams' open on the __cxx11 string.
         assert_eq!(s.longest(), 107);
-        // v0.1's 28 names (7 + 5 + 6 + 4 + 2 + 3 + 1), unchanged, and libstdc++'s 88 (18 + 70).
-        assert_eq!(s.count(), 28 + 88);
+        // v0.1's 28 names (7 + 5 + 6 + 4 + 2 + 3 + 1), unchanged, libstdc++'s 88 (18 + 70), and
+        // libc++'s 17 (2 + 15).
+        assert_eq!(s.count(), 28 + 88 + 17);
     }
 
     /// libstdc++.so.6.0.35's exports of the families the `cxx.*` names come from, as the C++
@@ -371,7 +420,7 @@ mod tests {
         let exports = exports();
         let mut cxx = 0;
         for (name, cap) in &s.capabilities {
-            if !cap.feature.as_str().starts_with("cxx.") {
+            if !cap.feature.as_str().starts_with("cxx.") || cap.macho_dylib == LIBCXX {
                 continue;
             }
             cxx += 1;
@@ -394,6 +443,26 @@ mod tests {
             );
         }
         assert_eq!(cxx, 88);
+    }
+
+    /// The parameters of a demangled function, split at the commas outside brackets.
+    fn params(list: &str) -> Vec<&str> {
+        let (mut depth, mut start, mut out) = (0, 0, vec![]);
+        for (i, c) in list.char_indices() {
+            match c {
+                '<' | '(' => depth += 1,
+                '>' | ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    out.push(list[start..i].trim());
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        if !list.trim().is_empty() {
+            out.push(list[start..].trim());
+        }
+        out
     }
 
     /// The rule of the PR-4c-3c spec's §2, applied to the exports list rather than written out:
@@ -422,25 +491,6 @@ mod tests {
             "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&",
             "std::basic_string<char, std::char_traits<char>, std::allocator<char> > const&",
         ];
-        // The parameters of a demangled function, split at the commas outside brackets.
-        fn params(list: &str) -> Vec<&str> {
-            let (mut depth, mut start, mut out) = (0, 0, vec![]);
-            for (i, c) in list.char_indices() {
-                match c {
-                    '<' | '(' => depth += 1,
-                    '>' | ')' => depth -= 1,
-                    ',' if depth == 0 => {
-                        out.push(list[start..i].trim());
-                        start = i + 1;
-                    }
-                    _ => {}
-                }
-            }
-            if !list.trim().is_empty() {
-                out.push(list[start..].trim());
-            }
-            out
-        }
         let mut want = BTreeMap::new();
         for (name, (_, demangled)) in exports() {
             let Some((head, rest)) = demangled.split_once('(') else {
@@ -476,7 +526,7 @@ mod tests {
         let got: BTreeMap<&str, (&str, usize)> = s
             .capabilities
             .iter()
-            .filter(|(_, c)| c.feature.as_str().starts_with("cxx."))
+            .filter(|(_, c)| c.feature.as_str().starts_with("cxx.") && c.macho_dylib == LIBSYSTEM)
             .map(|(n, c)| {
                 let name = std::str::from_utf8(n).unwrap();
                 (name, (c.feature.as_str(), usize::from(c.arity)))
@@ -509,6 +559,186 @@ mod tests {
         ] {
             assert!(exports.contains_key(name), "not a libstdc++ export: {name}");
             assert!(s.capability(name.as_bytes()).is_none(), "{name}");
+        }
+    }
+
+    /// libc++ 22.1.8's exports of the file families, as the libc++ fixture's build.sh listed
+    /// them: name, demangled form.
+    const LIBCXX_EXPORTS: &str =
+        include_str!("../../tests/fixtures/libcxx-capabilities/libcxx-exports.tsv");
+
+    fn libcxx_exports() -> BTreeMap<&'static str, &'static str> {
+        let exports: BTreeMap<_, _> = LIBCXX_EXPORTS
+            .lines()
+            .map(|line| {
+                let mut f = line.split('\t');
+                let (Some(name), Some(demangled), None) = (f.next(), f.next(), f.next()) else {
+                    panic!("{line:?}")
+                };
+                (name, demangled)
+            })
+            .collect();
+        assert_eq!(
+            exports.len(),
+            LIBCXX_EXPORTS.lines().count(),
+            "a name listed twice"
+        );
+        exports
+    }
+
+    #[test]
+    fn the_libcxx_names_are_libcxx_exports_and_their_sources_say_so() {
+        let s = signatures().unwrap();
+        let exports = libcxx_exports();
+        let mut libcxx = 0;
+        for (name, cap) in &s.capabilities {
+            if cap.macho_dylib != LIBCXX {
+                continue;
+            }
+            libcxx += 1;
+            let name = std::str::from_utf8(name).unwrap();
+            let Some(demangled) = exports.get(name) else {
+                panic!("not a libc++ export: {name}");
+            };
+            assert_eq!(cap.source, format!("libc++ 22.1.8: {demangled}"), "{name}");
+        }
+        assert_eq!(libcxx, 17);
+    }
+
+    /// The rule of the #105 spec's §2, applied to libc++'s exports list: the helpers of the
+    /// std::filesystem operations that create, remove, rename, copy, or resize, and the ifstream
+    /// and ofstream constructors and `open` that take a file name, for `char` and `wchar_t`, as
+    /// the issue asks (plan review P2: the constructors and `wchar_t` are in the rule, so an
+    /// export of one would be expected here, not missed). Each arity is the demangled form's
+    /// parameters, plus `this` for a member. libc++ 22.1.8 exports only `char`'s `open`.
+    #[test]
+    fn the_libcxx_names_are_the_exports_the_rule_selects_with_their_arities() {
+        const WRITES: [&str; 12] = [
+            "remove",
+            "remove_all",
+            "rename",
+            "create_directory",
+            "create_directories",
+            "create_symlink",
+            "create_hard_link",
+            "create_directory_symlink",
+            "copy",
+            "copy_file",
+            "copy_symlink",
+            "resize_file",
+        ];
+        // A file name: a `const char*`, a string, or (libc++'s overloads) a `path`.
+        const FILE_NAMES: [&str; 3] = [
+            "char const*",
+            "std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&",
+            "std::__1::__fs::filesystem::path const&",
+        ];
+        let mut want = BTreeMap::new();
+        for (name, demangled) in libcxx_exports() {
+            let Some((head, rest)) = demangled.split_once('(') else {
+                continue;
+            };
+            let Some(list) = rest.strip_suffix(')') else {
+                continue;
+            };
+            let params = params(list);
+            let helper = head.strip_prefix("std::__1::__fs::filesystem::__");
+            if helper.is_some_and(|f| WRITES.contains(&f)) {
+                want.insert(name, ("cxx.file_write", params.len()));
+                continue;
+            }
+            for (class, feature) in [
+                ("ifstream", "cxx.file_read"),
+                ("ofstream", "cxx.file_write"),
+            ] {
+                for char in ["char", "wchar_t"] {
+                    let stream =
+                        format!("std::__1::basic_{class}<{char}, std::__1::char_traits<{char}>>::");
+                    let Some(member) = head.strip_prefix(&stream) else {
+                        continue;
+                    };
+                    let opens = member == "open" || member == format!("basic_{class}");
+                    if opens && params.first().is_some_and(|p| FILE_NAMES.contains(p)) {
+                        want.insert(name, (feature, params.len() + 1));
+                    }
+                }
+            }
+        }
+        let s = signatures().unwrap();
+        let got: BTreeMap<&str, (&str, usize)> = s
+            .capabilities
+            .iter()
+            .filter(|(_, c)| c.macho_dylib == LIBCXX)
+            .map(|(n, c)| {
+                let name = std::str::from_utf8(n).unwrap();
+                (name, (c.feature.as_str(), usize::from(c.arity)))
+            })
+            .collect();
+        assert_eq!(got, want);
+        assert_eq!(got.len(), 17);
+        // Measured, and stated: libc++ 22.1.8 exports no ifstream or ofstream constructor (they are
+        // inline over basic_filebuf::open) and no wchar_t stream.
+        let exports = libcxx_exports();
+        for prefix in ["_ZNSt3__114basic_ifstream", "_ZNSt3__114basic_ofstream"] {
+            let members: Vec<&str> = exports
+                .iter()
+                .filter(|(n, _)| n.starts_with(prefix))
+                .map(|(_, d)| *d)
+                .collect();
+            assert_eq!(members.len(), 2, "{prefix}: {members:?}");
+            assert!(
+                members.iter().all(|d| d.contains(">::open(")),
+                "{members:?}"
+            );
+        }
+        assert!(!exports
+            .values()
+            .any(|d| d.contains("basic_ifstream<wchar_t") || d.contains("basic_ofstream<wchar_t")));
+    }
+
+    #[test]
+    fn the_unmapped_libcxx_names_are_exports_not_in_the_table() {
+        let s = signatures().unwrap();
+        let exports = libcxx_exports();
+        for name in [
+            // The mode decides read or write; a stream's constructor imports it.
+            "_ZNSt3__113basic_filebufIcNS_11char_traitsIcEEE4openEPKcj",
+            // Metadata, not a file's contents or name.
+            "_ZNSt3__14__fs10filesystem13__permissionsERKNS1_4pathENS1_5permsENS1_12perm_optionsEPNS_10error_codeE",
+            "_ZNSt3__14__fs10filesystem17__last_write_timeERKNS1_4pathEPNS_10error_codeE",
+            "_ZNSt3__14__fs10filesystem17__last_write_timeERKNS1_4pathENS_6chrono10time_pointINS1_16_FilesystemClockENS5_8durationInNS_5ratioILl1ELl1000000000EEEEEEEPNS_10error_codeE",
+            // They change nothing.
+            "_ZNSt3__14__fs10filesystem8__statusERKNS1_4pathEPNS_10error_codeE",
+            "_ZNSt3__14__fs10filesystem16__symlink_statusERKNS1_4pathEPNS_10error_codeE",
+            "_ZNSt3__14__fs10filesystem18directory_iteratorC1ERKNS1_4pathEPNS_10error_codeENS1_17directory_optionsE",
+            // It opens no file.
+            "_ZNSt3__113basic_filebufIcNS_11char_traitsIcEEEC1Ev",
+        ] {
+            assert!(exports.contains_key(name), "not a libc++ export: {name}");
+            assert!(s.capability(name.as_bytes()).is_none(), "{name}");
+        }
+        // libc++ exports nothing of basic_fstream: its constructor and open import filebuf's open.
+        assert!(!exports
+            .keys()
+            .any(|n| n.starts_with("_ZNSt3__113basic_fstream")));
+    }
+
+    /// #105: the POSIX names and libstdc++'s are libSystem's, libc++'s are libc++'s, and every
+    /// libc++ entry is one the model admits for a libc++ import (C6).
+    #[test]
+    fn each_name_is_looked_up_for_its_dylib() {
+        let s = signatures().unwrap();
+        for (name, cap) in &s.capabilities {
+            let name = std::str::from_utf8(name).unwrap();
+            let want = if name.starts_with("_ZNSt3__1") {
+                LIBCXX
+            } else {
+                LIBSYSTEM
+            };
+            assert_eq!(cap.macho_dylib, want, "{name}");
+            if cap.macho_dylib == LIBCXX {
+                assert!(LookedUp::Cxx.admits(&cap.feature), "{name}");
+            }
         }
     }
 
@@ -572,7 +802,9 @@ mod tests {
     fn invalid_data_is_an_error_not_a_panic() {
         let one = |symbols: &str| {
             parse(
-                &format!("[[capability]]\nfeature = \"posix.network\"\nsymbols = [{symbols}]"),
+                &format!(
+                    "[[capability]]\nfeature = \"posix.network\"\nmacho_dylib = \"{LIBSYSTEM}\"\nsymbols = [{symbols}]"
+                ),
                 NORETURN,
             )
             .map(|_| ())
@@ -609,6 +841,38 @@ mod tests {
             one("{ name = \"connect\", arity = 3, source = \" s \" }"),
             Ok(())
         );
+        // #105: every group names its Mach-O dylib, libSystem's or libc++'s, exactly.
+        let group = |dylib: &str| {
+            parse(
+                &format!(
+                    "[[capability]]\nfeature = \"cxx.file_write\"\n{dylib}symbols = [{{ name = \"a\", arity = 1, source = \"s\" }}]"
+                ),
+                NORETURN,
+            )
+            .map(|_| ())
+        };
+        assert_eq!(group(&format!("macho_dylib = \"{LIBCXX}\"\n")), Ok(()));
+        let missing = group("");
+        assert!(
+            missing
+                .as_ref()
+                .is_err_and(|e| e.contains("missing field `macho_dylib`")),
+            "{missing:?}"
+        );
+        for other in [
+            "",
+            "/usr/lib/libc++.dylib",
+            "/usr/lib/libc++.1.dylib ",
+            "libSystem",
+        ] {
+            assert_eq!(
+                group(&format!("macho_dylib = \"{other}\"\n")),
+                Err(format!(
+                    "capabilities.toml: cxx.file_write: macho_dylib {other:?} is neither libSystem nor libc++"
+                )),
+                "{other:?}"
+            );
+        }
         let unknown = one("{ name = \"connect\", arity = 3, source = \"s\", sources = \"s\" }");
         assert!(
             unknown
