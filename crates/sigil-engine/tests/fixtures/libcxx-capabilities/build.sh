@@ -101,7 +101,8 @@ family_exports() {
 }
 
 # The toolchain and the two libraries; the link inputs and header versions follow the link, and
-# then the whole is compared with the committed COMPILERS, before anything is moved. Each tool's version: the first dotted number of the first line that has one.
+# then the whole is compared with the committed COMPILERS, before anything is moved. Each tool's
+# version: the first dotted number of the first line that has one.
 for tool in clang++-22 ld.lld-22 ld64.lld-22 llvm-nm-22 llvm-cxxfilt-22 llvm-readelf-22 \
     llvm-otool-22 llvm-objdump-22; do
   "$tool" --version > "$T/version" || fail "$tool --version failed"
