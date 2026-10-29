@@ -186,10 +186,10 @@ fn a_macho_import_bound_to_libcxx_maps_only_libcxx_s_names() {
     s.validate().unwrap();
 }
 
-/// Plan review P2: #106's denial reaches libc++'s names. Under `cxx.file_write = fail`, the ELF
+/// Plan review P2: #51's denial reaches libc++'s names. Under `cxx.file_write = fail`, the ELF
 /// with code analysis FAILs with one violation citing each direct call of a libc++
 /// `cxx.file_write` import (five: ofstream's open, copy_file, create_directories, remove,
-/// rename), and none of the unmapped imports' calls.
+/// rename), and not `ifstream::open`'s (`cxx.file_read`).
 #[test]
 fn a_denied_libcxx_write_that_is_called_is_a_violation_citing_its_call_sites() {
     let s = inspect("libcxx-capabilities", true, &policy(FILE_WRITE_FAILS));
@@ -246,7 +246,12 @@ fn a_denial_on_the_macho_judges_libcxx_s_names_only() {
         other => panic!("{other:?}"),
     }
     let s = inspect("libcxx-macho", false, &policy(NETWORK_FAILS));
-    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+    assert!(
+        s.policy_violations.is_empty() && s.open_questions.is_empty(),
+        "{:?} {:?}",
+        s.policy_violations,
+        s.open_questions
+    );
 }
 
 /// Plan review P2: C6 does not tie a name to its feature (the table is the engine's), so a
