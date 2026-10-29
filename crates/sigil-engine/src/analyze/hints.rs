@@ -14,7 +14,7 @@ use crate::code::data::{signatures, Capability};
 /// capability table by its name. A Mach-O import (PR-4c-3b) is looked up by its name with one
 /// leading `_` stripped (a name without one is not looked up), and gives its entry's hint only
 /// when its library is the entry's `macho_dylib` (#105), or it was found by flat lookup, or it is
-/// an object file's ([`looked_up_for`]). Either hint's value is the name as the file has it.
+/// an object file's (`looked_up_for`). Either hint's value is the name as the file has it.
 /// `Err` only if the embedded signatures are invalid.
 pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
     let sig = signatures()?;
