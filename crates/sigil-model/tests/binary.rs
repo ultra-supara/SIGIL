@@ -715,7 +715,8 @@ fn each_library_is_looked_up_for_its_names() {
     }
 }
 
-/// #105: what each lookup admits; of two imports of one name, the greater decides.
+/// #105: what each lookup admits, and their order (the merge itself is tested by C6 in
+/// code_rules.rs).
 #[test]
 fn what_each_lookup_admits() {
     let key = |k: &str| FeatureKey::new(k).unwrap();

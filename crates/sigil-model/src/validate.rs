@@ -2211,11 +2211,11 @@ impl<'a> Validator<'a> {
                     "the value is a Mach-O import whose library is not looked up (only libSystem's, \
                      libc++'s for cxx.* features, flat lookup's, and an object file's are)",
                 ),
-                Some(looked_up) if !looked_up.admits(&hint.feature) => self.code_error(
+                Some(LookedUp::Cxx) if !LookedUp::Cxx.admits(&hint.feature) => self.code_error(
                     &at,
                     "the value is a Mach-O import of libc++, which supports only cxx.* hints",
                 ),
-                Some(_) => {}
+                Some(LookedUp::Cxx | LookedUp::All) => {}
             }
         }
     }

@@ -736,6 +736,38 @@ fn c6_the_greater_lookup_of_two_imports_of_one_name_decides() {
     s.hints = vec![import_hint(&s, "posix.network", "_send")];
     s.canonicalize();
     assert_eq!(errors(&s), Vec::<String>::new());
+
+    // The greater lookup last would be lost by a first-wins merge: libfoo's import (No) of the
+    // libc++ name sorts before libc++'s (Cxx).
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.imports.push(MachOImport {
+        name: UntrustedText::new(MACHO_LIBCXX_REMOVE),
+        library: MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new("@rpath/libfoo.dylib")),
+        },
+        weak: false,
+    });
+    s.canonicalize();
+    let ContainerFacts::MachO(facts) = &s.binaries[0].container else {
+        panic!()
+    };
+    let remove: Vec<&MachOLibrary> = facts
+        .imports
+        .iter()
+        .filter(|i| i.name.as_str() == Some(MACHO_LIBCXX_REMOVE))
+        .map(|i| &i.library)
+        .collect();
+    assert!(
+        matches!(remove.first(), Some(MachOLibrary::Dylib { ordinal: 2, .. }))
+            && matches!(remove.last(), Some(MachOLibrary::Dylib { ordinal: 3, .. })),
+        "{remove:?}"
+    );
+    s.hints = vec![import_hint(&s, "cxx.file_write", MACHO_LIBCXX_REMOVE)];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
 }
 
 #[test]

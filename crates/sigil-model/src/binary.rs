@@ -181,7 +181,8 @@ pub enum MachOLibrary {
 }
 
 /// Which capability hints a Mach-O import can support, by its library (PR-4c-3b, #105). Ordered:
-/// of two imports of one name, the greater decides.
+/// of two imports of one name, the greater decides: each variant admits every feature a lesser one
+/// admits, so the greater is the union of what the imports support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LookedUp {
     /// Not looked up: another dylib's import, this image's, the main executable's, a weak
@@ -206,7 +207,8 @@ impl LookedUp {
 }
 
 impl MachOLibrary {
-    /// How an import of this library is looked up in the capability table (PR-4c-3b, #105).
+    /// Which capability hints an import of this library can support: the rule C6 checks
+    /// (PR-4c-3b, #105).
     pub fn looked_up(&self) -> LookedUp {
         match self {
             MachOLibrary::Dylib {
