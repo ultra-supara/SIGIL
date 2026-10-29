@@ -1022,7 +1022,7 @@ fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial()
         .filter(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
         .map(|k| k.sha256.clone())
         .collect();
-    assert_eq!(recorded, [old.clone()]);
+    assert_eq!(recorded, std::slice::from_ref(&old));
     assert_ne!(table().sha256, old, "#105 changed the table");
     let time = saved.outcome.policy_time.clone();
     for deny in [DENY_NETWORK, DENY_CXX_WRITE] {
