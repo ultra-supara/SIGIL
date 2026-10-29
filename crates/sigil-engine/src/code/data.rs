@@ -89,7 +89,7 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
             LIBCXX => LIBCXX,
             other => {
                 return Err(format!(
-                    "capabilities.toml: {feature}: macho_dylib {other:?} is neither libSystem nor libc++"
+                    "capabilities.toml: {feature}: macho_dylib {other:?} is neither {LIBSYSTEM} nor {LIBCXX}"
                 ))
             }
         };
@@ -868,7 +868,7 @@ mod tests {
             assert_eq!(
                 group(&format!("macho_dylib = \"{other}\"\n")),
                 Err(format!(
-                    "capabilities.toml: cxx.file_write: macho_dylib {other:?} is neither libSystem nor libc++"
+                    "capabilities.toml: cxx.file_write: macho_dylib {other:?} is neither /usr/lib/libSystem.B.dylib nor /usr/lib/libc++.1.dylib"
                 )),
                 "{other:?}"
             );

@@ -71,6 +71,7 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
 /// Whether a Mach-O import of `library` gives `cap`'s hint (#105): one found by flat lookup, or an
 /// object file's, always does; one bound to a dylib only when that dylib is `cap.macho_dylib`.
 /// Another dylib's `_connect` is that dylib's function, not POSIX `connect`.
+/// It never gives a hint that C6 does not admit ([`sigil_model::MachOLibrary::looked_up`]).
 fn looked_up_for(library: &MachOLibrary, cap: &Capability) -> bool {
     match library {
         MachOLibrary::FlatLookup | MachOLibrary::Unbound => true,
@@ -158,12 +159,8 @@ mod tests {
             &names(&["connect", "dlopen", "dlsym", "malloc", "printf"]),
         )])
         .unwrap();
-        let got: Vec<(&str, &str)> = hints
-            .iter()
-            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
-            .collect();
         assert_eq!(
-            got,
+            got(&hints),
             [
                 ("posix.dynamic_loading", "dlopen"),
                 ("posix.dynamic_loading", "dlsym"),
@@ -258,12 +255,8 @@ mod tests {
             ("_puts", libsystem()),
         ])])
         .unwrap();
-        let got: Vec<(&str, &str)> = hints
-            .iter()
-            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
-            .collect();
         assert_eq!(
-            got,
+            got(&hints),
             [
                 ("posix.dynamic_loading", "_dlopen"),
                 ("posix.environment_access", "_getenv"),
@@ -354,12 +347,8 @@ mod tests {
             ],
         )])
         .unwrap();
-        let got: Vec<(&str, &str)> = hints
-            .iter()
-            .map(|h| (h.feature.as_str(), h.value.as_str().unwrap()))
-            .collect();
         assert_eq!(
-            got,
+            got(&hints),
             [
                 ("cxx.file_read", IFSTREAM),
                 ("cxx.file_write", REMOVE),
@@ -483,5 +472,43 @@ mod tests {
         ])])
         .unwrap();
         assert_eq!(got(&hints), [("cxx.file_write", LIBCXX_REMOVE)]);
+    }
+
+    /// #105: every Mach-O hint is one the model admits for the import's library (C6): the table's
+    /// `macho_dylib` never widens what [`MachOLibrary::looked_up`] allows.
+    #[test]
+    fn every_macho_hint_is_one_c6_admits() {
+        let libfoo = MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(UntrustedText::new("@rpath/libfoo.dylib")),
+        };
+        let libraries = [
+            libsystem(),
+            libcxx(2),
+            libfoo,
+            MachOLibrary::Dylib {
+                ordinal: 2,
+                name: None,
+            },
+            MachOLibrary::SelfImage,
+            MachOLibrary::MainExecutable,
+            MachOLibrary::FlatLookup,
+            MachOLibrary::WeakLookup,
+            MachOLibrary::Unbound,
+        ];
+        let libstdcxx_remove = format!("_{REMOVE}");
+        let mut hinted = 0;
+        for library in &libraries {
+            for name in ["_connect", libstdcxx_remove.as_str(), LIBCXX_REMOVE] {
+                for hint in derive(&[macho(&[(name, library.clone())])]).unwrap() {
+                    hinted += 1;
+                    assert!(
+                        library.looked_up().admits(&hint.feature),
+                        "{name} from {library:?}: {hint:?}"
+                    );
+                }
+            }
+        }
+        assert!(hinted > 0);
     }
 }

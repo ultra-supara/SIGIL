@@ -1,7 +1,7 @@
 # Capability imports (PR-5a spec §4.3): v0.1's capability_for_symbol (its 28 names unchanged)
-# and, below, libstdc++'s file operations (PR-4c-3c) and libc++'s (#105). A hint says that the file imports the
-# function: presence, never a call. The table is not a complete list of how a program reaches a
-# capability.
+# and, below, libstdc++'s file operations (PR-4c-3c) and libc++'s (#105). A hint says that the
+# file imports the function: presence, never a call. The table is not a complete list of how a
+# program reaches a capability.
 # Exact names only; a version (connect@GLIBC_2.2.5) is not part of the name.
 # arity: the SysV argument registers a call can read (the most, for a variadic function).
 # source: where the name and its meaning come from, required and not blank (PR-4c-3c).
@@ -209,8 +209,8 @@ symbols = [
 # __copy, __copy_file, __copy_symlink, __resize_file. Of the streams, libc++ exports only
 # ifstream's and ofstream's open, for char, with a const char* or a string.
 # source: "libc++ 22.1.8: <demangled form>", as llvm-cxxfilt 22.1.8 prints it. arity: the
-# parameters, plus this for open. macho_dylib: libc++'s, which gives these names only: _connect
-# bound to libc++ maps to nothing.
+# parameters, plus this for open. macho_dylib: libc++'s; an import bound to libc++ is looked up
+# for these names only, so _connect bound to libc++ maps to nothing.
 # A missing hint is not absence: a libc++ stream's constructor is inline and imports only
 # basic_filebuf::open, so std::ifstream f(path) gives no hint while f.open(path) does.
 # Not mapped: basic_filebuf::open (the mode decides read or write); basic_fstream (libc++
