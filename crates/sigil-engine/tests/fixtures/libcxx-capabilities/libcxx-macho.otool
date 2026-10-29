@@ -162,14 +162,14 @@ Load command 12
           cmd LC_LOAD_DYLIB
       cmdsize 48
          name /usr/lib/libc++.1.dylib (offset 24)
-   time stamp 0 Thu Jan  1 09:00:00 1970
+   time stamp 0 Thu Jan  1 00:00:00 1970
       current version 1700.0.0
 compatibility version 1.0.0
 Load command 13
           cmd LC_LOAD_DYLIB
       cmdsize 56
          name /usr/lib/libSystem.B.dylib (offset 24)
-   time stamp 0 Thu Jan  1 09:00:00 1970
+   time stamp 0 Thu Jan  1 00:00:00 1970
       current version 1351.0.0
 compatibility version 1.0.0
 Load command 14
