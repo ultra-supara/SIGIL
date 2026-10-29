@@ -222,8 +222,12 @@ The rule then yields an open question at most.
     values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,
     with the values nested in each;
   - C6: an `Import` hint is at `Symbol(value)`, and `value` is an import of its slice's ELF or
-    Mach-O facts. On a Mach-O slice, the import's library must be looked up (PR-4c-3b): bound to
-    `/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object file's.
+    Mach-O facts. On a Mach-O slice, the import's library must be looked up for the hint's feature
+    (PR-4c-3b, #105): bound to `/usr/lib/libSystem.B.dylib`, found by flat lookup, or an object
+    file's, for any feature; bound to `/usr/lib/libc++.1.dylib`, for a `cxx.*` feature only. C6
+    does not check that the capability table maps the name to the feature (the table is the
+    engine's): evaluation refuses, under a capability denial, a session whose hints are not the
+    ones the table gives (#51).
 
   C1 and C4 are about a binary inspection. Outside one, code facts are the M1 analyzer's (plan
   §4.6.5), which the golden install examples carry.
@@ -681,10 +685,10 @@ import. This holds with or without code analysis, and for `inspect ollama --inst
   leading `_`; a C++ name mangled, never demangled), and the import's version is not part of it;
 - `at`: `Symbol(<name>)`.
 
-A hint says that the file imports the function. It never says that the function is called: that
-is a call site (C). When `binary_imports` cut the import list short, the hints are as short as the
-list. A Mach-O slice's hints come only from its imports bound to libSystem, found by flat
-lookup, or an object file's (PR-4c-3b).
+A hint says that the file imports the function. It never says that the function is called: that is a
+call site (C). When `binary_imports` cut the import list short, the hints are as short as the list.
+A Mach-O slice's hints come only from its imports bound to libSystem, found by flat lookup, or an
+object file's (PR-4c-3b), and from its imports bound to libc++ for libc++'s `cxx.*` names (#105).
 
 | Key | Imports |
 |---|---|
@@ -695,8 +699,8 @@ lookup, or an object file's (PR-4c-3b).
 | `posix.dynamic_loading` | `dlopen`, `dlsym` |
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
-| `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name and its `open`: 18 mangled names (PR-4c-3c) |
-| `cxx.file_write` | libstdc++'s `std::filesystem` operations that create, remove, rename, copy, or resize, and `std::basic_ofstream`'s constructors that take a file name and its `open`: 70 mangled names (PR-4c-3c) |
+| `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name and its `open`: 18 mangled names (PR-4c-3c); libc++'s `std::basic_ifstream<char>::open`: 2 (#105) |
+| `cxx.file_write` | libstdc++'s `std::filesystem` operations that create, remove, rename, copy, or resize, and `std::basic_ofstream`'s constructors that take a file name and its `open`: 70 mangled names (PR-4c-3c); libc++'s `std::filesystem` helpers for the same operations and `std::basic_ofstream<char>::open`: 15 (#105) |
 
 The names and their sources are in `crates/sigil-engine/signatures/capabilities.toml`, and
 [binary inspection](binary-inspect.md#capabilities-and-code---code) says which C++ names stay
