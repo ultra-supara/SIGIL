@@ -8,7 +8,7 @@ use std::borrow::Borrow;
 use std::collections::{hash_map::Entry, BTreeMap, HashMap, HashSet};
 
 use crate::artifact::{Artifact, FileInstance, Slice};
-use crate::binary::{macho_architecture, BinaryFacts, ContainerFacts};
+use crate::binary::{macho_architecture, BinaryFacts, ContainerFacts, LookedUp};
 use crate::binary_input::{
     is_binary_root, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY, NAME_AND_HASH_ONLY,
 };
@@ -131,8 +131,9 @@ pub(crate) struct SessionIndex<'a> {
     pub code_coverage: HashMap<&'a str, Occurrences<'a, Coverage>>,
     pub identity_coverage: HashMap<&'a str, Occurrences<'a, Coverage>>,
     pub name_and_hash_only: HashSet<&'a str>,
-    /// Import name -> whether at least one matching import's library is looked up.
-    pub imports: HashMap<(&'a str, &'a UntrustedText), bool>,
+    /// Import name -> how the slice's imports of that name are looked up (#105): the greatest
+    /// over them. An ELF import is looked up for every name.
+    pub imports: HashMap<(&'a str, &'a UntrustedText), LookedUp>,
     pub declarations: HashMap<&'a str, Vec<(DeclKind, &'a UntrustedText)>>,
     /// Distinct slice IDs per artifact position and fat-table architecture. All binary facts,
     /// including duplicate records, contribute; two records of one slice do not make it twice.
@@ -249,13 +250,16 @@ impl<'a> SessionIndex<'a> {
             match &facts.container {
                 ContainerFacts::Elf(elf) => {
                     for import in &elf.imports {
-                        index.imports.insert((*slice, &import.name), true);
+                        index.imports.insert((*slice, &import.name), LookedUp::All);
                     }
                 }
                 ContainerFacts::MachO(macho) => {
                     for import in &macho.imports {
-                        *index.imports.entry((*slice, &import.name)).or_default() |=
-                            import.library.looked_up();
+                        let entry = index
+                            .imports
+                            .entry((*slice, &import.name))
+                            .or_insert(LookedUp::No);
+                        *entry = (*entry).max(import.library.looked_up());
                     }
                 }
             }

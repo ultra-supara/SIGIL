@@ -633,6 +633,111 @@ fn c6_a_mach_o_import_hint_names_an_import_looked_up() {
     assert_eq!(errors(&s), Vec::<String>::new());
 }
 
+/// libc++'s `std::filesystem::remove` helper, as a Mach-O names it (#105).
+const MACHO_LIBCXX_REMOVE: &str =
+    "__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE";
+
+/// `macho_session` with libc++ as its third dylib, importing `MACHO_LIBCXX_REMOVE` and `_send`.
+fn macho_session_with_libcxx() -> Session {
+    let mut s = macho_session();
+    let slice = s.artifacts[0].slices[0].id.clone();
+    s.relations.push(Relation::Declares {
+        from: slice,
+        needed: UntrustedText::new(LIBCXX),
+        kind: DeclKind::MachOLoadDylib,
+    });
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.load_dylibs.push(UntrustedText::new(LIBCXX));
+    for name in [MACHO_LIBCXX_REMOVE, "_send"] {
+        facts.imports.push(MachOImport {
+            name: UntrustedText::new(name),
+            library: MachOLibrary::Dylib {
+                ordinal: 3,
+                name: Some(UntrustedText::new(LIBCXX)),
+            },
+            weak: false,
+        });
+    }
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+    s
+}
+
+/// #105: an import bound to libc++ supports a `cxx.*` hint only.
+#[test]
+fn c6_a_libcxx_import_supports_only_a_cxx_hint() {
+    let mut s = macho_session_with_libcxx();
+    s.hints = vec![import_hint(&s, "cxx.file_write", MACHO_LIBCXX_REMOVE)];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+    for (feature, name) in [
+        ("posix.network", "_send"),
+        ("posix.file_write", MACHO_LIBCXX_REMOVE),
+    ] {
+        s.hints = vec![import_hint(&s, feature, name)];
+        assert!(
+            errors(&s)
+                .iter()
+                .any(|e| e.contains("a Mach-O import of libc++, which supports only cxx.* hints")),
+            "{feature} {name}: {:?}",
+            errors(&s)
+        );
+    }
+    // libfoo's import is still not looked up, and the message names libc++'s rule.
+    s.hints = vec![import_hint(&s, "cxx.file_write", "_socket")];
+    assert!(
+        errors(&s)
+            .iter()
+            .any(|e| e.contains("libc++'s for cxx.* features")),
+        "{:?}",
+        errors(&s)
+    );
+    // C6's limit (plan review P2): it checks the import's library against the feature's
+    // namespace, not the name against the feature, since the capability table is the engine's.
+    // `_send` from libc++ with a `cxx.*` hint validates; evaluation refuses such a session under a
+    // capability denial (#51; libcxx_capabilities.rs).
+    s.hints = vec![import_hint(&s, "cxx.file_write", "_send")];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+}
+
+/// #105: of two imports of one name, the greater lookup decides, whichever is listed last.
+#[test]
+fn c6_the_greater_lookup_of_two_imports_of_one_name_decides() {
+    let mut s = macho_session_with_libcxx();
+    // `_send` from libSystem (ordinal 1) too: canonical order puts libc++'s (ordinal 3) last.
+    let ContainerFacts::MachO(facts) = &mut s.binaries[0].container else {
+        panic!()
+    };
+    facts.imports.push(MachOImport {
+        name: UntrustedText::new("_send"),
+        library: MachOLibrary::Dylib {
+            ordinal: 1,
+            name: Some(UntrustedText::new(LIBSYSTEM)),
+        },
+        weak: false,
+    });
+    s.canonicalize();
+    let ContainerFacts::MachO(facts) = &s.binaries[0].container else {
+        panic!()
+    };
+    let send: Vec<&MachOLibrary> = facts
+        .imports
+        .iter()
+        .filter(|i| i.name.as_str() == Some("_send"))
+        .map(|i| &i.library)
+        .collect();
+    assert!(
+        matches!(send.last(), Some(MachOLibrary::Dylib { ordinal: 3, .. })),
+        "{send:?}"
+    );
+    s.hints = vec![import_hint(&s, "posix.network", "_send")];
+    s.canonicalize();
+    assert_eq!(errors(&s), Vec::<String>::new());
+}
+
 #[test]
 fn c1_request_code_is_only_for_a_binary_inspection() {
     for s in [common::complete_pass(), common::store_and_runtime()] {

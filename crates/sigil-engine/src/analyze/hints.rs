@@ -29,7 +29,7 @@ pub fn derive(binaries: &[BinaryFacts]) -> Result<Vec<FeatureHint>, String> {
             ContainerFacts::MachO(macho) => macho
                 .imports
                 .iter()
-                .filter(|i| i.library.looked_up())
+                .filter(|i| i.library.looked_up() == sigil_model::LookedUp::All)
                 .filter_map(|i| Some((&i.name, i.name.as_bytes().strip_prefix(b"_")?)))
                 .collect(),
         };
