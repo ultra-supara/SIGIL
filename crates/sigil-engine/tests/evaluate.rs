@@ -1001,8 +1001,20 @@ fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial()
     const PRE_105: &str = "432f71b2a3c5f25663e699d5447db24b27590a4dad5ed1186b0f30ac89b26944";
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-105/16-binary-code.json");
-    let saved: Session = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-    saved.validate().unwrap();
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let saved: Session = serde_json::from_str(&text).unwrap_or_else(|e| {
+        panic!(
+            "pre-105 fixture: sigil-session/1 compatibility: {}: {e}",
+            path.display()
+        )
+    });
+    saved.validate().unwrap_or_else(|e| {
+        panic!(
+            "pre-105 fixture: sigil-session/1 compatibility: {}: {e:?}",
+            path.display()
+        )
+    });
+    let saved_outcome = saved.outcome.clone();
     let old = Sha256Hex::new(PRE_105).unwrap();
     let recorded: Vec<Sha256Hex> = saved
         .knowledge
@@ -1034,6 +1046,10 @@ fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial()
     // Without a denial: as before.
     let mut s = saved;
     run(&mut s, "");
+    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(s.outcome, saved_outcome, "evaluated as before");
 }
 
 /// Plan review P2-1: the hints are the ones the table gives the import facts. `validate` cannot
