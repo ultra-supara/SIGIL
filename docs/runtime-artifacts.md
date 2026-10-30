@@ -306,11 +306,12 @@ slice in the session, read from the file's own bytes. They are observations, not
   searched, or cut short is a gap.
 - **NEEDED** and Mach-O loaded dylibs are also recorded as `Declares` relations, one per distinct
   name. The order stays in the record, for the loader's lookup order.
-- **Capability hints.** Each ELF slice, and each Mach-O slice (its imports from libSystem, by flat
-  lookup, or an object file's, each by its name without one leading `_`; PR-4c-3b), also gets one
-  feature hint per capability import: `posix.network` for `connect`, `posix.dynamic_loading` for
-  `dlopen` or `dlsym`, `cxx.file_write` for libstdc++'s `std::filesystem::remove`, and so on (the
-  names are listed in [binary inspection](binary-inspect.md#capabilities-and-code---code)). In
+- **Capability hints.** Each ELF slice, and each Mach-O slice (its imports from libSystem, from
+  libc++ for libc++'s names, by flat lookup, or an object file's, each by its name without one
+  leading `_`; PR-4c-3b, #105), also gets one feature hint per capability import:
+  `posix.network` for `connect`, `posix.dynamic_loading` for `dlopen` or `dlsym`, `cxx.file_write`
+  for libstdc++'s `std::filesystem::remove`, and so on (the names are listed in
+  [binary inspection](binary-inspect.md#capabilities-and-code---code)). In
   the official v0.30.6 bundle, `libllama-common` and `libllama-server-impl` have `cxx.*` hints.
   `libllama-common` also imports `std::ifstream`'s destructor and `basic_filebuf::open`, but no
   stream constructor (the compiler inlined them), so it has no `cxx.file_read` hint: a missing

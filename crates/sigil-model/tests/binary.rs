@@ -4,8 +4,9 @@ mod common;
 
 use sigil_model::{
     imports_over_gap, BinaryFacts, ContainerFacts, DataSymbol, DataValue, ElfFacts, ElfImport,
-    FunctionReturn, GoBuildInfo, GoModule, GoSetting, Loc, MachOFacts, MachOImport, MachOLibrary,
-    SliceId, UntrustedText, IMPORTS_OVER_GAP, LIBSYSTEM, LOAD_DYLIB_GAP_PREFIX, MH_OBJECT,
+    FeatureKey, FunctionReturn, GoBuildInfo, GoModule, GoSetting, Loc, LookedUp, MachOFacts,
+    MachOImport, MachOLibrary, SliceId, UntrustedText, IMPORTS_OVER_GAP, LIBCXX, LIBSYSTEM,
+    LOAD_DYLIB_GAP_PREFIX, MH_OBJECT,
 };
 
 fn t(s: &str) -> UntrustedText {
@@ -673,15 +674,34 @@ fn macho_imports_are_written_only_when_present_and_read_when_missing() {
     assert_eq!(serde_json::from_value::<MachOFacts>(json).unwrap(), facts);
 }
 
+/// #105: libSystem, flat lookup, and an object file's imports are looked up for every name;
+/// libc++'s for the `cxx.*` names; any other library's for none.
 #[test]
-fn only_libsystem_flat_lookup_and_an_object_s_imports_are_looked_up() {
-    assert!(libsystem(1).looked_up());
-    assert!(MachOLibrary::FlatLookup.looked_up());
-    assert!(MachOLibrary::Unbound.looked_up());
+fn each_library_is_looked_up_for_its_names() {
+    assert_eq!(libsystem(1).looked_up(), LookedUp::All);
+    assert_eq!(MachOLibrary::FlatLookup.looked_up(), LookedUp::All);
+    assert_eq!(MachOLibrary::Unbound.looked_up(), LookedUp::All);
+    assert_eq!(
+        MachOLibrary::Dylib {
+            ordinal: 2,
+            name: Some(t(LIBCXX)),
+        }
+        .looked_up(),
+        LookedUp::Cxx
+    );
     for library in [
         MachOLibrary::Dylib {
             ordinal: 1,
             name: Some(t("@rpath/libfoo.dylib")),
+        },
+        // Exact names only: not libc++abi, not another copy of libc++.
+        MachOLibrary::Dylib {
+            ordinal: 1,
+            name: Some(t("/usr/lib/libc++abi.dylib")),
+        },
+        MachOLibrary::Dylib {
+            ordinal: 1,
+            name: Some(t("/opt/homebrew/opt/llvm/lib/c++/libc++.1.dylib")),
         },
         MachOLibrary::Dylib {
             ordinal: 1,
@@ -691,8 +711,30 @@ fn only_libsystem_flat_lookup_and_an_object_s_imports_are_looked_up() {
         MachOLibrary::MainExecutable,
         MachOLibrary::WeakLookup,
     ] {
-        assert!(!library.looked_up(), "{library:?}");
+        assert_eq!(library.looked_up(), LookedUp::No, "{library:?}");
     }
+}
+
+/// #105: what each lookup admits, and their order (the merge itself is tested by C6 in
+/// code_rules.rs).
+#[test]
+fn what_each_lookup_admits() {
+    let key = |k: &str| FeatureKey::new(k).unwrap();
+    for feature in ["posix.network", "cxx.file_write", "go.net"] {
+        assert!(LookedUp::All.admits(&key(feature)), "{feature}");
+        assert!(!LookedUp::No.admits(&key(feature)), "{feature}");
+    }
+    assert!(LookedUp::Cxx.admits(&key("cxx.file_read")));
+    assert!(LookedUp::Cxx.admits(&key("cxx.file_write")));
+    for feature in [
+        "posix.network",
+        "posix.file_write",
+        "cxxx.file_write",
+        "cxx",
+    ] {
+        assert!(!LookedUp::Cxx.admits(&key(feature)), "{feature}");
+    }
+    assert!(LookedUp::No < LookedUp::Cxx && LookedUp::Cxx < LookedUp::All);
 }
 
 #[test]

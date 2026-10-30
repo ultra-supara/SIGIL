@@ -1,0 +1,64 @@
+_ITM_deregisterTMCloneTable	_ITM_deregisterTMCloneTable
+_ITM_registerTMCloneTable	_ITM_registerTMCloneTable
+_Unwind_Resume@GCC_3.0	_Unwind_Resume
+_ZNSt11logic_errorC2EPKc	std::logic_error::logic_error(char const*)
+_ZNSt12length_errorD1Ev	std::length_error::~length_error()
+_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm	std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::append(char const*, unsigned long)
+_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9__grow_byEmmmmmm	std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>::__grow_by(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long, unsigned long)
+_ZNSt3__113basic_filebufIcNS_11char_traitsIcEEE4openEPKcj	std::__1::basic_filebuf<char, std::__1::char_traits<char>>::open(char const*, unsigned int)
+_ZNSt3__113basic_filebufIcNS_11char_traitsIcEEEC1Ev	std::__1::basic_filebuf<char, std::__1::char_traits<char>>::basic_filebuf()
+_ZNSt3__113basic_filebufIcNS_11char_traitsIcEEED1Ev	std::__1::basic_filebuf<char, std::__1::char_traits<char>>::~basic_filebuf()
+_ZNSt3__113basic_istreamIcNS_11char_traitsIcEEED0Ev	std::__1::basic_istream<char, std::__1::char_traits<char>>::~basic_istream()
+_ZNSt3__113basic_istreamIcNS_11char_traitsIcEEED1Ev	std::__1::basic_istream<char, std::__1::char_traits<char>>::~basic_istream()
+_ZNSt3__113basic_istreamIcNS_11char_traitsIcEEED2Ev	std::__1::basic_istream<char, std::__1::char_traits<char>>::~basic_istream()
+_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEED0Ev	std::__1::basic_ostream<char, std::__1::char_traits<char>>::~basic_ostream()
+_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEED1Ev	std::__1::basic_ostream<char, std::__1::char_traits<char>>::~basic_ostream()
+_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEED2Ev	std::__1::basic_ostream<char, std::__1::char_traits<char>>::~basic_ostream()
+_ZNSt3__114basic_ifstreamIcNS_11char_traitsIcEEE4openEPKcj	std::__1::basic_ifstream<char, std::__1::char_traits<char>>::open(char const*, unsigned int)
+_ZNSt3__114basic_iostreamIcNS_11char_traitsIcEEED0Ev	std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZNSt3__114basic_iostreamIcNS_11char_traitsIcEEED1Ev	std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZNSt3__114basic_iostreamIcNS_11char_traitsIcEEED2Ev	std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZNSt3__114basic_ofstreamIcNS_11char_traitsIcEEE4openERKNS_12basic_stringIcS2_NS_9allocatorIcEEEEj	std::__1::basic_ofstream<char, std::__1::char_traits<char>>::open(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&, unsigned int)
+_ZNSt3__115system_categoryEv	std::__1::system_category()
+_ZNSt3__14__fs10filesystem11__copy_fileERKNS1_4pathES4_NS1_12copy_optionsEPNS_10error_codeE	std::__1::__fs::filesystem::__copy_file(std::__1::__fs::filesystem::path const&, std::__1::__fs::filesystem::path const&, std::__1::__fs::filesystem::copy_options, std::__1::error_code*)
+_ZNSt3__14__fs10filesystem13__permissionsERKNS1_4pathENS1_5permsENS1_12perm_optionsEPNS_10error_codeE	std::__1::__fs::filesystem::__permissions(std::__1::__fs::filesystem::path const&, std::__1::__fs::filesystem::perms, std::__1::__fs::filesystem::perm_options, std::__1::error_code*)
+_ZNSt3__14__fs10filesystem17__last_write_timeERKNS1_4pathEPNS_10error_codeE	std::__1::__fs::filesystem::__last_write_time(std::__1::__fs::filesystem::path const&, std::__1::error_code*)
+_ZNSt3__14__fs10filesystem20__create_directoriesERKNS1_4pathEPNS_10error_codeE	std::__1::__fs::filesystem::__create_directories(std::__1::__fs::filesystem::path const&, std::__1::error_code*)
+_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE	std::__1::__fs::filesystem::__remove(std::__1::__fs::filesystem::path const&, std::__1::error_code*)
+_ZNSt3__14__fs10filesystem8__renameERKNS1_4pathES4_PNS_10error_codeE	std::__1::__fs::filesystem::__rename(std::__1::__fs::filesystem::path const&, std::__1::__fs::filesystem::path const&, std::__1::error_code*)
+_ZNSt3__14__fs10filesystem8__statusERKNS1_4pathEPNS_10error_codeE	std::__1::__fs::filesystem::__status(std::__1::__fs::filesystem::path const&, std::__1::error_code*)
+_ZNSt3__18ios_base4initEPv	std::__1::ios_base::init(void*)
+_ZNSt3__18ios_base5clearEj	std::__1::ios_base::clear(unsigned int)
+_ZNSt3__19basic_iosIcNS_11char_traitsIcEEED2Ev	std::__1::basic_ios<char, std::__1::char_traits<char>>::~basic_ios()
+_ZSt9terminatev	std::terminate()
+_ZTINSt3__113basic_istreamIcNS_11char_traitsIcEEEE	typeinfo for std::__1::basic_istream<char, std::__1::char_traits<char>>
+_ZTINSt3__113basic_ostreamIcNS_11char_traitsIcEEEE	typeinfo for std::__1::basic_ostream<char, std::__1::char_traits<char>>
+_ZTINSt3__114basic_iostreamIcNS_11char_traitsIcEEEE	typeinfo for std::__1::basic_iostream<char, std::__1::char_traits<char>>
+_ZTISt12length_error	typeinfo for std::length_error
+_ZTTNSt3__114basic_ifstreamIcNS_11char_traitsIcEEEE	VTT for std::__1::basic_ifstream<char, std::__1::char_traits<char>>
+_ZTTNSt3__114basic_ofstreamIcNS_11char_traitsIcEEEE	VTT for std::__1::basic_ofstream<char, std::__1::char_traits<char>>
+_ZTVN10__cxxabiv120__si_class_type_infoE	vtable for __cxxabiv1::__si_class_type_info
+_ZTVNSt3__114basic_ifstreamIcNS_11char_traitsIcEEEE	vtable for std::__1::basic_ifstream<char, std::__1::char_traits<char>>
+_ZTVNSt3__114basic_ofstreamIcNS_11char_traitsIcEEEE	vtable for std::__1::basic_ofstream<char, std::__1::char_traits<char>>
+_ZTVSt12length_error	vtable for std::length_error
+_ZThn16_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED0Ev	non-virtual thunk to std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZThn16_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED1Ev	non-virtual thunk to std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZTv0_n24_NSt3__113basic_istreamIcNS_11char_traitsIcEEED0Ev	virtual thunk to std::__1::basic_istream<char, std::__1::char_traits<char>>::~basic_istream()
+_ZTv0_n24_NSt3__113basic_istreamIcNS_11char_traitsIcEEED1Ev	virtual thunk to std::__1::basic_istream<char, std::__1::char_traits<char>>::~basic_istream()
+_ZTv0_n24_NSt3__113basic_ostreamIcNS_11char_traitsIcEEED0Ev	virtual thunk to std::__1::basic_ostream<char, std::__1::char_traits<char>>::~basic_ostream()
+_ZTv0_n24_NSt3__113basic_ostreamIcNS_11char_traitsIcEEED1Ev	virtual thunk to std::__1::basic_ostream<char, std::__1::char_traits<char>>::~basic_ostream()
+_ZTv0_n24_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED0Ev	virtual thunk to std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZTv0_n24_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED1Ev	virtual thunk to std::__1::basic_iostream<char, std::__1::char_traits<char>>::~basic_iostream()
+_ZdlPvm	operator delete(void*, unsigned long)
+_Znwm	operator new(unsigned long)
+__cxa_allocate_exception	__cxa_allocate_exception
+__cxa_begin_catch	__cxa_begin_catch
+__cxa_finalize@GLIBC_2.2.5	__cxa_finalize
+__cxa_free_exception	__cxa_free_exception
+__cxa_throw	__cxa_throw
+__gmon_start__	__gmon_start__
+__gxx_personality_v0	__gxx_personality_v0
+__libc_start_main@GLIBC_2.34	__libc_start_main
+memcpy@GLIBC_2.14	memcpy
+memmove@GLIBC_2.2.5	memmove
+strlen@GLIBC_2.2.5	strlen

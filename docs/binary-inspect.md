@@ -92,13 +92,13 @@ with `component: <component> (<status>)`, the status in words, for example
 ## Capabilities and code (`--code`)
 
 **Capability hints.** A binary inspection records the capability imports of each ELF and Mach-O
-slice: 28 libc/POSIX functions in 7 groups, and 88 libstdc++ names in 2 groups (below). Each is a
-feature hint in the session (its `feature`, `signal: Import`, and the import's name as `value`),
-with or without `--code`. `inspect ollama --install-dir` records them too
-([runtime artifacts](runtime-artifacts.md#binaries)). A hint is import-level evidence: the file
-asks its loader (or, for a `.o`, its linker) for the function. It is not proof that the code calls
-it. A missing hint is not proof that the code cannot: a function linked statically into the file,
-one looked up at run time, and a raw system call are not imports.
+slice: 28 libc/POSIX functions in 7 groups, 88 libstdc++ names in 2 groups, and 17 libc++ names in 2
+groups (below). Each is a feature hint in the session (its `feature`, `signal: Import`, and the
+import's name as `value`), with or without `--code`. `inspect ollama --install-dir` records them too
+([runtime artifacts](runtime-artifacts.md#binaries)). A hint is import-level evidence: the file asks
+its loader (or, for a `.o`, its linker) for the function. It is not proof that the code calls it. A
+missing hint is not proof that the code cannot: a function linked statically into the file, one
+looked up at run time, and a raw system call are not imports.
 
 | Capability | Imports |
 |---|---|
@@ -109,21 +109,23 @@ one looked up at run time, and a raw system call are not imports.
 | `posix.dynamic_loading` | `dlopen`, `dlsym` |
 | `posix.environment_access` | `getenv`, `setenv`, `putenv` |
 | `posix.anti_debug` | `ptrace` |
-| `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name, and its `open` |
-| `cxx.file_write` | libstdc++'s `std::filesystem` functions `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open` |
+| `cxx.file_read` | libstdc++'s `std::basic_ifstream`'s constructors that take a file name, and its `open`; libc++'s `std::basic_ifstream<char>::open` |
+| `cxx.file_write` | libstdc++'s `std::filesystem` functions `remove`, `remove_all`, `rename`, `create_directory`, `create_directories`, `create_symlink`, `create_hard_link`, `create_directory_symlink`, `copy`, `copy_file`, `copy_symlink`, and `resize_file`; `std::basic_ofstream`'s constructors that take a file name, and its `open`; libc++'s helpers for the same twelve functions (`std::__1::__fs::filesystem::__remove`, …) and `std::basic_ofstream<char>::open` |
 
-Each entry of `crates/sigil-engine/signatures/capabilities.toml` names its source: POSIX.1-2024
-for the libc names (Linux and macOS `ptrace(2)` for `ptrace`), and, for a C++ name, the libstdc++
+Each entry of `crates/sigil-engine/signatures/capabilities.toml` names its source: POSIX.1-2024 for
+the libc names (Linux and macOS `ptrace(2)` for `ptrace`), and, for a libstdc++ name, the libstdc++
 symbol version that exports it (`GLIBCXX_3.4.26`) and its demangled form, with `[C1]` or `[C2]`
-after a constructor.
+after a constructor, and, for a libc++ name, `libc++ 22.1.8` and its demangled form. Each group also
+names the dylib a Mach-O import of its names must be bound to (`macho_dylib`).
 
 The match is on the exact name; a version (`connect@GLIBC_2.2.5`) is not part of it. Only the
 imports kept within `binary_imports` give hints: when a file has more, the report says that the
 capability imports past the cut are not known (below). A Mach-O import is matched by its name with
-one leading `_` stripped (`_connect` is `connect`), and a name without a leading `_` is never
-looked up. It is matched only when it is bound to `/usr/lib/libSystem.B.dylib`, found by flat
-lookup, or an object file's: `_connect` from another dylib is that dylib's function, not POSIX
-`connect`. Its hint's value is the name as the file has it (`_connect`)
+one leading `_` stripped (`_connect` is `connect`), and a name without a leading `_` is never looked
+up. It is matched only when it is bound to the dylib its entry names, found by flat lookup, or an
+object file's. The 28 `posix.*` names and libstdc++'s are `/usr/lib/libSystem.B.dylib`'s; libc++'s
+are `/usr/lib/libc++.1.dylib`'s (#105). `_connect` from another dylib, libc++ included, is that
+dylib's function, not POSIX `connect`. Its hint's value is the name as the file has it (`_connect`)
 ([below](#mach-o-imports)).
 
 **C++ names.** The `cxx.*` names (PR-4c-3c) are libstdc++'s exact mangled names, as
@@ -155,19 +157,51 @@ Some names stay unmapped:
 - every other `std::filesystem` function: a query (`file_size`, `canonical`, …), or
   `current_path(p)`, which changes the working directory, not a file;
 - the streams' default and move constructors: they open no file;
-- libc++'s names (`std::__1`), and other C++ libraries.
+- libc++ built with another ABI namespace (Android's `std::__ndk1`, Chromium's `std::__Cr`), whose
+  names differ, and other C++ libraries (Boost, Qt, Poco).
 
 A missing `cxx.*` hint is not absence. A stream constructor that the compiler inlines leaves
-`basic_filebuf::open`, which is unmapped, as the only import that opens the file (its destructor
-and vtables are imported too): g++ 15.3 at `-O2` does this for a class derived from
-`std::ifstream`, and for an `std::ofstream` on the old string. A statically linked libstdc++
-(`-static-libstdc++`, GCC 8's `libstdc++fs.a`, `std::experimental::filesystem`) leaves none of
-these names. Such a file imports libc's functions instead (unless libc is linked statically too),
-and `posix.*` maps only some of them: built with g++ 15.3, `std::filesystem::remove` calls
-`remove` and `create_directory` calls `mkdir`, and neither is in the table. On a Mach-O slice the
-names are looked up by the same rules as the others, so in practice only by flat lookup or in an
-object file: a libstdc++ dylib is not libSystem. The fixture is
-`tests/fixtures/cxx-capabilities/`, a g++ 15.3.0 program with both ABIs and a C2 call.
+`basic_filebuf::open`, which is unmapped, as the only import that opens the file (its destructor and
+vtables are imported too): g++ 15.3 at `-O2` does this for a class derived from `std::ifstream`, and
+for an `std::ofstream` on the old string. A statically linked libstdc++ (`-static-libstdc++`, GCC
+8's `libstdc++fs.a`, `std::experimental::filesystem`) leaves none of these names. Such a file
+imports libc's functions instead (unless libc is linked statically too), and `posix.*` maps only
+some of them: built with g++ 15.3, `std::filesystem::remove` calls `remove` and `create_directory`
+calls `mkdir`, and neither is in the table. On a Mach-O slice libstdc++'s names are looked up as
+libSystem's, so in practice only by flat lookup or in an object file: a libstdc++ dylib is not
+libSystem. The fixture is `tests/fixtures/cxx-capabilities/`, a g++ 15.3.0 program with both ABIs
+and a C2 call.
+
+**libc++.** libc++ (LLVM's C++ library: macOS's, and `clang -stdlib=libc++`'s) names its
+declarations in the inline namespace `std::__1`, and declares `std::filesystem`'s functions inline
+over exported helpers in `std::__1::__fs::filesystem` that take an `std::error_code*` (null for the
+overload that throws). A program imports the helper whichever overload it calls:
+`std::filesystem::remove(p)` imports
+`_ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE`. The table has the 13 helpers of
+the twelve write functions (`__create_directory` twice: with and without the path whose attributes
+the new directory takes) as `cxx.file_write`. Of the streams' functions, libc++ 22.1.8 exports only
+`std::basic_ifstream<char>::open` (`cxx.file_read`) and `std::basic_ofstream<char>::open`
+(`cxx.file_write`), each for a `const char*` and a `std::string`: 17 names (`libc++.so.1`; the
+fixture's `libcxx-exports.tsv`). On a Mach-O slice they are looked up when bound to
+`/usr/lib/libc++.1.dylib`, by flat lookup, or in an object file; an import bound to libc++ is looked
+up for these names only, so `_connect` from libc++ gives no hint.
+
+A libc++ stream's constructor is inline and opens the file through
+`std::basic_filebuf<char>::open`, which stays unmapped (the mode decides read or write): so
+`std::ifstream f(path)` gives no hint, while `f.open(path)` gives `cxx.file_read`. libc++ exports
+nothing of `std::basic_fstream`. `__permissions` and `__last_write_time` (metadata), `__status`,
+`__symlink_status`, and the directory iterators (they change nothing), and the other helpers (a
+query, or the working directory) stay unmapped, as their libstdc++ counterparts do. A statically
+linked libc++ leaves none of these names. The fixtures are `tests/fixtures/libcxx-capabilities/`:
+a clang 22.1.8 `-stdlib=libc++` program, and an arm64 Mach-O linked against a
+`/usr/lib/libc++.1.dylib` stub.
+
+What is verified, and what is not. The 17 names are selected from LLVM libc++ 22.1.8 as Debian
+builds it (`libc++.so.1`): its exports list and a program built against its headers. The Mach-O
+fixture checks the lookup by dylib, with a stub that lists the names it imports; it does not show
+that Apple's `libc++.1.dylib` exports the same names, or since which macOS. A libc++ built with
+another ABI namespace (Android's `std::__ndk1`, Chromium's `std::__Cr`) has other names, which the
+table does not map, and an older libc++ may lack a name.
 
 **`--code`** also finds where each capability import is called directly, and records each call
 site:
@@ -273,17 +307,17 @@ which can be edited without changing what dyld binds:
 - for an object file (`MH_OBJECT`), which no loader reads, the undefined external symbols of its
   `LC_SYMTAB`, left for the linker.
 
-Each import records its name as the file has it (`_connect`), its library, and whether it is weak.
-A library is a dylib, by its ordinal: the dylib-loading commands, in order. Or it is this image,
-the main executable, flat lookup (every loaded image, in order), weak lookup, or, in an object
-file, the linker. The [capability table](#capabilities-and-code---code) looks up the imports bound
-to `/usr/lib/libSystem.B.dylib`, the ones found by flat lookup, and an object file's, by their
-names with one leading `_` stripped. This holds for the `cxx.*` names too: libc++'s names are not
-in the table, and a libstdc++ dylib is not looked up. In the Markdown, a Mach-O's facts table
-gains an `Imports (dyld)` row (`Undefined symbols (link time)` for an object file), followed by
-the imports, each with its library: the dylib's name, `self`, `main executable`, `flat lookup`,
-`weak lookup`, or `ordinal <n>` when the dylib's name was not kept (not read, or over the limit of
-names).
+Each import records its name as the file has it (`_connect`), its library, and whether it is weak. A
+library is a dylib, by its ordinal: the dylib-loading commands, in order. Or it is this image, the
+main executable, flat lookup (every loaded image, in order), weak lookup, or, in an object file, the
+linker. The [capability table](#capabilities-and-code---code) looks up the imports bound to
+`/usr/lib/libSystem.B.dylib` for the `posix.*` and libstdc++ names, the imports bound to
+`/usr/lib/libc++.1.dylib` for libc++'s `cxx.*` names (#105), and, for every name, the ones found by
+flat lookup and an object file's, by their names with one leading `_` stripped. A libstdc++ dylib is
+not looked up. In the Markdown, a Mach-O's facts table gains an `Imports (dyld)` row (`Undefined
+symbols (link time)` for an object file), followed by the imports, each with its library: the
+dylib's name, `self`, `main executable`, `flat lookup`, `weak lookup`, or `ordinal <n>` when the
+dylib's name was not kept (not read, or over the limit of names).
 
 **Presence, never use.** As for ELF, an import says that the file asks for the function, not that
 it calls it. A Go executable for darwin binds the libSystem functions its runtime and standard

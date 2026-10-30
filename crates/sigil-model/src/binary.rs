@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::evidence::Loc;
-use crate::id::SliceId;
+use crate::id::{FeatureKey, SliceId};
 use crate::text::UntrustedText;
 
 /// The container analysis: what was read and what was not (scope `Root(install)`).
@@ -132,6 +132,10 @@ pub struct MachOFacts {
 /// library and the system calls.
 pub const LIBSYSTEM: &str = "/usr/lib/libSystem.B.dylib";
 
+/// The dylib whose names are libc++'s (#105): an import bound to it is looked up for the `cxx.*`
+/// names only.
+pub const LIBCXX: &str = "/usr/lib/libc++.1.dylib";
+
 /// The start of a Mach-O slice's gap for a dylib-loading command whose name is not in
 /// `load_dylibs`: not read (`load dylib: <why>`, `load dylib: command is too short`), or over the
 /// limit of names (`load dylib: over 1024 names`). The command still takes its library ordinal.
@@ -176,17 +180,45 @@ pub enum MachOLibrary {
     Unbound,
 }
 
+/// Which capability hints a Mach-O import can support, by its library (PR-4c-3b, #105). Ordered:
+/// of two imports of one name, the greater decides: each variant admits every feature a lesser one
+/// admits, so the greater is the union of what the imports support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LookedUp {
+    /// Not looked up: another dylib's import, this image's, the main executable's, a weak
+    /// lookup's, or one whose dylib's name was not kept. Another dylib's `_connect` is that
+    /// dylib's function, not POSIX `connect`.
+    No,
+    /// Bound to [`LIBCXX`]: only a name of a `cxx.*` feature.
+    Cxx,
+    /// Bound to [`LIBSYSTEM`], found by flat lookup, or an object file's: any name.
+    All,
+}
+
+impl LookedUp {
+    /// Whether an import looked up so can support a hint of `feature`.
+    pub fn admits(self, feature: &FeatureKey) -> bool {
+        match self {
+            LookedUp::All => true,
+            LookedUp::Cxx => feature.as_str().starts_with("cxx."),
+            LookedUp::No => false,
+        }
+    }
+}
+
 impl MachOLibrary {
-    /// Whether an import of this library is looked up in the capability table (PR-4c-3b): one
-    /// bound to [`LIBSYSTEM`], one found by flat lookup, or an object file's. Another dylib's
-    /// `_connect` is that dylib's function, not POSIX `connect`.
-    pub fn looked_up(&self) -> bool {
+    /// Which capability hints an import of this library can support: the rule C6 checks
+    /// (PR-4c-3b, #105).
+    pub fn looked_up(&self) -> LookedUp {
         match self {
             MachOLibrary::Dylib {
                 name: Some(name), ..
-            } => name.as_bytes() == LIBSYSTEM.as_bytes(),
-            MachOLibrary::FlatLookup | MachOLibrary::Unbound => true,
-            _ => false,
+            } if name.as_bytes() == LIBSYSTEM.as_bytes() => LookedUp::All,
+            MachOLibrary::Dylib {
+                name: Some(name), ..
+            } if name.as_bytes() == LIBCXX.as_bytes() => LookedUp::Cxx,
+            MachOLibrary::FlatLookup | MachOLibrary::Unbound => LookedUp::All,
+            _ => LookedUp::No,
         }
     }
 }

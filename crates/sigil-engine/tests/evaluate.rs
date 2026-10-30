@@ -731,6 +731,7 @@ fn an_install_root_removed_after_assembly_is_refused() {
 const DENY_NETWORK: &str =
     "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"no network\"\n";
 const DENY_LOADING: &str = "[[capabilities.deny]]\nfeature = \"posix.dynamic_loading\"\naction = \"warn\"\nreason = \"no plugins\"\n";
+const DENY_CXX_WRITE: &str = "[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"fail\"\nreason = \"no file writes\"\n";
 
 fn the_slice(s: &Session) -> SliceId {
     s.binaries[0].slice.clone()
@@ -989,6 +990,66 @@ fn a_session_not_analyzed_with_this_table_is_refused_under_a_capability_denial()
     let mut s = example("01-complete-pass");
     run(&mut s, DENY_NETWORK);
     assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+}
+
+/// #105, #106's contract: a session saved before libc++'s names were added
+/// (`tests/fixtures/pre-105/`) records the old table. Under a capability denial it is refused
+/// with the re-inspection guidance and left unchanged: its hints are never re-read with this
+/// table's names. Without a denial it evaluates as before.
+#[test]
+fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial() {
+    const PRE_105: &str = "432f71b2a3c5f25663e699d5447db24b27590a4dad5ed1186b0f30ac89b26944";
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-105/16-binary-code.json");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let saved: Session = serde_json::from_str(&text).unwrap_or_else(|e| {
+        panic!(
+            "pre-105 fixture: sigil-session/1 compatibility: {}: {e}",
+            path.display()
+        )
+    });
+    saved.validate().unwrap_or_else(|e| {
+        panic!(
+            "pre-105 fixture: sigil-session/1 compatibility: {}: {e:?}",
+            path.display()
+        )
+    });
+    let saved_outcome = saved.outcome.clone();
+    let old = Sha256Hex::new(PRE_105).unwrap();
+    let recorded: Vec<Sha256Hex> = saved
+        .knowledge
+        .iter()
+        .filter(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
+        .map(|k| k.sha256.clone())
+        .collect();
+    assert_eq!(recorded, std::slice::from_ref(&old));
+    assert_ne!(table().sha256, old, "#105 changed the table");
+    let time = saved.outcome.policy_time.clone();
+    for deny in [DENY_NETWORK, DENY_CXX_WRITE] {
+        let mut s = saved.clone();
+        let err = evaluate(&mut s, &policy_for(&saved, deny), time.clone()).unwrap_err();
+        assert_eq!(
+            err,
+            EvaluateError::CapabilityTable {
+                recorded: vec![old.clone()],
+                embedded: table().sha256,
+            },
+            "{deny}"
+        );
+        assert!(
+            err.to_string()
+                .contains("analyze the files again with this build"),
+            "{err}"
+        );
+        assert_eq!(s, saved, "a refused evaluation changes nothing");
+    }
+    // Without a denial: as before.
+    let mut s = saved;
+    run(&mut s, "");
+    assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
+    assert_eq!(s.outcome.verdict, Verdict::Pass);
+    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(s.outcome, saved_outcome, "evaluated as before");
 }
 
 /// Plan review P2-1: the hints are the ones the table gives the import facts. `validate` cannot

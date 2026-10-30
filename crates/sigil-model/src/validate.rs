@@ -2181,11 +2181,15 @@ impl<'a> Validator<'a> {
     }
 
     /// C6 (PR-5a spec §5.2): an `Import` hint names an import of its slice, at `Symbol(value)`.
-    /// On a Mach-O slice (PR-4c-3b), the import's library must be looked up
-    /// ([`MachOLibrary::looked_up`]): libSystem, flat lookup, or an object file's.
+    /// On a Mach-O slice (PR-4c-3b, #105), the import's library must be looked up for the hint's
+    /// feature ([`MachOLibrary::looked_up`]): libSystem's, flat lookup's, and an object file's for
+    /// any feature, libc++'s for a `cxx.*` one. C6 does not check that the capability table maps
+    /// the name to the feature: the table is the engine's, and evaluation refuses, under a
+    /// capability denial, a session whose hints are not the ones the table gives (#51).
     ///
     /// [`MachOLibrary::looked_up`]: crate::binary::MachOLibrary::looked_up
     fn import_hints(&mut self) {
+        use crate::binary::LookedUp;
         use crate::hint::Signal;
         let s = self.s;
         for hint in s.hints.iter().filter(|h| h.signal == Signal::Import) {
@@ -2194,19 +2198,24 @@ impl<'a> Validator<'a> {
                 self.code_error(&at, "an import hint's at must be Symbol(value)");
             }
             // Whether the value is an import of the slice, and, on a Mach-O slice, one whose
-            // library is looked up.
-            let imported = self
+            // library is looked up for the hint's feature.
+            match self
                 .index
                 .imports
-                .get(&(hint.subject.as_str(), &hint.value));
-            if imported.is_none() {
-                self.code_error(&at, "the value is not an import of its slice");
-            } else if imported == Some(&false) {
-                self.code_error(
+                .get(&(hint.subject.as_str(), &hint.value))
+                .copied()
+            {
+                None => self.code_error(&at, "the value is not an import of its slice"),
+                Some(LookedUp::No) => self.code_error(
                     &at,
                     "the value is a Mach-O import whose library is not looked up (only libSystem's, \
-                     flat lookup's, and an object file's are)",
-                );
+                     libc++'s for cxx.* features, flat lookup's, and an object file's are)",
+                ),
+                Some(LookedUp::Cxx) if !LookedUp::Cxx.admits(&hint.feature) => self.code_error(
+                    &at,
+                    "the value is a Mach-O import of libc++, which supports only cxx.* hints",
+                ),
+                Some(LookedUp::Cxx | LookedUp::All) => {}
             }
         }
     }

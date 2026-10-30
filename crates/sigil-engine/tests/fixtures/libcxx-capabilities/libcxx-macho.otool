@@ -1,0 +1,232 @@
+libcxx-macho:
+Mach header
+      magic cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
+ 0xfeedfacf 16777228          0  0x00           2    17       1008 0x00200085
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 72
+  segname __PAGEZERO
+   vmaddr 0x0000000000000000
+   vmsize 0x0000000100000000
+  fileoff 0
+ filesize 0
+  maxprot 0x00000000
+ initprot 0x00000000
+   nsects 0
+    flags 0x0
+Load command 1
+      cmd LC_SEGMENT_64
+  cmdsize 312
+  segname __TEXT
+   vmaddr 0x0000000100000000
+   vmsize 0x0000000000004000
+  fileoff 0
+ filesize 16384
+  maxprot 0x00000005
+ initprot 0x00000005
+   nsects 3
+    flags 0x0
+Section
+  sectname __text
+   segname __TEXT
+      addr 0x0000000100000430
+      size 0x0000000000000070
+    offset 1072
+     align 2^2 (4)
+    reloff 0
+    nreloc 0
+     flags 0x80000400
+ reserved1 0
+ reserved2 0
+Section
+  sectname __stubs
+   segname __TEXT
+      addr 0x00000001000004a0
+      size 0x0000000000000030
+    offset 1184
+     align 2^2 (4)
+    reloff 0
+    nreloc 0
+     flags 0x80000408
+ reserved1 4 (index into indirect symbol table)
+ reserved2 12 (size of stubs)
+Section
+  sectname __cstring
+   segname __TEXT
+      addr 0x00000001000004d0
+      size 0x000000000000000e
+    offset 1232
+     align 2^0 (1)
+    reloff 0
+    nreloc 0
+     flags 0x00000002
+ reserved1 0
+ reserved2 0
+Load command 2
+      cmd LC_SEGMENT_64
+  cmdsize 152
+  segname __DATA_CONST
+   vmaddr 0x0000000100004000
+   vmsize 0x0000000000004000
+  fileoff 16384
+ filesize 16384
+  maxprot 0x00000003
+ initprot 0x00000003
+   nsects 1
+    flags 0x10
+Section
+  sectname __got
+   segname __DATA_CONST
+      addr 0x0000000100004000
+      size 0x0000000000000020
+    offset 16384
+     align 2^3 (8)
+    reloff 0
+    nreloc 0
+     flags 0x00000006
+ reserved1 0 (index into indirect symbol table)
+ reserved2 0
+Load command 3
+      cmd LC_SEGMENT_64
+  cmdsize 72
+  segname __LINKEDIT
+   vmaddr 0x0000000100008000
+   vmsize 0x0000000000000450
+  fileoff 32768
+ filesize 1104
+  maxprot 0x00000001
+ initprot 0x00000001
+   nsects 0
+    flags 0x0
+Load command 4
+      cmd LC_DYLD_CHAINED_FIXUPS
+  cmdsize 16
+  dataoff 32768
+ datasize 288
+Load command 5
+      cmd LC_DYLD_EXPORTS_TRIE
+  cmdsize 16
+  dataoff 33056
+ datasize 48
+Load command 6
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 33112
+   nsyms 6
+  stroff 33240
+ strsize 216
+Load command 7
+            cmd LC_DYSYMTAB
+        cmdsize 80
+      ilocalsym 0
+      nlocalsym 0
+     iextdefsym 0
+     nextdefsym 2
+      iundefsym 2
+      nundefsym 4
+         tocoff 0
+           ntoc 0
+      modtaboff 0
+        nmodtab 0
+   extrefsymoff 0
+    nextrefsyms 0
+ indirectsymoff 33208
+  nindirectsyms 8
+      extreloff 0
+        nextrel 0
+      locreloff 0
+        nlocrel 0
+Load command 8
+          cmd LC_LOAD_DYLINKER
+      cmdsize 32
+         name /usr/lib/dyld (offset 12)
+Load command 9
+     cmd LC_UUID
+ cmdsize 24
+    uuid 4C4C442D-5555-3144-A117-BED5D59E7367
+Load command 10
+       cmd LC_BUILD_VERSION
+   cmdsize 32
+  platform 1
+       sdk 13.0
+     minos 13.0
+    ntools 1
+      tool 4
+   version 22.1.8
+Load command 11
+       cmd LC_MAIN
+   cmdsize 24
+  entryoff 1072
+ stacksize 0
+Load command 12
+          cmd LC_LOAD_DYLIB
+      cmdsize 48
+         name /usr/lib/libc++.1.dylib (offset 24)
+   time stamp 0 Thu Jan  1 00:00:00 1970
+      current version 1700.0.0
+compatibility version 1.0.0
+Load command 13
+          cmd LC_LOAD_DYLIB
+      cmdsize 56
+         name /usr/lib/libSystem.B.dylib (offset 24)
+   time stamp 0 Thu Jan  1 00:00:00 1970
+      current version 1351.0.0
+compatibility version 1.0.0
+Load command 14
+      cmd LC_FUNCTION_STARTS
+  cmdsize 16
+  dataoff 33104
+ datasize 8
+Load command 15
+      cmd LC_DATA_IN_CODE
+  cmdsize 16
+  dataoff 33112
+ datasize 0
+Load command 16
+      cmd LC_CODE_SIGNATURE
+  cmdsize 16
+  dataoff 33456
+ datasize 416
+Mach header
+      magic cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
+ 0xfeedfacf 16777228          0  0x00           2    17       1008 0x00200085
+== chained fixups
+libcxx-macho:
+chained fixups header (LC_DYLD_CHAINED_FIXUPS)
+  fixups_version = 0
+  starts_offset  = 32
+  imports_offset = 80
+  symbols_offset = 96
+  imports_count  = 4
+  imports_format = 1 (DYLD_CHAINED_IMPORT)
+  symbols_format = 0
+chained starts in image
+  seg_count = 4
+    seg_offset[0] = 0 (__PAGEZERO)
+    seg_offset[1] = 0 (__TEXT)
+    seg_offset[2] = 24 (__DATA_CONST)
+    seg_offset[3] = 0 (__LINKEDIT)
+chained starts in segment 2 (__DATA_CONST)
+  size = 24
+  page_size = 0x4000
+  pointer_format = 2 (DYLD_CHAINED_PTR_64)
+  segment_offset = 0x4000
+  max_valid_pointer = 0
+  page_count = 1
+    page_start[0] = 0
+dyld chained import[0]
+  lib_ordinal = 1 (libc++)
+  weak_import = 0
+  name_offset = 0 (_connect)
+dyld chained import[1]
+  lib_ordinal = 1 (libc++)
+  weak_import = 0
+  name_offset = 9 (__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE)
+dyld chained import[2]
+  lib_ordinal = 1 (libc++)
+  weak_import = 0
+  name_offset = 76 (__ZNSt3__14__fs10filesystem13__permissionsERKNS1_4pathENS1_5permsENS1_12perm_optionsEPNS_10error_codeE)
+dyld chained import[3]
+  lib_ordinal = 2 (libSystem)
+  weak_import = 0
+  name_offset = 179 (_getenv)

@@ -16,7 +16,7 @@ Inspection is local and read-only. SIGIL never executes the files it inspects, s
 | **Ollama installation** | Files under `bin/ollama` and `lib/ollama`, their matches against embedded official release manifests, and missing installation members. |
 | **Runtime components** | ELF component claims from file names, SONAMEs, embedded versions and commits, and reference hashes. Conflicting evidence stays visible. |
 | **Standalone binaries** | Digests and container facts for ELF executables, shared libraries, and object files, plus thin and universal Mach-O files. No model store or running runtime is needed. |
-| **Capabilities and code** | POSIX and libstdc++ capability imports, Go function-name and export hints in ELF files, and—with `binary inspect --code`—direct call sites and argument values in x86-64 ELF code. |
+| **Capabilities and code** | POSIX, libstdc++, and libc++ capability imports, Go function-name and export hints in ELF files, and—with `binary inspect --code`—direct call sites and argument values in x86-64 ELF code. |
 | **Runtime exposure** | In observe mode, listening sockets attributed to `ollama serve` through `/proc` file descriptors. The optional API probe records the response from one requested endpoint. |
 
 Use SIGIL to collect evidence for a security review, check a local deployment in CI, or inspect a native library before including it in an AI environment. Each finding links back to the facts and evidence that support it.
@@ -113,7 +113,7 @@ SIGIL preserves how each conclusion was reached:
 | **Reference match** | File content matches an entry in an embedded release manifest. Installation completeness is assessed separately. This is a content comparison, not signature verification. |
 | **Component identity** | Names, embedded build values, and reference hashes support a component claim. Versions retain their sources; conflicting claims are reported explicitly. |
 | **Signature hint** | A known export or an exact Go function name was found in the ELF file. For example, `go.process_spawn` records a function-name match, not a call. |
-| **Capability import** | The binary requests a known function from its loader or linker, such as `connect` → `posix.network` or a mapped libstdc++ file operation → `cxx.file_write`. |
+| **Capability import** | The binary requests a known function from its loader or linker, such as `connect` → `posix.network` or a mapped libstdc++ or libc++ file operation → `cxx.file_write`. |
 | **Direct call site** | With `--code`, supported code contains a direct call or tail jump to a capability import, with its location, containing function, and recovered argument values. This is static evidence, not an observation of runtime execution. |
 
 Component identification also reads supported `ggml_version()` and `ggml_commit()` return values without running those functions. When reference hashes cannot establish an installation's release, an embedded commit may produce an open set of releases it is **consistent with**; that does not close release coverage.
@@ -123,7 +123,7 @@ Current analysis boundaries:
 - **Code analysis is x86-64 ELF only**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
 - **`--code` is available on `binary inspect`.** Installation inspection collects container facts, identities, and hints; it does not yet analyze call sites. Inspect an installation's individual files with `binary inspect --code` when needed.
 - **Mach-O support covers containers and imports**, including per-architecture slices in universal files. Identity scans and code analysis remain unsupported, so these required checks leave the default result incomplete.
-- **Capability mappings cover specific names.** POSIX and libstdc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
+- **Capability mappings cover specific names.** POSIX, libstdc++, and libc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
 
 ## Apply a policy
 
