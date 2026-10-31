@@ -89,25 +89,25 @@ fn a_source_names_the_unit_and_the_unit_was_read() {
 fn the_unit_is_the_argument_read_at_its_root() {
     let mut s = valid();
     unit(&mut s).discovered_by = vec![DiscoverySource::Walk];
-    rejected_for(&s, "discovered by Argument only");
+    rejected_for(&s, "a unit is discovered by Argument only");
     let mut s = valid();
     unit(&mut s).path = t("/etc/systemd/system/other.service");
-    rejected_for(&s, "at the service-unit root's path");
+    rejected_for(&s, "the unit is not at the service-unit root's path");
 }
 
 #[test]
-fn a_service_unit_root_has_exactly_one_source_naming_its_unit() {
+fn a_service_unit_root_has_exactly_one_source() {
     let mut s = valid();
     exe(&mut s)
         .discovered_by
         .retain(|d| *d == DiscoverySource::Walk);
-    rejected_for(&s, "has 0 ServiceUnit sources");
+    rejected_for(&s, "0 ServiceUnit sources");
     let mut s = valid();
     let config = source(&mut s).clone();
     exe(&mut s)
         .discovered_by
         .push(DiscoverySource::ServiceUnit { config });
-    rejected_for(&s, "has 2 ServiceUnit sources");
+    rejected_for(&s, "2 ServiceUnit sources");
 }
 
 #[test]
@@ -130,6 +130,23 @@ fn only_the_install_s_bin_ollama_carries_a_source() {
     unit(&mut s)
         .discovered_by
         .push(DiscoverySource::ServiceUnit { config });
+    rejected_for(&s, "only the install root's bin/ollama");
+    let mut s = valid();
+    let config = source(&mut s).clone();
+    exe(&mut s)
+        .discovered_by
+        .retain(|d| *d == DiscoverySource::Walk);
+    s.request.roots.push(ScanRoot {
+        id: id("other"),
+        path: t("/usr/local"),
+    });
+    let mut other = exe(&mut s).clone();
+    other.id = id("inst:other/bin/ollama");
+    other.root = id("other");
+    other
+        .discovered_by
+        .push(DiscoverySource::ServiceUnit { config });
+    s.instances.push(other);
     rejected_for(&s, "only the install root's bin/ollama");
 }
 

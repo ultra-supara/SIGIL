@@ -1090,7 +1090,7 @@ impl<'a> Validator<'a> {
                             self.errors.push(ValidationError::BinaryInput {
                                 at: instance.id.to_string(),
                                 why: "discovered by Argument outside a binary inspection's roots \
-                                      and the service unit's root"
+                                      and the service-unit root"
                                     .to_string(),
                             });
                         }
@@ -2086,13 +2086,6 @@ impl<'a> Validator<'a> {
         use crate::artifact::DiscoverySource;
         use crate::evidence::ConfigRef;
         let s = self.s;
-        let root_path = |name: &str| {
-            s.request
-                .roots
-                .iter()
-                .find(|r| r.id.as_str() == name)
-                .map(|r| r.path.as_bytes().to_vec())
-        };
         let sources: Vec<(&FileInstance, &ConfigRef)> = s
             .instances
             .iter()
@@ -2103,88 +2096,79 @@ impl<'a> Validator<'a> {
                 })
             })
             .collect();
-        let mut errors: Vec<(String, String)> = vec![];
-        if let Some(unit_path) = root_path(SERVICE_UNIT_ROOT) {
-            let roots = "request.roots".to_string();
-            if root_path(INSTALL_ROOT).is_none() {
-                errors.push((
-                    roots.clone(),
-                    "a service-unit root comes with an install root".into(),
-                ));
+        let install = self.index.roots.get(INSTALL_ROOT).copied();
+        if let Some(root) = self.index.roots.get(SERVICE_UNIT_ROOT).copied() {
+            if install.is_none() {
+                self.unit_error(
+                    "request.roots",
+                    "a service-unit root comes with an install root",
+                );
             }
-            let units: Vec<&FileInstance> = s
-                .instances
-                .iter()
-                .filter(|i| i.root.as_str() == SERVICE_UNIT_ROOT)
-                .collect();
-            match units.as_slice() {
-                [unit] => {
-                    let at = format!("instances[{}]", unit.id);
-                    if unit.discovered_by != [DiscoverySource::Argument] {
-                        errors.push((at.clone(), "the unit is discovered by Argument only".into()));
-                    }
-                    if unit.path.as_bytes() != unit_path.as_slice() {
-                        errors.push((
-                            at.clone(),
-                            "the unit is at the service-unit root's path".into(),
-                        ));
-                    }
-                    if !matches!(unit.content, InstanceContent::Read { .. }) {
-                        errors.push((at.clone(), "the unit was not read".into()));
-                    }
-                    if sources.len() != 1 || sources.iter().any(|(_, c)| c.file != unit.id) {
-                        errors.push((
-                            at,
-                            format!(
-                                "the session has {} ServiceUnit sources; it has exactly one, \
-                                 naming the unit",
-                                sources.len()
-                            ),
-                        ));
-                    }
+            let units = self.index.by_root.get(SERVICE_UNIT_ROOT);
+            if let Some(unit) = units.and_then(|entries| entries.unique()) {
+                let at = format!("instances[{}]", unit.id);
+                if unit.discovered_by != [DiscoverySource::Argument] {
+                    self.unit_error(&at, "a unit is discovered by Argument only");
                 }
-                other => errors.push((
-                    roots,
+                if unit.path != root.path {
+                    self.unit_error(&at, "the unit is not at the service-unit root's path");
+                }
+                if !matches!(unit.content, InstanceContent::Read { .. }) {
+                    self.unit_error(&at, "the unit was not read");
+                }
+                if sources.len() != 1 {
+                    self.unit_error(
+                        &at,
+                        format!(
+                            "{} ServiceUnit sources; a service-unit root has exactly one",
+                            sources.len()
+                        ),
+                    );
+                }
+            } else {
+                self.unit_error(
+                    "request.roots",
                     format!(
                         "the service-unit root holds {} instances; it holds exactly one",
-                        other.len()
+                        units.map_or(0, |entries| entries.count)
                     ),
-                )),
+                );
             }
         }
-        let bin = root_path(INSTALL_ROOT).map(|mut p| {
-            p.extend_from_slice(b"/bin/ollama");
-            p
-        });
         for (instance, config) in &sources {
             let at = format!("instances[{}]", instance.id);
             // A dangling `config.file` is reported by `config`.
             if let Some(file) = self.index.instances.get(config.file.as_str()) {
                 if file.root.as_str() != SERVICE_UNIT_ROOT {
-                    errors.push((
-                        at.clone(),
-                        "the source's file is not the service-unit root's instance".into(),
-                    ));
+                    self.unit_error(
+                        &at,
+                        "the source's file is not the service-unit root's instance",
+                    );
                 }
             }
             if config.key.as_bytes() != b"ExecStart" {
-                errors.push((at.clone(), "the key is not ExecStart".into()));
+                self.unit_error(&at, "the key is not ExecStart");
             }
             if config.line == 0 {
-                errors.push((at.clone(), "the line is 0; lines count from 1".into()));
+                self.unit_error(&at, "the line is 0; lines count from 1");
             }
-            if instance.root.as_str() != INSTALL_ROOT
-                || bin.as_deref() != Some(instance.path.as_bytes())
-            {
-                errors.push((
-                    at.clone(),
-                    "a ServiceUnit source is carried by only the install root's bin/ollama".into(),
-                ));
+            let carrier = instance.root.as_str() == INSTALL_ROOT
+                && install.and_then(|r| instance.path.as_bytes().strip_prefix(r.path.as_bytes()))
+                    == Some(&b"/bin/ollama"[..]);
+            if !carrier {
+                self.unit_error(
+                    &at,
+                    "a ServiceUnit source is carried by only the install root's bin/ollama",
+                );
             }
         }
-        for (at, why) in errors {
-            self.errors.push(ValidationError::ServiceUnit { at, why });
-        }
+    }
+
+    fn unit_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
+        self.errors.push(ValidationError::ServiceUnit {
+            at: at.to_string(),
+            why: why.into(),
+        });
     }
 
     fn code_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
