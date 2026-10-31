@@ -78,12 +78,21 @@ pub const REDIRECTS: &[&str] = &[
 ///
 /// It is an explicitly limited subset, not a systemd-compatible parser: what it does not model
 /// is refused, even where systemd accepts it.
+///
+/// SIGIL does not check that systemd would load the unit: another fatal setting (e.g. a relative
+/// `WorkingDirectory=`) makes systemd run nothing while this returns the path.
 pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
     if text.contains(&0) {
         return Err("a NUL byte".to_string());
     }
-    if std::str::from_utf8(text).is_err() {
+    let Ok(utf8) = std::str::from_utf8(text) else {
         return Err("the unit is not UTF-8".to_string());
+    };
+    if utf8
+        .chars()
+        .any(|c| matches!(c as u32, 0xFDD0..=0xFDEF) || (c as u32) & 0xFFFE == 0xFFFE)
+    {
+        return Err("the unit is not UTF-8 clean (a noncharacter)".to_string());
     }
     if text.windows(3).any(|w| w == [0xEF, 0xBB, 0xBF]) {
         return Err("a byte-order mark".to_string());
@@ -164,8 +173,13 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
     let at = |why: &str| format!("ExecStart= at line {line}: {why}");
     let (item, rest) = first_item(&value).map_err(&at)?;
     let (exe, argv0) = strip_prefixes(item).map_err(&at)?;
-    if rest.iter().any(|&b| matches!(b, b'"' | b'\'' | b'\\')) {
-        return Err(at("a quote or backslash in the arguments (not modeled)"));
+    if rest
+        .iter()
+        .any(|&b| matches!(b, b'"' | b'\'' | b'\\' | b'%'))
+    {
+        return Err(at(
+            "a quote, backslash, or specifier in the arguments (not modeled)",
+        ));
     }
     if rest.split(|&b| is_space(b)).any(|w| w == b";") {
         return Err(at("a `;` argument (a second command)"));
@@ -190,6 +204,9 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
         return Err(at(
             "a relative command (systemd's search path is not modeled)",
         ));
+    }
+    if exe.ends_with(b"/") || exe.ends_with(b"/.") {
+        return Err(at("a directory path"));
     }
     Ok((exe.to_vec(), line))
 }
@@ -340,14 +357,6 @@ mod tests {
             (
                 "[Service]\nExecStart=/a/bin/ollama a;b ;x\n",
                 "/a/bin/ollama",
-            ),
-            (
-                "[Service]\nExecStart=/tmpfs/bin/ollama\n",
-                "/tmpfs/bin/ollama",
-            ),
-            (
-                "[Service]\nExecStart=/var/tmpx/ollama\n",
-                "/var/tmpx/ollama",
             ),
         ];
         for (text, exe) in cases {
@@ -503,6 +512,34 @@ mod tests {
                 "line 1: an invalid section name",
             ),
             (
+                "[Ser\x7fvice]\nExecStart=/a/bin/ollama\n",
+                "line 1: an invalid section name",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama a\u{fffe}b\n",
+                "the unit is not UTF-8 clean (a noncharacter)",
+            ),
+            (
+                "[Unit]\nDescription=x\u{10ffff}\n[Service]\nExecStart=/a/bin/ollama\n",
+                "the unit is not UTF-8 clean (a noncharacter)",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama a\u{fdd0}\n",
+                "the unit is not UTF-8 clean (a noncharacter)",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama %Z\n",
+                "at line 2: a quote, backslash, or specifier in the arguments",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama/\n",
+                "at line 2: a directory path",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/.\n",
+                "at line 2: a directory path",
+            ),
+            (
                 "[Ser\x01vice]\nExecStart=/a/bin/ollama\n",
                 "line 1: an invalid section name",
             ),
@@ -520,19 +557,19 @@ mod tests {
             ),
             (
                 "[Service]\nExecStart=/a/bin/ollama \"serve\n",
-                "at line 2: a quote or backslash in the arguments",
+                "at line 2: a quote, backslash, or specifier in the arguments",
             ),
             (
                 "[Service]\nExecStart=/a/bin/ollama 'serve'\n",
-                "a quote or backslash in the arguments",
+                "a quote, backslash, or specifier in the arguments",
             ),
             (
                 "[Service]\nExecStart=/a/bin/ollama a\\x20b\n",
-                "a quote or backslash in the arguments",
+                "a quote, backslash, or specifier in the arguments",
             ),
             (
                 "[Service]\nExecStart=/a/bin/ollama serve \\;\n",
-                "a quote or backslash in the arguments",
+                "a quote, backslash, or specifier in the arguments",
             ),
             (
                 "[Service]\nExecStart=/a/bin/ollama serve ; /b/bin/x\n",
