@@ -231,14 +231,7 @@ fn assemble(
         };
         let mut facts = install::collect(&dir, r.budgets).map_err(InspectError::BadId)?;
         if let Some(unit) = unit {
-            service_unit::attach(
-                unit,
-                facts.root_id,
-                &facts.discovery.state,
-                facts.bin_gap.as_deref(),
-                &mut facts.instances,
-            )
-            .map_err(InspectError::Input)?;
+            service_unit::attach(unit, &mut facts).map_err(InspectError::Input)?;
         }
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;

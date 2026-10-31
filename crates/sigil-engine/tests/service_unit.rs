@@ -262,6 +262,22 @@ fn an_installation_replaced_after_the_unit_was_read_is_an_input_error() {
     input_error(result, "was replaced after it was resolved");
 }
 
+/// Task 5 re-review: the prefix moved after the unit was read, and a link to it left in its
+/// place. The walk opens the same directory, at another path: not the installation resolved.
+#[test]
+fn an_installation_moved_after_the_unit_was_read_is_an_input_error() {
+    let t = Tree::new();
+    let models = TempDir::new().unwrap();
+    let unit = t.unit(&format!("{}/bin/ollama", t.inst().display()));
+    let source = from_unit(&unit);
+    std::fs::rename(t.inst(), t.root.join("moved")).unwrap();
+    symlink(t.root.join("moved"), t.inst()).unwrap();
+    input_error(
+        inspect(models.path(), source),
+        "was moved after it was resolved",
+    );
+}
+
 /// The executable alone replaced between the unit's read and the walk.
 #[test]
 fn an_executable_replaced_after_the_unit_was_read_is_an_input_error() {
