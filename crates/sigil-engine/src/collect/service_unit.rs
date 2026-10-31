@@ -38,11 +38,15 @@ fn skipped(line: &[u8]) -> bool {
 
 /// Settings of `[Service]` that make the service's paths lead elsewhere than the host's
 /// (systemd.exec(5)): with one set, `ExecStart=`'s path may name another file than the one SIGIL
-/// would resolve. Settings that only hide a path (`PrivateTmp=`, `ProtectHome=`,
-/// `InaccessiblePaths=`) make the service fail to start instead, and are not listed.
+/// would resolve. Settings that only hide a path (`ProtectHome=`, `InaccessiblePaths=`,
+/// `NoExecPaths=`) make the service fail to start rather than run another file, and are not
+/// listed. `PrivateTmp=` (implied by `DynamicUser=`) is not listed either: it gives the service an
+/// empty `/tmp` and `/var/tmp` of its own, so an executable there is not the host's file. Like a
+/// file an `ExecStartPre=` may replace, this is not modeled.
 pub const REDIRECTS: &[&str] = &[
     "RootDirectory",
     "RootImage",
+    "RootMStack",
     "BindPaths",
     "BindReadOnlyPaths",
     "TemporaryFileSystem",
@@ -54,17 +58,21 @@ pub const REDIRECTS: &[&str] = &[
 /// The executable of the one `ExecStart=` of `[Service]`, and the line its assignment starts on
 /// (from 1). `Err` says why the unit is outside the modeled subset of systemd.syntax(7) and
 /// systemd.service(5) "COMMAND LINES" (systemd 261):
-/// - lines are split at `\n` and trimmed of systemd's whitespace (space, tab, CR, LF); empty and
-///   comment (`#`, `;`) lines are skipped, also inside a continuation; a line ending in `\` is
-///   joined with the next one, the `\` replaced by a space;
-/// - only `[Service]` is read; a section header without `]`, and a line without `=` in
-///   `[Service]`, are outside the subset;
+/// - the unit is UTF-8 with no NUL and no byte-order mark;
+/// - lines are split at `\n` and trimmed of systemd's whitespace (space, tab, CR, LF); a CR is
+///   allowed only as the last byte of a line (systemd ends a line at a lone CR); empty and
+///   comment (`#`, `;`) lines are skipped; a line ending in `\` is not modeled (systemd's
+///   continuation rules are not emulated);
+/// - only `[Service]` is read; a section header without `]` or with a quote, a backslash, or a
+///   control byte in its name, and a line without `=` in `[Service]`, are outside the subset;
 /// - `ExecStart` assignments apply in order, an empty one clearing the list; exactly one must
 ///   remain;
 /// - its first item is unquoted (a whole `"…"` or `'…'` item, or up to whitespace; no other
 ///   quote), then the prefixes `@-:+!` are removed, each at most once; `+` with `!`, `@` without
 ///   a following item, and `|` (a shell) are outside the subset;
-/// - what remains is an absolute path with no `\`, `%`, `$`, or control byte;
+/// - the arguments after it have no quote and no backslash, and no word that is exactly `;` (a
+///   second command);
+/// - what remains of the first item is an absolute path with no `\`, `%`, `$`, or control byte;
 /// - a [`REDIRECTS`] setting still set at the end is outside the subset: it changes where the
 ///   service's paths lead.
 ///
@@ -74,34 +82,41 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
     if text.contains(&0) {
         return Err("a NUL byte".to_string());
     }
-    let mut lines = text.split(|&b| b == b'\n').zip(1u32..);
+    if std::str::from_utf8(text).is_err() {
+        return Err("the unit is not UTF-8".to_string());
+    }
+    if text.windows(3).any(|w| w == [0xEF, 0xBB, 0xBF]) {
+        return Err("a byte-order mark".to_string());
+    }
     let mut in_service = false;
     let mut assigned: Vec<(Vec<u8>, u32)> = vec![];
-    // The `REDIRECTS` settings still set, each with the line of its last assignment.
-    let mut redirects: Vec<(&'static str, u32)> = vec![];
-    while let Some((raw, number)) = lines.next() {
-        let first = trim(raw);
-        if skipped(first) {
+    // The line of the last assignment of each `REDIRECTS` setting still set, indexed like it.
+    let mut redirects = [None::<u32>; REDIRECTS.len()];
+    for (raw, number) in text.split(|&b| b == b'\n').zip(1u32..) {
+        if raw[..raw.len().saturating_sub(1)].contains(&b'\r') {
+            return Err(format!("line {number}: a carriage return inside a line"));
+        }
+        let line = trim(raw);
+        if skipped(line) {
             continue;
         }
-        let mut line = first.to_vec();
-        while line.last() == Some(&b'\\') {
-            line.pop();
-            line.push(b' ');
-            match lines
-                .by_ref()
-                .map(|(raw, _)| trim(raw))
-                .find(|l| !skipped(l))
-            {
-                Some(next) => line.extend_from_slice(next),
-                None => break,
-            }
+        if line.last() == Some(&b'\\') {
+            return Err(format!(
+                "line {number}: a continuation (`\\` at the end of a line) is not modeled"
+            ));
         }
         if line[0] == b'[' {
             if line.last() != Some(&b']') {
                 return Err(format!("line {number}: a section header without `]`"));
             }
-            in_service = &line[1..line.len() - 1] == b"Service";
+            let name = &line[1..line.len() - 1];
+            if name
+                .iter()
+                .any(|&b| matches!(b, b'"' | b'\'' | b'\\' | 0..=0x1f | 0x7f))
+            {
+                return Err(format!("line {number}: an invalid section name"));
+            }
+            in_service = name == b"Service";
             continue;
         }
         if !in_service {
@@ -112,11 +127,8 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
         };
         let key = trim(&line[..eq]);
         let value = trim(&line[eq + 1..]);
-        if let Some(name) = REDIRECTS.iter().copied().find(|k| k.as_bytes() == key) {
-            redirects.retain(|(k, _)| *k != name);
-            if !value.is_empty() {
-                redirects.push((name, number));
-            }
+        if let Some(i) = REDIRECTS.iter().position(|k| k.as_bytes() == key) {
+            redirects[i] = if value.is_empty() { None } else { Some(number) };
             continue;
         }
         if key != b"ExecStart" {
@@ -128,19 +140,23 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
             assigned.push((value.to_vec(), number));
         }
     }
-    if let Some((name, at)) = redirects.iter().min_by_key(|(_, n)| *n) {
+    let earliest = redirects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, at)| at.map(|at| (at, REDIRECTS[i])))
+        .min();
+    if let Some((at, name)) = earliest {
         return Err(format!(
             "line {at}: {name}= changes where the service's paths lead (not modeled)"
         ));
     }
-    let (value, line) = match assigned.as_slice() {
-        [one] => one.clone(),
-        [] => return Err("no ExecStart= in [Service]".to_string()),
-        more => {
-            let at: Vec<String> = more.iter().map(|(_, n)| n.to_string()).collect();
+    let (value, line) = match assigned.len() {
+        0 => return Err("no ExecStart= in [Service]".to_string()),
+        1 => assigned.remove(0),
+        n => {
+            let at: Vec<String> = assigned.iter().map(|(_, n)| n.to_string()).collect();
             return Err(format!(
-                "{} ExecStart= commands (lines {}); one is modeled",
-                more.len(),
+                "{n} ExecStart= commands (lines {}); one is modeled",
                 at.join(", ")
             ));
         }
@@ -148,6 +164,12 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
     let at = |why: &str| format!("ExecStart= at line {line}: {why}");
     let (item, rest) = first_item(&value).map_err(&at)?;
     let (exe, argv0) = strip_prefixes(item).map_err(&at)?;
+    if rest.iter().any(|&b| matches!(b, b'"' | b'\'' | b'\\')) {
+        return Err(at("a quote or backslash in the arguments (not modeled)"));
+    }
+    if rest.split(|&b| is_space(b)).any(|w| w == b";") {
+        return Err(at("a `;` argument (a second command)"));
+    }
     if argv0 && rest.is_empty() {
         return Err(at("`@` without the argv[0] it passes"));
     }
@@ -265,9 +287,12 @@ mod tests {
             ),
             ("ExecStart=/no\n[Service]\nExecStart=/a/bin/ollama\n", 3),
             ("[Service]\r\nExecStart=/a/bin/ollama serve\r\n", 2),
+            ("[Service]\n; ExecStart=/no\nExecStart=/a/bin/ollama\n", 3),
+            ("[Service]\nExecStart=\t/a/bin/ollama\tserve\n", 2),
+            ("[Service]\nExecStart=/a/bin/ollama\r", 2),
             (
-                "[Service]\nExecStart=\\\n# skipped\n\n  /a/bin/ollama serve\n",
-                2,
+                "[Service]\n# a comment ending in \\\nExecStart=/a/bin/ollama\n",
+                3,
             ),
             (
                 "[Service]\nExecStart=/no\nExecStart=\nExecStart=/a/bin/ollama\n",
@@ -312,10 +337,30 @@ mod tests {
             ),
             ("[Service]\nExecStart=!-/a/bin/ollama\n", "/a/bin/ollama"),
             ("[Service]\nExecStart=\"-/a/bin/ollama\"\n", "/a/bin/ollama"),
+            (
+                "[Service]\nExecStart=/a/bin/ollama a;b ;x\n",
+                "/a/bin/ollama",
+            ),
+            (
+                "[Service]\nExecStart=/tmpfs/bin/ollama\n",
+                "/tmpfs/bin/ollama",
+            ),
+            (
+                "[Service]\nExecStart=/var/tmpx/ollama\n",
+                "/var/tmpx/ollama",
+            ),
         ];
         for (text, exe) in cases {
             assert_eq!(ok(text).0, exe, "{text:?}");
         }
+    }
+
+    #[test]
+    fn not_utf8() {
+        let e = exec_start(b"[Service]\nExecStart=/a/bin/ollama\xff\n").unwrap_err();
+        assert_eq!(e, "the unit is not UTF-8");
+        let e = exec_start(b"[Service]\nExecStart=/a/bin/ollama\xff\0\n").unwrap_err();
+        assert_eq!(e, "a NUL byte");
     }
 
     #[test]
@@ -413,6 +458,86 @@ mod tests {
                 "line 1: a section header without `]`",
             ),
             ("[Service]\nExecStart=/a/bin/ollama\0\n", "a NUL byte"),
+            (
+                "[Service]\nExecStart=/a/bin/ol\x7flama\n",
+                "a control character",
+            ),
+            (
+                "[Service]\nExecStart=\"/a'b/ollama\"\n",
+                "a quote inside an item",
+            ),
+            (
+                "\u{feff}[Service]\nExecStart=/a/bin/ollama\n",
+                "a byte-order mark",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama\n# \u{feff}\n",
+                "a byte-order mark",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ol\rlama\n",
+                "line 2: a carriage return inside a line",
+            ),
+            (
+                "[Service]\nExecStart=\\\n# skipped\n\n  /a/bin/ollama serve\n",
+                "line 2: a continuation (`\\` at the end of a line) is not modeled",
+            ),
+            (
+                "[Service]\nEnvironment=A=\\\\\nExecStart=/a/bin/ollama\n",
+                "line 2: a continuation",
+            ),
+            (
+                "[Service]\nEnvironment=A=\\ \nRootDirectory=/srv/x\nExecStart=/a/bin/ollama\n",
+                "line 2: a continuation",
+            ),
+            (
+                "[Ser\"vice]\nExecStart=/a/bin/ollama\n",
+                "line 1: an invalid section name",
+            ),
+            (
+                "[Ser'vice]\nExecStart=/a/bin/ollama\n",
+                "line 1: an invalid section name",
+            ),
+            (
+                "[Ser\\vice]\nExecStart=/a/bin/ollama\n",
+                "line 1: an invalid section name",
+            ),
+            (
+                "[Ser\x01vice]\nExecStart=/a/bin/ollama\n",
+                "line 1: an invalid section name",
+            ),
+            (
+                "[Service]\nRootMStack=/x\nExecStart=/a/bin/ollama\n",
+                "line 2: RootMStack= changes where",
+            ),
+            (
+                "[Service]\nRootImage=/x.raw\nBindPaths=/a:/b\nExecStart=/a/bin/ollama\n",
+                "line 2: RootImage=",
+            ),
+            (
+                "[Service]\nBindPaths=/a:/b\nRootImage=/x.raw\nExecStart=/a/bin/ollama\n",
+                "line 2: BindPaths=",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama \"serve\n",
+                "at line 2: a quote or backslash in the arguments",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama 'serve'\n",
+                "a quote or backslash in the arguments",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama a\\x20b\n",
+                "a quote or backslash in the arguments",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama serve \\;\n",
+                "a quote or backslash in the arguments",
+            ),
+            (
+                "[Service]\nExecStart=/a/bin/ollama serve ; /b/bin/x\n",
+                "at line 2: a `;` argument (a second command)",
+            ),
         ];
         for (text, why) in cases {
             let e = err(text);
