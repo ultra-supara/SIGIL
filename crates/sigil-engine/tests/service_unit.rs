@@ -74,7 +74,12 @@ impl Tree {
 
     /// `units/ollama.service`: `ExecStart=` (line 4) runs `exec serve`.
     fn unit(&self, exec: &str) -> PathBuf {
-        let path = self.root.join("units/ollama.service");
+        self.unit_at("units/ollama.service", exec)
+    }
+
+    /// The same unit, at `rel` under the tree.
+    fn unit_at(&self, rel: &str, exec: &str) -> PathBuf {
+        let path = self.root.join(rel);
         let text = format!("[Unit]\nDescription=Ollama\n[Service]\nExecStart={exec} serve\n");
         std::fs::write(&path, text).unwrap();
         path
@@ -89,15 +94,20 @@ fn from_unit(path: &Path) -> InstallSource {
 }
 
 fn inspect(models: &Path, source: InstallSource) -> Result<Session, InspectError> {
+    inspect_with(models, source, InstallBudgets::default())
+}
+
+fn inspect_with(
+    models: &Path,
+    source: InstallSource,
+    budgets: InstallBudgets,
+) -> Result<Session, InspectError> {
     let req = StoreRequest {
         models_dir: models.to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),
         manifest_limit: DEFAULT_MANIFEST_LIMIT,
-        install: Some(InstallRequest {
-            source,
-            budgets: InstallBudgets::default(),
-        }),
+        install: Some(InstallRequest { source, budgets }),
     };
     store_session(
         &req,
@@ -243,10 +253,13 @@ fn an_installation_replaced_after_the_unit_was_read_is_an_input_error() {
     std::fs::rename(t.inst(), t.root.join("inst.old")).unwrap();
     std::fs::create_dir_all(t.inst().join("bin")).unwrap();
     std::fs::write(t.inst().join("bin/ollama"), elf(2)).unwrap();
-    input_error(
-        inspect(models.path(), source),
-        "was replaced after it was resolved",
-    );
+    let result = inspect(models.path(), source);
+    // The root check's message, not the executable's.
+    match &result {
+        Err(InspectError::Input(e)) => assert!(e.contains("the installation "), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    input_error(result, "was replaced after it was resolved");
 }
 
 /// The executable alone replaced between the unit's read and the walk.
@@ -262,4 +275,92 @@ fn an_executable_replaced_after_the_unit_was_read_is_an_input_error() {
         inspect(models.path(), source),
         "was replaced after it was resolved",
     );
+}
+
+/// Skipped as root, who opens and lists what mode 0100 refuses.
+fn is_root() -> bool {
+    if rustix::process::geteuid().is_root() {
+        eprintln!("skipped: root opens a mode-000 directory");
+        return true;
+    }
+    false
+}
+
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// The prefix is searchable (the unit resolves) but not readable (the walk cannot open it).
+#[test]
+fn an_unreadable_prefix_is_an_input_error_that_says_so() {
+    if is_root() {
+        return;
+    }
+    let t = Tree::new();
+    let models = TempDir::new().unwrap();
+    let unit = t.unit(&format!("{}/bin/ollama", t.inst().display()));
+    let source = from_unit(&unit);
+    chmod(&t.inst(), 0o100);
+    let result = inspect(models.path(), source);
+    chmod(&t.inst(), 0o755);
+    match &result {
+        Err(InspectError::Input(e)) => assert!(!e.contains("replaced"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    input_error(result, "could not be opened: permission denied");
+}
+
+#[test]
+fn an_unlistable_bin_is_an_input_error_that_says_so() {
+    if is_root() {
+        return;
+    }
+    let t = Tree::new();
+    let models = TempDir::new().unwrap();
+    let unit = t.unit(&format!("{}/bin/ollama", t.inst().display()));
+    let source = from_unit(&unit);
+    chmod(&t.inst().join("bin"), 0o100);
+    let result = inspect(models.path(), source);
+    chmod(&t.inst().join("bin"), 0o755);
+    input_error(result, "bin/ollama: PermissionDenied");
+}
+
+#[test]
+fn a_files_budget_that_stops_the_walk_is_an_input_error_that_says_so() {
+    let t = Tree::new();
+    let models = TempDir::new().unwrap();
+    let unit = t.unit(&format!("{}/bin/ollama", t.inst().display()));
+    let budgets = InstallBudgets {
+        files: 0,
+        ..InstallBudgets::default()
+    };
+    input_error(
+        inspect_with(models.path(), from_unit(&unit), budgets),
+        "install_files_discovered reached",
+    );
+}
+
+/// A unit placed inside the installation is one file seen twice: two instances, one artifact.
+#[test]
+fn a_unit_inside_the_installation_shares_its_artifact() {
+    let t = Tree::new();
+    let models = TempDir::new().unwrap();
+    let unit = t.unit_at(
+        "inst/lib/ollama/ollama.service",
+        &format!("{}/bin/ollama", t.inst().display()),
+    );
+    let s = inspect(models.path(), from_unit(&unit)).unwrap();
+    assert_eq!(s.validate(), Ok(()));
+    let artifact_of = |id: &str| {
+        let i = s.instances.iter().find(|i| i.id.as_str() == id).unwrap();
+        match &i.content {
+            InstanceContent::Read { artifact } => artifact.clone(),
+            InstanceContent::NotRead { .. } => panic!("{id} was not read"),
+        }
+    };
+    let walked = artifact_of("inst:install/lib/ollama/ollama.service");
+    let unit_read = artifact_of("inst:service-unit/ollama.service");
+    assert_eq!(walked, unit_read);
+    assert_eq!(s.artifacts.iter().filter(|a| a.id == walked).count(), 1);
 }

@@ -227,12 +227,17 @@ fn assemble(
         // PR-4d-1: a unit, read by the caller, names the installation.
         let (dir, unit) = match &r.source {
             InstallSource::Dir(dir) => (dir.clone(), None),
-            InstallSource::ServiceUnit(unit) => (unit.prefix.clone(), Some(unit.as_ref().clone())),
+            InstallSource::ServiceUnit(unit) => (unit.prefix.clone(), Some(unit.as_ref())),
         };
         let mut facts = install::collect(&dir, r.budgets).map_err(InspectError::BadId)?;
-        if let Some(unit) = &unit {
-            service_unit::attach(unit, facts.root_id, &mut facts.instances)
-                .map_err(InspectError::Input)?;
+        if let Some(unit) = unit {
+            service_unit::attach(
+                unit,
+                facts.root_id,
+                &facts.discovery.state,
+                &mut facts.instances,
+            )
+            .map_err(InspectError::Input)?;
         }
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
@@ -254,13 +259,12 @@ fn assemble(
         // The unit: its root, its placement, its contents (merged as any content read twice),
         // and its read limit.
         if let Some(unit) = unit {
-            roots.push(unit.root);
-            instances.push(unit.instance);
+            roots.push(unit.root.clone());
+            instances.push(unit.instance.clone());
             match artifacts.iter_mut().find(|x| x.id == unit.artifact.id) {
-                Some(known) => {
-                    merge(known, unit.artifact).map_err(|e| InspectError::Invalid(vec![e]))?
-                }
-                None => artifacts.push(unit.artifact),
+                Some(known) => merge(known, unit.artifact.clone())
+                    .map_err(|e| InspectError::Invalid(vec![e]))?,
+                None => artifacts.push(unit.artifact.clone()),
             }
             budgets.insert(SERVICE_UNIT_BYTES.to_string(), unit.limit);
         }

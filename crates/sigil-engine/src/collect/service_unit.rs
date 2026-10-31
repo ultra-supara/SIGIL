@@ -16,8 +16,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use sigil_model::{
-    Artifact, ConfigRef, DiscoverySource, FileInstance, NotReadReason, RootId, ScanRoot, Stability,
-    UntrustedText, INSTALL_ROOT, SERVICE_UNIT_ROOT,
+    Artifact, ConfigRef, CoverageState, DiscoverySource, FileInstance, NotReadReason, RootId,
+    ScanRoot, Stability, Unavailability, UntrustedText, INSTALL_ROOT, SERVICE_UNIT_ROOT,
 };
 
 use super::fs::{recorded, FsBudgets, ReadOutcome, ReadSpec, RelPath, RootError, SafeFs};
@@ -244,22 +244,47 @@ fn prefix_of(exe: &Path) -> Option<PathBuf> {
 /// Adds the unit's source to the installation's `bin/ollama`. The walk's root (`root_id`, the
 /// `dev:ino` of the directory it opened) must be the prefix resolved, and its placement of the
 /// `install` root at the resolved executable's path must be the file resolved (`dev:ino`).
-/// `Err` is the input error: the installation or its executable was replaced after it was
-/// resolved, or the walk did not find the executable there.
+/// `Err` is the input error, and it names the cause the walk recorded (`walk` is its coverage
+/// state): the installation could not be opened (`root_id` is `None`), the installation or its
+/// executable was replaced after it was resolved, or the walk did not record the executable
+/// (its budget, its `bin` gaps, or a removal). `instances` is untouched on every `Err`.
 pub fn attach(
     unit: &UnitFacts,
     root_id: Option<(u64, u64)>,
+    walk: &CoverageState,
     instances: &mut [FileInstance],
 ) -> Result<(), String> {
     let given = unit.given.as_path();
-    if root_id != Some(unit.prefix_id) {
-        return Err(fatal(
-            given,
-            &format!(
-                "the installation {} was replaced after it was resolved",
-                shown(&unit.prefix)
-            ),
-        ));
+    match root_id {
+        Some(id) if id == unit.prefix_id => {}
+        Some(_) => {
+            return Err(fatal(
+                given,
+                &format!(
+                    "the installation {} was replaced after it was resolved",
+                    shown(&unit.prefix)
+                ),
+            ))
+        }
+        None => {
+            let why = match walk {
+                CoverageState::Unavailable {
+                    why: Unavailability::PermissionDenied,
+                } => "permission denied".to_string(),
+                CoverageState::Unavailable {
+                    why: Unavailability::NotFound,
+                } => "not found".to_string(),
+                CoverageState::Error { message } => message.terminal_line(),
+                _ => "it was not opened".to_string(),
+            };
+            return Err(fatal(
+                given,
+                &format!(
+                    "the installation {} could not be opened: {why}",
+                    shown(&unit.prefix)
+                ),
+            ));
+        }
     }
     let path = unit.exe.as_os_str().as_bytes();
     let found = instances
@@ -279,10 +304,36 @@ pub fn attach(
         None => Err(fatal(
             given,
             &format!(
-                "{} was not found by the installation's walk",
-                shown(&unit.exe)
+                "{} was not recorded by the installation's walk ({})",
+                shown(&unit.exe),
+                not_recorded(walk)
             ),
         )),
+    }
+}
+
+/// Why the walk has no `bin/ollama`, from what it recorded. The `Partial` entries are raw file
+/// names, escaped as one text.
+fn not_recorded(walk: &CoverageState) -> String {
+    match walk {
+        CoverageState::BudgetExceeded {
+            budget,
+            used,
+            limit,
+        } => format!("{budget} reached ({used} of {limit})"),
+        CoverageState::Partial { missing } => {
+            let bin: Vec<&str> = missing
+                .iter()
+                .map(String::as_str)
+                .filter(|m| *m == "bin" || m.starts_with("bin:") || m.starts_with("bin/"))
+                .collect();
+            if bin.is_empty() {
+                "removed after it was resolved".to_string()
+            } else {
+                UntrustedText::new(bin.join("; ")).terminal_line()
+            }
+        }
+        _ => "removed after it was resolved".to_string(),
     }
 }
 
@@ -1146,7 +1197,7 @@ mod tests {
             walked(&f.exe, f.exe_id),
             walked(&p.join("inst/lib/ollama"), (1, 2)),
         ];
-        attach(&f, root, &mut found).unwrap();
+        attach(&f, root, &CoverageState::Complete, &mut found).unwrap();
         assert_eq!(
             found[0].discovered_by,
             vec![
@@ -1157,27 +1208,64 @@ mod tests {
             ]
         );
         assert_eq!(found[1].discovered_by, vec![DiscoverySource::Walk]);
-        // The walk opened another directory than the prefix resolved, or none.
-        for other_root in [Some((f.prefix_id.0, f.prefix_id.1 + 1)), None] {
-            let mut found = vec![walked(&f.exe, f.exe_id)];
-            let e = attach(&f, other_root, &mut found).unwrap_err();
-            assert!(e.contains("the installation"), "{e}");
-            assert!(e.contains("was replaced after it was resolved"), "{e}");
-            assert_eq!(found[0].discovered_by, vec![DiscoverySource::Walk]);
-        }
-        let mut other = vec![walked(&f.exe, (f.exe_id.0, f.exe_id.1 + 1))];
-        let e = attach(&f, root, &mut other).unwrap_err();
+        // The walk opened another directory than the prefix resolved.
+        let mut found = vec![walked(&f.exe, f.exe_id)];
+        let other_root = Some((f.prefix_id.0, f.prefix_id.1 + 1));
+        let e = attach(&f, other_root, &CoverageState::Complete, &mut found).unwrap_err();
+        assert!(e.contains("the installation"), "{e}");
         assert!(e.contains("was replaced after it was resolved"), "{e}");
+        assert_eq!(found[0].discovered_by, vec![DiscoverySource::Walk]);
+        // The walk opened none: its state says why.
+        let denied = CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied,
+        };
+        let mut found = vec![walked(&f.exe, f.exe_id)];
+        let e = attach(&f, None, &denied, &mut found).unwrap_err();
+        assert!(e.contains("could not be opened: permission denied"), "{e}");
+        assert!(!e.contains("replaced"), "{e}");
+        assert_eq!(found[0].discovered_by, vec![DiscoverySource::Walk]);
+        let gone = CoverageState::Unavailable {
+            why: Unavailability::NotFound,
+        };
+        let e = attach(&f, None, &gone, &mut found).unwrap_err();
+        assert!(e.contains("could not be opened: not found"), "{e}");
+        let e = attach(&f, None, &CoverageState::Complete, &mut found).unwrap_err();
+        assert!(e.contains("could not be opened: it was not opened"), "{e}");
+        let mut other = vec![walked(&f.exe, (f.exe_id.0, f.exe_id.1 + 1))];
+        let e = attach(&f, root, &CoverageState::Complete, &mut other).unwrap_err();
+        assert!(e.contains("was replaced after it was resolved"), "{e}");
+        // No instance at the executable's path: the walk's state says why.
         let mut none = vec![walked(&p.join("inst/bin/other"), f.exe_id)];
-        let e = attach(&f, root, &mut none).unwrap_err();
+        let budget = CoverageState::BudgetExceeded {
+            budget: "install_files_discovered".into(),
+            used: 0,
+            limit: 0,
+        };
+        let e = attach(&f, root, &budget, &mut none).unwrap_err();
         assert!(
-            e.contains("was not found by the installation's walk"),
+            e.contains("was not recorded by the installation's walk"),
             "{e}"
         );
+        assert!(
+            e.contains("install_files_discovered reached (0 of 0)"),
+            "{e}"
+        );
+        let partial = CoverageState::Partial {
+            missing: vec![
+                "bin: PermissionDenied".into(),
+                "lib/ollama: not found".into(),
+            ],
+        };
+        let e = attach(&f, root, &partial, &mut none).unwrap_err();
+        assert!(e.contains("bin: PermissionDenied"), "{e}");
+        assert!(!e.contains("lib/ollama"), "{e}");
+        let e = attach(&f, root, &CoverageState::Complete, &mut none).unwrap_err();
+        assert!(e.contains("removed after it was resolved"), "{e}");
+        assert_eq!(none[0].discovered_by, vec![DiscoverySource::Walk]);
         let mut elsewhere = vec![FileInstance {
             root: RootId::new("models").unwrap(),
             ..walked(&f.exe, f.exe_id)
         }];
-        assert!(attach(&f, root, &mut elsewhere).is_err());
+        assert!(attach(&f, root, &CoverageState::Complete, &mut elsewhere).is_err());
     }
 }
