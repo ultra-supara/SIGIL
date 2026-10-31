@@ -326,6 +326,31 @@ fn an_unlistable_bin_is_an_input_error_that_says_so() {
     input_error(result, "bin/ollama: PermissionDenied");
 }
 
+/// Task 5 re-review: a budget reached under `lib/ollama` (here `install_bytes`, which never keeps
+/// `bin/ollama` from being recorded) does not hide why `bin/ollama` was not recorded.
+#[test]
+fn an_unlistable_bin_is_named_whatever_budget_the_walk_reached() {
+    if is_root() {
+        return;
+    }
+    let t = Tree::new();
+    let models = TempDir::new().unwrap();
+    let unit = t.unit(&format!("{}/bin/ollama", t.inst().display()));
+    let source = from_unit(&unit);
+    let budgets = InstallBudgets {
+        bytes: 1,
+        ..InstallBudgets::default()
+    };
+    chmod(&t.inst().join("bin"), 0o100);
+    let result = inspect_with(models.path(), source, budgets);
+    chmod(&t.inst().join("bin"), 0o755);
+    match &result {
+        Err(InspectError::Input(e)) => assert!(!e.contains("install_bytes"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    input_error(result, "bin/ollama: PermissionDenied");
+}
+
 #[test]
 fn a_files_budget_that_stops_the_walk_is_an_input_error_that_says_so() {
     let t = Tree::new();

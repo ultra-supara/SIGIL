@@ -61,6 +61,10 @@ pub struct InstallFacts {
     pub artifacts: Vec<Artifact>,
     /// Coverage of `artifacts.discovery`, scope `Root(install)`.
     pub discovery: Coverage,
+    /// What the walk recorded while handling `bin/ollama` (a gap, an error, or the files
+    /// budget), or `None` if it recorded nothing there: why a service unit's executable may have
+    /// no placement, which a summary state reached elsewhere would hide (PR-4d-1).
+    pub bin_gap: Option<String>,
     pub bytes_read: u64,
     /// The container facts of each ELF or Mach-O slice, parsed once on the fd that hashed it.
     pub binaries: Vec<sigil_model::BinaryFacts>,
@@ -107,6 +111,7 @@ fn collect_with(
         missing: vec![],
         errors: vec![],
         exceeded: vec![],
+        bin_gap: None,
         found: 0,
         during_read,
         // An install scan never analyzes code, whatever a library caller passes (PR-5a).
@@ -147,6 +152,7 @@ fn collect_with(
             state,
             budget: None,
         },
+        bin_gap: c.bin_gap,
         bytes_read: c.used,
     })
 }
@@ -165,6 +171,8 @@ struct Collector<'a> {
     /// `Error` entries: an entry vanished or changed during the scan.
     errors: Vec<String>,
     exceeded: Vec<BudgetUse>,
+    /// What was recorded while `bin/ollama` was handled.
+    bin_gap: Option<String>,
     /// How many of the two places exist.
     found: u32,
     during_read: &'a dyn Fn(&RelPath),
@@ -177,6 +185,7 @@ struct Collector<'a> {
 impl Collector<'_> {
     fn places(&mut self) -> Result<(), String> {
         let bin = RelPath::parse(BIN).map_err(|e| format!("{e:?}"))?;
+        let before = (self.missing.len(), self.errors.len(), self.exceeded.len());
         match self.fs.entry_at(&self.root, &bin) {
             Ok(entry) => {
                 self.found += 1;
@@ -194,6 +203,17 @@ impl Collector<'_> {
             }
             Err(e) => self.place_missing(BIN, &e),
         }
+        // What `bin/ollama`'s handling recorded is why it may have no placement (PR-4d-1).
+        self.bin_gap = self.missing[before.0..]
+            .iter()
+            .chain(&self.errors[before.1..])
+            .cloned()
+            .chain(
+                self.exceeded[before.2..]
+                    .iter()
+                    .map(|b| format!("install_{} reached ({} of {})", b.budget, b.used, b.limit)),
+            )
+            .next();
         let lib = RelPath::parse(LIB).map_err(|e| format!("{e:?}"))?;
         match self.fs.walk_entries(&self.root, &lib) {
             Ok(walk) => {

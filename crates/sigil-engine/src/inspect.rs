@@ -235,6 +235,7 @@ fn assemble(
                 unit,
                 facts.root_id,
                 &facts.discovery.state,
+                facts.bin_gap.as_deref(),
                 &mut facts.instances,
             )
             .map_err(InspectError::Input)?;
