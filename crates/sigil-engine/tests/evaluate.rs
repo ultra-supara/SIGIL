@@ -123,7 +123,7 @@ fn re_evaluating_every_golden_example_reproduces_it() {
         assert_eq!(s, expected, "{}", path.display());
         seen += 1;
     }
-    assert_eq!(seen, 18);
+    assert_eq!(seen, 19);
 }
 
 /// The policy example 18 was evaluated under: it denies `posix.network` and
