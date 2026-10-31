@@ -10,6 +10,248 @@
 //! states what this file says at that line. Drop-ins are not read, so it is not the effective
 //! command.
 
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+use sigil_model::{
+    Artifact, ConfigRef, DiscoverySource, FileInstance, RootId, ScanRoot, Stability, UntrustedText,
+    INSTALL_ROOT, SERVICE_UNIT_ROOT,
+};
+
+use super::fs::{recorded, FsBudgets, ReadOutcome, ReadSpec, RelPath, RootError, SafeFs};
+
+/// `service_unit_bytes`'s default: systemd's line limit (1 MiB).
+pub const DEFAULT_UNIT_BYTES: u64 = 1 << 20;
+/// The unit's read limit, as `request.budgets` records it.
+pub const SERVICE_UNIT_BYTES: &str = "service_unit_bytes";
+
+/// What the unit gave. The CLI reads it before anything else and passes it to the engine
+/// (`inspect::InstallSource::ServiceUnit`): `--out` is kept out of `dir` and `prefix` by the
+/// `dev:ino` these reads saw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitFacts {
+    /// The path as given, for messages.
+    pub given: PathBuf,
+    /// The read limit (`service_unit_bytes`).
+    pub limit: u64,
+    /// The unit's canonical directory, and its `dev:ino` as the read opened it.
+    pub dir: PathBuf,
+    pub dir_id: (u64, u64),
+    /// `service-unit`, at the unit's canonical path (as a binary input's root is).
+    pub root: ScanRoot,
+    /// `inst:service-unit/<name>`, discovered by `Argument`, read.
+    pub instance: FileInstance,
+    /// Its contents (`Format::Other`).
+    pub artifact: Artifact,
+    /// `ExecStart` at the line of the one assignment that remains.
+    pub config: ConfigRef,
+    /// The executable `ExecStart=` names, resolved: `<prefix>/bin/ollama`.
+    pub exe: PathBuf,
+    /// The installation's prefix, and its `dev:ino`, taken right after it was resolved.
+    pub prefix: PathBuf,
+    pub prefix_id: (u64, u64),
+    /// The resolved executable's `dev:ino`, taken right after it was resolved.
+    pub exe_id: (u64, u64),
+}
+
+/// Reads the unit at `path`, at most `limit` bytes, and resolves the executable its
+/// `ExecStart=` names. `Err` is the input error of exit 1: `--service-unit <path>: <why>`.
+pub fn collect(path: &Path, limit: u64) -> Result<UnitFacts, String> {
+    collect_with(path, limit, &|_| {})
+}
+
+fn shown(path: &Path) -> String {
+    UntrustedText::from_bytes(path.as_os_str().as_bytes()).terminal_line()
+}
+
+/// `--service-unit <path>: <why>`, the path escaped for a terminal line. `why` holds no
+/// untrusted bytes, or holds them escaped already.
+fn fatal(path: &Path, why: &str) -> String {
+    format!("--service-unit {}: {why}", shown(path))
+}
+
+/// Why `canonicalize` or `symlink_metadata` failed.
+fn io_why(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "not found".to_string(),
+        std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
+        _ => e.to_string(),
+    }
+}
+
+/// As [`collect`], calling `before_open` with the unit's canonical path after it was resolved
+/// and before its directory is opened: the tests' way to replace it.
+fn collect_with(path: &Path, limit: u64, before_open: &dyn Fn(&Path)) -> Result<UnitFacts, String> {
+    let fail = |why: &str| fatal(path, why);
+    let canonical = std::fs::canonicalize(path).map_err(|e| fail(&io_why(&e)))?;
+    let resolved = std::fs::symlink_metadata(&canonical)
+        .map(|st| (st.dev(), st.ino()))
+        .map_err(|e| fail(&io_why(&e)))?;
+    let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
+        return Err(fail("not a file"));
+    };
+    let dir_id = std::fs::symlink_metadata(parent)
+        .map(|st| (st.dev(), st.ino()))
+        .map_err(|e| fail(&format!("its directory: {}", io_why(&e))))?;
+    let name = name
+        .to_str()
+        .ok_or_else(|| fail("the file name is not UTF-8"))?;
+    let rel = RelPath::parse(name).map_err(|e| fail(&e.to_string()))?;
+    let root = RootId::new(SERVICE_UNIT_ROOT).map_err(|e| format!("internal error: {e}"))?;
+    let keep = usize::try_from(limit).map_err(|_| fail("service_unit_bytes is too large"))?;
+    before_open(&canonical);
+    let mut fs = SafeFs::new(FsBudgets::default());
+    fs.add_unlisted_root(root.clone(), parent).map_err(|e| {
+        let why = match e {
+            RootError::NotFound => "not found".to_string(),
+            RootError::PermissionDenied => "permission denied".to_string(),
+            RootError::NotADirectory => "not a directory".to_string(),
+            RootError::Duplicate => "named twice".to_string(),
+            RootError::Failed(m) => m,
+        };
+        fail(&format!("its directory: {why}"))
+    })?;
+    // The directory opened must be the one resolved, by `dev:ino` (external plan review, P3): a
+    // swap in between would read elsewhere.
+    if fs.root_id(&root) != Some(dir_id) {
+        return Err(fail("its directory changed after it was resolved"));
+    }
+    let read = fs.read_entry(
+        &root,
+        &rel,
+        ReadSpec {
+            keep,
+            limit: Some(limit),
+        },
+        vec![DiscoverySource::Argument],
+    );
+    match &read.outcome {
+        ReadOutcome::Complete => {}
+        ReadOutcome::LimitExceeded { limit, size } => {
+            return Err(fail(&format!(
+                "over {SERVICE_UNIT_BYTES} ({size} bytes; the limit is {limit})"
+            )))
+        }
+        ReadOutcome::NotFound => return Err(fail("vanished after it was resolved")),
+        ReadOutcome::NotRead(why) => return Err(fail(&format!("not read ({why:?})"))),
+        ReadOutcome::Failed(m) => return Err(fail(m)),
+    }
+    let (Some(instance), Some(artifact)) = (read.instance, read.artifact) else {
+        return Err(fail("not read"));
+    };
+    if (instance.stat.dev, instance.stat.ino) != resolved {
+        return Err(fail("replaced by another file after it was resolved"));
+    }
+    if instance.stability != Stability::NoChangeDetected {
+        return Err(fail("changed during the read"));
+    }
+    let (named, line) = exec_start(&read.prefix).map_err(|why| fail(&why))?;
+    let at = format!("ExecStart= at line {line}");
+    let named = Path::new(OsStr::from_bytes(&named));
+    let exe = std::fs::canonicalize(named)
+        .map_err(|e| fail(&format!("{at} names {}: {}", shown(named), io_why(&e))))?;
+    let st = std::fs::symlink_metadata(&exe)
+        .map_err(|e| fail(&format!("{at} names {}: {}", shown(&exe), io_why(&e))))?;
+    if !st.is_file() {
+        return Err(fail(&format!(
+            "{at} names {}, which is not a regular file",
+            shown(&exe)
+        )));
+    }
+    let prefix = prefix_of(&exe).ok_or_else(|| {
+        fail(&format!(
+            "{at} names {}, which is not <prefix>/bin/ollama",
+            shown(&exe)
+        ))
+    })?;
+    let prefix_id = std::fs::symlink_metadata(&prefix)
+        .map(|st| (st.dev(), st.ino()))
+        .map_err(|e| {
+            fail(&format!(
+                "{at}: its prefix {}: {}",
+                shown(&prefix),
+                io_why(&e)
+            ))
+        })?;
+    let config = ConfigRef {
+        file: instance.id.clone(),
+        key: UntrustedText::new("ExecStart"),
+        line,
+    };
+    Ok(UnitFacts {
+        given: path.to_path_buf(),
+        limit,
+        dir: parent.to_path_buf(),
+        dir_id,
+        root: ScanRoot {
+            id: root,
+            path: recorded(&canonical),
+        },
+        instance,
+        artifact,
+        config,
+        exe,
+        prefix,
+        prefix_id,
+        exe_id: (st.dev(), st.ino()),
+    })
+}
+
+/// The installation prefix of a resolved executable `<prefix>/bin/ollama` (Ollama's bundle
+/// search starts at `<exe>/../lib/ollama`), or `None` in any other layout. `/bin/ollama` has no
+/// prefix to walk: `None`.
+fn prefix_of(exe: &Path) -> Option<PathBuf> {
+    let rest = exe.as_os_str().as_bytes().strip_suffix(b"/bin/ollama")?;
+    (!rest.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(rest)))
+}
+
+/// Adds the unit's source to the installation's `bin/ollama`. The walk's root (`root_id`, the
+/// `dev:ino` of the directory it opened) must be the prefix resolved, and its placement of the
+/// `install` root at the resolved executable's path must be the file resolved (`dev:ino`).
+/// `Err` is the input error: the installation or its executable was replaced after it was
+/// resolved, or the walk did not find the executable there.
+pub fn attach(
+    unit: &UnitFacts,
+    root_id: Option<(u64, u64)>,
+    instances: &mut [FileInstance],
+) -> Result<(), String> {
+    let given = unit.given.as_path();
+    if root_id != Some(unit.prefix_id) {
+        return Err(fatal(
+            given,
+            &format!(
+                "the installation {} was replaced after it was resolved",
+                shown(&unit.prefix)
+            ),
+        ));
+    }
+    let path = unit.exe.as_os_str().as_bytes();
+    let found = instances
+        .iter_mut()
+        .find(|i| i.root.as_str() == INSTALL_ROOT && i.path.as_bytes() == path);
+    match found {
+        Some(i) if (i.stat.dev, i.stat.ino) == unit.exe_id => {
+            i.discovered_by.push(DiscoverySource::ServiceUnit {
+                config: unit.config.clone(),
+            });
+            Ok(())
+        }
+        Some(_) => Err(fatal(
+            given,
+            &format!("{} was replaced after it was resolved", shown(&unit.exe)),
+        )),
+        None => Err(fatal(
+            given,
+            &format!(
+                "{} was not found by the installation's walk",
+                shown(&unit.exe)
+            ),
+        )),
+    }
+}
+
 /// systemd's `WHITESPACE`: what is trimmed from a line and separates items.
 fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
@@ -580,5 +822,261 @@ mod tests {
             let e = err(text);
             assert!(e.contains(why), "{text:?}: {e}");
         }
+    }
+
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{symlink, MetadataExt};
+    use std::path::{Path, PathBuf};
+
+    use sigil_model::{
+        ConfigRef, DiscoverySource, FileInstance, Format, InstanceContent, InstanceId,
+        NotReadReason, RootId, Stability, StatInfo, UntrustedText, INSTALL_ROOT, SERVICE_UNIT_ROOT,
+    };
+
+    use crate::collect::fs::recorded;
+
+    /// `inst/bin/ollama` under a canonical temporary directory.
+    fn tree() -> (tempfile::TempDir, PathBuf) {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        std::fs::create_dir_all(p.join("inst/bin")).unwrap();
+        std::fs::write(p.join("inst/bin/ollama"), b"exe").unwrap();
+        (d, p)
+    }
+
+    /// `ollama.service` in `dir`, whose `ExecStart=` (line 2) runs `exe serve`.
+    fn unit(dir: &Path, exe: &Path) -> PathBuf {
+        let path = dir.join("ollama.service");
+        let mut text = b"[Service]\nExecStart=".to_vec();
+        text.extend_from_slice(exe.as_os_str().as_bytes());
+        text.extend_from_slice(b" serve\n");
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_unit_gives_its_executable_and_the_prefix() {
+        let (_d, p) = tree();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        let f = collect(&u, DEFAULT_UNIT_BYTES).unwrap();
+        assert_eq!(f.root.id.as_str(), SERVICE_UNIT_ROOT);
+        assert_eq!(f.root.path.as_bytes(), u.as_os_str().as_bytes());
+        assert_eq!(f.instance.id.as_str(), "inst:service-unit/ollama.service");
+        assert_eq!(f.instance.discovered_by, vec![DiscoverySource::Argument]);
+        assert!(matches!(f.instance.content, InstanceContent::Read { .. }));
+        assert_eq!(f.artifact.format, Format::Other);
+        assert_eq!(
+            f.config,
+            ConfigRef {
+                file: f.instance.id.clone(),
+                key: UntrustedText::new("ExecStart"),
+                line: 2,
+            }
+        );
+        assert_eq!(f.exe, p.join("inst/bin/ollama"));
+        assert_eq!(f.prefix, p.join("inst"));
+        assert_eq!(
+            (f.given.as_path(), f.limit),
+            (u.as_path(), DEFAULT_UNIT_BYTES)
+        );
+        assert_eq!(f.dir, p);
+        let id = |path: &Path| {
+            let st = std::fs::metadata(path).unwrap();
+            (st.dev(), st.ino())
+        };
+        assert_eq!(f.exe_id, id(&p.join("inst/bin/ollama")));
+        assert_eq!(f.prefix_id, id(&p.join("inst")));
+        assert_eq!(f.dir_id, id(&p));
+    }
+
+    #[test]
+    fn a_directory_replaced_after_it_was_resolved_is_refused() {
+        let (_d, p) = tree();
+        std::fs::create_dir_all(p.join("units")).unwrap();
+        let u = unit(&p.join("units"), &p.join("inst/bin/ollama"));
+        // The old directory is kept under another name, so the new one cannot reuse its inode.
+        let swap = |path: &Path| {
+            let dir = path.parent().unwrap();
+            std::fs::rename(dir, dir.with_extension("old")).unwrap();
+            std::fs::create_dir(dir).unwrap();
+            std::fs::copy(dir.with_extension("old").join("ollama.service"), path).unwrap();
+        };
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &swap).unwrap_err();
+        assert!(
+            e.contains("its directory changed after it was resolved"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn symlinks_are_resolved_as_execve_and_an_argument_are() {
+        let (_d, p) = tree();
+        std::fs::create_dir_all(p.join("other")).unwrap();
+        symlink(p.join("inst/bin"), p.join("other/bin")).unwrap();
+        std::fs::create_dir_all(p.join("units")).unwrap();
+        let u = unit(&p.join("units"), &p.join("other/bin/ollama"));
+        symlink(&u, p.join("link.service")).unwrap();
+        let f = collect(&p.join("link.service"), DEFAULT_UNIT_BYTES).unwrap();
+        // The unit is the file the link leads to; the installation, the one the executable
+        // resolves to, not `other`.
+        assert_eq!(f.root.path.as_bytes(), u.as_os_str().as_bytes());
+        assert_eq!(f.instance.id.as_str(), "inst:service-unit/ollama.service");
+        assert_eq!(f.exe, p.join("inst/bin/ollama"));
+        assert_eq!(f.prefix, p.join("inst"));
+    }
+
+    #[test]
+    fn every_failure_is_an_input_error_with_its_reason() {
+        let (_d, p) = tree();
+        std::fs::write(p.join("inst/ollama"), b"exe").unwrap();
+        std::fs::create_dir_all(p.join("dir/bin/ollama")).unwrap();
+        let units = |name: &str, exe: &Path| {
+            std::fs::create_dir_all(p.join(name)).unwrap();
+            unit(&p.join(name), exe)
+        };
+        let relative = p.join("relative.service");
+        std::fs::write(&relative, b"[Service]\nExecStart=ollama serve\n").unwrap();
+        let cases: Vec<(PathBuf, u64, &str)> = vec![
+            (p.join("none.service"), DEFAULT_UNIT_BYTES, ": not found"),
+            (
+                p.join("inst"),
+                DEFAULT_UNIT_BYTES,
+                "not read (NotRegularFile)",
+            ),
+            (
+                units("small", &p.join("inst/bin/ollama")),
+                4,
+                "over service_unit_bytes",
+            ),
+            (
+                units("missing", &p.join("none/bin/ollama")),
+                DEFAULT_UNIT_BYTES,
+                "ExecStart= at line 2 names",
+            ),
+            (
+                units("layout", &p.join("inst/ollama")),
+                DEFAULT_UNIT_BYTES,
+                "which is not <prefix>/bin/ollama",
+            ),
+            (
+                units("directory", &p.join("dir/bin/ollama")),
+                DEFAULT_UNIT_BYTES,
+                "which is not a regular file",
+            ),
+            (relative, DEFAULT_UNIT_BYTES, "a relative command"),
+        ];
+        for (path, limit, why) in cases {
+            let e = collect(&path, limit).expect_err(why);
+            assert!(e.starts_with("--service-unit "), "{e}");
+            assert!(e.contains(why), "{why}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_unit_replaced_after_it_was_resolved_is_refused() {
+        let (_d, p) = tree();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        // The old file is kept under another name, so the new one cannot reuse its inode.
+        let swap = |path: &Path| {
+            std::fs::rename(path, path.with_extension("old")).unwrap();
+            std::fs::write(path, b"[Service]\nExecStart=/elsewhere/bin/ollama\n").unwrap();
+        };
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &swap).unwrap_err();
+        assert!(
+            e.contains("replaced by another file after it was resolved"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn the_prefix_is_what_precedes_bin_ollama() {
+        assert_eq!(
+            prefix_of(Path::new("/usr/local/bin/ollama")),
+            Some(PathBuf::from("/usr/local"))
+        );
+        assert_eq!(
+            prefix_of(Path::new("/opt/x y/bin/ollama")),
+            Some(PathBuf::from("/opt/x y"))
+        );
+        for path in [
+            "/bin/ollama",
+            "/usr/local/bin/ollama-serve",
+            "/usr/local/ollama",
+            "/usr/local/sbin/ollama",
+            "/usr/local/bin/ollama/x",
+        ] {
+            assert_eq!(prefix_of(Path::new(path)), None, "{path}");
+        }
+    }
+
+    /// A placement of the install root at `path` with `dev:ino`, as the walk records it.
+    fn walked(path: &Path, (dev, ino): (u64, u64)) -> FileInstance {
+        FileInstance {
+            id: InstanceId::new("inst:install/bin/ollama").unwrap(),
+            root: RootId::new(INSTALL_ROOT).unwrap(),
+            path: recorded(path),
+            link_chain: vec![],
+            resolved: None,
+            content: InstanceContent::NotRead {
+                why: NotReadReason::BudgetExceeded,
+            },
+            stat: StatInfo {
+                dev,
+                ino,
+                mode: 0o100755,
+                uid: 0,
+                gid: 0,
+                size: 3,
+                mtime_ns: 0,
+                nlink: 1,
+            },
+            stability: Stability::NoChangeDetected,
+            discovered_by: vec![DiscoverySource::Walk],
+        }
+    }
+
+    #[test]
+    fn the_source_goes_on_the_file_resolved() {
+        let (_d, p) = tree();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        let f = collect(&u, DEFAULT_UNIT_BYTES).unwrap();
+        let root = Some(f.prefix_id);
+        let mut found = vec![
+            walked(&f.exe, f.exe_id),
+            walked(&p.join("inst/lib/ollama"), (1, 2)),
+        ];
+        attach(&f, root, &mut found).unwrap();
+        assert_eq!(
+            found[0].discovered_by,
+            vec![
+                DiscoverySource::Walk,
+                DiscoverySource::ServiceUnit {
+                    config: f.config.clone()
+                }
+            ]
+        );
+        assert_eq!(found[1].discovered_by, vec![DiscoverySource::Walk]);
+        // The walk opened another directory than the prefix resolved, or none.
+        for other_root in [Some((f.prefix_id.0, f.prefix_id.1 + 1)), None] {
+            let mut found = vec![walked(&f.exe, f.exe_id)];
+            let e = attach(&f, other_root, &mut found).unwrap_err();
+            assert!(e.contains("the installation"), "{e}");
+            assert!(e.contains("was replaced after it was resolved"), "{e}");
+            assert_eq!(found[0].discovered_by, vec![DiscoverySource::Walk]);
+        }
+        let mut other = vec![walked(&f.exe, (f.exe_id.0, f.exe_id.1 + 1))];
+        let e = attach(&f, root, &mut other).unwrap_err();
+        assert!(e.contains("was replaced after it was resolved"), "{e}");
+        let mut none = vec![walked(&p.join("inst/bin/other"), f.exe_id)];
+        let e = attach(&f, root, &mut none).unwrap_err();
+        assert!(
+            e.contains("was not found by the installation's walk"),
+            "{e}"
+        );
+        let mut elsewhere = vec![FileInstance {
+            root: RootId::new("models").unwrap(),
+            ..walked(&f.exe, f.exe_id)
+        }];
+        assert!(attach(&f, root, &mut elsewhere).is_err());
     }
 }
