@@ -57,6 +57,7 @@ use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
 use crate::reference::{
     EntryKind, MemberResult, ReferenceMatch, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT,
+    SERVICE_UNIT_ROOT,
 };
 use crate::relation::{
     BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
@@ -257,6 +258,9 @@ pub enum ValidationError {
     /// (P1, P2; #51), or a session with one does not record the one capability table its binaries
     /// were analyzed with (`at` is `knowledge`).
     Capability { at: String, why: String },
+    /// A service unit's root, its instance, or a `ServiceUnit` source disagrees with the session
+    /// (PR-4d-1).
+    ServiceUnit { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -392,6 +396,7 @@ impl fmt::Display for ValidationError {
             BinaryInput { at, why } => write!(f, "binary input {at}: {why}"),
             Code { at, why } => write!(f, "{at}: {why}"),
             Capability { at, why } => write!(f, "{at}: {why}"),
+            ServiceUnit { at, why } => write!(f, "{at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -808,6 +813,7 @@ impl<'a> Validator<'a> {
         self.reference_matches();
         self.binaries();
         self.binary_inputs();
+        self.service_units();
         self.code_coverage();
         self.identity_coverage();
         self.import_hints();
@@ -1077,10 +1083,14 @@ impl<'a> Validator<'a> {
                 match source {
                     crate::artifact::DiscoverySource::Walk => {}
                     crate::artifact::DiscoverySource::Argument => {
-                        if !crate::binary_input::is_binary_root(&instance.root) {
+                        // A binary inspection's inputs, and the unit `--service-unit` names
+                        // (PR-4d-1): both are named on the command line.
+                        let unit = instance.root.as_str() == SERVICE_UNIT_ROOT;
+                        if !crate::binary_input::is_binary_root(&instance.root) && !unit {
                             self.errors.push(ValidationError::BinaryInput {
                                 at: instance.id.to_string(),
-                                why: "discovered by Argument outside a binary inspection's roots"
+                                why: "discovered by Argument outside a binary inspection's roots \
+                                      and the service-unit root"
                                     .to_string(),
                             });
                         }
@@ -2064,6 +2074,101 @@ impl<'a> Validator<'a> {
                 Ok(_) => {}
             }
         }
+    }
+
+    /// PR-4d-1: the unit given, and the executable it names. A `service-unit` root comes with an
+    /// `install` root and holds exactly one instance: at the root's path, discovered by
+    /// `Argument` only, read; the session then has exactly one `ServiceUnit` source, naming it
+    /// (as B10 checks a binary input's provenance). A `ServiceUnit` source names an instance of
+    /// that root, the key `ExecStart`, and a line from 1, and only the install root's
+    /// `bin/ollama` (at the root's path plus `/bin/ollama`) carries one.
+    fn service_units(&mut self) {
+        use crate::artifact::DiscoverySource;
+        use crate::evidence::ConfigRef;
+        let s = self.s;
+        let sources: Vec<(&FileInstance, &ConfigRef)> = s
+            .instances
+            .iter()
+            .flat_map(|i| {
+                i.discovered_by.iter().filter_map(move |d| match d {
+                    DiscoverySource::ServiceUnit { config } => Some((i, config)),
+                    _ => None,
+                })
+            })
+            .collect();
+        let install = self.index.roots.get(INSTALL_ROOT).copied();
+        if let Some(root) = self.index.roots.get(SERVICE_UNIT_ROOT).copied() {
+            if install.is_none() {
+                self.unit_error(
+                    "request.roots",
+                    "a service-unit root comes with an install root",
+                );
+            }
+            let units = self.index.by_root.get(SERVICE_UNIT_ROOT);
+            if let Some(unit) = units.and_then(|entries| entries.unique()) {
+                let at = format!("instances[{}]", unit.id);
+                if unit.discovered_by != [DiscoverySource::Argument] {
+                    self.unit_error(&at, "a unit is discovered by Argument only");
+                }
+                if unit.path != root.path {
+                    self.unit_error(&at, "the unit is not at the service-unit root's path");
+                }
+                if !matches!(unit.content, InstanceContent::Read { .. }) {
+                    self.unit_error(&at, "the unit was not read");
+                }
+                if sources.len() != 1 {
+                    self.unit_error(
+                        &at,
+                        format!(
+                            "{} ServiceUnit sources; a service-unit root has exactly one",
+                            sources.len()
+                        ),
+                    );
+                }
+            } else {
+                self.unit_error(
+                    "request.roots",
+                    format!(
+                        "the service-unit root holds {} instances; it holds exactly one",
+                        units.map_or(0, |entries| entries.count)
+                    ),
+                );
+            }
+        }
+        for (instance, config) in &sources {
+            let at = format!("instances[{}]", instance.id);
+            // A dangling `config.file` is reported by `config`.
+            if let Some(file) = self.index.instances.get(config.file.as_str()) {
+                if file.root.as_str() != SERVICE_UNIT_ROOT {
+                    self.unit_error(
+                        &at,
+                        "the source's file is not the service-unit root's instance",
+                    );
+                }
+            }
+            if config.key.as_bytes() != b"ExecStart" {
+                self.unit_error(&at, "the key is not ExecStart");
+            }
+            if config.line == 0 {
+                self.unit_error(&at, "the line is 0; lines count from 1");
+            }
+            let carrier = instance.root.as_str() == INSTALL_ROOT
+                && install.and_then(|r| instance.path.as_bytes().strip_prefix(r.path.as_bytes()))
+                    == Some(&b"/bin/ollama"[..]);
+            if !carrier {
+                self.unit_error(
+                    &at,
+                    "a ServiceUnit source is carried by only the install root's bin/ollama",
+                );
+            }
+        }
+    }
+
+    fn unit_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
+        self.errors.push(ValidationError::ServiceUnit {
+            at: at.to_string(),
+            why: why.into(),
+        });
     }
 
     fn code_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {

@@ -1,0 +1,77 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "5618babf35b48a595d781a1b15f284b4d5617754e283a6569747faa2a4baaae1",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:1919191919191919191919191919191919191919191919191919191919191919",
+      "size": 312,
+      "format": "Other",
+      "paths": [
+        "/etc/systemd/system/ollama.service"
+      ],
+      "slices": []
+    },
+    {
+      "id": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Exec"
+        }
+      },
+      "paths": [
+        "/usr/local/bin/ollama"
+      ],
+      "slices": [
+        {
+          "id": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    }
+  ]
+}

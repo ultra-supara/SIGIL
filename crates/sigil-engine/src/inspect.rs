@@ -21,6 +21,7 @@ use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
 use crate::collect::named::{self, NamedBudgets};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
+use crate::collect::service_unit::{self, SERVICE_UNIT_BYTES};
 use crate::observe;
 use crate::observe::proc::{ProcBudgets, ProcFacts};
 use crate::policy::{evaluate, EvaluateError, Policy, ScopeInput};
@@ -43,9 +44,21 @@ pub struct StoreRequest {
 /// An installation to inspect: its files against the embedded reference set (PR-4a).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallRequest {
-    /// The install prefix: `bin/ollama` and `lib/ollama/` below it.
-    pub dir: PathBuf,
+    /// Where the installation is.
+    pub source: InstallSource,
     pub budgets: InstallBudgets,
+}
+
+/// Where an installation is (PR-4d-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallSource {
+    /// The install prefix (`--install-dir`): `bin/ollama` and `lib/ollama/` below it.
+    Dir(PathBuf),
+    /// A systemd unit (`--service-unit`), already read ([`service_unit::collect`]): the prefix
+    /// of the executable its `ExecStart=` names. The caller reads it first, so `--out` is kept
+    /// out of the installation by the `dev:ino` that read saw; a walk whose root is not that
+    /// prefix, or whose `bin/ollama` is not that executable, is [`InspectError::Input`].
+    ServiceUnit(Box<service_unit::UnitFacts>),
 }
 
 /// The scan root of the model store.
@@ -65,7 +78,8 @@ pub enum InspectError {
     /// The session's reference rows or release claims are not what the embedded set gives (a
     /// bug).
     Reference(Vec<String>),
-    /// An input of `binary inspect` that cannot be inspected (exit 1; plan §4.9).
+    /// An input of `binary inspect`, or the unit of `--service-unit` (PR-4d-1), that cannot be
+    /// inspected (exit 1; plan §4.9).
     Input(String),
     /// Embedded data the engine cannot use, e.g. invalid signatures (a bug, reported rather than
     /// panicking).
@@ -210,7 +224,15 @@ fn assemble(
     let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
-        let facts = install::collect(&r.dir, r.budgets).map_err(InspectError::BadId)?;
+        // PR-4d-1: a unit, read by the caller, names the installation.
+        let (dir, unit) = match &r.source {
+            InstallSource::Dir(dir) => (dir.clone(), None),
+            InstallSource::ServiceUnit(unit) => (unit.prefix.clone(), Some(unit.as_ref())),
+        };
+        let mut facts = install::collect(&dir, r.budgets).map_err(InspectError::BadId)?;
+        if let Some(unit) = unit {
+            service_unit::attach(unit, &mut facts).map_err(InspectError::Input)?;
+        }
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
         let identity_coverage = container::identity(&facts).map_err(InspectError::BadId)?;
@@ -228,6 +250,18 @@ fn assemble(
         knowledge.push(set.knowledge());
         install_set = Some(set);
         budgets.extend(install_budgets(r.budgets));
+        // The unit: its root, its placement, its contents (merged as any content read twice),
+        // and its read limit.
+        if let Some(unit) = unit {
+            roots.push(unit.root.clone());
+            instances.push(unit.instance.clone());
+            match artifacts.iter_mut().find(|x| x.id == unit.artifact.id) {
+                Some(known) => merge(known, unit.artifact.clone())
+                    .map_err(|e| InspectError::Invalid(vec![e]))?,
+                None => artifacts.push(unit.artifact.clone()),
+            }
+            budgets.insert(SERVICE_UNIT_BYTES.to_string(), unit.limit);
+        }
         coverage.push(facts.discovery);
         coverage.push(result.coverage);
         coverage.push(container);

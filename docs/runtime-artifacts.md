@@ -1,4 +1,4 @@
-# Runtime artifacts (`sigil-engine`, `--install-dir`)
+# Runtime artifacts (`sigil-engine`, `--install-dir`, `--service-unit`)
 
 With `--install-dir PREFIX`, SIGIL also inspects an Ollama installation. It hashes
 `PREFIX/bin/ollama` and every entry under `PREFIX/lib/ollama/`. Each of them is compared with the
@@ -8,7 +8,8 @@ separate questions:
 - **Attribution:** which official releases the installed content matches.
 - **Completeness:** whether the installation holds every member of that release.
 
-- **Status:** `sigil inspect ollama --install-dir PREFIX`, in any mode and with any format.
+- **Status:** `sigil inspect ollama --install-dir PREFIX` or `--service-unit FILE` (PR-4d-1), in
+  any mode and with any format.
 - **Source:** plan §4.4.2, §4.4.3 (components), and §4.6.2. The session types are described in
   [`docs/session-model.md`](session-model.md), and the scope rule in [`docs/policy.md`](policy.md).
 
@@ -35,8 +36,8 @@ separate questions:
 - **A link is stable** only if a second `readlinkat` gives the same target text. Otherwise the
   placement is `ChangedDuringRead`, as is a file whose `fstat` changed during its read, or a file
   hashed whose open fd is not the file its `lstat` saw just before.
-- **The budgets** (`--budget`, with `--install-dir` only) are recorded in `request.budgets` with an
-  `install_` prefix:
+- **The budgets** (`--budget`, with `--install-dir` or `--service-unit`) are recorded in
+  `request.budgets` with an `install_` prefix:
 
   | Budget | Default | What it bounds |
   |---|---|---|
@@ -46,6 +47,61 @@ separate questions:
 
   `install_directory_entries` (16384), `install_walk_depth` (32), and `install_link_hops` (40) are
   recorded as well. They are fixed.
+
+## Found by a service unit (`--service-unit`, PR-4d-1)
+
+`--service-unit FILE` names a systemd unit instead of the prefix. SIGIL reads the unit, takes the
+executable its one `ExecStart=` names, and inspects that executable's installation exactly as
+`--install-dir` does. The two options exclude each other.
+
+- **The unit** is explicit input, read as a `binary inspect` input is: its path is resolved, its
+  directory is opened from `/` without following and must be the directory resolved (by path
+  and `dev:ino`), the file is opened without following and must be the file resolved, and it is
+  read whole, up to `service_unit_bytes` (default 1 MiB, systemd's line limit), with no change
+  during the read. It is the scan root `service-unit`, with one instance discovered by
+  `Argument`.
+- **The modeled subset** of systemd.syntax(7), systemd.service(5), and systemd.exec(5)
+  (systemd 261). It is an explicitly limited subset, not a systemd-compatible parser: what it
+  does not model is refused, even where systemd accepts it (a continuation line ending in `\`,
+  `-"/usr/local/bin/ollama"` with a prefix outside the quotes). UTF-8 with no NUL, byte-order
+  mark, or noncharacter; lines trimmed of whitespace, a CR only at a line's end; comments and
+  section headers; only `[Service]`, as `Key=Value` lines; `ExecStart` assignments in order, an
+  empty one clearing the list, exactly one remaining; its first item unquoted (a whole
+  `"…"`/`'…'` item, or up to whitespace) and the prefixes `@-:+!` removed, each at most once,
+  `+` never with `!`, `@` only with the argv[0] that follows it; an absolute path with no `\`,
+  `%`, `$`, or control byte, not ending in `/`; arguments with no quote, `\`, or `%`, and no `;`
+  word. Anything else is an input error (exit 1) that names the line: a relative command
+  (systemd's search path), a specifier, a variable, an escape, a continuation, a shell (`|`), two
+  commands.
+- **Where paths lead.** A unit that sets `RootDirectory=`, `RootImage=`, `RootMStack=`,
+  `BindPaths=`, `BindReadOnlyPaths=`, `TemporaryFileSystem=`, `MountImages=`,
+  `ExtensionImages=`, or `ExtensionDirectories=` in `[Service]` (not cleared by an empty
+  assignment) is an input error: with one, `ExecStart=`'s path can lead to another file than the
+  host's. Settings that only hide a path (`ProtectHome=`, `InaccessiblePaths=`, `NoExecPaths=`)
+  make the service fail to start rather than run another file, and are not modeled; nor is
+  `PrivateTmp=` (an executable under `/tmp` would be the service's own, not the host's), nor a
+  file an `ExecStartPre=` replaces. SIGIL does not check that systemd would load the unit at all.
+- **The installation** is the executable resolved (`canonicalize`, as `execve` follows links):
+  it must be `<prefix>/bin/ollama`, and `<prefix>` is walked. Ollama finds its bundle from its
+  resolved executable (`<exe>/../lib/ollama` first), so a link to `bin` leads to the installation
+  the link leads to, never the one its unresolved path suggests. Another layout is an input
+  error. Only the metadata of the path's components is read.
+- **The output.** The unit is read first. `--out` is kept out of the installation and the
+  unit's directory by path and by the `dev:ino` those reads saw, and the walk's root must be that
+  installation, by `dev:ino` and path: a directory renamed or replaced meanwhile is never written
+  into, and an installation replaced or moved between the unit's read and the walk is an input
+  error.
+- **The source.** The walk's `bin/ollama`, which must be the file resolved (`dev:ino`), records
+  `ServiceUnit { config: { file: the unit, key: ExecStart, line } }` after `Walk`. It states what
+  this file says at that line, not the effective command: drop-ins (`*.service.d/*.conf`), the
+  `/usr/lib`/`/etc` precedence, and templates are not read. `User=`, `Group=`,
+  `WorkingDirectory=`, and `Environment=` are not read either.
+- **Failures.** A unit that cannot be read, is over its budget, changed during its read, or is
+  outside the subset, and an executable that cannot be resolved or is not `<prefix>/bin/ollama`,
+  are input errors. So is a `bin/ollama` the walk does not record, since the source has nothing
+  to attach to; the message gives what the walk recorded for it (`bin/ollama: PermissionDenied`,
+  `install_files_discovered reached (…)`). Anything else the walk finds missing in the
+  installation (`lib/ollama`, a file over budget) is a gap, as with `--install-dir`.
 
 ## The reference set
 
@@ -151,7 +207,7 @@ the install paths of the content that reports it, in path order.
 
 `artifacts.discovery`, `artifacts.release`, `artifacts.container`, and `artifacts.identity` (see
 Binaries) belong to the scope `runtime_artifacts`, which the default policy audits when
-`--install-dir` is given.
+`--install-dir` or `--service-unit` is given.
 
 **`artifacts.discovery`** (scope: the root `install`):
 
@@ -287,7 +343,7 @@ slice in the session, read from the file's own bytes. They are observations, not
   - 16 comments of 256 bytes;
   - `binary_imports` imports;
   - a 1 KiB Go version, 1 MiB of modinfo, 4,096 deps, and 1,024 build settings.
-- **Budgets** (`--budget`, with `--install-dir` only):
+- **Budgets** (`--budget`, with `--install-dir` or `--service-unit`):
   - `binary_parse_bytes` (64 MiB per artifact) bounds the parser's input cache, before anything
     is allocated, with 128 bytes of bookkeeping charged per cached read. A test measures the
     heap: files declaring millions of entries stay within it plus the output limits;

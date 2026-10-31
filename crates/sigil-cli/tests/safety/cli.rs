@@ -160,6 +160,62 @@ fn static_inspection_of_an_install_reads_only_its_roots() {
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
 }
 
+/// PR-4d-1: `--service-unit` reads the unit, and the installation its `ExecStart=` resolves to.
+/// The unit names `decoy/bin/ollama`, where `decoy/bin` is a symlink to the real installation's
+/// `bin`: the walk reads the real `lib/ollama`, never `decoy/lib/ollama`, which the unresolved
+/// path suggests.
+#[test]
+fn static_inspection_of_a_service_unit_reads_only_its_inputs() {
+    let case = "static_inspection_of_a_service_unit_reads_only_its_inputs";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let build = fx.tmp.path().join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    let Some(so) = fixtures::require(case, fixtures::shared_object(&build)) else {
+        return;
+    };
+    let models = fixtures::ollama_store(&fx.target);
+    let install = fixtures::ollama_install(&fx.target.join("real"), &so);
+    let decoy = fx.target.join("decoy");
+    std::fs::create_dir_all(decoy.join("lib/ollama")).unwrap();
+    std::fs::copy(&so, decoy.join("lib/ollama/libdecoy.so")).unwrap();
+    std::os::unix::fs::symlink(install.join("bin"), decoy.join("bin")).unwrap();
+    let units = fx.target.join("units");
+    std::fs::create_dir_all(&units).unwrap();
+    let unit = units.join("ollama.service");
+    std::fs::write(
+        &unit,
+        format!(
+            "[Service]\nExecStart={}/bin/ollama serve\n",
+            decoy.display()
+        ),
+    )
+    .unwrap();
+    let md = fx.out.join("report.md");
+    let args = os(&[
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--service-unit",
+        &unit,
+        &"--format",
+        &"md",
+        &"--out",
+        &md,
+    ]);
+    let r = run("inspect-static-service-unit", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(std::fs::read_to_string(&md).unwrap().contains("Found by"));
+    assert_read_under(&r, &units);
+    assert_read_under(&r, &install.join("lib/ollama"));
+    assert_never_opened_under(&r, &decoy.join("lib"));
+    // Reads only under `target/`, writes only --out, no exec, no load, no socket, no /proc.
+    assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
+}
+
 /// The run opened nothing under `dir`, and nothing relative to a directory under it.
 fn assert_never_opened_under(run: &TracedRun, dir: &Path) {
     let dir = std::fs::canonicalize(dir).unwrap();

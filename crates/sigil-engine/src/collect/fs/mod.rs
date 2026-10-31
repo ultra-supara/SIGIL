@@ -162,6 +162,15 @@ impl SafeFs {
             .map(|r| r.path.as_path())
     }
 
+    /// The `dev:ino` of root `id`'s directory as opened (`fstat` of its fd), or `None` for an
+    /// unknown root: what a later check compares, never the path looked up again (PR-4d-1).
+    #[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
+    pub fn root_id(&self, id: &RootId) -> Option<(u64, u64)> {
+        let index = self.root_index(id)?;
+        let st = rustix::fs::fstat(&self.roots[index].fd).ok()?;
+        Some((st.st_dev as u64, st.st_ino as u64))
+    }
+
     pub(crate) fn root_index(&self, id: &RootId) -> Option<usize> {
         self.roots.iter().position(|r| r.id == *id)
     }
@@ -232,6 +241,20 @@ mod tests {
     use sigil_model::RootId;
 
     use super::{FsBudgets, RootError, SafeFs};
+
+    #[test]
+    fn root_id_is_the_opened_directory_s() {
+        use std::os::unix::fs::MetadataExt;
+        let d = tempfile::TempDir::new().unwrap();
+        let (listed, unlisted) = (RootId::new("a").unwrap(), RootId::new("b").unwrap());
+        let mut fs = SafeFs::new(FsBudgets::default());
+        fs.add_root(listed.clone(), d.path()).unwrap();
+        fs.add_unlisted_root(unlisted.clone(), d.path()).unwrap();
+        let st = std::fs::metadata(d.path()).unwrap();
+        assert_eq!(fs.root_id(&listed), Some((st.dev(), st.ino())));
+        assert_eq!(fs.root_id(&unlisted), Some((st.dev(), st.ino())));
+        assert_eq!(fs.root_id(&RootId::new("c").unwrap()), None);
+    }
 
     /// Review of #89: a root is opened from `/` one component at a time without following a
     /// symlink, so a component replaced by one after `canonicalize` is refused, never followed.

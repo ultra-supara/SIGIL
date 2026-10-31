@@ -72,7 +72,7 @@ fn every_example_validates_against_the_schema() {
     let schema = schema();
     let validator = validator_for(&schema, "AiBom");
     let all = examples();
-    assert_eq!(all.len(), 18);
+    assert_eq!(all.len(), 19);
     for (name, value) in all {
         assert_valid_against(&validator, &value, &name);
     }

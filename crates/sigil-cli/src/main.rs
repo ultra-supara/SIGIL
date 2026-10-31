@@ -32,10 +32,13 @@ use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::named::NamedBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
+use sigil_engine::collect::service_unit::{
+    self, UnitFacts, DEFAULT_UNIT_BYTES, SERVICE_UNIT_BYTES,
+};
 use sigil_engine::explain::{self, Format as ExplainFormat};
 use sigil_engine::inspect::{
     binary_session, observe_session, store_session, ActiveInput, BinaryRequest, InspectError,
-    InstallRequest, ObserveRequest, StoreRequest, MODELS_ROOT,
+    InstallRequest, InstallSource, ObserveRequest, StoreRequest, MODELS_ROOT,
 };
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
@@ -167,6 +170,10 @@ struct OllamaArgs {
     /// release manifests embedded in SIGIL [default: not inspected].
     #[arg(long, value_name = "DIR")]
     install_dir: Option<PathBuf>,
+    /// A systemd service unit: the installation its ExecStart= names is inspected as with
+    /// --install-dir [default: not read].
+    #[arg(long, value_name = "FILE", conflicts_with = "install_dir")]
+    service_unit: Option<PathBuf>,
     /// Inventory only the model with this display name (e.g. llama3.2:latest).
     #[arg(long, value_name = "NAME")]
     model: Option<String>,
@@ -345,6 +352,34 @@ fn main() -> ExitCode {
 
 // --- inspect ollama ---------------------------------------------------------------------------
 
+/// `--out` is kept out of the models dir, `--install-dir`, and with `--service-unit` the
+/// installation and the unit's directory, by path and by the `dev:ino` the unit's reads saw
+/// (PR-4d-1).
+fn ollama_out(
+    out: &Path,
+    models_dir: &Path,
+    install_dir: Option<&Path>,
+    unit: Option<&UnitFacts>,
+) -> Result<out::Target, Failure> {
+    let mut roots = vec![(models_dir, "models")];
+    if let Some(dir) = install_dir {
+        roots.push((dir, "install"));
+    }
+    if let Some(u) = unit {
+        roots.push((u.prefix.as_path(), "install"));
+        roots.push((u.dir.as_path(), "service-unit"));
+    }
+    let mut target = check_out(out, &roots)?;
+    if let Some(u) = unit {
+        for (id, name) in [(u.prefix_id, "install"), (u.dir_id, "service-unit")] {
+            target
+                .exclude(id, name)
+                .map_err(|e| Failure::Usage(format!("--out {}: {}", shown_path(out), shown(&e))))?;
+        }
+    }
+    Ok(target)
+}
+
 fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     let started_at = now()?;
     let mode = match args.mode {
@@ -359,15 +394,30 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     } else {
         None
     };
-    let given = budgets(&args.budgets, mode, probing, args.install_dir.is_some())?;
+    let given = budgets(
+        &args.budgets,
+        mode,
+        probing,
+        args.install_dir.is_some() || args.service_unit.is_some(),
+        args.service_unit.is_some(),
+    )?;
+    // PR-4d-1: the unit is read first. It names the installation, and `--out` is kept out of
+    // that and the unit's directory by the `dev:ino` the reads saw as well as by path. The
+    // exclusion does not depend on the path lookup: a directory renamed after the read cannot
+    // let the write in. The engine then requires the walk's root to be that prefix.
+    let unit = match &args.service_unit {
+        Some(path) => Some(Box::new(
+            service_unit::collect(path, given.service_unit).map_err(Failure::Run)?,
+        )),
+        None => None,
+    };
     let target = match &args.out {
-        Some(out) => {
-            let mut roots = vec![(models_dir.as_path(), "models")];
-            if let Some(dir) = &args.install_dir {
-                roots.push((dir.as_path(), "install"));
-            }
-            Some(check_out(out, &roots)?)
-        }
+        Some(out) => Some(ollama_out(
+            out,
+            &models_dir,
+            args.install_dir.as_deref(),
+            unit.as_deref(),
+        )?),
         None => None,
     };
     let policy = load_policy(args.policy.as_deref())?;
@@ -377,10 +427,17 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         model_filter: args.model.clone(),
         budgets: given.fs,
         manifest_limit: given.manifest_limit,
-        install: args.install_dir.clone().map(|dir| InstallRequest {
-            dir,
-            budgets: given.install,
-        }),
+        install: match (&args.install_dir, unit) {
+            (Some(dir), _) => Some(InstallRequest {
+                source: InstallSource::Dir(dir.clone()),
+                budgets: given.install,
+            }),
+            (None, Some(unit)) => Some(InstallRequest {
+                source: InstallSource::ServiceUnit(unit),
+                budgets: given.install,
+            }),
+            (None, None) => None,
+        },
     };
     let tool = tool_info();
     let proc_root = Path::new("/proc");
@@ -410,7 +467,10 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             policy_time,
         ),
     };
-    let session = assembled.map_err(|e| Failure::Run(shown(&e.to_string())))?;
+    let session = assembled.map_err(|e| match e {
+        InspectError::Input(message) => Failure::Run(message),
+        other => Failure::Run(shown(&other.to_string())),
+    })?;
     conclude(
         session,
         args.format,
@@ -783,15 +843,23 @@ struct Budgets {
     proc: ProcBudgets,
     probe: ProbeOptions,
     install: InstallBudgets,
+    service_unit: u64,
 }
 
 /// The budgets, by the names the session records in `request.budgets`.
-fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result<Budgets, Failure> {
+fn budgets(
+    given: &[String],
+    mode: Mode,
+    probing: bool,
+    install: bool,
+    unit: bool,
+) -> Result<Budgets, Failure> {
     let mut fs_budgets = FsBudgets::default();
     let mut manifest_limit = DEFAULT_MANIFEST_LIMIT;
     let mut proc_budgets = ProcBudgets::default();
     let mut probe_options = ProbeOptions::default();
     let mut install_budgets = InstallBudgets::default();
+    let mut service_unit = DEFAULT_UNIT_BYTES;
     for entry in given {
         let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
         let Some((key, value)) = entry.split_once('=') else {
@@ -830,25 +898,34 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
             "api_io_ms" => probe_options.io_deadline = Duration::from_millis(value),
             "api_response_bytes" => probe_options.max_response = value,
             "install_files_discovered" | "install_entries_listed" | "install_bytes" if !install => {
-                return Err(usage("this budget applies to --install-dir only"));
+                return Err(usage(
+                    "this budget applies to --install-dir or --service-unit only",
+                ));
             }
             "install_files_discovered" => install_budgets.files = value,
             "install_entries_listed" => install_budgets.entries = value,
             "install_bytes" => install_budgets.bytes = value,
             "binary_parse_bytes" | "binary_imports" | BINARY_SCAN_BYTES if !install => {
-                return Err(usage("this budget applies to --install-dir only"));
+                return Err(usage(
+                    "this budget applies to --install-dir or --service-unit only",
+                ));
             }
             "binary_parse_bytes" => install_budgets.binary.parse_bytes = value,
             "binary_imports" => install_budgets.binary.imports = value,
             BINARY_SCAN_BYTES => install_budgets.binary.scan_bytes = value,
+            SERVICE_UNIT_BYTES if !unit => {
+                return Err(usage("this budget applies to --service-unit only"));
+            }
+            SERVICE_UNIT_BYTES => service_unit = value,
             _ => {
                 return Err(usage(
                     "unknown budget; known: files_discovered, entries_listed, directory_entries, \
                      walk_depth, link_hops, manifest_bytes, in observe mode processes_listed, \
                      fds_per_process, tcp_table_bytes, with --active api-probe \
-                     api_connect_ms, api_io_ms, api_response_bytes, and with --install-dir \
-                     install_files_discovered, install_entries_listed, install_bytes, \
-                     binary_parse_bytes, binary_imports, binary_scan_bytes",
+                     api_connect_ms, api_io_ms, api_response_bytes, with --install-dir or \
+                     --service-unit install_files_discovered, install_entries_listed, \
+                     install_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, and \
+                     with --service-unit service_unit_bytes",
                 ))
             }
         }
@@ -859,6 +936,7 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
         proc: proc_budgets,
         probe: probe_options,
         install: install_budgets,
+        service_unit,
     })
 }
 
@@ -1512,6 +1590,56 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::{civil_from_days, parse_api_addr};
+
+    /// A tree `inst/bin/ollama`, `units/ollama.service` (its `ExecStart=` names the installation
+    /// by its canonical path), and `models/`, with the unit read.
+    fn unit_tree() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        sigil_engine::collect::service_unit::UnitFacts,
+    ) {
+        use sigil_engine::collect::service_unit::{collect, DEFAULT_UNIT_BYTES};
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        std::fs::create_dir_all(p.join("inst/bin")).unwrap();
+        std::fs::write(p.join("inst/bin/ollama"), b"binary").unwrap();
+        std::fs::create_dir(p.join("units")).unwrap();
+        std::fs::create_dir(p.join("models")).unwrap();
+        let exe = p.join("inst/bin/ollama");
+        std::fs::write(
+            p.join("units/ollama.service"),
+            format!("[Service]\nExecStart={} serve\n", exe.display()),
+        )
+        .unwrap();
+        let facts = collect(&p.join("units/ollama.service"), DEFAULT_UNIT_BYTES).unwrap();
+        (d, p, facts)
+    }
+
+    /// PR-4d-1 review: `--out` in a directory that was the installation, or the unit's
+    /// directory, when the unit was read, and is somewhere else by now. `check_out`'s path
+    /// lookup finds another directory at the old path, so only the `dev:ino` the reads saw
+    /// refuses it. Nothing is created there.
+    #[test]
+    fn out_is_kept_out_of_the_unit_s_reads_by_dev_ino() {
+        for (renamed, name) in [("inst", "install"), ("units", "service-unit")] {
+            let (_d, p, facts) = unit_tree();
+            let moved = p.join(format!("{renamed}.moved"));
+            std::fs::rename(p.join(renamed), &moved).unwrap();
+            std::fs::create_dir(p.join(renamed)).unwrap();
+            let before = std::fs::read_dir(&moved).unwrap().count();
+            let out = moved.join("r.md");
+            let refused = super::ollama_out(&out, &p.join("models"), None, Some(&facts));
+            let Err(super::Failure::Usage(message)) = refused else {
+                panic!("{name}: --out in the moved directory was not refused");
+            };
+            assert!(
+                message.contains(&format!("the {name} directory as it was read")),
+                "{name}: {message}"
+            );
+            assert!(!out.exists(), "{name}");
+            assert_eq!(std::fs::read_dir(&moved).unwrap().count(), before, "{name}");
+        }
+    }
 
     /// Plan review P1: an input that resolves to `--out` at the read, after `check_binary_out`
     /// passed (a symlink swapped in between), is caught against the inputs as read, and the

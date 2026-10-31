@@ -4,7 +4,9 @@
 //! SIGIL's own labels alike. Nothing in a session can therefore form a heading, link, table cell,
 //! code span, or HTML in the report. Tables are GFM, and a cell never contains a line break.
 
-use crate::artifact::{FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs};
+use crate::artifact::{
+    DiscoverySource, FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs,
+};
 use crate::coverage::Coverage;
 use crate::evidence::{EvidenceRef, Loc, Observability};
 use crate::finding::{CondState, OpenQuestion};
@@ -879,6 +881,33 @@ fn runtime_artifacts(out: &mut String, s: &Session) {
         (None, None) => "not compared with a reference set".to_string(),
     };
     out.push_str(&format!("{} {}\n\n", esc("Release:"), esc(&release)));
+    // PR-4d-1: the unit whose `ExecStart=` named a placement of this root.
+    let found_by: Vec<String> = s
+        .instances
+        .iter()
+        .filter(|i| i.root == root.id)
+        .flat_map(|i| i.discovered_by.iter())
+        .filter_map(|d| match d {
+            DiscoverySource::ServiceUnit { config } => Some(config),
+            _ => None,
+        })
+        .map(|c| {
+            let unit = s
+                .instances
+                .iter()
+                .find(|u| u.id == c.file)
+                .map_or_else(|| esc(c.file.as_str()), |u| u.path.markdown_inline());
+            format!(
+                "{unit} {}{} {}",
+                c.key.markdown_inline(),
+                esc("="),
+                esc(&format!("(line {})", c.line))
+            )
+        })
+        .collect();
+    if !found_by.is_empty() {
+        out.push_str(&format!("{} {}\n\n", esc("Found by:"), found_by.join(", ")));
+    }
     let mut prefix = root.path.as_bytes().to_vec();
     prefix.push(b'/');
     let member = |i: &FileInstance| match i.path.as_bytes().strip_prefix(prefix.as_slice()) {

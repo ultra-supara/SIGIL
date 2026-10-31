@@ -114,7 +114,7 @@ pub use model::{
 pub use probe::{is_loopback, target, ActiveFeature, ApiProbe, ProbePhase, ProbeResult};
 pub use reference::{
     EntryKind, MemberKind, MemberResult, ReferenceMatch, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE,
-    INSTALL_ROOT,
+    INSTALL_ROOT, SERVICE_UNIT_ROOT,
 };
 pub use relation::{
     BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,

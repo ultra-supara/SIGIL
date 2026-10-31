@@ -11,7 +11,8 @@ use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::named::NamedBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::inspect::{
-    binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, StoreRequest,
+    binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, InstallSource,
+    StoreRequest,
 };
 use sigil_engine::policy::Policy;
 use sigil_model::{
@@ -69,7 +70,7 @@ fn an_install_session_has_the_import_hints() {
         budgets: FsBudgets::default(),
         manifest_limit: DEFAULT_MANIFEST_LIMIT,
         install: Some(InstallRequest {
-            dir: tree.path().to_path_buf(),
+            source: InstallSource::Dir(tree.path().to_path_buf()),
             budgets: InstallBudgets::default(),
         }),
     };

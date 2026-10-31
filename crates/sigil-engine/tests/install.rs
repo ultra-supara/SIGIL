@@ -418,3 +418,31 @@ fn elf_placements_get_their_facts_once_per_content() {
     // Non-ELF content gets no record.
     assert_eq!(f.binaries.len(), 3, "bin/ollama, libggml, libdata");
 }
+
+/// PR-4d-1: why the walk has no placement of `bin/ollama`, taken where `bin/ollama` was handled,
+/// so a summary state reached elsewhere (a budget under `lib/ollama`) cannot hide it.
+#[test]
+fn bin_gap_is_what_the_walk_recorded_for_bin_ollama() {
+    let d = install();
+    assert_eq!(run(d.path(), InstallBudgets::default()).bin_gap, None);
+    let no_files = InstallBudgets {
+        files: 0,
+        ..InstallBudgets::default()
+    };
+    assert_eq!(
+        run(d.path(), no_files).bin_gap.as_deref(),
+        Some("install_files_discovered reached (0 of 0)")
+    );
+    std::fs::remove_file(d.path().join("bin/ollama")).unwrap();
+    let one_byte = InstallBudgets {
+        bytes: 1,
+        ..InstallBudgets::default()
+    };
+    let f = run(d.path(), one_byte);
+    assert!(
+        matches!(&f.discovery.state, CoverageState::BudgetExceeded { budget, .. } if budget == "install_bytes"),
+        "{:?}",
+        f.discovery.state
+    );
+    assert_eq!(f.bin_gap.as_deref(), Some("bin/ollama: not found"));
+}

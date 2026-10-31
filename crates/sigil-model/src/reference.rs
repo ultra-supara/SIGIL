@@ -15,6 +15,9 @@ use crate::text::UntrustedText;
 
 /// The scan root of an installation (`--install-dir`).
 pub const INSTALL_ROOT: &str = "install";
+/// The scan root of a systemd unit (`--service-unit`; PR-4d-1): the unit file, read whole. Its
+/// `ExecStart=` names the installation's `bin/ollama`.
+pub const SERVICE_UNIT_ROOT: &str = "service-unit";
 /// The install walk and reads: what was listed and read.
 pub const ARTIFACTS_DISCOVERY: &str = "artifacts.discovery";
 /// The comparison with the reference set: attribution and completeness.

@@ -63,7 +63,7 @@ cargo run --locked -q -p sigil-cli -- session render out/session.json --out out/
 
 The store defaults to `$OLLAMA_MODELS`, then `~/.ollama/models`. Use `--models-dir /path/to/models` to select another store, including one owned by a system service. Static inspection needs only the files; Ollama does not need to be running.
 
-The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store and installation, and separate from binary inputs.
+The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store, installation, and service unit's directory, and separate from binary inputs.
 
 ### Include the installation or runtime
 
@@ -71,6 +71,10 @@ The document goes to `--out` (or stdout when omitted), and the outcome summary g
 # Also identify the installation's files and compare them with release references.
 cargo run --locked -q -p sigil-cli -- inspect ollama \
   --install-dir /usr/local --out out/install.json
+
+# Or find the installation from its systemd unit's ExecStart=.
+cargo run --locked -q -p sigil-cli -- inspect ollama \
+  --service-unit /etc/systemd/system/ollama.service --out out/unit.json
 
 # Also attribute the running server's listening sockets through /proc.
 cargo run --locked -q -p sigil-cli -- inspect ollama \
@@ -81,7 +85,7 @@ cargo run --locked -q -p sigil-cli -- inspect ollama \
   --active api-probe --out out/active.json
 ```
 
-These options can be combined. The API probe defaults to `127.0.0.1:11434`; `--api-addr` selects an address, and a non-loopback target requires `--allow-remote`. It resolves no DNS names. The [Ollama guide](docs/ollama-inspection.md) covers all options and the scope of each observation.
+These options can be combined, except `--install-dir` with `--service-unit`. The API probe defaults to `127.0.0.1:11434`; `--api-addr` selects an address, and a non-loopback target requires `--allow-remote`. It resolves no DNS names. The [Ollama guide](docs/ollama-inspection.md) covers all options and the scope of each observation.
 
 ## Read the verdict and the coverage together
 
