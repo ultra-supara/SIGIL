@@ -166,19 +166,58 @@ fn argument_stays_refused_outside_binary_and_service_unit_roots() {
 
 #[test]
 fn found_by_names_the_unit_and_its_line() {
-    let md = sigil_model::render::markdown::render_session(&valid());
+    let mut s = valid();
+    let (key, line_no) = {
+        let c = source(&mut s);
+        (c.key.clone(), c.line)
+    };
+    let md = sigil_model::render::markdown::render_session(&s);
     let prefix = t("Found by:").markdown_inline();
     let line = md
         .lines()
         .find(|l| l.starts_with(&prefix))
         .expect("a Found by line");
-    assert!(line.contains(&t(UNIT_PATH).markdown_inline()), "{line}");
-    assert!(line.contains(&t("(line 6)").markdown_inline()), "{line}");
+    // The renderer writes the key and `=` with no space between them.
+    let expected = format!(
+        "{prefix} {} {}{} {}",
+        t(UNIT_PATH).markdown_inline(),
+        key.markdown_inline(),
+        t("=").markdown_inline(),
+        t(&format!("(line {line_no})")).markdown_inline()
+    );
+    assert_eq!(line, expected);
     // Without the source, no such line.
-    let mut s = valid();
     exe(&mut s)
         .discovered_by
         .retain(|d| *d == DiscoverySource::Walk);
     let md = sigil_model::render::markdown::render_session(&s);
     assert!(!md.lines().any(|l| l.starts_with(&prefix)), "{md}");
+    // A valid session with an install root and no service unit has no such line either.
+    let plain = open_release();
+    assert_eq!(plain.validate(), Ok(()));
+    let md = sigil_model::render::markdown::render_session(&plain);
+    assert!(!md.lines().any(|l| l.starts_with(&prefix)), "{md}");
+}
+
+const HOSTILE: &str =
+    "x|y `code` <script>alert(1)</script> [a](http://e) *b* _c_\n# heading\u{202E}";
+
+#[test]
+fn a_hostile_unit_path_is_escaped_in_found_by() {
+    let mut s = valid();
+    unit(&mut s).path = t(HOSTILE);
+    s.request
+        .roots
+        .iter_mut()
+        .find(|r| r.id.as_str() == SERVICE_UNIT_ROOT)
+        .unwrap()
+        .path = t(HOSTILE);
+    let md = sigil_model::render::markdown::render_session(&s);
+    let prefix = t("Found by:").markdown_inline();
+    assert!(md.lines().any(|l| l.starts_with(&prefix)), "{md}");
+    // The escaper writes `\<script`: the backslash makes it text, so none may be bare.
+    assert!(md.contains("\\<script"), "{md}");
+    assert!(!md.replace("\\<script", "").contains("<script"), "{md}");
+    assert!(!md.contains("\n# heading"), "{md}");
+    assert!(!md.contains(HOSTILE), "{md}");
 }
