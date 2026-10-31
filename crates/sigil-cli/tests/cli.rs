@@ -1719,6 +1719,29 @@ fn documented_install_dirs_are_pointed_at_the_test_tree() {
 }
 
 #[test]
+fn documented_service_units_are_pointed_at_the_test_unit() {
+    let v = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        isolate_unit(
+            &v(&["inspect", "ollama", "--service-unit", "/etc/ollama.service"]),
+            "/t"
+        ),
+        v(&["inspect", "ollama", "--service-unit", "/t"])
+    );
+    assert_eq!(
+        isolate_unit(
+            &v(&["inspect", "ollama", "--service-unit=/etc/ollama.service"]),
+            "/t"
+        ),
+        v(&["inspect", "ollama", "--service-unit=/t"])
+    );
+    assert_eq!(
+        isolate_unit(&v(&["inspect", "ollama", "--out", "o"]), "/t"),
+        v(&["inspect", "ollama", "--out", "o"])
+    );
+}
+
+#[test]
 fn binary_budgets_apply_with_install_dir_only() {
     let models = store(true);
     let install = install_tree();
@@ -1770,8 +1793,19 @@ fn service_unit_inspects_the_installation_its_exec_start_names() {
     let r = inspect(models.path(), &[&"--service-unit", &unit]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let s = session_of(&r);
-    let root = |id: &str| s.request.roots.iter().any(|r| r.id.as_str() == id);
-    assert!(root("install") && root("service-unit"));
+    let root = |id: &str| {
+        s.request
+            .roots
+            .iter()
+            .find(|r| r.id.as_str() == id)
+            .map(|r| r.path.as_bytes().to_vec())
+    };
+    let canonical = |p: &Path| {
+        use std::os::unix::ffi::OsStrExt;
+        fs::canonicalize(p).unwrap().as_os_str().as_bytes().to_vec()
+    };
+    assert_eq!(root("install"), Some(canonical(install.path())));
+    assert_eq!(root("service-unit"), Some(canonical(&unit)));
     assert!(
         r.stderr.contains("release: not established ("),
         "{}",
@@ -1782,7 +1816,15 @@ fn service_unit_inspects_the_installation_its_exec_start_names() {
         &[&"--service-unit", &unit, &"--format", &"md"],
     );
     assert_eq!(r.code, 0, "{}", r.stderr);
-    assert!(r.stdout.contains("Found by"), "{}", r.stdout);
+    let found_by = r
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("Found by"))
+        .unwrap_or_else(|| panic!("no Found by line:\n{}", r.stdout));
+    // Markdown escapes the punctuation: `ExecStart\=` and `\(line 2\)`.
+    assert!(found_by.contains("ollama\\.service"), "{found_by}");
+    assert!(found_by.contains("ExecStart\\="), "{found_by}");
+    assert!(found_by.contains("\\(line 2\\)"), "{found_by}");
 }
 
 #[test]
@@ -1831,6 +1873,39 @@ fn a_unit_that_cannot_be_inspected_is_an_input_error() {
     );
     assert_eq!(r.code, 1, "{}", r.stderr);
     assert!(r.stderr.contains("over service_unit_bytes"), "{}", r.stderr);
+}
+
+#[test]
+fn a_unit_whose_installation_the_walk_cannot_give_is_an_input_error() {
+    let models = store(true);
+    let install = install_tree();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
+    let elsewhere = TempDir::new().unwrap();
+    let out = elsewhere.path().join("report.md");
+    let r = inspect(
+        models.path(),
+        &[
+            &"--service-unit",
+            &unit,
+            &"--budget",
+            &"install_files_discovered=0",
+            &"--format",
+            &"md",
+            &"--out",
+            &out,
+        ],
+    );
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr.contains(
+            "was not recorded by the installation's walk (install_files_discovered reached"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
+    assert!(!out.exists(), "{}", out.display());
 }
 
 #[test]
