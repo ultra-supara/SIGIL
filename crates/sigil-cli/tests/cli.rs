@@ -1238,8 +1238,9 @@ fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsi
 /// Runs the commands of `doc` (relative to the workspace) in order, in one temporary directory,
 /// with `OLLAMA_MODELS` set to a store whose model has no license (one WARN finding). Each must
 /// exit 0, 3, or 4: never an execution error (1) or a usage error (2). Every API probe goes to a
-/// server of this test, which must see exactly one request per active command, and every
-/// `--install-dir` to a synthetic tree, and every `--service-unit` to a unit that names it. Returns the number of commands and of active commands.
+/// server of this test, which must see exactly one request per active command, every
+/// `--install-dir` to a synthetic tree, and every `--service-unit` to a unit that names it.
+/// Returns the number of commands and of active commands.
 fn run_documented(doc: &str) -> (usize, usize) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
