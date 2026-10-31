@@ -2104,3 +2104,72 @@ pub fn capability_policy() -> Session {
     };
     s
 }
+
+/// The unit of example 19 (PR-4d-1).
+pub const UNIT_PATH: &str = "/etc/systemd/system/ollama.service";
+
+/// Example 19: The installation a service unit names (PR-4d-1). `--service-unit
+/// /etc/systemd/system/ollama.service`: its `ExecStart=` at line 6 names `/usr/local/bin/ollama`,
+/// so `/usr/local` is inspected as with `--install-dir /usr/local`, and `bin/ollama` records that
+/// the unit named it. Discovery is complete: PASS + COMPLETE.
+pub fn service_unit() -> Session {
+    let mut s = base(&["artifacts.discovery"]);
+    s.request.audit = ids(&["runtime_artifacts"]);
+    s.request.roots.push(ScanRoot {
+        id: id(SERVICE_UNIT_ROOT),
+        path: t(UNIT_PATH),
+    });
+    s.request
+        .budgets
+        .insert("service_unit_bytes".to_string(), 1 << 20);
+    let unit_artifact: ArtifactId = id(&format!("sha256:{}", hex(0x19)));
+    s.artifacts.push(Artifact {
+        id: unit_artifact.clone(),
+        size: 312,
+        format: Format::Other,
+        slices: vec![],
+    });
+    let unit: InstanceId = id("inst:service-unit/ollama.service");
+    let mut placed = instance(&unit, SERVICE_UNIT_ROOT, UNIT_PATH, &unit_artifact, 1019);
+    placed.discovered_by = vec![DiscoverySource::Argument];
+    placed.stat.size = 312;
+    s.instances.push(placed);
+    let exe_artifact: ArtifactId = id(&format!("sha256:{}", hex(0x1a)));
+    s.artifacts.push(Artifact {
+        id: exe_artifact.clone(),
+        size: 1_048_576,
+        format: Format::Elf {
+            kind: ElfType::Exec,
+        },
+        slices: vec![Slice {
+            id: SliceId::from_parts(&exe_artifact, Arch::X86_64, 0),
+            arch: Arch::X86_64,
+            offset: 0,
+            size: 1_048_576,
+            sha256: id(&hex(0x1a)),
+        }],
+    });
+    let mut exe = instance(
+        &id("inst:install/bin/ollama"),
+        INSTALL_ROOT,
+        "/usr/local/bin/ollama",
+        &exe_artifact,
+        1020,
+    );
+    exe.stat.mode = 0o100755;
+    exe.discovered_by.push(DiscoverySource::ServiceUnit {
+        config: ConfigRef {
+            file: unit,
+            key: t("ExecStart"),
+            line: 6,
+        },
+    });
+    s.instances.push(exe);
+    s.coverage.push(Coverage {
+        check: id("artifacts.discovery"),
+        scope: Ref::Root(id(INSTALL_ROOT)),
+        state: CoverageState::Complete,
+        budget: None,
+    });
+    s
+}
