@@ -12,7 +12,9 @@ use sigil_engine::analyze::release::{analyze, claims, open};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::{collect, InstallBudgets};
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
-use sigil_engine::inspect::{store_session, ActiveInput, InstallRequest, StoreRequest};
+use sigil_engine::inspect::{
+    store_session, ActiveInput, InstallRequest, InstallSource, StoreRequest,
+};
 use sigil_engine::policy::{evaluate, Policy};
 use sigil_engine::reference::{
     names, official, parse_set, verify_reference_matches, verify_release_claims, RefSet,
@@ -81,7 +83,7 @@ fn request(models: &Path, install: Option<&Path>) -> StoreRequest {
         budgets: FsBudgets::default(),
         manifest_limit: DEFAULT_MANIFEST_LIMIT,
         install: install.map(|dir| InstallRequest {
-            dir: dir.to_path_buf(),
+            source: InstallSource::Dir(dir.to_path_buf()),
             budgets: InstallBudgets::default(),
         }),
     }

@@ -35,7 +35,7 @@ use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::explain::{self, Format as ExplainFormat};
 use sigil_engine::inspect::{
     binary_session, observe_session, store_session, ActiveInput, BinaryRequest, InspectError,
-    InstallRequest, ObserveRequest, StoreRequest, MODELS_ROOT,
+    InstallRequest, InstallSource, ObserveRequest, StoreRequest, MODELS_ROOT,
 };
 use sigil_engine::observe::host;
 use sigil_engine::observe::proc::ProcBudgets;
@@ -378,7 +378,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         budgets: given.fs,
         manifest_limit: given.manifest_limit,
         install: args.install_dir.clone().map(|dir| InstallRequest {
-            dir,
+            source: InstallSource::Dir(dir),
             budgets: given.install,
         }),
     };

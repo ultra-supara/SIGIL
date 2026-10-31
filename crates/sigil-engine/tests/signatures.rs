@@ -14,7 +14,8 @@ use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::named::{collect, NamedBudgets};
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
 use sigil_engine::inspect::{
-    binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, StoreRequest,
+    binary_session, store_session, ActiveInput, BinaryRequest, InstallRequest, InstallSource,
+    StoreRequest,
 };
 use sigil_engine::policy::Policy;
 use sigil_model::{
@@ -627,7 +628,7 @@ fn install_session(tree: &Path, models: &Path, budgets: InstallBudgets) -> Sessi
         budgets: FsBudgets::default(),
         manifest_limit: DEFAULT_MANIFEST_LIMIT,
         install: Some(InstallRequest {
-            dir: tree.to_path_buf(),
+            source: InstallSource::Dir(tree.to_path_buf()),
             budgets,
         }),
     };

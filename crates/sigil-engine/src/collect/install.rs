@@ -54,6 +54,9 @@ impl Default for InstallBudgets {
 pub struct InstallFacts {
     /// The canonical path SafeFs opened, or the path as given when it could not be opened.
     pub root_path: UntrustedText,
+    /// The `dev:ino` of the directory the walk opened as its root (`SafeFs::root_id`), or `None`
+    /// when it could not be opened: what a service unit's prefix is compared with (PR-4d-1).
+    pub root_id: Option<(u64, u64)>,
     pub instances: Vec<FileInstance>,
     pub artifacts: Vec<Artifact>,
     /// Coverage of `artifacts.discovery`, scope `Root(install)`.
@@ -91,6 +94,7 @@ fn collect_with(
     });
     let opened = fs.add_root(root.clone(), dir);
     let root_path = recorded(fs.root_path(&root).unwrap_or(dir));
+    let root_id = fs.root_id(&root);
     let mut c = Collector {
         fs: &fs,
         root: root.clone(),
@@ -132,6 +136,7 @@ fn collect_with(
     let (binaries, _, scans) = super::binread::binaries(c.parsed, &c.artifacts);
     Ok(InstallFacts {
         root_path,
+        root_id,
         instances: c.instances,
         artifacts: c.artifacts,
         binaries,
