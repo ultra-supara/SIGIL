@@ -368,7 +368,7 @@ pub const REDIRECTS: &[&str] = &[
 /// The executable of the one `ExecStart=` of `[Service]`, and the line its assignment starts on
 /// (from 1). `Err` says why the unit is outside the modeled subset of systemd.syntax(7) and
 /// systemd.service(5) "COMMAND LINES" (systemd 261):
-/// - the unit is UTF-8 with no NUL and no byte-order mark;
+/// - the unit is UTF-8 with no NUL, byte-order mark, or noncharacter;
 /// - lines are split at `\n` and trimmed of systemd's whitespace (space, tab, CR, LF); a CR is
 ///   allowed only as the last byte of a line (systemd ends a line at a lone CR); empty and
 ///   comment (`#`, `;`) lines are skipped; a line ending in `\` is not modeled (systemd's
@@ -380,9 +380,10 @@ pub const REDIRECTS: &[&str] = &[
 /// - its first item is unquoted (a whole `"…"` or `'…'` item, or up to whitespace; no other
 ///   quote), then the prefixes `@-:+!` are removed, each at most once; `+` with `!`, `@` without
 ///   a following item, and `|` (a shell) are outside the subset;
-/// - the arguments after it have no quote and no backslash, and no word that is exactly `;` (a
+/// - the arguments after it have no quote, backslash, or `%`, and no word that is exactly `;` (a
 ///   second command);
-/// - what remains of the first item is an absolute path with no `\`, `%`, `$`, or control byte;
+/// - what remains of the first item is an absolute path with no `\`, `%`, `$`, or control byte,
+///   not ending in `/` or `/.`;
 /// - a [`REDIRECTS`] setting still set at the end is outside the subset: it changes where the
 ///   service's paths lead.
 ///
