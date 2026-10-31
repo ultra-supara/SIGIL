@@ -16,8 +16,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use sigil_model::{
-    Artifact, ConfigRef, DiscoverySource, FileInstance, RootId, ScanRoot, Stability, UntrustedText,
-    INSTALL_ROOT, SERVICE_UNIT_ROOT,
+    Artifact, ConfigRef, DiscoverySource, FileInstance, NotReadReason, RootId, ScanRoot, Stability,
+    UntrustedText, INSTALL_ROOT, SERVICE_UNIT_ROOT,
 };
 
 use super::fs::{recorded, FsBudgets, ReadOutcome, ReadSpec, RelPath, RootError, SafeFs};
@@ -59,7 +59,7 @@ pub struct UnitFacts {
 /// Reads the unit at `path`, at most `limit` bytes, and resolves the executable its
 /// `ExecStart=` names. `Err` is the input error of exit 1: `--service-unit <path>: <why>`.
 pub fn collect(path: &Path, limit: u64) -> Result<UnitFacts, String> {
-    collect_with(path, limit, &|_| {})
+    collect_with(path, limit, &|_| {}, &|_| {}, &|_| {})
 }
 
 fn shown(path: &Path) -> String {
@@ -81,11 +81,19 @@ fn io_why(e: &std::io::Error) -> String {
     }
 }
 
-/// As [`collect`], calling `before_open` with the unit's canonical path after it was resolved
-/// and before its directory is opened: the tests' way to replace it.
-fn collect_with(path: &Path, limit: u64, before_open: &dyn Fn(&Path)) -> Result<UnitFacts, String> {
+/// As [`collect`], calling `after_resolve` with the unit's canonical path right after it was
+/// resolved, `before_open` with it before its directory is opened, and `during_read` while the
+/// file is open: the tests' ways to change it.
+fn collect_with(
+    path: &Path,
+    limit: u64,
+    after_resolve: &dyn Fn(&Path),
+    before_open: &dyn Fn(&Path),
+    during_read: &dyn Fn(&RelPath),
+) -> Result<UnitFacts, String> {
     let fail = |why: &str| fatal(path, why);
     let canonical = std::fs::canonicalize(path).map_err(|e| fail(&io_why(&e)))?;
+    after_resolve(&canonical);
     let resolved = std::fs::symlink_metadata(&canonical)
         .map(|st| (st.dev(), st.ino()))
         .map_err(|e| fail(&io_why(&e)))?;
@@ -113,12 +121,14 @@ fn collect_with(path: &Path, limit: u64, before_open: &dyn Fn(&Path)) -> Result<
         };
         fail(&format!("its directory: {why}"))
     })?;
-    // The directory opened must be the one resolved, by `dev:ino` (external plan review, P3): a
-    // swap in between would read elsewhere.
-    if fs.root_id(&root) != Some(dir_id) {
+    // The directory opened must be the one resolved. The path catches a symlink swapped into an
+    // ancestor after `canonicalize`: the root is opened from `/` without following links, so it
+    // would be a directory the path does not name. `dev:ino` catches a directory replaced at the
+    // same path, and it is the identity the CLI keeps `--out` away from.
+    if fs.root_path(&root) != Some(parent) || fs.root_id(&root) != Some(dir_id) {
         return Err(fail("its directory changed after it was resolved"));
     }
-    let read = fs.read_entry(
+    let (read, _) = fs.read_entry_with(
         &root,
         &rel,
         ReadSpec {
@@ -126,8 +136,18 @@ fn collect_with(path: &Path, limit: u64, before_open: &dyn Fn(&Path)) -> Result<
             limit: Some(limit),
         },
         vec![DiscoverySource::Argument],
+        |_| during_read(&rel),
     );
+    // A file replaced after it was resolved is not the unit: it is said first, whatever it
+    // turned out to be.
+    let replaced = read
+        .instance
+        .as_ref()
+        .is_some_and(|i| (i.stat.dev, i.stat.ino) != resolved);
     match &read.outcome {
+        ReadOutcome::Complete | ReadOutcome::LimitExceeded { .. } if replaced => {
+            return Err(fail("replaced by another file after it was resolved"));
+        }
         ReadOutcome::Complete => {}
         ReadOutcome::LimitExceeded { limit, size } => {
             return Err(fail(&format!(
@@ -135,17 +155,31 @@ fn collect_with(path: &Path, limit: u64, before_open: &dyn Fn(&Path)) -> Result<
             )))
         }
         ReadOutcome::NotFound => return Err(fail("vanished after it was resolved")),
-        ReadOutcome::NotRead(why) => return Err(fail(&format!("not read ({why:?})"))),
-        ReadOutcome::Failed(m) => return Err(fail(m)),
+        ReadOutcome::NotRead(why) => {
+            let mode = read.instance.as_ref().map_or(0, |i| i.stat.mode) & 0o170_000;
+            let what = match why {
+                NotReadReason::NotRegularFile if mode == 0o040_000 => "a directory".to_string(),
+                // Swapped in after the argument was resolved: never followed.
+                NotReadReason::NotRegularFile if mode == 0o120_000 => {
+                    "a symlink now, not followed".to_string()
+                }
+                NotReadReason::NotRegularFile => "not a regular file".to_string(),
+                NotReadReason::PermissionDenied => "permission denied".to_string(),
+                NotReadReason::Vanished => "vanished before it was read".to_string(),
+                other => format!("{other:?}"),
+            };
+            return Err(fail(&what));
+        }
+        // It may carry the raw file name.
+        ReadOutcome::Failed(m) => return Err(fail(&UntrustedText::new(m).terminal_line())),
     }
     let (Some(instance), Some(artifact)) = (read.instance, read.artifact) else {
         return Err(fail("not read"));
     };
-    if (instance.stat.dev, instance.stat.ino) != resolved {
-        return Err(fail("replaced by another file after it was resolved"));
-    }
-    if instance.stability != Stability::NoChangeDetected {
-        return Err(fail("changed during the read"));
+    match instance.stability {
+        Stability::NoChangeDetected => {}
+        Stability::ChangedDuringRead => return Err(fail("changed during the read")),
+        Stability::Vanished => return Err(fail("vanished during the read")),
     }
     let (named, line) = exec_start(&read.prefix).map_err(|why| fail(&why))?;
     let at = format!("ExecStart= at line {line}");
@@ -901,7 +935,7 @@ mod tests {
             std::fs::create_dir(dir).unwrap();
             std::fs::copy(dir.with_extension("old").join("ollama.service"), path).unwrap();
         };
-        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &swap).unwrap_err();
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &|_| {}, &swap, &|_| {}).unwrap_err();
         assert!(
             e.contains("its directory changed after it was resolved"),
             "{e}"
@@ -938,11 +972,7 @@ mod tests {
         std::fs::write(&relative, b"[Service]\nExecStart=ollama serve\n").unwrap();
         let cases: Vec<(PathBuf, u64, &str)> = vec![
             (p.join("none.service"), DEFAULT_UNIT_BYTES, ": not found"),
-            (
-                p.join("inst"),
-                DEFAULT_UNIT_BYTES,
-                "not read (NotRegularFile)",
-            ),
+            (p.join("inst"), DEFAULT_UNIT_BYTES, "a directory"),
             (
                 units("small", &p.join("inst/bin/ollama")),
                 4,
@@ -981,11 +1011,82 @@ mod tests {
             std::fs::rename(path, path.with_extension("old")).unwrap();
             std::fs::write(path, b"[Service]\nExecStart=/elsewhere/bin/ollama\n").unwrap();
         };
-        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &swap).unwrap_err();
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &|_| {}, &swap, &|_| {}).unwrap_err();
         assert!(
             e.contains("replaced by another file after it was resolved"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn an_ancestor_swapped_for_a_symlink_is_refused() {
+        let (_d, p) = tree();
+        std::fs::create_dir_all(p.join("a/b/c")).unwrap();
+        std::fs::create_dir_all(p.join("x/c")).unwrap();
+        std::fs::create_dir_all(p.join("inst2/bin")).unwrap();
+        std::fs::write(p.join("inst2/bin/ollama"), b"exe").unwrap();
+        let u = unit(&p.join("a/b/c"), &p.join("inst/bin/ollama"));
+        unit(&p.join("x/c"), &p.join("inst2/bin/ollama"));
+        // The old `b` is kept, so no inode is reused: only the path tells the two apart.
+        let swap = |_: &Path| {
+            std::fs::rename(p.join("a/b"), p.join("a/b.old")).unwrap();
+            symlink(p.join("x"), p.join("a/b")).unwrap();
+        };
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &swap, &|_| {}, &|_| {}).unwrap_err();
+        assert!(
+            e.contains("its directory changed after it was resolved"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_unit_changed_or_removed_during_the_read_is_refused() {
+        use std::io::Write;
+        let (_d, p) = tree();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        let grow = |rel: &RelPath| {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(p.join(rel.display()))
+                .unwrap();
+            f.write_all(b"# more\n").unwrap();
+        };
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &|_| {}, &|_| {}, &grow).unwrap_err();
+        assert!(e.contains("changed during the read"), "{e}");
+        let remove = |rel: &RelPath| std::fs::remove_file(p.join(rel.display())).unwrap();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        let e = collect_with(&u, DEFAULT_UNIT_BYTES, &|_| {}, &|_| {}, &remove).unwrap_err();
+        assert!(e.contains("vanished during the read"), "{e}");
+    }
+
+    #[test]
+    fn a_unit_replaced_by_an_oversized_file_says_replaced() {
+        let (_d, p) = tree();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        let limit = std::fs::metadata(&u).unwrap().len();
+        let swap = |path: &Path| {
+            std::fs::rename(path, path.with_extension("old")).unwrap();
+            std::fs::write(path, vec![b'#'; usize::try_from(limit).unwrap() + 100]).unwrap();
+        };
+        let e = collect_with(&u, limit, &|_| {}, &swap, &|_| {}).unwrap_err();
+        assert!(
+            e.contains("replaced by another file after it was resolved"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_unit_that_cannot_be_opened_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            eprintln!("skipped: root opens a mode-000 file");
+            return;
+        }
+        let (_d, p) = tree();
+        let u = unit(&p, &p.join("inst/bin/ollama"));
+        std::fs::set_permissions(&u, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let e = collect(&u, DEFAULT_UNIT_BYTES).unwrap_err();
+        assert!(e.contains("permission denied"), "{e}");
     }
 
     #[test]
