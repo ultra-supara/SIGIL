@@ -482,8 +482,8 @@ pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
         }
     };
     let at = |why: &str| format!("ExecStart= at line {line}: {why}");
-    let (item, rest) = first_item(&value).map_err(&at)?;
-    let (exe, argv0) = strip_prefixes(item).map_err(&at)?;
+    let (item, rest) = first_item(&value).map_err(at)?;
+    let (exe, argv0) = strip_prefixes(item).map_err(at)?;
     if rest
         .iter()
         .any(|&b| matches!(b, b'"' | b'\'' | b'\\' | b'%'))
