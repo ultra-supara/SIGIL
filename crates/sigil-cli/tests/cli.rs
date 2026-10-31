@@ -1150,6 +1150,27 @@ fn isolate_install(args: &[String], dir: &str) -> Vec<String> {
     out
 }
 
+/// `args` with any `--service-unit` (`--service-unit X` or `--service-unit=X`) pointed at
+/// `unit`, so that no test reads a real unit or the installation it names.
+fn isolate_unit(args: &[String], unit: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut value_follows = false;
+    for a in args {
+        if value_follows {
+            value_follows = false;
+            out.push(unit.to_string());
+        } else if a == "--service-unit" {
+            value_follows = true;
+            out.push(a.clone());
+        } else if a.starts_with("--service-unit=") {
+            out.push(format!("--service-unit={unit}"));
+        } else {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
 /// `args` with every `<PATH>` of a `binary inspect` command replaced by `fixture`, so that no
 /// test reads a file outside the workspace. Flags and their values are kept.
 fn isolate_binary(args: &[String], fixture: &str) -> Vec<String> {
@@ -1218,7 +1239,7 @@ fn counting_api_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsi
 /// with `OLLAMA_MODELS` set to a store whose model has no license (one WARN finding). Each must
 /// exit 0, 3, or 4: never an execution error (1) or a usage error (2). Every API probe goes to a
 /// server of this test, which must see exactly one request per active command, and every
-/// `--install-dir` to a synthetic tree. Returns the number of commands and of active commands.
+/// `--install-dir` to a synthetic tree, and every `--service-unit` to a unit that names it. Returns the number of commands and of active commands.
 fn run_documented(doc: &str) -> (usize, usize) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -1226,6 +1247,8 @@ fn run_documented(doc: &str) -> (usize, usize) {
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {doc}: {e}"));
     let models = store(false);
     let install = install_tree();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
     let cwd = TempDir::new().unwrap();
     let (server, requests) = counting_api_server();
     let commands = documented_commands(&text);
@@ -1249,6 +1272,8 @@ fn run_documented(doc: &str) -> (usize, usize) {
         let args = isolate_probe(&args, &server);
         // Nor a real installation.
         let args = isolate_install(&args, install.path().to_str().unwrap());
+        // Nor a real unit.
+        let args = isolate_unit(&args, unit.to_str().unwrap());
         // Nor a file outside the workspace.
         let fixture = elf_fixture("libdata.so");
         let args = isolate_binary(&args, fixture.to_str().unwrap());
@@ -1718,6 +1743,146 @@ fn binary_budgets_apply_with_install_dir_only() {
         let r = inspect(models.path(), &[&"--budget", &budget]);
         assert_eq!(r.code, 2, "{budget}: {}", r.stderr);
         assert!(r.stderr.contains("--install-dir"), "{budget}: {}", r.stderr);
+    }
+}
+
+// --- --service-unit (PR-4d-1) -------------------------------------------------------------------
+
+/// A unit in its own directory whose `ExecStart=` (line 2) runs `install`'s `bin/ollama`.
+fn unit_for(install: &Path) -> TempDir {
+    let d = TempDir::new().unwrap();
+    let exe = fs::canonicalize(install).unwrap().join("bin/ollama");
+    write(
+        d.path(),
+        "ollama.service",
+        &format!("[Service]\nExecStart={} serve\n", exe.display()),
+    );
+    d
+}
+
+#[test]
+fn service_unit_inspects_the_installation_its_exec_start_names() {
+    let models = store(true);
+    let install = install_tree();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
+    let r = inspect(models.path(), &[&"--service-unit", &unit]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    let root = |id: &str| s.request.roots.iter().any(|r| r.id.as_str() == id);
+    assert!(root("install") && root("service-unit"));
+    assert!(
+        r.stderr.contains("release: not established ("),
+        "{}",
+        r.stderr
+    );
+    let r = inspect(
+        models.path(),
+        &[&"--service-unit", &unit, &"--format", &"md"],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Found by"), "{}", r.stdout);
+}
+
+#[test]
+fn service_unit_and_install_dir_exclude_each_other() {
+    let models = store(true);
+    let install = install_tree();
+    let units = unit_for(install.path());
+    let r = inspect(
+        models.path(),
+        &[
+            &"--service-unit",
+            &units.path().join("ollama.service"),
+            &"--install-dir",
+            &install.path(),
+        ],
+    );
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("cannot be used with"), "{}", r.stderr);
+}
+
+#[test]
+fn a_unit_that_cannot_be_inspected_is_an_input_error() {
+    let models = store(true);
+    let r = inspect(
+        models.path(),
+        &[&"--service-unit", &"/nonexistent/sigil.service"],
+    );
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("--service-unit /nonexistent/sigil.service: not found"),
+        "{}",
+        r.stderr
+    );
+    let install = install_tree();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
+    let r = inspect(
+        models.path(),
+        &[
+            &"--service-unit",
+            &unit,
+            &"--budget",
+            &"service_unit_bytes=4",
+        ],
+    );
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.contains("over service_unit_bytes"), "{}", r.stderr);
+}
+
+#[test]
+fn the_unit_s_budgets() {
+    let models = store(true);
+    let install = install_tree();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
+    // Its own budget only with it; the install budgets with it too.
+    let r = inspect(models.path(), &[&"--budget", &"service_unit_bytes=10"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("applies to --service-unit only"),
+        "{}",
+        r.stderr
+    );
+    let r = inspect(
+        models.path(),
+        &[
+            &"--service-unit",
+            &unit,
+            &"--budget",
+            &"install_bytes=1048576",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(
+        session_of(&r).request.budgets.get("install_bytes"),
+        Some(&1_048_576)
+    );
+}
+
+#[test]
+fn out_under_the_unit_s_directory_or_its_installation_is_refused() {
+    let models = store(true);
+    let install = install_tree();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
+    for out in [
+        units.path().join("report.md"),
+        install.path().join("report.md"),
+    ] {
+        let r = inspect(
+            models.path(),
+            &[&"--service-unit", &unit, &"--format", &"md", &"--out", &out],
+        );
+        assert_eq!(r.code, 2, "{}: {}", out.display(), r.stderr);
+        assert!(
+            r.stderr.contains("SIGIL never writes under a scan root"),
+            "{}",
+            r.stderr
+        );
+        assert!(!out.exists(), "{}", out.display());
     }
 }
 

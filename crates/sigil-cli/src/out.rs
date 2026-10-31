@@ -126,6 +126,17 @@ impl Target {
         &self.path
     }
 
+    /// Adds a scan root by the `dev:ino` a read saw (PR-4d-1: the installation a service unit
+    /// names, and the unit's directory). Refused, as `pin` refuses one, when the pinned
+    /// directory is, or lies under, it; the write checks it again, as every root.
+    pub fn exclude(&mut self, root: (u64, u64)) -> Result<(), String> {
+        if contained(&self.dir, &[root])? {
+            return Err("the output lies under a scan root".to_string());
+        }
+        self.roots.push(root);
+        Ok(())
+    }
+
     /// Writes `bytes` at the pinned target. A file there whose `dev:ino` is in `protected` (an
     /// input of the run) is not replaced.
     pub fn write(&self, bytes: &[u8], protected: &[(u64, u64)]) -> Result<(), String> {
@@ -476,6 +487,22 @@ mod tests {
         fs::rename(p.join("reports"), p.join("models/reports")).unwrap();
         assert!(pinned.write(b"doc", &[]).is_err());
         assert!(names(&p.join("models/reports")).is_empty());
+    }
+
+    #[test]
+    fn an_excluded_root_renamed_then_entered_by_the_pinned_directory_is_refused() {
+        let (_d, p) = dir();
+        fs::create_dir(p.join("install")).unwrap();
+        fs::create_dir(p.join("reports")).unwrap();
+        let mut pinned = Target::pin(&p.join("reports/out.json"), vec![]).unwrap();
+        pinned.exclude(inode(&p.join("install"))).unwrap();
+        fs::rename(p.join("install"), p.join("moved")).unwrap();
+        fs::rename(p.join("reports"), p.join("moved/reports")).unwrap();
+        assert!(pinned.write(b"doc", &[]).is_err());
+        assert!(names(&p.join("moved/reports")).is_empty());
+        // Excluding a root the pinned directory already lies under is refused at once.
+        let mut pinned = Target::pin(&p.join("moved/reports/out.json"), vec![]).unwrap();
+        assert!(pinned.exclude(inode(&p.join("moved"))).is_err());
     }
 
     /// Review of #88 (P1): the pinned directory moved into a scan root before the write, with a

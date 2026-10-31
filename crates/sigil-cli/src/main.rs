@@ -32,6 +32,7 @@ use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::named::NamedBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
+use sigil_engine::collect::service_unit::{self, DEFAULT_UNIT_BYTES, SERVICE_UNIT_BYTES};
 use sigil_engine::explain::{self, Format as ExplainFormat};
 use sigil_engine::inspect::{
     binary_session, observe_session, store_session, ActiveInput, BinaryRequest, InspectError,
@@ -167,6 +168,10 @@ struct OllamaArgs {
     /// release manifests embedded in SIGIL [default: not inspected].
     #[arg(long, value_name = "DIR")]
     install_dir: Option<PathBuf>,
+    /// A systemd service unit: the installation its ExecStart= names is inspected as with
+    /// --install-dir [default: not read].
+    #[arg(long, value_name = "FILE", conflicts_with = "install_dir")]
+    service_unit: Option<PathBuf>,
     /// Inventory only the model with this display name (e.g. llama3.2:latest).
     #[arg(long, value_name = "NAME")]
     model: Option<String>,
@@ -359,14 +364,46 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     } else {
         None
     };
-    let given = budgets(&args.budgets, mode, probing, args.install_dir.is_some())?;
+    let given = budgets(
+        &args.budgets,
+        mode,
+        probing,
+        args.install_dir.is_some() || args.service_unit.is_some(),
+        args.service_unit.is_some(),
+    )?;
+    // PR-4d-1: the unit is read first. It names the installation, and `--out` is kept out of
+    // that and the unit's directory by the `dev:ino` the reads saw, never by looking the paths up
+    // again: a directory renamed later cannot let the write in. The engine then requires the
+    // walk's root to be that prefix.
+    let unit = match &args.service_unit {
+        Some(path) => Some(Box::new(
+            service_unit::collect(path, given.service_unit).map_err(Failure::Run)?,
+        )),
+        None => None,
+    };
     let target = match &args.out {
         Some(out) => {
             let mut roots = vec![(models_dir.as_path(), "models")];
             if let Some(dir) = &args.install_dir {
                 roots.push((dir.as_path(), "install"));
             }
-            Some(check_out(out, &roots)?)
+            if let Some(u) = &unit {
+                roots.push((u.prefix.as_path(), "install"));
+                roots.push((u.dir.as_path(), "service-unit"));
+            }
+            let mut target = check_out(out, &roots)?;
+            if let Some(u) = &unit {
+                for id in [u.prefix_id, u.dir_id] {
+                    target.exclude(id).map_err(|e| {
+                        Failure::Usage(format!(
+                            "--out {}: {}; SIGIL never writes under a scan root",
+                            shown_path(out),
+                            shown(&e)
+                        ))
+                    })?;
+                }
+            }
+            Some(target)
         }
         None => None,
     };
@@ -377,10 +414,17 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         model_filter: args.model.clone(),
         budgets: given.fs,
         manifest_limit: given.manifest_limit,
-        install: args.install_dir.clone().map(|dir| InstallRequest {
-            source: InstallSource::Dir(dir),
-            budgets: given.install,
-        }),
+        install: match (&args.install_dir, unit) {
+            (Some(dir), _) => Some(InstallRequest {
+                source: InstallSource::Dir(dir.clone()),
+                budgets: given.install,
+            }),
+            (None, Some(unit)) => Some(InstallRequest {
+                source: InstallSource::ServiceUnit(unit),
+                budgets: given.install,
+            }),
+            (None, None) => None,
+        },
     };
     let tool = tool_info();
     let proc_root = Path::new("/proc");
@@ -410,7 +454,10 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             policy_time,
         ),
     };
-    let session = assembled.map_err(|e| Failure::Run(shown(&e.to_string())))?;
+    let session = assembled.map_err(|e| match e {
+        InspectError::Input(message) => Failure::Run(message),
+        other => Failure::Run(shown(&other.to_string())),
+    })?;
     conclude(
         session,
         args.format,
@@ -783,15 +830,23 @@ struct Budgets {
     proc: ProcBudgets,
     probe: ProbeOptions,
     install: InstallBudgets,
+    service_unit: u64,
 }
 
 /// The budgets, by the names the session records in `request.budgets`.
-fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result<Budgets, Failure> {
+fn budgets(
+    given: &[String],
+    mode: Mode,
+    probing: bool,
+    install: bool,
+    unit: bool,
+) -> Result<Budgets, Failure> {
     let mut fs_budgets = FsBudgets::default();
     let mut manifest_limit = DEFAULT_MANIFEST_LIMIT;
     let mut proc_budgets = ProcBudgets::default();
     let mut probe_options = ProbeOptions::default();
     let mut install_budgets = InstallBudgets::default();
+    let mut service_unit = DEFAULT_UNIT_BYTES;
     for entry in given {
         let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
         let Some((key, value)) = entry.split_once('=') else {
@@ -830,17 +885,21 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
             "api_io_ms" => probe_options.io_deadline = Duration::from_millis(value),
             "api_response_bytes" => probe_options.max_response = value,
             "install_files_discovered" | "install_entries_listed" | "install_bytes" if !install => {
-                return Err(usage("this budget applies to --install-dir only"));
+                return Err(usage("this budget applies to --install-dir or --service-unit only"));
             }
             "install_files_discovered" => install_budgets.files = value,
             "install_entries_listed" => install_budgets.entries = value,
             "install_bytes" => install_budgets.bytes = value,
             "binary_parse_bytes" | "binary_imports" | BINARY_SCAN_BYTES if !install => {
-                return Err(usage("this budget applies to --install-dir only"));
+                return Err(usage("this budget applies to --install-dir or --service-unit only"));
             }
             "binary_parse_bytes" => install_budgets.binary.parse_bytes = value,
             "binary_imports" => install_budgets.binary.imports = value,
             BINARY_SCAN_BYTES => install_budgets.binary.scan_bytes = value,
+            SERVICE_UNIT_BYTES if !unit => {
+                return Err(usage("this budget applies to --service-unit only"));
+            }
+            SERVICE_UNIT_BYTES => service_unit = value,
             _ => {
                 return Err(usage(
                     "unknown budget; known: files_discovered, entries_listed, directory_entries, \
@@ -848,7 +907,8 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
                      fds_per_process, tcp_table_bytes, with --active api-probe \
                      api_connect_ms, api_io_ms, api_response_bytes, and with --install-dir \
                      install_files_discovered, install_entries_listed, install_bytes, \
-                     binary_parse_bytes, binary_imports, binary_scan_bytes",
+                     binary_parse_bytes, binary_imports, binary_scan_bytes, and with --service-unit \
+                     service_unit_bytes",
                 ))
             }
         }
@@ -859,6 +919,7 @@ fn budgets(given: &[String], mode: Mode, probing: bool, install: bool) -> Result
         proc: proc_budgets,
         probe: probe_options,
         install: install_budgets,
+        service_unit,
     })
 }
 
