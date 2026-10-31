@@ -163,3 +163,22 @@ fn argument_stays_refused_outside_binary_and_service_unit_roots() {
         "{errors:?}"
     );
 }
+
+#[test]
+fn found_by_names_the_unit_and_its_line() {
+    let md = sigil_model::render::markdown::render_session(&valid());
+    let prefix = t("Found by:").markdown_inline();
+    let line = md
+        .lines()
+        .find(|l| l.starts_with(&prefix))
+        .expect("a Found by line");
+    assert!(line.contains(&t(UNIT_PATH).markdown_inline()), "{line}");
+    assert!(line.contains(&t("(line 6)").markdown_inline()), "{line}");
+    // Without the source, no such line.
+    let mut s = valid();
+    exe(&mut s)
+        .discovered_by
+        .retain(|d| *d == DiscoverySource::Walk);
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(!md.lines().any(|l| l.starts_with(&prefix)), "{md}");
+}
