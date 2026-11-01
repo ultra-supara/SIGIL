@@ -1239,7 +1239,14 @@ fn processes(out: &mut String, s: &Session) {
     let rows = s.processes.iter().map(process_row).collect();
     table(
         out,
-        &["Process", "Name", "Roles", "Executable", "fd table"],
+        &[
+            "Process",
+            "Name",
+            "Roles",
+            "Executable",
+            "Mappings",
+            "fd table",
+        ],
         rows,
     );
 }
@@ -1247,6 +1254,9 @@ fn processes(out: &mut String, s: &Session) {
 fn process_row(p: &ProcessObs) -> Vec<String> {
     let name = md::name_cell(p.name.as_ref());
     let exe = md::exe_cell(&p.exe);
+    // PR-4d-2: the objects mapped, and how many are linked to a scanned file (by dev:ino).
+    let linked = p.mappings.iter().filter(|m| m.instance.is_some()).count();
+    let mappings = format!("{} ({linked} linked)", p.mappings.len());
     let fd_table = match p.fd_table {
         Observability::Observed => "listed".to_string(),
         Observability::NotObservable(why) => format!("not listed ({})", not_observable(why)),
@@ -1263,6 +1273,7 @@ fn process_row(p: &ProcessObs) -> Vec<String> {
         name,
         esc(&joined(&p.roles)),
         exe,
+        esc(&mappings),
         esc(&fd_table),
     ]
 }

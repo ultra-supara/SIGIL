@@ -231,3 +231,16 @@ fn a_recorded_process_that_holds_no_listener_needs_an_entry() {
     s.processes.push(bare);
     rejected_for(&s, "has no entry for this process");
 }
+
+#[test]
+fn the_processes_table_counts_mappings_and_links() {
+    let md = sigil_model::render::markdown::render_session(&valid());
+    assert!(md.contains("| Mappings |"), "{md}");
+    // `ollama serve`: its executable and libc, one linked. The runner: four, three linked.
+    assert!(md.contains("| 2 \\(1 linked\\) |"), "{md}");
+    assert!(md.contains("| 4 \\(3 linked\\) |"), "{md}");
+    assert!(
+        md.contains("inst\\:install\\/lib\\/ollama\\/llama\\-server"),
+        "{md}"
+    );
+}
