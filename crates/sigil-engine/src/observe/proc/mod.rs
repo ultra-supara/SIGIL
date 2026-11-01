@@ -650,9 +650,14 @@ fn scan(
     }))
 }
 
+/// The bytes of `cmdline` read of a process named `ollama`, and read again of the runtime
+/// (review of R2): arguments over it make a process that may be the runtime, or, read again, a
+/// gap.
+const CMDLINE_LIMIT: u64 = 64 << 10;
+
 /// `ollama serve` by its arguments, unless an `exe` that can be read is not `ollama`.
 fn runtime_match(dir: BorrowedFd<'_>) -> RuntimeMatch {
-    let argv = match read_limited(dir, "cmdline", 64 << 10) {
+    let argv = match read_limited(dir, "cmdline", CMDLINE_LIMIT) {
         Ok(Read::Whole(bytes)) => parse::cmdline(&bytes),
         Ok(Read::OverLimit) => {
             return RuntimeMatch::Unknown("its arguments are over 64 KiB".into())
@@ -680,7 +685,7 @@ fn exe(dir: BorrowedFd<'_>) -> Result<(Vec<u8>, bool), NotObservable> {
 }
 
 /// The process as recorded. `argv` only for the runtime: the one its role rests on, which the
-/// second pass reads again only to compare (`argv_changed`).
+/// second pass reads again only to compare (`argv_gap`).
 fn observation(
     dir: BorrowedFd<'_>,
     pid: u32,
@@ -776,19 +781,21 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// then it is `Gone`. Otherwise what was read is taken as another program's, and its identity
 /// and mappings are dropped (`maps` counts as not read), when:
 /// - the path changed since the listing pass, or between its two reads (`exec_seen`);
-/// - the identity changed between its two reads, or since the listing pass read the runtime's
-///   (`identity_changed`);
+/// - the identity changed between its two reads, or since the listing pass read the runtime's,
+///   or one of those reads failed while another did not (`identity_change`);
 /// - `startstack` or `arg_start` moved between the two `stat` reads (`stack_moved`);
-/// - the runtime's arguments are not the ones its role rests on (`argv_changed`).
+/// - the runtime's arguments are not the ones its role rests on (`argv_gap`).
 ///
-/// The role and the argv recorded at listing are kept: they held then, and the gap says that
-/// this pass may have read another program.
+/// Each gap says what was seen: another executable; a read of the identity that failed, and
+/// why; or the runtime's arguments changed, over 64 KiB, or not read again, and why. The role and
+/// the argv recorded at listing are kept: they held then, and the gap says that this pass may
+/// have read another program.
 ///
 /// Code review of PR-4d-2, R-B, and review of R2: several `/proc` reads are not one atomic
 /// snapshot. An exec between them is seen by the executable's path or identity, by the
 /// runtime's arguments, or by `startstack` or `arg_start`, which an exec places anew under ASLR;
 /// an exit is seen by the last `stat`. The kernel ends a `maps` read early at an exec or an
-/// exit, so a read cut short so is never kept once the exec or the exit is seen. What cannot be
+/// exit, and a read so cut short is never kept once the exec or the exit is seen. What cannot be
 /// told apart is an exec of the same file (for the runtime, with the same arguments) while those
 /// two fields are not shown (0 to a reader not permitted to see them) or do not move (ASLR off).
 /// What holds then is that every mapping kept was mapped, during the reads, by the process
@@ -851,8 +858,10 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
     // Code review of PR-4d-2, R-B: `ollama serve` re-exec'd as `ollama version` keeps the path,
     // and the file too, but not its arguments.
     let other_argv = match &s.runtime {
-        RuntimeMatch::Confirmed(argv) => argv_changed(argv, read_limited(dir, "cmdline", 64 << 10)),
-        _ => false,
+        RuntimeMatch::Confirmed(argv) => {
+            argv_gap(argv, read_limited(dir, "cmdline", CMDLINE_LIMIT))
+        }
+        _ => None,
     };
     // Review of R2: read last, `stat` says whether the process exited during the reads above,
     // which an exit ends early (`maps`) or empties (`cmdline`): then none of them is a change.
@@ -861,8 +870,9 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         Ok(stat) => parse::stat_stack_addresses(&stat),
         Err(pass) => return pass,
     };
+    let (other_id, id_failed) = identity_change(s.exe_id.as_ref(), &first_id, &again_id);
     let other_exe = exec_seen(recorded, first.as_deref(), last.as_deref())
-        || identity_changed(s.exe_id.as_ref(), &first_id, &again_id)
+        || other_id
         || stack_moved(first_stack, last_stack);
     if other_exe {
         missing.push(
@@ -871,14 +881,18 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
                 .into(),
         );
     }
-    if other_argv {
-        missing.push(
-            "cmdline: the runtime's arguments changed, or cannot be read again, since it was \
-             listed"
-                .into(),
-        );
+    // Review of R2: a read that failed is not an exec (`PR_SET_DUMPABLE`, `setuid()`, FUSE
+    // `hard_remove` or a transient error give one too), but what was read is not tied to one
+    // executable either.
+    if let Some(why) = id_failed {
+        missing.push(format!(
+            "exe: a read of its identity failed ({why:?}); what was read is not tied to one \
+             executable"
+        ));
     }
-    let exe_id = if other_exe || other_argv {
+    let dropped = other_exe || id_failed.is_some() || other_argv.is_some();
+    missing.extend(other_argv);
+    let exe_id = if dropped {
         // What was read may be another program's: dropped, so not read.
         mappings.clear();
         maps_read = MapsRead::NotRead;
@@ -903,8 +917,8 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
 /// second pass's reads, and `last`, after them) than the one expected: the path recorded by the
 /// listing pass, or else the first one read. Then what was read in between may be another
 /// image's (an exec keeps the start time). The path only: `deleted` may change meanwhile. An
-/// exec of the same path is not seen here, but by `identity_changed` when the file changed, by
-/// `stack_moved`, and by `argv_changed` when the runtime's arguments changed.
+/// exec of the same path is not seen here, but by `identity_change` when the file changed, by
+/// `stack_moved`, and by `argv_gap` when the runtime's arguments changed.
 fn exec_seen(recorded: Option<&ProcessExe>, first: Option<&[u8]>, last: Option<&[u8]>) -> bool {
     let expected = match recorded {
         Some(ProcessExe::Path { path, .. }) => Some(path.as_bytes()),
@@ -942,27 +956,49 @@ fn stack_moved(first: Option<(u64, u64)>, last: Option<(u64, u64)>) -> bool {
     moved(first.0, last.0) || moved(first.1, last.1)
 }
 
-/// Whether the executable's identity changed (code review of PR-4d-2, R-B): the second pass's
-/// two reads of it (`first`, before `maps`, and `again`, after it) differ as read, an error
-/// being a reading too; or the listing pass read one (`listed`, for the runtime only) and
-/// `first` is not that one. An error counts there too: a setuid exec makes the process
-/// non-dumpable, and `exe` then gives `EACCES`. A listing that read no identity says nothing.
-fn identity_changed(
+/// What the reads of the executable's identity show (code review of PR-4d-2, R-B, and review of
+/// R2): the second pass's two (`first`, before `maps`, and `again`, after it), and the listing
+/// pass's when it read one (`listed`, for the runtime only; an error there says nothing).
+/// Whether two of them give two identities: another executable ran. And, when they are not all
+/// the same reading, the error of the last one that failed: what was read is then not tied to
+/// one executable, though no other one was seen. A setuid exec makes the process non-dumpable,
+/// and `exe` then gives `EACCES`; so do `PR_SET_DUMPABLE` and `setuid()` without an exec.
+fn identity_change(
     listed: Option<&Result<(u64, u64), NotObservable>>,
     first: &Result<(u64, u64), NotObservable>,
     again: &Result<(u64, u64), NotObservable>,
-) -> bool {
-    let since_listing = matches!(listed, Some(Ok(id)) if *first != Ok(*id));
-    since_listing || first != again
+) -> (bool, Option<NotObservable>) {
+    let reads: Vec<&Result<(u64, u64), NotObservable>> = listed
+        .filter(|id| id.is_ok())
+        .into_iter()
+        .chain([first, again])
+        .collect();
+    let ids: BTreeSet<&(u64, u64)> = reads.iter().filter_map(|r| r.as_ref().ok()).collect();
+    let failed = if reads.windows(2).all(|w| w[0] == w[1]) {
+        None
+    } else {
+        reads.iter().rev().find_map(|r| r.as_ref().err().copied())
+    };
+    (ids.len() > 1, failed)
 }
 
-/// Whether the runtime's arguments, read again after its `maps` (`again`, up to 64 KiB as the
-/// listing pass reads them), are not the ones its role rests on (`listed`): `cmdline` cannot be
-/// read, is over 64 KiB, or does not parse to exactly them (code review of PR-4d-2, R-B).
-fn argv_changed(listed: &[Vec<u8>], again: Result<Read, Errno>) -> bool {
+/// The gap, if any, of the runtime's arguments read again after its `maps` (`again`, up to
+/// `CMDLINE_LIMIT` as the listing pass reads them): they are not the ones its role rests on
+/// (`listed`), they are over 64 KiB, or `cmdline` cannot be read, and why (code review of
+/// PR-4d-2, R-B, and review of R2).
+fn argv_gap(listed: &[Vec<u8>], again: Result<Read, Errno>) -> Option<String> {
     match again {
-        Ok(Read::Whole(bytes)) => parse::cmdline(&bytes) != listed,
-        Ok(Read::OverLimit) | Err(_) => true,
+        Ok(Read::Whole(bytes)) if parse::cmdline(&bytes) == listed => None,
+        Ok(Read::Whole(_)) => {
+            Some("cmdline: the runtime's arguments changed since it was listed".into())
+        }
+        Ok(Read::OverLimit) => {
+            Some("cmdline: the runtime's arguments are over 64 KiB when read again".into())
+        }
+        Err(e) => Some(format!(
+            "cmdline: the runtime's arguments cannot be read again ({:?})",
+            not_observable(e)
+        )),
     }
 }
 
@@ -1248,7 +1284,7 @@ mod tests {
     };
 
     use super::{
-        argv_changed, exec_seen, identity_changed, observe_with, read_up_to, request, stack_moved,
+        argv_gap, exec_seen, identity_change, observe_with, read_up_to, request, stack_moved,
         Detail, ProcBudgets, ProcFacts, Read, EXITED, RUNTIME_ROLE,
     };
 
@@ -1540,6 +1576,12 @@ mod tests {
     /// The gap of a process seen to run another executable.
     const RAN_ANOTHER: &str = "exe: the process ran another executable (its path, identity or stack address changed) since it was listed or during the reads";
 
+    /// The gap of a runtime whose arguments read again are not the listed ones.
+    const ARGV_CHANGED: &str = "cmdline: the runtime's arguments changed since it was listed";
+
+    /// The gap of a process whose identity was read at one read and not at another.
+    const ID_FAILED: &str = "exe: a read of its identity failed (NoProcess); what was read is not tied to one executable";
+
     /// Replaces the fixture's file `<root>/fs/<comm>` with another at the same path: written
     /// beside it and renamed over it, so both exist at once and their inodes differ.
     fn replace(root: &Path, comm: &str) {
@@ -1583,10 +1625,7 @@ mod tests {
         });
         assert_eq!(pids(&f), [10, 11]);
         let d = detail(&f, 10);
-        assert_eq!(
-            d.missing,
-            ["cmdline: the runtime's arguments changed, or cannot be read again, since it was listed"]
-        );
+        assert_eq!(d.missing, [ARGV_CHANGED]);
         assert_eq!(d.exe_id, None);
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
@@ -1682,10 +1721,7 @@ mod tests {
         });
         assert_eq!(pids(&f), [10, 11]);
         let d = detail(&f, 10);
-        assert_eq!(
-            d.missing,
-            ["cmdline: the runtime's arguments changed, or cannot be read again, since it was listed"]
-        );
+        assert_eq!(d.missing, [ARGV_CHANGED]);
         assert_eq!(d.exe_id, None);
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
@@ -1796,6 +1832,107 @@ mod tests {
         }
     }
 
+    /// Review of R2: a read of the identity that fails, while another does not, is not an exec:
+    /// the gap names the error. What was read is still dropped, as it is not tied to one
+    /// executable. The runtime's file removed (live, as under FUSE `hard_remove`) between the
+    /// passes fails since the listing; removed after `maps`, it fails at the read after it.
+    #[test]
+    fn an_identity_that_cannot_be_read_again_names_the_error_and_drops_what_was_read() {
+        for after_maps in [false, true] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            let remove = || std::fs::remove_file(root.join("fs/ollama")).unwrap();
+            let f = if after_maps {
+                run_after_maps(root, &|pid| {
+                    if pid == 10 {
+                        remove();
+                    }
+                })
+            } else {
+                run(root, &remove)
+            };
+            assert_eq!(pids(&f), [10, 11], "{after_maps}");
+            let d = detail(&f, 10);
+            let mut missing = vec![ID_FAILED];
+            if !after_maps {
+                missing.insert(0, "exe: its identity cannot be read (NoProcess)");
+            }
+            assert_eq!(d.missing, missing, "{after_maps}");
+            assert_eq!(d.exe_id, None, "{after_maps}");
+            assert!(f.processes[0].mappings.is_empty(), "{after_maps}");
+            assert_eq!(f.processes[0].maps_read, MapsRead::NotRead, "{after_maps}");
+            assert_listed_role(&f);
+        }
+    }
+
+    /// Review of R2: the runtime's `cmdline` that cannot be read again names the error.
+    #[test]
+    fn the_runtimes_arguments_that_cannot_be_read_again_name_the_error() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let cmdline = root.join("10/cmdline");
+        let f = run(root, &|| {
+            std::fs::set_permissions(&cmdline, std::fs::Permissions::from_mode(0o000)).unwrap();
+        });
+        if std::fs::read(&cmdline).is_ok() {
+            eprintln!("skipped: root reads a mode-000 file");
+            return;
+        }
+        let d = detail(&f, 10);
+        assert_eq!(
+            d.missing,
+            ["cmdline: the runtime's arguments cannot be read again (PermissionDenied)"]
+        );
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_listed_role(&f);
+    }
+
+    /// Review of R2: both reads of the runtime's `cmdline` take up to 64 KiB. Arguments of
+    /// exactly 64 KiB are the runtime's and are the same when read again; one byte more when
+    /// read again is over the limit, a gap that says so.
+    #[test]
+    fn the_runtimes_arguments_are_read_up_to_64_kib_both_times() {
+        // `/x/ollama`, `serve`, and a third argument that makes `cmdline` 64 KiB.
+        let mut argv = b"/x/ollama\0serve\0".to_vec();
+        argv.resize((64 << 10) - 1, b'a');
+        argv.push(0);
+        assert_eq!(argv.len(), 64 << 10);
+        for grow in [false, true] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            std::fs::write(root.join("10/cmdline"), &argv).unwrap();
+            let f = run(root, &|| {
+                if grow {
+                    let mut longer = argv.clone();
+                    longer.insert(0, b'/');
+                    std::fs::write(root.join("10/cmdline"), longer).unwrap();
+                }
+            });
+            assert_eq!(pids(&f), [10, 11], "{grow}");
+            let runtime = &f.processes[0];
+            assert_eq!(runtime.roles, [ProcessRole::new(RUNTIME_ROLE).unwrap()]);
+            assert_eq!(runtime.argv.as_ref().map(Vec::len), Some(3), "{grow}");
+            let d = detail(&f, 10);
+            if grow {
+                assert_eq!(
+                    d.missing,
+                    ["cmdline: the runtime's arguments are over 64 KiB when read again"]
+                );
+                assert_eq!(runtime.maps_read, MapsRead::NotRead);
+            } else {
+                assert!(d.missing.is_empty(), "{d:?}");
+                assert_eq!(runtime.maps_read, MapsRead::Whole);
+            }
+        }
+    }
+
     /// Review of R2: an exec places `startstack` and `arg_start` anew under ASLR. A field moved
     /// between the two reads is an exec; one either read shows as 0 (not permitted), or one
     /// missing, says nothing.
@@ -1819,55 +1956,79 @@ mod tests {
         }
     }
 
-    /// Code review of PR-4d-2, R-B: the executable's identity changed when the second pass's two
-    /// reads of it differ, as read (an error is a reading too), or when the first is not the one
-    /// the listing pass read. A listing that read no identity says nothing.
+    /// Code review of PR-4d-2, R-B, and review of R2: the executable's identity changed when two
+    /// reads of it give two identities: the second pass's two, or its first and the listing's.
+    /// A read that fails while another does not, or fails otherwise, is named instead: what was
+    /// read is not tied to one executable, but no other one was seen. A listing that read no
+    /// identity says nothing.
     #[test]
     fn an_exec_is_seen_by_the_executables_identity() {
         type Id = Result<(u64, u64), NotObservable>;
         let (a, b): (Id, Id) = (Ok((1, 2)), Ok((1, 3)));
         let denied: Id = Err(NotObservable::PermissionDenied);
         let gone: Id = Err(NotObservable::NoProcess);
-        for (listed, first, again, changed) in [
+        let failed = |why| (false, Some(why));
+        for (listed, first, again, change) in [
             // Within the pass.
-            (None, a, a, false),
-            (None, a, b, true),
-            (None, a, denied, true),
-            (None, denied, a, true),
-            (None, denied, denied, false),
-            (None, denied, gone, true),
+            (None, a, a, (false, None)),
+            (None, a, b, (true, None)),
+            (None, a, denied, failed(NotObservable::PermissionDenied)),
+            (None, denied, a, failed(NotObservable::PermissionDenied)),
+            (None, denied, denied, (false, None)),
+            (None, denied, gone, failed(NotObservable::NoProcess)),
             // Across the passes.
-            (Some(a), a, a, false),
-            (Some(a), b, b, true),
-            (Some(a), denied, denied, true),
-            (Some(a), a, b, true),
-            (Some(denied), a, a, false),
+            (Some(a), a, a, (false, None)),
+            (Some(a), b, b, (true, None)),
+            (
+                Some(a),
+                denied,
+                denied,
+                failed(NotObservable::PermissionDenied),
+            ),
+            (Some(a), a, b, (true, None)),
+            (Some(a), b, gone, (true, Some(NotObservable::NoProcess))),
+            (Some(denied), a, a, (false, None)),
+            (Some(denied), a, b, (true, None)),
         ] {
             assert_eq!(
-                identity_changed(listed.as_ref(), &first, &again),
-                changed,
+                identity_change(listed.as_ref(), &first, &again),
+                change,
                 "{listed:?} {first:?} {again:?}"
             );
         }
     }
 
-    /// Code review of PR-4d-2, R-B: the runtime's arguments read again are the ones its role
-    /// rests on only when `cmdline` is read whole and parses to exactly them.
+    /// Code review of PR-4d-2, R-B, and review of R2: the runtime's arguments read again are the
+    /// ones its role rests on only when `cmdline` is read whole and parses to exactly them;
+    /// otherwise the gap says which: changed, over 64 KiB, or not read and why.
     #[test]
-    fn the_runtimes_arguments_read_again_are_the_listed_ones_or_a_change() {
+    fn the_runtimes_arguments_read_again_are_the_listed_ones_or_a_gap() {
         let listed = [b"/x/ollama".to_vec(), b"serve".to_vec()];
         let whole = |bytes: &[u8]| -> Result<Read, Errno> { Ok(Read::Whole(bytes.to_vec())) };
-        for (case, again, changed) in [
-            ("equal", whole(b"/x/ollama\0serve\0"), false),
-            ("different", whole(b"/x/ollama\0version\0"), true),
-            ("a prefix", whole(b"/x/ollama\0"), true),
-            ("longer", whole(b"/x/ollama\0serve\0--x\0"), true),
-            ("empty", whole(b""), true),
-            ("over 64 KiB", Ok(Read::OverLimit), true),
-            ("refused", Err(Errno::ACCESS), true),
-            ("gone", Err(Errno::SRCH), true),
+        let changed = Some(ARGV_CHANGED);
+        for (case, again, gap) in [
+            ("equal", whole(b"/x/ollama\0serve\0"), None),
+            ("different", whole(b"/x/ollama\0version\0"), changed),
+            ("a prefix", whole(b"/x/ollama\0"), changed),
+            ("longer", whole(b"/x/ollama\0serve\0--x\0"), changed),
+            ("empty", whole(b""), changed),
+            (
+                "over 64 KiB",
+                Ok(Read::OverLimit),
+                Some("cmdline: the runtime's arguments are over 64 KiB when read again"),
+            ),
+            (
+                "refused",
+                Err(Errno::ACCESS),
+                Some("cmdline: the runtime's arguments cannot be read again (PermissionDenied)"),
+            ),
+            (
+                "gone",
+                Err(Errno::SRCH),
+                Some("cmdline: the runtime's arguments cannot be read again (NoProcess)"),
+            ),
         ] {
-            assert_eq!(argv_changed(&listed, again), changed, "{case}");
+            assert_eq!(argv_gap(&listed, again).as_deref(), gap, "{case}");
         }
     }
 
