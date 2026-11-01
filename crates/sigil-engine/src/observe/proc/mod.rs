@@ -26,9 +26,10 @@
 //! runtimes and every process descended from one are read a second time, after checking that
 //! the PID is still the process listed (its start time): the executable's `dev:ino` (`stat`
 //! through `exe`, which follows the link to the file the process runs and never opens it),
-//! `maps` up to `proc_maps_bytes`, and `ns/mnt`. A mapping is an observation only: nothing is
-//! derived from one, or from its absence (F-T1). Linking them to scanned files is
-//! `analyze::runtime_processes`.
+//! `maps` up to `proc_maps_bytes` (and `proc_maps_total_bytes` over all of them), and `ns/mnt`.
+//! A mapping is one per distinct (dev, ino, path, deleted): one inode reached by two paths gives
+//! two. It is an observation only: nothing is derived from one, or from its absence (F-T1).
+//! Linking them to scanned files is `analyze::runtime_processes`.
 //!
 //! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
 //! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
@@ -37,7 +38,8 @@
 
 pub mod parse;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
@@ -73,6 +75,8 @@ pub struct ProcBudgets {
     pub max_table_bytes: u64,
     /// Bytes of each process's `maps` (PR-4d-2).
     pub max_maps_bytes: u64,
+    /// Bytes of `maps` over all processes of one observation (PR-4d-2).
+    pub max_maps_total_bytes: u64,
 }
 
 impl Default for ProcBudgets {
@@ -82,6 +86,7 @@ impl Default for ProcBudgets {
             max_fds: 65_536,
             max_table_bytes: 16 << 20,
             max_maps_bytes: 16 << 20,
+            max_maps_total_bytes: 256 << 20,
         }
     }
 }
@@ -107,9 +112,10 @@ pub struct ProcFacts {
     pub gaps: Vec<String>,
     /// What the second pass read of each runtime and descendant, by PID (PR-4d-2).
     pub details: Vec<Detail>,
-    /// Why some process's parent is not known: a descendant of the runtime may be missing
-    /// (PR-4d-2). Kept apart from `gaps`, which say what may hide the runtime's sockets.
-    pub lineage_gaps: Vec<String>,
+    /// What may hide a runtime or a descendant from the second pass: a process that cannot be
+    /// read or read again, whose parent cannot be read, or that may be the runtime (PR-4d-2).
+    /// Kept apart from `gaps`, which say what may hide the runtime's sockets.
+    pub process_gaps: Vec<String>,
 }
 
 /// What the second pass read of one runtime or descendant, beyond its `ProcessObs` (PR-4d-2).
@@ -140,6 +146,8 @@ struct Ctx<'a> {
     when: When<'a>,
     budgets: ProcBudgets,
     own_mnt_ns: Option<u64>,
+    /// The bytes of `maps` still to be read in this observation (`max_maps_total_bytes`).
+    maps_left: Cell<u64>,
 }
 
 /// What the second pass read of one process.
@@ -215,7 +223,7 @@ fn observe_with(
         pid1_visible: false,
         gaps: vec![],
         details: vec![],
-        lineage_gaps: vec![],
+        process_gaps: vec![],
     };
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let root = match rustix::fs::openat(rustix::fs::CWD, proc_root, flags, Mode::empty()) {
@@ -257,16 +265,17 @@ fn observe_with(
                 facts.gaps.push(format!(
                     "process {pid} cannot be read ({why:?}); it may be the runtime"
                 ));
-                facts.lineage_gaps.push(format!(
+                facts.process_gaps.push(format!(
                     "process {pid} cannot be read ({why:?}); its parent is not known"
                 ));
                 incomplete = Some(worse(incomplete, why));
             }
             Scan::Read(s) => {
                 if let RuntimeMatch::Unknown(why) = &s.runtime {
-                    facts
-                        .gaps
-                        .push(format!("process {pid} may be the runtime: {why}"));
+                    // Its executable and descendants were not observed, if it is the runtime.
+                    let gap = format!("process {pid} may be the runtime: {why}");
+                    facts.gaps.push(gap.clone());
+                    facts.process_gaps.push(gap);
                 }
                 if let (RuntimeMatch::Confirmed(_), Some(Err(why))) = (&s.runtime, &s.obs) {
                     facts.gaps.push(format!(
@@ -277,7 +286,7 @@ fn observe_with(
                     incomplete = Some(worse(incomplete, why));
                 }
                 if let Err(why) = s.lineage {
-                    facts.lineage_gaps.push(format!(
+                    facts.process_gaps.push(format!(
                         "process {pid}: its parent cannot be read ({why:?})"
                     ));
                 }
@@ -350,6 +359,7 @@ fn observe_with(
         when,
         budgets,
         own_mnt_ns,
+        maps_left: Cell::new(budgets.max_maps_total_bytes),
     };
     let observed = descendants(&scanned);
     for (i, s) in scanned.iter().enumerate() {
@@ -391,7 +401,7 @@ fn observe_with(
                     denied: why == NotObservable::PermissionDenied,
                     missing: vec![format!("the process cannot be read again ({why:?})")],
                 }),
-                None => facts.lineage_gaps.push(format!(
+                None => facts.process_gaps.push(format!(
                     "process {} cannot be read again ({why:?}); a descendant is not recorded",
                     s.pid
                 )),
@@ -666,26 +676,29 @@ fn observation(
 }
 
 /// The PIDs of the confirmed runtimes, and of every process whose parent is one of them,
-/// through any number of generations (PR-4d-2). Only parents read from `stat` count.
+/// through any number of generations (PR-4d-2), breadth first. Only parents read from `stat`
+/// count.
 fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
+    let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for s in scanned {
+        if let Ok((ppid, _)) = s.lineage {
+            children.entry(ppid).or_default().push(s.pid);
+        }
+    }
     let mut set: BTreeSet<u32> = scanned
         .iter()
         .filter(|s| matches!(s.runtime, RuntimeMatch::Confirmed(_)) && s.lineage.is_ok())
         .map(|s| s.pid)
         .collect();
-    loop {
-        let before = set.len();
-        for s in scanned {
-            if let Ok((ppid, _)) = s.lineage {
-                if set.contains(&ppid) {
-                    set.insert(s.pid);
-                }
+    let mut queue: VecDeque<u32> = set.iter().copied().collect();
+    while let Some(pid) = queue.pop_front() {
+        for &child in children.get(&pid).map(Vec::as_slice).unwrap_or_default() {
+            if set.insert(child) {
+                queue.push_back(child);
             }
         }
-        if set.len() == before {
-            return set;
-        }
     }
+    set
 }
 
 /// The second pass over one runtime or descendant (PR-4d-2): `Gone` when it exited, is a
@@ -808,8 +821,10 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
     }
 }
 
-/// The file-backed objects of `maps`, each once, in the order first seen, and whether `maps`
-/// was refused for want of permission (PR-4d-2).
+/// The file-backed mappings of `maps`, one per distinct (dev, ino, path, deleted) in the order
+/// first seen (one inode reached by two paths gives two), and whether `maps` was refused for
+/// want of permission (PR-4d-2). It is read up to `max_maps_bytes`, and no more than what is
+/// left of `max_maps_total_bytes`.
 fn mappings(
     dir: BorrowedFd<'_>,
     process: &ProcessRef,
@@ -817,7 +832,13 @@ fn mappings(
     same_mount_ns: &Tri<()>,
     missing: &mut Vec<String>,
 ) -> (Vec<MappingObs>, bool) {
-    let limit = ctx.budgets.max_maps_bytes;
+    let per_process = ctx.budgets.max_maps_bytes;
+    let remaining = ctx.maps_left.get();
+    if remaining == 0 {
+        missing.push("maps: not read (proc_maps_total_bytes reached)".into());
+        return (vec![], false);
+    }
+    let limit = per_process.min(remaining);
     let (bytes, over) = match read_up_to(dir, "maps", limit) {
         Ok(read) => read,
         Err(e) => {
@@ -826,11 +847,19 @@ fn mappings(
             return (vec![], why == NotObservable::PermissionDenied);
         }
     };
+    ctx.maps_left
+        .set(remaining.saturating_sub(bytes.len() as u64));
     let mut lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
     if over {
         // The last line may be cut: it is not read.
         lines.pop();
-        missing.push(format!("maps: over proc_maps_bytes ({limit} bytes read)"));
+        if limit < per_process {
+            missing.push(format!(
+                "maps: over proc_maps_total_bytes ({remaining} bytes were left)"
+            ));
+        } else {
+            missing.push(format!("maps: over proc_maps_bytes ({limit} bytes read)"));
+        }
     }
     let mut out = vec![];
     let mut seen = BTreeSet::new();
@@ -838,6 +867,7 @@ fn mappings(
     for line in lines.into_iter().filter(|l| !l.is_empty()) {
         match parse::maps_row(line) {
             parse::MapsRow::File(m) => {
+                // One per distinct (dev, ino, path, deleted), not per VMA.
                 if seen.insert((m.dev, m.ino, m.path.clone(), m.deleted)) {
                     out.push(MappingObs {
                         process: process.clone(),
@@ -951,7 +981,7 @@ fn read_limited(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<Read, Err
 }
 
 /// Reads `name` in `dir` (not followed) up to `limit` bytes, and whether it holds more: then the
-/// first `limit` bytes are returned.
+/// first `limit` bytes are returned. No more than `limit + 1` bytes are ever read.
 fn read_up_to(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<(Vec<u8>, bool), Errno> {
     let fd = rustix::fs::openat(
         dir,
@@ -962,7 +992,8 @@ fn read_up_to(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<(Vec<u8>, b
     let mut out = vec![];
     let mut buffer = [0u8; 8192];
     loop {
-        let n = match rustix::io::read(&fd, &mut buffer) {
+        let want = request(out.len(), limit, buffer.len());
+        let n = match rustix::io::read(&fd, &mut buffer[..want]) {
             Ok(0) => return Ok((out, false)),
             Ok(n) => n,
             Err(Errno::INTR) => continue,
@@ -976,6 +1007,14 @@ fn read_up_to(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<(Vec<u8>, b
     }
 }
 
+/// How many bytes one `read(2)` asks for, when `read` bytes were read up to `limit`: no more
+/// than the buffer holds, and no more than `limit + 1` in all (the one byte more shows that there
+/// is more). Never 0 while under `limit + 1`.
+fn request(read: usize, limit: u64, buffer: usize) -> usize {
+    let left = limit.saturating_add(1).saturating_sub(read as u64);
+    usize::try_from(left).unwrap_or(usize::MAX).min(buffer)
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt};
@@ -983,7 +1022,11 @@ mod tests {
 
     use sigil_model::{ProcessRef, Timestamp};
 
-    use super::{observe_with, Detail, ProcBudgets, ProcFacts, EXITED};
+    use std::os::fd::AsFd;
+
+    use rustix::fs::{Mode, OFlags};
+
+    use super::{observe_with, read_up_to, request, Detail, ProcBudgets, ProcFacts, EXITED};
 
     /// A process directory. Its `exe` links to a file of the fixture, `<root>/fs/<comm>`.
     fn process(root: &Path, pid: u32, ppid: u32, comm: &str, argv: &[&str], start: u64) {
@@ -1058,7 +1101,7 @@ mod tests {
 
     /// Review of PR-4d-2: a descendant that cannot be read again is not dropped silently.
     #[test]
-    fn a_descendant_that_cannot_be_read_again_is_a_lineage_gap() {
+    fn a_descendant_that_cannot_be_read_again_is_a_process_gap() {
         let d = tempfile::TempDir::new().unwrap();
         let root = d.path();
         fixture(root);
@@ -1072,7 +1115,7 @@ mod tests {
         }
         assert_eq!(pids(&f), [10]);
         assert_eq!(
-            f.lineage_gaps,
+            f.process_gaps,
             ["process 11 cannot be read again (PermissionDenied); a descendant is not recorded"]
         );
         assert_eq!(f.details.len(), 1);
@@ -1115,7 +1158,7 @@ mod tests {
         });
         assert_eq!(pids(&f), [10]);
         assert_eq!(f.details.len(), 1);
-        assert!(f.lineage_gaps.is_empty(), "{:?}", f.lineage_gaps);
+        assert!(f.process_gaps.is_empty(), "{:?}", f.process_gaps);
     }
 
     /// Review of PR-4d-2: an exec keeps the start time. When the runtime runs another executable
@@ -1146,5 +1189,45 @@ mod tests {
             d.missing,
             ["exe: the process runs another executable than when it was listed"]
         );
+    }
+
+    /// Review of PR-4d-2: one `read(2)` asks for no more than `limit + 1` bytes in all, and
+    /// never for 0 while under it.
+    #[test]
+    fn a_read_requests_at_most_one_byte_over_the_limit() {
+        for (read, limit, want) in [
+            (0, 0, 1),
+            (0, 1, 2),
+            (1, 1, 1),
+            (0, 8191, 8192),
+            (8191, 8191, 1),
+            (0, 8192, 8192),
+            (8192, 8192, 1),
+            (0, 8193, 8192),
+            (8192, 8193, 2),
+            (8193, 8193, 1),
+            (0, u64::MAX, 8192),
+            (8192, u64::MAX, 8192),
+        ] {
+            assert_eq!(
+                request(read, limit, 8192),
+                want,
+                "read {read}, limit {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_up_to_keeps_the_limit_and_says_when_there_is_more() {
+        let d = tempfile::TempDir::new().unwrap();
+        std::fs::write(d.path().join("f"), b"0123456789").unwrap();
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+        let dir = rustix::fs::openat(rustix::fs::CWD, d.path(), flags, Mode::empty()).unwrap();
+        let read = |limit| read_up_to(dir.as_fd(), "f", limit).unwrap();
+        assert_eq!(read(0), (vec![], true));
+        assert_eq!(read(1), (b"0".to_vec(), true));
+        assert_eq!(read(9), (b"012345678".to_vec(), true));
+        assert_eq!(read(10), (b"0123456789".to_vec(), false));
+        assert_eq!(read(11), (b"0123456789".to_vec(), false));
     }
 }

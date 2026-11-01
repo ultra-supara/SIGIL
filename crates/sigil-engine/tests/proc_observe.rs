@@ -580,8 +580,8 @@ fn detail(f: &ProcFacts, pid: u32) -> &Detail {
 }
 
 /// PR-4d-2: the runtime's children and theirs are recorded, an unrelated process is not; each
-/// one's executable identity is its target's, and its file-backed mappings are listed once
-/// per object, unlinked.
+/// one's executable identity is its target's, and its file-backed mappings are listed once per
+/// distinct (dev, ino, path, deleted), unlinked.
 #[test]
 fn the_runtime_and_its_descendants_are_observed() {
     let fake = FakeProc::new();
@@ -643,7 +643,7 @@ fn the_runtime_and_its_descendants_are_observed() {
         );
         assert!(!detail(&f, pid).denied);
     }
-    assert!(f.lineage_gaps.is_empty(), "{:?}", f.lineage_gaps);
+    assert!(f.process_gaps.is_empty(), "{:?}", f.process_gaps);
 }
 
 #[test]
@@ -737,7 +737,7 @@ fn unreadable_maps_alone_is_a_gap_not_a_denial() {
 }
 
 #[test]
-fn a_process_whose_parent_cannot_be_read_is_a_lineage_gap() {
+fn a_process_whose_parent_cannot_be_read_is_a_process_gap() {
     let fake = FakeProc::new();
     serve_at(&fake, "");
     fake.process(&Proc {
@@ -752,7 +752,122 @@ fn a_process_whose_parent_cannot_be_read_is_a_lineage_gap() {
     }
     let f = run(&fake);
     assert_eq!(
-        f.lineage_gaps,
+        f.process_gaps,
         ["process 4500: its parent cannot be read (PermissionDenied)"]
     );
+}
+
+/// External review of PR-4d-2: a process that may be the runtime may have descendants that
+/// were not observed. Its gap is a process gap too; the rest stands as before.
+#[test]
+fn a_process_that_may_be_the_runtime_is_a_process_gap() {
+    let fake = FakeProc::new();
+    serve_at(&fake, "");
+    if !fake.deny(4242, "comm") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    let f = run(&fake);
+    let gap = "process 4242 may be the runtime: its name cannot be read";
+    assert_eq!(f.process_gaps, [gap]);
+    assert_eq!(f.gaps, [gap]);
+    assert!(f.processes.is_empty(), "{:?}", f.processes);
+    assert!(f.details.is_empty(), "{:?}", f.details);
+}
+
+/// The runtime (one `maps` line per given file) and its child 4300 (one line).
+fn two_observed(fake: &FakeProc, runtime: &[&std::path::Path], child: &std::path::Path) {
+    let mut maps = String::new();
+    for path in runtime {
+        maps += &maps_line(path);
+        maps += "\n";
+    }
+    serve_at(fake, &maps);
+    fake.process(&Proc {
+        pid: 4300,
+        comm: "llama-server",
+        ppid: 4242,
+        start_ticks: 4100,
+        maps: &format!("{}\n", maps_line(child)),
+        ..Proc::default()
+    });
+}
+
+fn so(fake: &FakeProc, name: &str) -> std::path::PathBuf {
+    let path = fake.fs(name);
+    std::fs::write(&path, name).unwrap();
+    path
+}
+
+/// External review of PR-4d-2: `maps` is bounded over all processes too. Once the total is
+/// spent, a process's `maps` is not read.
+#[test]
+fn the_total_maps_budget_spent_leaves_the_next_maps_unread() {
+    let fake = FakeProc::new();
+    let (a, b) = (so(&fake, "/a.so"), so(&fake, "/b.so"));
+    two_observed(&fake, &[&a], &b);
+    let total = maps_line(&a).len() as u64 + 1;
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_total_bytes: total,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(f.processes[0].mappings.len(), 1);
+    assert!(
+        detail(&f, 4242).missing.is_empty(),
+        "{:?}",
+        detail(&f, 4242)
+    );
+    assert!(f.processes[1].mappings.is_empty());
+    let d = detail(&f, 4300);
+    assert_eq!(
+        d.missing,
+        ["maps: not read (proc_maps_total_bytes reached)"]
+    );
+    assert!(!d.denied);
+}
+
+#[test]
+fn a_maps_cut_by_the_total_budget_says_so() {
+    let fake = FakeProc::new();
+    let (a, b) = (so(&fake, "/a.so"), so(&fake, "/b.so"));
+    two_observed(&fake, &[&a, &b], &b);
+    // The first line, its newline, and two bytes of the second.
+    let total = maps_line(&a).len() as u64 + 3;
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_total_bytes: total,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(f.processes[0].mappings.len(), 1);
+    assert_eq!(
+        detail(&f, 4242).missing,
+        [format!(
+            "maps: over proc_maps_total_bytes ({total} bytes were left)"
+        )]
+    );
+    assert_eq!(
+        detail(&f, 4300).missing,
+        ["maps: not read (proc_maps_total_bytes reached)"]
+    );
+}
+
+/// External review of PR-4d-2: a mapping is one per distinct (dev, ino, path, deleted), not one
+/// per object: one inode reached by two paths gives two.
+#[test]
+fn one_inode_mapped_by_two_paths_is_two_mappings() {
+    let fake = FakeProc::new();
+    let a = so(&fake, "/a.so");
+    let b = fake.fs("/b.so");
+    std::fs::hard_link(&a, &b).unwrap();
+    serve_at(&fake, &format!("{}\n{}\n", maps_line(&a), maps_line(&b)));
+    let f = run(&fake);
+    let m = &f.processes[0].mappings;
+    assert_eq!(m.len(), 2, "{m:?}");
+    assert_eq!((m[0].dev, m[0].ino), (m[1].dev, m[1].ino));
+    assert_ne!(m[0].path_text, m[1].path_text);
 }
