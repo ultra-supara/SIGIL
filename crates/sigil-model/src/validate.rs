@@ -2188,7 +2188,7 @@ impl<'a> Validator<'a> {
     /// - P5: a required `processes.observed` has an entry for the audit and for each recorded
     ///   process. The runtime's entry is never `OutOfScope`, required or not.
     /// - P6: `maps_read` agrees with `mappings` and with the process's entry: `NotRead` has no
-    ///   mapping; a `Complete` entry is about a process read `Whole`; an `Unavailable` or
+    ///   mapping, `Part` at least one; a `Complete` entry is about a process read `Whole`; an `Unavailable` or
     ///   `OutOfScope` one about a process whose `maps` was `NotRead` and whose executable is not
     ///   linked; an `OutOfScope` one about a listener's holder.
     fn process_links(&mut self) {
@@ -2264,6 +2264,10 @@ impl<'a> Validator<'a> {
             // read from `maps` read in part, so `maps_read` says it, and agrees with both.
             if obs.maps_read == MapsRead::NotRead && !obs.mappings.is_empty() {
                 self.process_error(&at, "maps_read is NotRead, but it has mappings");
+            }
+            // A read in part that kept no mapping is `NotRead` (review of R1).
+            if obs.maps_read == MapsRead::Part && obs.mappings.is_empty() {
+                self.process_error(&at, "maps_read is Part, but it has no mapping");
             }
         }
         let holders: HashSet<&ProcessRef> = s

@@ -439,10 +439,10 @@ fn observe_with(
                     "the process may be the runtime ({why}); its executable and mappings were not read"
                 )],
             }),
-            // A confirmed runtime is always in its own tree.
-            RuntimeMatch::Rejected | RuntimeMatch::Confirmed(_) => {
-                facts.outside.push(obs.process.clone())
-            }
+            RuntimeMatch::Rejected => facts.outside.push(obs.process.clone()),
+            // A recorded runtime has a readable parent, so it is always in its own tree. Were it
+            // not, it gets no entry, which validation refuses, never `OutOfScope`.
+            RuntimeMatch::Confirmed(_) => {}
         }
     }
     facts.processes = recorded.into_values().collect();

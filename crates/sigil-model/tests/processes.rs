@@ -262,6 +262,24 @@ fn maps_not_read_has_no_mapping() {
     rejected_for(&s, "maps_read is NotRead, but it has mappings");
 }
 
+/// Review of R1 (P6): `Part` has at least one mapping. A read in part that kept none is
+/// `NotRead`; otherwise its cell would read "0 (0 linked; partial)".
+#[test]
+fn a_partial_read_has_a_mapping() {
+    let mut s = valid();
+    let runner = s.processes[1].process.clone();
+    s.processes[1].mappings.clear();
+    s.processes[1].maps_read = MapsRead::Part;
+    set_state(
+        &mut s,
+        &runner,
+        CoverageState::Partial {
+            missing: vec!["maps: over proc_maps_total_bytes (3 bytes were left)".into()],
+        },
+    );
+    rejected_for(&s, "maps_read is Part, but it has no mapping");
+}
+
 /// Code review of PR-4d-2, R-A (P6): a `Complete` entry is about a process whose `maps` was read
 /// whole.
 #[test]
