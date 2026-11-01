@@ -528,14 +528,34 @@ fn a_runtime_whose_stat_is_gone_has_exited() {
 }
 
 #[test]
-fn the_runtimes_role_and_its_argv_are_one_read_of_cmdline() {
+fn cmdline_is_opened_only_for_processes_named_ollama_and_again_only_for_the_runtime() {
     // Re-review of #74: the role rests on `cmdline`, and the argv recorded must be that same
     // evidence, so it is one read. It is never opened for a process whose `comm` is not
     // `ollama`, even one that is recorded (nginx, fronting). Code review of PR-4d-2, R-B: the
-    // second pass opens the runtime's once more, only to compare it with that read.
+    // second pass opens the runtime's once more, only to compare it with that read. Review of
+    // R2: never a descendant's: one named `ollama` is opened once, by the listing pass, and
+    // another not at all.
     let mut fake = FakeProc::new();
     fake.process(&serve(4242, &[7001]));
     fake.listen("0.0.0.0", 11434, 7001);
+    fake.process(&Proc {
+        pid: 4300,
+        comm: "ollama",
+        argv: &["/usr/local/bin/ollama", "runner", "--port", "1"],
+        exe: Some("/usr/local/bin/ollama"),
+        ppid: 4242,
+        start_ticks: 4100,
+        ..Proc::default()
+    });
+    fake.process(&Proc {
+        pid: 4301,
+        comm: "llama-server",
+        argv: &["/usr/local/lib/ollama/llama-server"],
+        exe: Some("/usr/local/lib/ollama/llama-server"),
+        ppid: 4242,
+        start_ticks: 4101,
+        ..Proc::default()
+    });
     fake.process(&Proc {
         pid: 200,
         comm: "nginx",
@@ -548,12 +568,18 @@ fn the_runtimes_role_and_its_argv_are_one_read_of_cmdline() {
     fake.process(&Proc::default());
     let opens = Opens::watch(&[
         fake.pid_dir(4242).join("cmdline"),
+        fake.pid_dir(4300).join("cmdline"),
+        fake.pid_dir(4301).join("cmdline"),
         fake.pid_dir(200).join("cmdline"),
         fake.pid_dir(100).join("cmdline"),
         fake.pid_dir(1).join("cmdline"),
     ]);
     let f = run(&fake);
-    assert_eq!(opens.counts(), [2, 0, 0, 0]);
+    assert_eq!(opens.counts(), [2, 1, 0, 0, 0, 0]);
+    // Both descendants were read by the second pass.
+    for pid in [4300, 4301] {
+        assert!(detail(&f, pid).missing.is_empty(), "{:?}", detail(&f, pid));
+    }
 
     let runtime = f.processes.iter().find(|p| p.process.pid == 4242).unwrap();
     assert_eq!(runtime.roles, [ProcessRole::new(RUNTIME_ROLE).unwrap()]);

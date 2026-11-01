@@ -1611,8 +1611,7 @@ mod tests {
 
     /// Code review of PR-4d-2, R-B: an exec of the same path keeps the PID, the start time and
     /// the path, but not the arguments (`ollama serve` re-execs as `ollama version`). What the
-    /// second pass read may be another program's: the runtime keeps no identity or mappings. A
-    /// descendant's arguments are not read again.
+    /// second pass read may be another program's: the runtime keeps no identity or mappings.
     #[test]
     fn an_exec_of_the_same_path_with_other_arguments_keeps_no_identity_or_mappings() {
         let d = tempfile::TempDir::new().unwrap();
@@ -1621,7 +1620,6 @@ mod tests {
         std::fs::write(root.join("10/maps"), MAPPED).unwrap();
         let f = run(root, &|| {
             std::fs::write(root.join("10/cmdline"), b"/x/ollama\0version\0").unwrap();
-            std::fs::write(root.join("11/cmdline"), b"/x/runner\0--other\0").unwrap();
         });
         assert_eq!(pids(&f), [10, 11]);
         let d = detail(&f, 10);
@@ -1630,9 +1628,6 @@ mod tests {
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
         assert_listed_role(&f);
-        let d = detail(&f, 11);
-        assert!(d.missing.is_empty(), "{d:?}");
-        assert_eq!(d.exe_id, Some(id(root, "runner")));
     }
 
     /// Code review of PR-4d-2, R-B: the file at the runtime's path replaced, and run again, keeps
