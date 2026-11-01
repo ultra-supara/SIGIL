@@ -118,11 +118,14 @@ never by path. It is on by default: the default policy audits `runtime_processes
     the same both times, otherwise the PID is another process now. A process found gone (exited,
     or its PID reused) or a zombie during the second pass has exited, and nothing that pass read
     of it is kept: a runtime stays as listed, with the gap "the process exited before the second
-    pass ended; nothing it read of the executable and mappings is kept", and a descendant that holds no recorded listener is not
-    recorded (one already recorded as a listener's holder stays recorded, with the same gap).
+    pass ended; nothing the pass read of its executable and mappings is kept", and a descendant
+    that holds no recorded listener is not recorded (one already recorded as a listener's holder
+    stays recorded, with the same gap).
   - **Roles.** A descendant has no role.
   - **What may be missed.** A process started after its parent was listed, and a descendant whose
-    parent exited before the listing: it was reparented, so the search does not reach it.
+    parent exited before the listing: it was reparented, so the search does not reach it. A
+    process whose main thread exited while other threads run reads as a zombie, and is taken as
+    gone; its `cmdline` reads empty, so the listing pass does not take it for the runtime.
 - **The executable.**
   - **Its identity.** `stat` through `/proc/<pid>/exe` gives the file the process runs (its
     `dev:ino`), also when it was deleted or is in another mount namespace. The file is never
@@ -130,11 +133,12 @@ never by path. It is on by default: the default policy audits `runtime_processes
   - **An exec during the reads.** An exec keeps the PID and the start time, and an exec of the
     same path keeps the path too. The listing pass also reads the runtime's identity, and keeps
     the `startstack` and `arg_start` fields of its `stat`. The second pass reads, in order: `stat`;
-    the link's path, then the identity; `ns/mnt`; `maps`; the identity again, then the path
-    again (with the rest of its record, for a process the listing pass did not record); for the
-    runtime, `cmdline` again; and `stat` again. A process the last `stat` finds gone or a zombie
-    exited during the reads, which is not an exec (above). Otherwise, what the second pass read
-    is dropped (no identity, no mappings, `maps_read` `NotRead`), with a gap that says why, when:
+    the link's path, then the identity (when that gives `ENOENT` or `ESRCH`, `stat` once more: a
+    zombie is gone there); `ns/mnt`; `maps`; the identity again, then the path again (with the
+    rest of its record, for a process the listing pass did not record); for the runtime,
+    `cmdline` again; and `stat` again. A process the last `stat` finds gone or a zombie exited
+    during the reads, which is not an exec (above). Otherwise, its identity and mappings are
+    dropped (`maps_read` `NotRead`), with a gap that says why, when:
     - the path changed between its two reads, or since the listing pass recorded it;
     - the identity changed between its two reads, or, for the runtime, since the listing pass
       read it;
@@ -143,18 +147,24 @@ never by path. It is on by default: the default policy audits `runtime_processes
       both reads show it: the kernel shows 0 to a reader not permitted to see it;
     - the runtime's arguments are not the ones its role rests on, are over 64 KiB, or cannot be
       read again;
-    - a read of the identity failed while another one gave the identity or another error. That
-      is not taken as an exec (`PR_SET_DUMPABLE`, `setuid()` without an exec, or a transient
-      error fail it too); the gap says that what was read is not tied to one executable.
+    - the reads of the identity compared (the second pass's two, and, for the runtime, the
+      listing pass's when it gave one) are not all the same because one failed. A read fails
+      without an exec too (`PR_SET_DUMPABLE`, `setuid()` without an exec, FUSE `hard_remove`, or
+      a transient error), so the gap says only that what was read is not tied to one executable.
 
-    The role and the arguments recorded at listing are kept: they held then.
+    The role and the arguments recorded at listing are kept: they held then. A process the
+    listing pass did not record is still recorded, with the path read last.
   - **What cannot be told apart.** Several `/proc` reads are not one atomic snapshot. An exec
     that changes nothing compared is not seen: one of the same file (for the runtime, with the
-    same arguments) while the stack fields are hidden (0) or do not move (ASLR off), or one by a
-    descendant between the passes, of which only a path the listing pass recorded, if any, is
-    compared. What the session states still holds then: every mapping kept was mapped, during
-    the reads, by the process running that file (with those arguments), and `Whole` means `maps`
-    was read to an end that such an exec may have brought early.
+    same arguments) while the stack fields do not move (ASLR off, system-wide or by the process's
+    own `ADDR_NO_RANDOMIZE` personality); one to another program and back to that file within
+    the reads, under the same conditions; or one by a descendant between the passes, of which
+    only a path the listing pass recorded, if any, is compared. Hidden stack fields (0) are not
+    compared, but `stat` hides them under the same permission check as `maps`, which is then
+    refused too. What the session states then: the process ran that file (with those arguments)
+    when its path and identity were read, before and after `maps`; every mapping kept was mapped
+    by it during the reads, by that file's image unless it ran another program in between; and
+    `Whole` means `maps` was read to an end that an exec may have brought early.
   - **The link.** When exactly one scanned instance has that `dev:ino`, the process's `exe` is
     that instance, and the instance records a `ProcessExe` source. Otherwise `exe` stays the path
     the link names.
@@ -171,7 +181,8 @@ never by path. It is on by default: the default policy audits `runtime_processes
     reached by two paths gives two mappings. A live file whose name ends in " (deleted)" reads as
     deleted; the line cannot tell the two apart.
   - **How much was read.** Each process's `maps_read` says what its mappings stand for:
-    - `Whole`: `maps` was read to its end;
+    - `Whole`: `maps` was read to its end, an end an exec may bring early (above), and every
+      line was understood;
     - `Part`: a budget cut the read short, or some lines were not understood; it has at least one
       mapping;
     - `NotRead`: no mapping. `maps` was not read (it cannot be read, or a total was used up), a
@@ -216,8 +227,8 @@ never by path. It is on by default: the default policy audits `runtime_processes
     runtime (why); its executable and mappings were not read".
 - **In the Markdown report.** The `Mappings` column of the Processes table counts only what was
   read: `n (m linked)` when `maps` was read whole (`n` mappings, `m` of them linked), and
-  `n (m linked; partial)` when it was read in part. A process whose `maps` was not read has no
-  count, only what its entry says: `not observed (why)` when it is `Unavailable` (for example
+  `n (m linked; partial)` when it was read in part. A process whose `maps_read` is `NotRead` has
+  no count, only what its entry says: `not observed (why)` when it is `Unavailable` (for example
   `not observed (permission denied)`), `not observed` when it is `Partial` (the Coverage section
   says why), and `not read` otherwise, as for an `OutOfScope` entry, or a session from before
   PR-4d-2, which has no entry.
