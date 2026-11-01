@@ -225,13 +225,7 @@ fn a_listener_holder_needs_an_out_of_scope_entry() {
     hold(&mut s, &holder.process);
     s.processes.push(holder.clone());
     rejected_for(&s, "has no entry for this process");
-    s.coverage.push(coverage(
-        PROCESSES_OBSERVED,
-        Ref::Process(holder.process),
-        CoverageState::OutOfScope {
-            why: "not found among the runtime and its descendants".into(),
-        },
-    ));
+    out_of_scope(&mut s, &holder.process);
     assert_valid(&s);
 }
 
@@ -307,6 +301,70 @@ fn an_unavailable_or_out_of_scope_entry_needs_maps_not_read() {
     rejected_for(&s, "is OutOfScope, but the process's maps_read is Whole");
 }
 
+/// `processes.observed` `OutOfScope` on `p`, with the engine's reason.
+fn out_of_scope(s: &mut Session, p: &ProcessRef) {
+    s.coverage.push(coverage(
+        PROCESSES_OBSERVED,
+        Ref::Process(p.clone()),
+        CoverageState::OutOfScope {
+            why: "not found among the runtime and its descendants".into(),
+        },
+    ));
+}
+
+/// Review of R1 (P6): an `OutOfScope` entry is about a listener's holder, as the engine records
+/// one outside the runtime's tree.
+#[test]
+fn an_out_of_scope_entry_is_about_a_listener_s_holder() {
+    let mut s = valid();
+    let holder = bare(&s, 7);
+    out_of_scope(&mut s, &holder.process);
+    s.processes.push(holder);
+    rejected_for(
+        &s,
+        "is OutOfScope, but the process holds no recorded listener",
+    );
+}
+
+/// Review of R1 (P6): an `OutOfScope` or `Unavailable` entry is about a process whose executable
+/// was not linked: linking it needs its identity, which neither read.
+#[test]
+fn an_out_of_scope_or_unavailable_entry_has_no_linked_executable() {
+    let mut s = valid();
+    let mut holder = bare(&s, 7);
+    holder.exe = ProcessExe::Instance {
+        instance: id("inst:install/bin/ollama"),
+    };
+    inst(&mut s, "inst:install/bin/ollama")
+        .discovered_by
+        .push(DiscoverySource::ProcessExe {
+            process: holder.process.clone(),
+        });
+    hold(&mut s, &holder.process);
+    out_of_scope(&mut s, &holder.process);
+    s.processes.push(holder);
+    rejected_for(
+        &s,
+        "is OutOfScope, but the process's executable is linked to an instance",
+    );
+
+    let mut s = valid();
+    let serve = s.processes[0].process.clone();
+    set_state(
+        &mut s,
+        &serve,
+        CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied,
+        },
+    );
+    s.processes[0].mappings.clear();
+    s.processes[0].maps_read = MapsRead::NotRead;
+    rejected_for(
+        &s,
+        "is Unavailable, but the process's executable is linked to an instance",
+    );
+}
+
 #[test]
 fn the_processes_table_counts_mappings_and_links() {
     let md = sigil_model::render::markdown::render_session(&valid());
@@ -377,14 +435,8 @@ fn a_process_whose_maps_was_not_read_is_not_shown_as_a_zero() {
     // A listener's holder outside the runtime's tree: out of scope, not read.
     let mut s = valid();
     let holder = bare(&s, 7);
-    hold(&mut s, &holder.process.clone());
-    s.coverage.push(coverage(
-        PROCESSES_OBSERVED,
-        Ref::Process(holder.process.clone()),
-        CoverageState::OutOfScope {
-            why: "not found among the runtime and its descendants".into(),
-        },
-    ));
+    hold(&mut s, &holder.process);
+    out_of_scope(&mut s, &holder.process);
     s.processes.push(holder);
     let md = markdown(&s);
     assert!(md.contains("| not read |"), "{md}");

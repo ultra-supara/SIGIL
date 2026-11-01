@@ -1259,19 +1259,21 @@ fn process_row(p: &ProcessObs, s: &Session) -> Vec<String> {
     // What was observed, not a zero: the count is how much of `maps` was read, and a process whose
     // `maps` was not read has none (F-T1), only the reason its entry gives. The entry's state
     // alone cannot tell `maps` not read from `maps` read in part.
-    let found = s.coverage.iter().find(|c| {
-        c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(p.process.clone())
-    });
     let mappings = match p.maps_read {
         MapsRead::Whole => format!("{} ({linked} linked)", p.mappings.len()),
         MapsRead::Part => format!("{} ({linked} linked; partial)", p.mappings.len()),
-        MapsRead::NotRead => match found.map(|c| &c.state) {
-            Some(CoverageState::Unavailable { why }) => {
-                format!("not observed ({})", unavailability(*why))
+        MapsRead::NotRead => {
+            let found = s.coverage.iter().find(|c| {
+                c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(p.process.clone())
+            });
+            match found.map(|c| &c.state) {
+                Some(CoverageState::Unavailable { why }) => {
+                    format!("not observed ({})", unavailability(*why))
+                }
+                Some(CoverageState::Partial { .. }) => "not observed".to_string(),
+                _ => "not read".to_string(),
             }
-            Some(CoverageState::Partial { .. }) => "not observed".to_string(),
-            _ => "not read".to_string(),
-        },
+        }
     };
     let fd_table = match p.fd_table {
         Observability::Observed => "listed".to_string(),

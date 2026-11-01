@@ -32,7 +32,9 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::access::PrincipalClaim;
-use crate::artifact::{FileInstance, InstanceContent, MapsRead, ProcessExe, ProcessRef, Stability};
+use crate::artifact::{
+    FileInstance, InstanceContent, MapsRead, ProcessExe, ProcessObs, ProcessRef, Stability,
+};
 use crate::code::{ArgValue, CallTarget, CheckResult, CheckUnknown, CodeFacts};
 use crate::coverage::{AbsenceBasis, CoverageState};
 use crate::evidence::{
@@ -2186,15 +2188,17 @@ impl<'a> Validator<'a> {
     /// - P5: a required `processes.observed` has an entry for the audit and for each recorded
     ///   process. The runtime's entry is never `OutOfScope`, required or not.
     /// - P6: `maps_read` agrees with `mappings` and with the process's entry: `NotRead` has no
-    ///   mapping; a `Complete` entry is about a process read `Whole`, an `Unavailable` or
-    ///   `OutOfScope` one about a process whose `maps` was `NotRead`.
+    ///   mapping; a `Complete` entry is about a process read `Whole`; an `Unavailable` or
+    ///   `OutOfScope` one about a process whose `maps` was `NotRead` and whose executable is not
+    ///   linked; an `OutOfScope` one about a listener's holder.
     fn process_links(&mut self) {
         use crate::artifact::DiscoverySource;
+        use crate::listener::ListenerOwner;
         let s = self.s;
         let index = self.index;
-        let mut recorded = HashSet::new();
+        let mut recorded: HashMap<&ProcessRef, &ProcessObs> = HashMap::new();
         for obs in &s.processes {
-            if !recorded.insert(&obs.process) {
+            if recorded.insert(&obs.process, obs).is_some() {
                 self.process_error(&format!("processes[{}]", obs.process.pid), "recorded twice");
             }
         }
@@ -2209,7 +2213,7 @@ impl<'a> Validator<'a> {
                     self.process_error(&at, format!("names process {} twice", process.pid));
                 }
                 // A process that is not recorded is reported by `process`.
-                if let Some(obs) = s.processes.iter().find(|p| p.process == *process) {
+                if let Some(obs) = recorded.get(process) {
                     let linked = match &obs.exe {
                         ProcessExe::Instance { instance } => *instance == inst.id,
                         _ => false,
@@ -2256,7 +2260,21 @@ impl<'a> Validator<'a> {
                     }
                 }
             }
+            // P6 (code review of PR-4d-2, R-A): the entry's state alone cannot tell `maps` not
+            // read from `maps` read in part, so `maps_read` says it, and agrees with both.
+            if obs.maps_read == MapsRead::NotRead && !obs.mappings.is_empty() {
+                self.process_error(&at, "maps_read is NotRead, but it has mappings");
+            }
         }
+        let holders: HashSet<&ProcessRef> = s
+            .listeners
+            .iter()
+            .filter_map(|l| match &l.owner {
+                ListenerOwner::Process { process } => Some(process),
+                _ => None,
+            })
+            .collect();
+        // P3, and each entry about a recorded process against that process (P5, P6).
         let mut scoped = HashSet::new();
         let mut audit = false;
         for c in s
@@ -2264,31 +2282,37 @@ impl<'a> Validator<'a> {
             .iter()
             .filter(|c| c.check.as_str() == crate::PROCESSES_OBSERVED)
         {
-            match &c.scope {
-                Ref::Audit => audit = true,
-                Ref::Process(p) => {
-                    if !recorded.contains(p) {
-                        self.process_error(
-                            &format!("coverage[{} on process {}]", c.check, p.pid),
-                            "is about a process that is not recorded",
-                        );
-                    }
-                    if !scoped.insert(p) {
-                        self.process_error(
-                            &format!("coverage[{} on process {}]", c.check, p.pid),
-                            "is about this process twice",
-                        );
-                    }
+            let p = match &c.scope {
+                Ref::Audit => {
+                    audit = true;
+                    continue;
                 }
-                _ => self.process_error(
-                    &format!("coverage[{}]", c.check),
-                    "is scoped to neither the audit nor a process",
-                ),
+                Ref::Process(p) => p,
+                _ => {
+                    self.process_error(
+                        &format!("coverage[{}]", c.check),
+                        "is scoped to neither the audit nor a process",
+                    );
+                    continue;
+                }
+            };
+            let at = format!("coverage[{} on process {}]", c.check, p.pid);
+            let obs = recorded.get(p);
+            if obs.is_none() {
+                self.process_error(&at, "is about a process that is not recorded");
+            }
+            if !scoped.insert(p) {
+                self.process_error(&at, "is about this process twice");
+            }
+            if let Some(obs) = obs {
+                for why in Self::entry_contradictions(&c.state, obs, holders.contains(p)) {
+                    self.process_error(&at, why);
+                }
             }
         }
         // P5 (external plan review; code review of PR-4d-2, R-C): a required check has its audit
         // entry, and an entry for every recorded process, whatever it is. The engine gives one to
-        // each: a listener's holder outside the runtime's tree has `OutOfScope` (below).
+        // each: a listener's holder outside the runtime's tree has `OutOfScope`.
         let required = s
             .request
             .required_checks
@@ -2310,50 +2334,46 @@ impl<'a> Validator<'a> {
                 }
             }
         }
-        // P6 (code review of PR-4d-2, R-A): the entry's state alone cannot tell `maps` not read
-        // from `maps` read in part, so `maps_read` says it, and agrees with both.
-        for obs in &s.processes {
-            if obs.maps_read == MapsRead::NotRead && !obs.mappings.is_empty() {
-                self.process_error(
-                    &format!("processes[{}]", obs.process.pid),
-                    "maps_read is NotRead, but it has mappings",
-                );
+    }
+
+    /// What a `processes.observed` entry in `state` contradicts about its process (P5's runtime
+    /// term, P6). `holds` is whether the process holds a recorded listener.
+    fn entry_contradictions(state: &CoverageState, obs: &ProcessObs, holds: bool) -> Vec<String> {
+        let (name, read) = match state {
+            CoverageState::Complete => ("Complete", MapsRead::Whole),
+            CoverageState::Unavailable { .. } => ("Unavailable", MapsRead::NotRead),
+            CoverageState::OutOfScope { .. } => ("OutOfScope", MapsRead::NotRead),
+            _ => return vec![],
+        };
+        let mut why = vec![];
+        if obs.maps_read != read {
+            why.push(format!(
+                "is {name}, but the process's maps_read is {:?}",
+                obs.maps_read
+            ));
+        }
+        // Linking an executable takes its identity, which neither an unavailable nor an
+        // out-of-scope process had read.
+        let unread = matches!(
+            state,
+            CoverageState::Unavailable { .. } | CoverageState::OutOfScope { .. }
+        );
+        if unread && matches!(obs.exe, ProcessExe::Instance { .. }) {
+            why.push(format!(
+                "is {name}, but the process's executable is linked to an instance"
+            ));
+        }
+        if let CoverageState::OutOfScope { .. } = state {
+            // P5: the runtime is what the check is about.
+            if obs.roles.iter().any(|r| r.as_str() == crate::RUNTIME_ROLE) {
+                why.push("is OutOfScope, but the process is the runtime".to_string());
+            }
+            // The engine records a process outside the runtime's tree only as a listener's holder.
+            if !holds {
+                why.push("is OutOfScope, but the process holds no recorded listener".to_string());
             }
         }
-        for c in s
-            .coverage
-            .iter()
-            .filter(|c| c.check.as_str() == crate::PROCESSES_OBSERVED)
-        {
-            let Ref::Process(p) = &c.scope else {
-                continue;
-            };
-            // A process that is not recorded is reported by P3.
-            let Some(obs) = s.processes.iter().find(|o| o.process == *p) else {
-                continue;
-            };
-            let at = format!("coverage[{} on process {}]", c.check, p.pid);
-            // P5: the runtime is what `processes.observed` is about.
-            let runtime = obs.roles.iter().any(|r| r.as_str() == crate::RUNTIME_ROLE);
-            if runtime && matches!(c.state, CoverageState::OutOfScope { .. }) {
-                self.process_error(&at, "is OutOfScope, but the process is the runtime");
-            }
-            let (state, want) = match &c.state {
-                CoverageState::Complete => ("Complete", MapsRead::Whole),
-                CoverageState::Unavailable { .. } => ("Unavailable", MapsRead::NotRead),
-                CoverageState::OutOfScope { .. } => ("OutOfScope", MapsRead::NotRead),
-                _ => continue,
-            };
-            if obs.maps_read != want {
-                self.process_error(
-                    &at,
-                    format!(
-                        "is {state}, but the process's maps_read is {:?}",
-                        obs.maps_read
-                    ),
-                );
-            }
-        }
+        why
     }
 
     fn process_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
