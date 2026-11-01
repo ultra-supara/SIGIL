@@ -22,9 +22,18 @@
 //! Processes are read one at a time, and each one's directory is closed before the next, so the
 //! number of open files does not grow with the process table.
 //!
-//! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory, and, per
-//! process, `comm`, `cmdline`, `stat`, `exe`, `ns/net`, `fd`, and `fd/<n>`. Links are read with
-//! `readlinkat`, never followed or opened.
+//! **The runtime's descendants (PR-4d-2).** Every listed process's `stat` gives its parent; the
+//! runtimes and every process descended from one are read a second time, after checking that
+//! the PID is still the process listed (its start time): the executable's `dev:ino` (`stat`
+//! through `exe`, which follows the link to the file the process runs and never opens it),
+//! `maps` up to `proc_maps_bytes`, and `ns/mnt`. A mapping is an observation only: nothing is
+//! derived from one, or from its absence (F-T1). Linking them to scanned files is
+//! `analyze::runtime_processes`.
+//!
+//! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
+//! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
+//! `stat` through it), `maps`, `ns/net`, `ns/mnt`, `fd`, and `fd/<n>`. No link but `exe` is
+//! followed, and nothing it leads to is opened.
 
 pub mod parse;
 
@@ -32,11 +41,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
-use rustix::fs::{Mode, OFlags};
+use rustix::fs::{AtFlags, Mode, OFlags};
 use rustix::io::Errno;
 use sigil_model::{
-    Listener, ListenerId, ListenerOwner, NotObservable, NsInode, Observability, ProcessExe,
-    ProcessObs, ProcessRef, ProcessRole, Protocol, Timestamp, UntrustedText,
+    Basis, Listener, ListenerId, ListenerOwner, MappingObs, NotObservable, NsInode, ObsSource,
+    Observability, ProcessExe, ProcessObs, ProcessRef, ProcessRole, Protocol, Timestamp, Tri,
+    UnknownReason, UntrustedText,
 };
 
 /// The role of the runtime's server process.
@@ -61,6 +71,8 @@ pub struct ProcBudgets {
     pub max_fds: u64,
     /// Bytes of each TCP table.
     pub max_table_bytes: u64,
+    /// Bytes of each process's `maps` (PR-4d-2).
+    pub max_maps_bytes: u64,
 }
 
 impl Default for ProcBudgets {
@@ -69,6 +81,7 @@ impl Default for ProcBudgets {
             max_processes: 32_768,
             max_fds: 65_536,
             max_table_bytes: 16 << 20,
+            max_maps_bytes: 16 << 20,
         }
     }
 }
@@ -92,6 +105,49 @@ pub struct ProcFacts {
     /// What could not be read, and might hide the runtime or its sockets: a table, the process
     /// list, a process that could not be identified.
     pub gaps: Vec<String>,
+    /// What the second pass read of each runtime and descendant, by PID (PR-4d-2).
+    pub details: Vec<Detail>,
+    /// Why some process's parent is not known: a descendant of the runtime may be missing
+    /// (PR-4d-2). Kept apart from `gaps`, which say what may hide the runtime's sockets.
+    pub lineage_gaps: Vec<String>,
+}
+
+/// What the second pass read of one runtime or descendant, beyond its `ProcessObs` (PR-4d-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Detail {
+    pub process: ProcessRef,
+    /// Its executable's `dev:ino` (`stat` through `exe`), when it could be read.
+    pub exe_id: Option<(u64, u64)>,
+    /// Both the executable's identity and `maps` were refused for want of permission.
+    pub denied: bool,
+    /// What was not observed, one entry each.
+    pub missing: Vec<String>,
+}
+
+/// Why a runtime has no mappings: it exited between the two passes.
+pub const EXITED: &str = "the process exited before its executable and mappings were read";
+
+/// When the processes were read, and in which boot: part of each one's identity.
+#[derive(Clone, Copy)]
+struct When<'a> {
+    at: &'a Timestamp,
+    boot_id: &'a str,
+}
+
+/// What the second pass shares.
+struct Ctx<'a> {
+    root: BorrowedFd<'a>,
+    when: When<'a>,
+    budgets: ProcBudgets,
+    own_mnt_ns: Option<u64>,
+}
+
+/// What the second pass read of one process.
+struct Second {
+    /// The process as recorded, for one the listing pass did not record.
+    obs: Option<ProcessObs>,
+    mappings: Vec<MappingObs>,
+    detail: Detail,
 }
 
 /// Whether a process is the runtime.
@@ -106,6 +162,10 @@ enum RuntimeMatch {
 
 /// One process, read and closed.
 struct Scanned {
+    pid: u32,
+    comm: Option<Vec<u8>>,
+    /// Its parent and start time (`stat`), or why they cannot be read.
+    lineage: Result<(u32, u64), NotObservable>,
     runtime: RuntimeMatch,
     fronting: bool,
     /// The listening sockets its fds refer to.
@@ -126,6 +186,18 @@ enum Scan {
 
 /// Reads the process and listener tables under `proc_root` (`/proc` outside tests).
 pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBudgets) -> ProcFacts {
+    observe_with(proc_root, at, boot_id, budgets, &|| {})
+}
+
+/// As [`observe`], calling `between` after the listing pass and before the second: the tests' way
+/// to change a process meanwhile.
+fn observe_with(
+    proc_root: &Path,
+    at: &Timestamp,
+    boot_id: &str,
+    budgets: ProcBudgets,
+    between: &dyn Fn(),
+) -> ProcFacts {
     let mut facts = ProcFacts {
         processes: vec![],
         listeners: vec![],
@@ -133,6 +205,8 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
         process_list: Observability::Observed,
         pid1_visible: false,
         gaps: vec![],
+        details: vec![],
+        lineage_gaps: vec![],
     };
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let root = match rustix::fs::openat(rustix::fs::CWD, proc_root, flags, Mode::empty()) {
@@ -149,6 +223,10 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
     facts.own_net_ns = rustix::fs::readlinkat(root, "self/ns/net", Vec::new())
         .ok()
         .and_then(|link| parse::link_inode(link.as_bytes(), "net"));
+    let own_mnt_ns = rustix::fs::readlinkat(root, "self/ns/mnt", Vec::new())
+        .ok()
+        .and_then(|link| parse::link_inode(link.as_bytes(), "mnt"));
+    let when = When { at, boot_id };
     let rows = read_tables(root, budgets, &mut facts.gaps);
     let listening: BTreeSet<u64> = rows.iter().map(|(_, row)| row.inode).collect();
 
@@ -164,11 +242,14 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
         Observability::Observed => None,
     };
     for pid in pids {
-        match scan(root, pid, &listening, at, boot_id, budgets) {
+        match scan(root, pid, &listening, when, budgets) {
             Scan::Gone => {}
             Scan::Unreadable(why) => {
                 facts.gaps.push(format!(
                     "process {pid} cannot be read ({why:?}); it may be the runtime"
+                ));
+                facts.lineage_gaps.push(format!(
+                    "process {pid} cannot be read ({why:?}); its parent is not known"
                 ));
                 incomplete = Some(worse(incomplete, why));
             }
@@ -185,6 +266,11 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
                 }
                 if let Observability::NotObservable(why) = s.fd_table {
                     incomplete = Some(worse(incomplete, why));
+                }
+                if let Err(why) = s.lineage {
+                    facts.lineage_gaps.push(format!(
+                        "process {pid}: its parent cannot be read ({why:?})"
+                    ));
                 }
                 scanned.push(*s);
             }
@@ -247,6 +333,47 @@ pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBud
         }
     }
     facts.listeners.sort_by(|a, b| a.id.cmp(&b.id));
+
+    // PR-4d-2: the runtimes and their descendants, read a second time.
+    between();
+    let ctx = Ctx {
+        root,
+        when,
+        budgets,
+        own_mnt_ns,
+    };
+    let observed = descendants(&scanned);
+    for (i, s) in scanned.iter().enumerate() {
+        let Ok((_, start_ticks)) = s.lineage else {
+            continue;
+        };
+        if !observed.contains(&s.pid) {
+            continue;
+        }
+        match second(&ctx, s, start_ticks, !recorded.contains_key(&i)) {
+            Some(read) => {
+                if let Some(obs) = read.obs {
+                    recorded.insert(i, obs);
+                }
+                if let Some(obs) = recorded.get_mut(&i) {
+                    obs.mappings = read.mappings;
+                }
+                facts.details.push(read.detail);
+            }
+            // Gone: a runtime stays as the listing pass recorded it; a descendant is not
+            // recorded.
+            None => {
+                if let Some(obs) = recorded.get(&i) {
+                    facts.details.push(Detail {
+                        process: obs.process.clone(),
+                        exe_id: None,
+                        denied: false,
+                        missing: vec![EXITED.to_string()],
+                    });
+                }
+            }
+        }
+    }
     facts.processes = recorded.into_values().collect();
     facts
 }
@@ -357,8 +484,7 @@ fn scan(
     root: BorrowedFd<'_>,
     pid: u32,
     listening: &BTreeSet<u64>,
-    at: &Timestamp,
-    boot_id: &str,
+    when: When<'_>,
     budgets: ProcBudgets,
 ) -> Scan {
     let dir = match open_dir(root, &pid.to_string()) {
@@ -377,6 +503,19 @@ fn scan(
         Err(Errno::NOENT | Errno::SRCH) => return Scan::Gone,
         _ => None,
     };
+    // PR-4d-2: every process's parent and start time, so the runtime's descendants are found.
+    let lineage = match read_limited(dir, "stat", 4096) {
+        Ok(Read::Whole(bytes)) => {
+            let text = String::from_utf8_lossy(&bytes);
+            match (parse::stat_ppid(&text), parse::stat_start_ticks(&text)) {
+                (Some(ppid), Some(start_ticks)) => Ok((ppid, start_ticks)),
+                _ => Err(NotObservable::ReadIncomplete),
+            }
+        }
+        Ok(Read::OverLimit) => Err(NotObservable::ReadIncomplete),
+        Err(Errno::NOENT | Errno::SRCH) => return Scan::Gone,
+        Err(e) => Err(not_observable(e)),
+    };
     let (listening_held, fd_table) = match sockets(dir, listening, budgets) {
         Some(found) => found,
         None => return Scan::Gone,
@@ -393,15 +532,23 @@ fn scan(
     let keep = matches!(runtime, RuntimeMatch::Confirmed(_))
         || (!listening_held.is_empty()
             && (fronting || matches!(runtime, RuntimeMatch::Unknown(_))));
-    let obs = if keep {
-        match observation(dir, pid, comm, &runtime, fd_table, at, boot_id) {
-            Err(NotObservable::NoProcess) => return Scan::Gone,
-            recorded => Some(recorded),
-        }
-    } else {
-        None
-    };
+    let obs = keep.then(|| {
+        lineage.map(|(_, start_ticks)| {
+            observation(
+                dir,
+                pid,
+                start_ticks,
+                comm.clone(),
+                &runtime,
+                fd_table,
+                when,
+            )
+        })
+    });
     Scan::Read(Box::new(Scanned {
+        pid,
+        comm,
+        lineage,
         runtime,
         fronting,
         listening: listening_held,
@@ -439,24 +586,17 @@ fn exe(dir: BorrowedFd<'_>) -> Result<(Vec<u8>, bool), NotObservable> {
     }
 }
 
-/// The process as recorded, or why it cannot be: its `stat` (its start time, part of its
-/// identity) could not be read or understood. `NoProcess` when it exited meanwhile. `argv` only
-/// for the runtime: the one its role rests on, never read again.
+/// The process as recorded. `argv` only for the runtime: the one its role rests on, never read
+/// again.
 fn observation(
     dir: BorrowedFd<'_>,
     pid: u32,
+    start_ticks: u64,
     comm: Option<Vec<u8>>,
     runtime: &RuntimeMatch,
     fd_table: Observability,
-    at: &Timestamp,
-    boot_id: &str,
-) -> Result<ProcessObs, NotObservable> {
-    let start_ticks = match read_limited(dir, "stat", 4096) {
-        Ok(Read::Whole(bytes)) => parse::stat_start_ticks(&String::from_utf8_lossy(&bytes))
-            .ok_or(NotObservable::ReadIncomplete)?,
-        Ok(Read::OverLimit) => return Err(NotObservable::ReadIncomplete),
-        Err(e) => return Err(not_observable(e)),
-    };
+    when: When<'_>,
+) -> ProcessObs {
     let net_ns = match rustix::fs::readlinkat(dir, "ns/net", Vec::new()) {
         Ok(link) => match parse::link_inode(link.as_bytes(), "net") {
             Some(inode) => NsInode::Inode(inode),
@@ -484,13 +624,13 @@ fn observation(
         ),
         _ => (vec![], None),
     };
-    Ok(ProcessObs {
+    ProcessObs {
         process: ProcessRef {
             pid,
             start_ticks,
-            boot_id: boot_id.to_string(),
+            boot_id: when.boot_id.to_string(),
         },
-        at: at.clone(),
+        at: when.at.clone(),
         roles,
         exe,
         mappings: vec![],
@@ -498,7 +638,179 @@ fn observation(
         argv,
         net_ns,
         fd_table,
+    }
+}
+
+/// The PIDs of the confirmed runtimes, and of every process whose parent is one of them,
+/// through any number of generations (PR-4d-2). Only parents read from `stat` count.
+fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
+    let mut set: BTreeSet<u32> = scanned
+        .iter()
+        .filter(|s| matches!(s.runtime, RuntimeMatch::Confirmed(_)) && s.lineage.is_ok())
+        .map(|s| s.pid)
+        .collect();
+    loop {
+        let before = set.len();
+        for s in scanned {
+            if let Ok((ppid, _)) = s.lineage {
+                if set.contains(&ppid) {
+                    set.insert(s.pid);
+                }
+            }
+        }
+        if set.len() == before {
+            return set;
+        }
+    }
+}
+
+/// The second pass over one runtime or descendant (PR-4d-2). `None` when it exited, or its PID
+/// is another process now (another start time). `build` reads its `ProcessObs` too, for a
+/// process the listing pass did not record.
+fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, build: bool) -> Option<Second> {
+    let dir = open_dir(ctx.root, &s.pid.to_string()).ok()?;
+    let dir = dir.as_fd();
+    match read_limited(dir, "stat", 4096) {
+        Ok(Read::Whole(bytes))
+            if parse::stat_start_ticks(&String::from_utf8_lossy(&bytes)) == Some(start_ticks) => {}
+        _ => return None,
+    }
+    let process = ProcessRef {
+        pid: s.pid,
+        start_ticks,
+        boot_id: ctx.when.boot_id.to_string(),
+    };
+    let mut missing = vec![];
+    let exe_id = exe_identity(dir);
+    if let Err(why) = exe_id {
+        missing.push(format!("exe: its identity cannot be read ({why:?})"));
+    }
+    let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
+    let (mappings, maps_denied) = mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
+    let denied = exe_id == Err(NotObservable::PermissionDenied) && maps_denied;
+    let obs = build.then(|| {
+        observation(
+            dir,
+            s.pid,
+            start_ticks,
+            s.comm.clone(),
+            &s.runtime,
+            s.fd_table,
+            ctx.when,
+        )
+    });
+    Some(Second {
+        obs,
+        mappings,
+        detail: Detail {
+            process,
+            exe_id: exe_id.ok(),
+            denied,
+            missing,
+        },
     })
+}
+
+/// The executable's `dev:ino`: `stat` through the `exe` link, which the kernel resolves to the
+/// file the process runs, also when it was deleted or is in another mount namespace. The file is
+/// not opened.
+#[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
+fn exe_identity(dir: BorrowedFd<'_>) -> Result<(u64, u64), NotObservable> {
+    let st = rustix::fs::statat(dir, "exe", AtFlags::empty()).map_err(not_observable)?;
+    Ok((st.st_dev as u64, st.st_ino as u64))
+}
+
+/// Whether the process's mount namespace is SIGIL's: what a mapping's path means (PR-4d-2).
+fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) -> Tri<()> {
+    let unknown = |why| Tri::Unknown {
+        reason: UnknownReason::NotObservable(why),
+    };
+    let theirs = match rustix::fs::readlinkat(dir, "ns/mnt", Vec::new()) {
+        Ok(link) => match parse::link_inode(link.as_bytes(), "mnt") {
+            Some(inode) => inode,
+            None => {
+                missing.push("ns/mnt: not understood".into());
+                return unknown(NotObservable::ReadIncomplete);
+            }
+        },
+        Err(e) => {
+            let why = not_observable(e);
+            missing.push(format!("ns/mnt: cannot be read ({why:?})"));
+            return unknown(why);
+        }
+    };
+    let Some(ours) = own else {
+        missing.push("ns/mnt: SIGIL's own cannot be read".into());
+        return unknown(NotObservable::ReadIncomplete);
+    };
+    let basis = Basis::Observed {
+        source: ObsSource::Proc,
+    };
+    if theirs == ours {
+        Tri::Yes {
+            why: (),
+            basis,
+            unresolved: vec![],
+        }
+    } else {
+        Tri::No {
+            basis,
+            unresolved: vec![],
+        }
+    }
+}
+
+/// The file-backed objects of `maps`, each once, in the order first seen, and whether `maps`
+/// was refused for want of permission (PR-4d-2).
+fn mappings(
+    dir: BorrowedFd<'_>,
+    process: &ProcessRef,
+    ctx: &Ctx<'_>,
+    same_mount_ns: &Tri<()>,
+    missing: &mut Vec<String>,
+) -> (Vec<MappingObs>, bool) {
+    let limit = ctx.budgets.max_maps_bytes;
+    let (bytes, over) = match read_up_to(dir, "maps", limit) {
+        Ok(read) => read,
+        Err(e) => {
+            let why = not_observable(e);
+            missing.push(format!("maps: cannot be read ({why:?})"));
+            return (vec![], why == NotObservable::PermissionDenied);
+        }
+    };
+    let mut lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+    if over {
+        // The last line may be cut: it is not read.
+        lines.pop();
+        missing.push(format!("maps: over proc_maps_bytes ({limit} bytes read)"));
+    }
+    let mut out = vec![];
+    let mut seen = BTreeSet::new();
+    let mut malformed = 0usize;
+    for line in lines.into_iter().filter(|l| !l.is_empty()) {
+        match parse::maps_row(line) {
+            parse::MapsRow::File(m) => {
+                if seen.insert((m.dev, m.ino, m.path.clone(), m.deleted)) {
+                    out.push(MappingObs {
+                        process: process.clone(),
+                        at: ctx.when.at.clone(),
+                        dev: m.dev,
+                        ino: m.ino,
+                        path_text: UntrustedText::from_bytes(m.path),
+                        deleted: m.deleted,
+                        instance: None,
+                        same_mount_ns: same_mount_ns.clone(),
+                    });
+                }
+            }
+            parse::MapsRow::NotFile => {}
+            parse::MapsRow::Malformed => malformed += 1,
+        }
+    }
+    if malformed > 0 {
+        missing.push(format!("maps: {malformed} lines not understood"));
+    }
+    (out, false)
 }
 
 /// The listening sockets a process's fds refer to, and whether its fd table was listed
@@ -582,6 +894,17 @@ enum Read {
 /// Reads `name` in `dir` (its last component not followed), up to `limit` bytes. procfs reports
 /// no size, so the limit is checked while reading.
 fn read_limited(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<Read, Errno> {
+    let (bytes, over) = read_up_to(dir, name, limit)?;
+    Ok(if over {
+        Read::OverLimit
+    } else {
+        Read::Whole(bytes)
+    })
+}
+
+/// Reads `name` in `dir` (not followed) up to `limit` bytes, and whether it holds more: then the
+/// first `limit` bytes are returned.
+fn read_up_to(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<(Vec<u8>, bool), Errno> {
     let fd = rustix::fs::openat(
         dir,
         name,
@@ -592,15 +915,73 @@ fn read_limited(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<Read, Err
     let mut buffer = [0u8; 8192];
     loop {
         let n = match rustix::io::read(&fd, &mut buffer) {
-            Ok(0) => break,
+            Ok(0) => return Ok((out, false)),
             Ok(n) => n,
             Err(Errno::INTR) => continue,
             Err(e) => return Err(e),
         };
         out.extend_from_slice(&buffer[..n]);
         if out.len() as u64 > limit {
-            return Ok(Read::OverLimit);
+            out.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            return Ok((out, true));
         }
     }
-    Ok(Read::Whole(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    use sigil_model::Timestamp;
+
+    use super::{observe_with, ProcBudgets};
+
+    fn process(root: &Path, pid: u32, ppid: u32, comm: &str, argv: &[&str], start: u64) {
+        let dir = root.join(pid.to_string());
+        std::fs::create_dir_all(dir.join("fd")).unwrap();
+        std::fs::create_dir_all(dir.join("ns")).unwrap();
+        std::fs::write(dir.join("comm"), format!("{comm}\n")).unwrap();
+        let mut cmdline = vec![];
+        for a in argv {
+            cmdline.extend_from_slice(a.as_bytes());
+            cmdline.push(0);
+        }
+        std::fs::write(dir.join("cmdline"), cmdline).unwrap();
+        let fields: Vec<String> = (5..=21).map(|n| n.to_string()).collect();
+        std::fs::write(
+            dir.join("stat"),
+            format!("{pid} ({comm}) S {ppid} {} {start} 0 0\n", fields.join(" ")),
+        )
+        .unwrap();
+        std::fs::write(dir.join("maps"), "").unwrap();
+        symlink("net:[1]", dir.join("ns/net")).unwrap();
+        symlink("mnt:[2]", dir.join("ns/mnt")).unwrap();
+    }
+
+    /// A descendant whose PID is another process by the second pass (another start time) is
+    /// not recorded.
+    #[test]
+    fn a_pid_reused_between_the_passes_is_not_recorded() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        std::fs::create_dir_all(root.join("self/ns")).unwrap();
+        std::fs::create_dir_all(root.join("net")).unwrap();
+        std::fs::write(root.join("net/tcp"), "").unwrap();
+        std::fs::write(root.join("net/tcp6"), "").unwrap();
+        symlink("net:[1]", root.join("self/ns/net")).unwrap();
+        symlink("mnt:[2]", root.join("self/ns/mnt")).unwrap();
+        process(root, 1, 0, "init", &["/sbin/init"], 1);
+        process(root, 10, 1, "ollama", &["/x/ollama", "serve"], 100);
+        process(root, 11, 10, "runner", &["/x/runner"], 200);
+        let reuse = || process(root, 11, 10, "runner", &["/x/runner"], 300);
+        let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
+        let f = observe_with(root, &at, "b", ProcBudgets::default(), &|| {
+            std::fs::remove_dir_all(root.join("11")).unwrap();
+            reuse();
+        });
+        let pids: Vec<u32> = f.processes.iter().map(|p| p.process.pid).collect();
+        assert_eq!(pids, [10]);
+        assert_eq!(f.details.len(), 1);
+    }
 }

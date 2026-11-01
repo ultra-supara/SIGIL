@@ -1,7 +1,9 @@
 //! The `/proc` collector on a fake proc root (plan §4.6.8): which processes are the runtime, who
 //! holds each listening socket, and what is recorded when something cannot be read.
 
-use sigil_engine::observe::proc::{observe, ProcBudgets, ProcFacts, RUNTIME_ROLE};
+use std::os::unix::fs::PermissionsExt;
+
+use sigil_engine::observe::proc::{observe, Detail, ProcBudgets, ProcFacts, RUNTIME_ROLE};
 use sigil_model::*;
 
 mod common;
@@ -68,7 +70,7 @@ fn the_runtime_and_its_listeners_are_recorded() {
             at: at(),
             roles: vec![ProcessRole::new("ollama serve").unwrap()],
             exe: ProcessExe::Path {
-                path: t("/usr/local/bin/ollama"),
+                path: t(fake.fs("/usr/local/bin/ollama").to_str().unwrap()),
                 deleted: false
             },
             mappings: vec![],
@@ -556,4 +558,201 @@ fn the_runtimes_role_and_its_argv_are_one_read_of_cmdline() {
     assert_eq!(argv, [&b"/usr/local/bin/ollama"[..], b"serve"]);
     let nginx = f.processes.iter().find(|p| p.process.pid == 200).unwrap();
     assert_eq!(nginx.argv, None);
+}
+
+fn serve_at(fake: &FakeProc, maps: &str) {
+    fake.process(&Proc {
+        pid: 4242,
+        comm: "ollama",
+        argv: &["/usr/local/bin/ollama", "serve"],
+        exe: Some("/usr/local/bin/ollama"),
+        start_ticks: 4000,
+        maps,
+        ..Proc::default()
+    });
+}
+
+fn detail(f: &ProcFacts, pid: u32) -> &Detail {
+    f.details
+        .iter()
+        .find(|d| d.process.pid == pid)
+        .unwrap_or_else(|| panic!("no detail for {pid}: {:?}", f.details))
+}
+
+/// PR-4d-2: the runtime's children and theirs are recorded, an unrelated process is not; each
+/// one's executable identity is its target's, and its file-backed mappings are listed once
+/// per object, unlinked.
+#[test]
+fn the_runtime_and_its_descendants_are_observed() {
+    let fake = FakeProc::new();
+    let lib = fake.fs("/usr/local/lib/ollama/libggml-cpu.so");
+    std::fs::create_dir_all(lib.parent().unwrap()).unwrap();
+    std::fs::write(&lib, b"lib").unwrap();
+    let line = maps_line(&lib);
+    let maps = format!("{line}\n{line}\n7f00-7f10 rw-p 00000000 00:00 0 [heap]\n");
+    serve_at(&fake, "");
+    fake.process(&Proc {
+        pid: 4300,
+        comm: "llama-server",
+        argv: &["/usr/local/lib/ollama/llama-server", "--port", "1"],
+        exe: Some("/usr/local/lib/ollama/llama-server"),
+        ppid: 4242,
+        start_ticks: 4100,
+        maps: &maps,
+        ..Proc::default()
+    });
+    fake.process(&Proc {
+        pid: 4400,
+        comm: "gpu-discover",
+        ppid: 4300,
+        start_ticks: 4200,
+        ..Proc::default()
+    });
+    fake.process(&Proc {
+        pid: 4500,
+        comm: "bash",
+        ppid: 1,
+        start_ticks: 4300,
+        ..Proc::default()
+    });
+    let f = run(&fake);
+    let pids: Vec<u32> = f.processes.iter().map(|p| p.process.pid).collect();
+    assert_eq!(pids, [4242, 4300, 4400]);
+    let runner = &f.processes[1];
+    assert!(runner.roles.is_empty());
+    assert_eq!(runner.argv, None);
+    assert_eq!(runner.name, Some(t("llama-server")));
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(&lib).unwrap();
+    assert_eq!(runner.mappings.len(), 1, "{:?}", runner.mappings);
+    let mapping = &runner.mappings[0];
+    assert_eq!((mapping.dev, mapping.ino), (m.dev(), m.ino()));
+    assert_eq!(mapping.path_text, t(lib.to_str().unwrap()));
+    assert_eq!(mapping.process, runner.process);
+    assert!(!mapping.deleted);
+    assert_eq!(mapping.instance, None);
+    assert!(matches!(mapping.same_mount_ns, Tri::Yes { .. }));
+    let exe = std::fs::metadata(fake.fs("/usr/local/bin/ollama")).unwrap();
+    assert_eq!(detail(&f, 4242).exe_id, Some((exe.dev(), exe.ino())));
+    for pid in [4242, 4300, 4400] {
+        assert!(
+            detail(&f, pid).missing.is_empty(),
+            "{pid}: {:?}",
+            detail(&f, pid)
+        );
+        assert!(!detail(&f, pid).denied);
+    }
+    assert!(f.lineage_gaps.is_empty(), "{:?}", f.lineage_gaps);
+}
+
+#[test]
+fn a_mapping_in_another_mount_namespace_says_so() {
+    let fake = FakeProc::new();
+    let lib = fake.fs("/lib.so");
+    std::fs::write(&lib, b"x").unwrap();
+    fake.process(&Proc {
+        pid: 4242,
+        comm: "ollama",
+        argv: &["/usr/local/bin/ollama", "serve"],
+        exe: Some("/usr/local/bin/ollama"),
+        mnt_ns: 4026532000,
+        maps: &maps_line(&lib),
+        ..Proc::default()
+    });
+    let f = run(&fake);
+    assert!(matches!(
+        f.processes[0].mappings[0].same_mount_ns,
+        Tri::No { .. }
+    ));
+}
+
+#[test]
+fn maps_over_its_budget_keeps_the_lines_read() {
+    let fake = FakeProc::new();
+    let a = fake.fs("/a.so");
+    let b = fake.fs("/b.so");
+    std::fs::write(&a, b"a").unwrap();
+    std::fs::write(&b, b"b").unwrap();
+    let first = maps_line(&a);
+    let maps = format!("{first}\n{}\n", maps_line(&b));
+    serve_at(&fake, &maps);
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_bytes: first.len() as u64 + 3,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(f.processes[0].mappings.len(), 1);
+    let d = detail(&f, 4242);
+    assert!(
+        d.missing
+            .iter()
+            .any(|m| m.starts_with("maps: over proc_maps_bytes")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn a_maps_line_not_understood_is_a_gap_and_the_others_stand() {
+    let fake = FakeProc::new();
+    let a = fake.fs("/a.so");
+    std::fs::write(&a, b"a").unwrap();
+    serve_at(&fake, &format!("{}\ngarbage\n", maps_line(&a)));
+    let f = run(&fake);
+    assert_eq!(f.processes[0].mappings.len(), 1);
+    assert_eq!(detail(&f, 4242).missing, ["maps: 1 lines not understood"]);
+}
+
+#[test]
+fn unreadable_maps_and_executable_are_denied() {
+    let fake = FakeProc::new();
+    serve_at(&fake, "");
+    if !fake.deny(4242, "maps") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    // `stat` through `exe` needs search permission on the target's directory.
+    let bin = fake.fs("/usr/local/bin");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let f = run(&fake);
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let d = detail(&f, 4242);
+    assert!(d.denied, "{d:?}");
+    assert_eq!(d.exe_id, None);
+    assert!(f.processes[0].mappings.is_empty());
+}
+
+#[test]
+fn unreadable_maps_alone_is_a_gap_not_a_denial() {
+    let fake = FakeProc::new();
+    serve_at(&fake, "");
+    if !fake.deny(4242, "maps") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    let d = detail(&run(&fake), 4242).clone();
+    assert!(!d.denied);
+    assert_eq!(d.missing, ["maps: cannot be read (PermissionDenied)"]);
+}
+
+#[test]
+fn a_process_whose_parent_cannot_be_read_is_a_lineage_gap() {
+    let fake = FakeProc::new();
+    serve_at(&fake, "");
+    fake.process(&Proc {
+        pid: 4500,
+        comm: "bash",
+        start_ticks: 4300,
+        ..Proc::default()
+    });
+    if !fake.deny(4500, "stat") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    let f = run(&fake);
+    assert_eq!(
+        f.lineage_gaps,
+        ["process 4500: its parent cannot be read (PermissionDenied)"]
+    );
 }
