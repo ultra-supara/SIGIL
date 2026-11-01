@@ -961,7 +961,7 @@ fn the_entries_budget_keeps_the_first_mappings_and_says_so() {
     assert_eq!(f.processes[0].maps_read, MapsRead::Part);
     assert_eq!(
         detail(&f, 4242).missing,
-        ["maps: over proc_maps_entries (2 records kept)"]
+        ["maps: over proc_maps_entries (stopped after 2 mappings)"]
     );
 }
 
@@ -1037,6 +1037,43 @@ fn the_entries_budget_reached_leaves_the_next_maps_unopened() {
     assert!(!d.denied);
 }
 
+/// Review of R3: what is left of the budget carries from one process to the next. Of two, the
+/// runtime reads one; its child reads the one left, and stops at the next.
+#[test]
+fn what_is_left_of_the_entries_budget_carries_to_the_next_process() {
+    let fake = FakeProc::new();
+    let (a, b, c) = (so(&fake, "/a.so"), so(&fake, "/b.so"), so(&fake, "/c.so"));
+    serve_at(&fake, &format!("{}\n", maps_line(&a)));
+    fake.process(&Proc {
+        pid: 4300,
+        comm: "llama-server",
+        ppid: 4242,
+        start_ticks: 4100,
+        maps: &format!("{}\n{}\n", maps_line(&b), maps_line(&c)),
+        ..Proc::default()
+    });
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_entries: 2,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(paths(&f.processes[0]), [text(&a)]);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Whole);
+    assert!(
+        detail(&f, 4242).missing.is_empty(),
+        "{:?}",
+        detail(&f, 4242)
+    );
+    assert_eq!(paths(&f.processes[1]), [text(&b)]);
+    assert_eq!(f.processes[1].maps_read, MapsRead::Part);
+    assert_eq!(
+        detail(&f, 4300).missing,
+        ["maps: over proc_maps_entries (stopped after 1 mappings)"]
+    );
+}
+
 /// Code review of PR-4d-2, R-D: a process that a byte budget and the entries budget both stop
 /// lists each reason once, the byte budget's first. In its read: `proc_maps_bytes` cuts the third
 /// line, and the entries budget stops at the second. Before it: the runtime spent both.
@@ -1062,7 +1099,7 @@ fn a_maps_stopped_by_both_budgets_lists_each_once_the_bytes_first() {
         detail(&f, 4242).missing,
         [
             format!("maps: over proc_maps_bytes ({limit} bytes read)"),
-            "maps: over proc_maps_entries (1 records kept)".to_string(),
+            "maps: over proc_maps_entries (stopped after 1 mappings)".to_string(),
         ]
     );
 

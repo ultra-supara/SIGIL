@@ -185,7 +185,7 @@ fn the_executable_and_the_mappings_are_linked_by_dev_ino() {
         .iter()
         .any(|c| c.as_str() == PROCESSES_OBSERVED));
     assert_eq!(s.request.budgets.get("proc_maps_bytes"), Some(&(16 << 20)));
-    // Code review of PR-4d-2, R-D: the mappings kept over all processes.
+    // Code review of PR-4d-2, R-D: the mappings read over all processes.
     assert_eq!(s.request.budgets.get("proc_maps_entries"), Some(&65_536));
 }
 

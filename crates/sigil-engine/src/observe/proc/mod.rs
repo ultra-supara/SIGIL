@@ -29,9 +29,10 @@
 //! through `exe`, which follows the link to the file the process runs and never opens it),
 //! `maps` up to `proc_maps_bytes` (and `proc_maps_total_bytes` over all of them), and `ns/mnt`.
 //! A mapping is one per distinct (dev, ino, path, deleted): one inode reached by two paths gives
-//! two. No more than `proc_maps_entries` mappings are kept over all of them, a duplicate not
-//! counting; once that many are, a `maps` is not read. A mapping is an observation only: nothing
-//! is derived from one, or from its absence (F-T1).
+//! two. No more than `proc_maps_entries` mappings are read over all of them, a duplicate not
+//! counting and one dropped later (an exec or an exit seen) still counting; once that many are,
+//! a `maps` is not read. A mapping is an observation only: nothing is derived from one, or from
+//! its absence (F-T1).
 //! Linking executables and mappings to scanned files is `analyze::runtime_processes`. A
 //! listener's holder outside the runtime's tree is not read again; one that may be the runtime
 //! gets a [`Detail`] saying so.
@@ -89,8 +90,9 @@ pub struct ProcBudgets {
     pub max_maps_bytes: u64,
     /// Bytes of `maps` over all processes of one observation (PR-4d-2).
     pub max_maps_total_bytes: u64,
-    /// Mappings kept over all processes of one observation, after the dedup: a duplicate does
-    /// not count (code review of PR-4d-2, R-D).
+    /// Mappings read over all processes of one observation, after the dedup: a duplicate does
+    /// not count, and one dropped later (an exec or an exit seen) does (code review of PR-4d-2,
+    /// R-D).
     pub max_maps_entries: u64,
 }
 
@@ -174,7 +176,7 @@ struct Ctx<'a> {
     own_mnt_ns: Option<u64>,
     /// The bytes of `maps` still to be read in this observation (`max_maps_total_bytes`).
     maps_left: Cell<u64>,
-    /// The mappings still to be kept in this observation (`max_maps_entries`). One kept and then
+    /// The mappings still to be read in this observation (`max_maps_entries`). One read and then
     /// dropped (`second`) still counts, as its bytes do.
     entries_left: Cell<u64>,
     /// Called with each process's PID at each `Stage` of its reads: the tests' way to change it
@@ -1112,10 +1114,11 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
 /// `max_maps_bytes`, and no more than what is left of `max_maps_total_bytes`; and no more
 /// mappings are kept than what is left of `max_maps_entries`, a duplicate not counting: no line
 /// after the one that would exceed it is parsed (code review of PR-4d-2, R-D). `NotRead` when it
-/// cannot be read or nothing is left of either total (then it is not opened), `Part` when it is
-/// over a budget or has lines not understood, and `NotRead` again when such a read kept no
-/// mapping. One read to its end is `Whole`, mappings or none. Each reason is one gap, in this
-/// order: the bytes' budget, the entries' budget, then the lines not understood.
+/// cannot be read, or nothing is left of `max_maps_total_bytes` or of `max_maps_entries` (then it
+/// is not opened); `Part` when it is over a budget or has lines not understood, and `NotRead`
+/// again when such a read kept no mapping. One read to its end is `Whole`, mappings or none.
+/// Each reason is one gap, in this order: the bytes' budget, the entries' budget, then the lines
+/// not understood.
 fn mappings(
     dir: BorrowedFd<'_>,
     process: &ProcessRef,
@@ -1198,7 +1201,7 @@ fn mappings(
         .set(entries.saturating_sub(out.len() as u64));
     if over_entries {
         missing.push(format!(
-            "maps: over proc_maps_entries ({} records kept)",
+            "maps: over proc_maps_entries (stopped after {} mappings)",
             out.len()
         ));
     }
@@ -1438,13 +1441,23 @@ mod tests {
 
     /// As `run`, calling `hook` with each process's PID at `stage` of the second pass's reads.
     fn run_at(root: &Path, stage: Stage, hook: &dyn Fn(u32)) -> ProcFacts {
+        run_at_with(root, ProcBudgets::default(), stage, hook)
+    }
+
+    /// As `run_at`, within `budgets`.
+    fn run_at_with(
+        root: &Path,
+        budgets: ProcBudgets,
+        stage: Stage,
+        hook: &dyn Fn(u32),
+    ) -> ProcFacts {
         let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
         let during = |at_stage: Stage, pid: u32| {
             if at_stage == stage {
                 hook(pid);
             }
         };
-        observe_with(root, &at, "b", ProcBudgets::default(), &|| {}, &during)
+        observe_with(root, &at, "b", budgets, &|| {}, &during)
     }
 
     /// As `run`, calling `hook` with each process's PID right after the second pass read its
@@ -1782,6 +1795,44 @@ mod tests {
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
         assert_listed_role(&f);
+    }
+
+    /// Review of R3: `proc_maps_entries` counts the mappings read, also those dropped later. The
+    /// runtime's one mapping is read, then dropped once another file is seen run at its path
+    /// after its `maps`; its child still finds the budget of two reduced by it.
+    #[test]
+    fn mappings_dropped_after_their_read_still_count_against_the_entries_budget() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        std::fs::write(
+            root.join("11/maps"),
+            "7f0000000000-7f0000001000 r-xp 00000000 08:01 2001 /x/a.so\n\
+             7f0000001000-7f0000002000 r-xp 00000000 08:01 2002 /x/b.so\n",
+        )
+        .unwrap();
+        let budgets = ProcBudgets {
+            max_maps_entries: 2,
+            ..ProcBudgets::default()
+        };
+        let f = run_at_with(root, budgets, Stage::AfterMaps, &|pid| {
+            if pid == 10 {
+                replace(root, "ollama");
+            }
+        });
+        assert_eq!(pids(&f), [10, 11]);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        assert_eq!(detail(&f, 10).missing, [RAN_ANOTHER]);
+        let child = &f.processes[1];
+        let paths: Vec<&UntrustedText> = child.mappings.iter().map(|m| &m.path_text).collect();
+        assert_eq!(paths, [&UntrustedText::new("/x/a.so")]);
+        assert_eq!(child.maps_read, MapsRead::Part);
+        assert_eq!(
+            detail(&f, 11).missing,
+            ["maps: over proc_maps_entries (stopped after 1 mappings)"]
+        );
     }
 
     /// Review of R2: the runtime's arguments are read again after its `maps`, so a change
