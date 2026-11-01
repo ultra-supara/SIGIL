@@ -2205,15 +2205,16 @@ impl<'a> Validator<'a> {
                 }
                 // A process that is not recorded is reported by `process`.
                 if let Some(obs) = s.processes.iter().find(|p| p.process == *process) {
-                    let linked = matches!(&obs.exe, ProcessExe::Instance { instance } if *instance == inst.id);
+                    let linked = match &obs.exe {
+                        ProcessExe::Instance { instance } => *instance == inst.id,
+                        _ => false,
+                    };
                     if !linked {
-                        self.process_error(
-                                &at,
-                                format!(
-                                    "a ProcessExe source names process {}, whose executable is not this instance",
-                                    process.pid
-                                ),
-                            );
+                        let why = format!(
+                            "a ProcessExe source names process {}, whose executable is not this instance",
+                            process.pid
+                        );
+                        self.process_error(&at, why);
                     }
                 }
             }
@@ -2222,9 +2223,10 @@ impl<'a> Validator<'a> {
             let at = format!("processes[{}]", obs.process.pid);
             if let ProcessExe::Instance { instance } = &obs.exe {
                 if let Some(inst) = index.instances.get(instance.as_str()) {
-                    let named = inst.discovered_by.iter().any(|d| {
-                            matches!(d, DiscoverySource::ProcessExe { process } if *process == obs.process)
-                        });
+                    let named = inst.discovered_by.iter().any(|d| match d {
+                        DiscoverySource::ProcessExe { process } => *process == obs.process,
+                        _ => false,
+                    });
                     if !named {
                         self.process_error(
                             &at,
@@ -2262,29 +2264,29 @@ impl<'a> Validator<'a> {
                 Ref::Process(p) => {
                     if !recorded.contains(p) {
                         self.process_error(
-                            "coverage",
-                            format!(
-                                "{} is about a process that is not recorded ({})",
-                                c.check, p.pid
-                            ),
+                            &format!("coverage[{} on process {}]", c.check, p.pid),
+                            "is about a process that is not recorded",
                         );
                     }
                     if !scoped.insert(p) {
                         self.process_error(
-                            "coverage",
-                            format!("{} is about process {} twice", c.check, p.pid),
+                            &format!("coverage[{} on process {}]", c.check, p.pid),
+                            "is about this process twice",
                         );
                     }
                 }
                 _ => self.process_error(
-                    "coverage",
-                    format!("{} is scoped to neither the audit nor a process", c.check),
+                    &format!("coverage[{}]", c.check),
+                    "is scoped to neither the audit nor a process",
                 ),
             }
         }
         // P5 (external plan review): a required check has its audit entry, and an entry for each
-        // process the second pass read, i.e. each runtime and each process with a mapping or a
-        // linked executable. A process recorded only as a listener's holder needs none.
+        // process the second pass read. The engine records a non-runtime process only as a
+        // descendant or as a listener's holder, so a process is read when it is the runtime, has a
+        // mapping, has a linked executable, or holds no listener (a descendant, even with no
+        // mapping and an unlinked executable: non-dumpable, setuid, or an exec between the
+        // passes). Only a descendant that also holds a listener escapes.
         let required = s
             .request
             .required_checks
@@ -2293,14 +2295,19 @@ impl<'a> Validator<'a> {
         if required {
             if !audit {
                 self.process_error(
-                    "coverage",
+                    "coverage[processes.observed on audit]",
                     "processes.observed is required but has no entry for the audit",
                 );
             }
             for obs in &s.processes {
-                let read = obs.roles.iter().any(|r| r.as_str() == "ollama serve")
+                let holds_listener = s.listeners.iter().any(|l| match &l.owner {
+                    crate::listener::ListenerOwner::Process { process } => *process == obs.process,
+                    _ => false,
+                });
+                let read = obs.roles.iter().any(|r| r.as_str() == crate::RUNTIME_ROLE)
                     || !obs.mappings.is_empty()
-                    || matches!(obs.exe, ProcessExe::Instance { .. });
+                    || matches!(obs.exe, ProcessExe::Instance { .. })
+                    || !holds_listener;
                 if read && !scoped.contains(&obs.process) {
                     self.process_error(
                         &format!("processes[{}]", obs.process.pid),

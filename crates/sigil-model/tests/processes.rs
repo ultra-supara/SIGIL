@@ -133,3 +133,86 @@ fn a_process_is_recorded_once() {
     s.processes.push(again);
     rejected_for(&s, "recorded twice");
 }
+
+/// A recorded process that is neither the runtime, nor mapping, nor linked: a listener's holder
+/// or a descendant the second pass read.
+fn bare(s: &Session, pid: u32) -> ProcessObs {
+    let mut p = s.processes[1].clone();
+    p.process.pid = pid;
+    p.roles = vec![];
+    p.exe = ProcessExe::Path {
+        path: t("/x"),
+        deleted: false,
+    };
+    p.mappings.clear();
+    p
+}
+
+fn drop_entry(s: &mut Session, p: &ProcessRef) {
+    s.coverage.retain(|c| {
+        !(c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(p.clone()))
+    });
+}
+
+#[test]
+fn a_listener_holder_needs_no_entry() {
+    let mut s = valid();
+    let holder = bare(&s, 7);
+    s.listeners.push(Listener {
+        id: id("listener:tcp/127.0.0.1:11434#7001"),
+        protocol: Protocol::Tcp,
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        socket_inode: 7001,
+        owner: ListenerOwner::Process {
+            process: holder.process.clone(),
+        },
+    });
+    s.processes.push(holder);
+    assert_valid(&s);
+}
+
+#[test]
+fn a_runtime_with_no_mappings_and_no_linked_exe_needs_an_entry() {
+    let mut s = valid();
+    s.processes[0].exe = ProcessExe::NotObservable(NotObservable::PermissionDenied);
+    s.processes[0].mappings.clear();
+    let serve = s.processes[0].process.clone();
+    drop_entry(&mut s, &serve);
+    inst(&mut s, "inst:install/bin/ollama")
+        .discovered_by
+        .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
+    rejected_for(&s, "has no entry for this process");
+}
+
+#[test]
+fn a_process_with_a_linked_exe_and_no_mappings_needs_an_entry() {
+    let mut s = valid();
+    s.processes[1].mappings.clear();
+    let runner = s.processes[1].process.clone();
+    drop_entry(&mut s, &runner);
+    rejected_for(&s, "has no entry for this process");
+}
+
+#[test]
+fn a_process_with_mappings_and_an_unlinked_exe_needs_an_entry() {
+    let mut s = valid();
+    s.processes[1].exe = ProcessExe::Path {
+        path: t("/usr/local/lib/ollama/llama-server"),
+        deleted: false,
+    };
+    inst(&mut s, "inst:install/lib/ollama/llama-server")
+        .discovered_by
+        .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
+    let runner = s.processes[1].process.clone();
+    drop_entry(&mut s, &runner);
+    rejected_for(&s, "has no entry for this process");
+}
+
+#[test]
+fn a_recorded_process_that_holds_no_listener_needs_an_entry() {
+    let mut s = valid();
+    let bare = bare(&s, 7);
+    s.processes.push(bare);
+    rejected_for(&s, "has no entry for this process");
+}

@@ -52,7 +52,7 @@ use sigil_model::{
 };
 
 /// The role of the runtime's server process.
-pub const RUNTIME_ROLE: &str = "ollama serve";
+pub use sigil_model::RUNTIME_ROLE;
 /// Process names (`comm`) of fronting processes: their listeners are kept as hints, and never
 /// lower a bind class (§4.6.8).
 pub const FRONTING: &[&str] = &[

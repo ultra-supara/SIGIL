@@ -202,6 +202,9 @@ pub struct ProcessRef {
 /// The coverage check of the observed runtime processes' executables and mappings (PR-4d-2).
 pub const PROCESSES_OBSERVED: &str = "processes.observed";
 
+/// The role of the runtime's server process.
+pub const RUNTIME_ROLE: &str = "ollama serve";
+
 /// What was observed about a running process (observe mode). Its environment, cwd, and user are
 /// [`crate::ProcessValue`]s with an `ObservedProcess` origin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
