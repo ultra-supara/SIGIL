@@ -233,17 +233,17 @@ pub struct ProcessObs {
     pub fd_table: Observability,
 }
 
-/// How much of a process's `maps` was read (PR-4d-2). `mappings` is every file-backed object
-/// mapped at `at` only when `Whole`.
+/// How much of a process's `maps` was read (PR-4d-2), so how much `mappings` stands for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MapsRead {
-    /// Read to its end.
+    /// `maps` was read to its end. A read that an exec or an exit SIGIL detects cut short is
+    /// never kept; what it cannot detect is in the engine's doc (`observe::proc`).
     Whole,
     /// Read in part (a budget cut it short, or lines were not understood): `mappings` is what
     /// was read, at least one.
     Part,
     /// Not read, a read in part that kept no mapping, or what was read was dropped (an exec
-    /// during the reads): `mappings` is empty.
+    /// during the reads was seen, or could not be ruled out): `mappings` is empty.
     /// Also a process whose `maps` SIGIL does not read (a listener's holder outside the
     /// runtime's tree). What a session from before `maps_read` reads as.
     #[default]
