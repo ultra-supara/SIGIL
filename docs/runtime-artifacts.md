@@ -117,8 +117,8 @@ never by path. It is on by default: the default policy audits `runtime_processes
   - **The PID check.** The second pass reads `stat` first and again last; the start time must be
     the same both times, otherwise the PID is another process now. A process found gone (exited,
     or its PID reused) or a zombie during the second pass has exited, and nothing that pass read
-    of it is kept: a runtime stays as listed, with the gap "the process exited before its
-    executable and mappings were read", and a descendant that holds no recorded listener is not
+    of it is kept: a runtime stays as listed, with the gap "the process exited before the second
+    pass ended; nothing it read of the executable and mappings is kept", and a descendant that holds no recorded listener is not
     recorded (one already recorded as a listener's holder stays recorded, with the same gap).
   - **Roles.** A descendant has no role.
   - **What may be missed.** A process started after its parent was listed, and a descendant whose

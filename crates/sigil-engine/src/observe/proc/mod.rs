@@ -158,8 +158,10 @@ pub struct Detail {
     pub missing: Vec<String>,
 }
 
-/// Why a recorded process has no mappings: it exited between the two passes.
-pub const EXITED: &str = "the process exited before its executable and mappings were read";
+/// Why a recorded process has no mappings: it exited (or its PID was reused) before the second
+/// pass ended, so nothing that pass read of it is kept.
+pub const EXITED: &str =
+    "the process exited before the second pass ended; nothing it read of the executable and mappings is kept";
 
 /// When the processes were read, and in which boot: part of each one's identity.
 #[derive(Clone, Copy)]
