@@ -388,6 +388,38 @@ fn a_model_filter_is_recorded() {
     assert_eq!(s.models.len(), 1);
 }
 
+/// PR-4d-2: the budgets of the runtime processes' `maps` apply in observe mode only.
+#[test]
+fn proc_maps_budgets_are_observe_budgets() {
+    let d = store(true);
+    for key in ["proc_maps_bytes=1", "proc_maps_total_bytes=1"] {
+        let r = inspect(d.path(), &[&"--budget", &key]);
+        assert_eq!(r.code, 2, "{key}: {}", r.stderr);
+        assert!(
+            r.stderr
+                .contains("this budget applies to --mode observe only"),
+            "{key}: {}",
+            r.stderr
+        );
+        assert!(r.stdout.is_empty());
+    }
+    let r = inspect(
+        d.path(),
+        &[
+            &"--mode",
+            &"observe",
+            &"--budget",
+            &"proc_maps_bytes=4096",
+            &"--budget",
+            &"proc_maps_total_bytes=8192",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    assert_eq!(s.request.budgets["proc_maps_bytes"], 4096);
+    assert_eq!(s.request.budgets["proc_maps_total_bytes"], 8192);
+}
+
 #[test]
 fn observe_mode_reads_this_system() {
     let d = store(true);
