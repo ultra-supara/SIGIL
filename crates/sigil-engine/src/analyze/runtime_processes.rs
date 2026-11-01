@@ -13,7 +13,7 @@
 //! | `Audit` | `Unavailable(PermissionDenied)` | The process list was denied, or PID 1 is missing from a complete list (`hidepid`) |
 //! | `Audit` | `Partial` | The list was cut short, or a process gap (`ProcFacts::process_gaps`): a process that cannot be read or read again, whose parent cannot be read, or that may be the runtime |
 //! | `Audit` | `Complete` | Otherwise |
-//! | a process | `Unavailable(PermissionDenied)` | Both its executable's identity and `maps` were refused |
+//! | a process | `Unavailable(PermissionDenied)` | Both its executable's identity and `maps` were refused, and the checks for an exec found no gap; or it cannot be read again for want of permission |
 //! | a process | `Partial` | Anything else not observed (`Detail::missing`), as for a listener's holder outside the runtime's tree that may be the runtime, whose executable and mappings are not read |
 //! | a process | `Complete` | Its executable's identity, all of `maps`, and `ns/mnt` were read |
 //! | a process | `OutOfScope` ([`OUTSIDE_THE_RUNTIME`]) | In `ProcFacts::outside`: a listener's holder outside the runtime's tree, whose executable and mappings are not read |

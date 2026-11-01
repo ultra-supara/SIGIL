@@ -149,10 +149,11 @@ pub struct ProcFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detail {
     pub process: ProcessRef,
-    /// Its executable's `dev:ino` (`stat` through `exe`), when it could be read and the process
-    /// was not seen to run another program meanwhile.
+    /// Its executable's `dev:ino` (`stat` through `exe`), when it could be read and nothing read
+    /// was dropped (another executable seen, or one not ruled out).
     pub exe_id: Option<(u64, u64)>,
-    /// Both the executable's identity and `maps` were refused for want of permission.
+    /// Refused for want of permission: both the executable's identity and `maps`, with no gap
+    /// from the checks for an exec; or the process could not be read again.
     pub denied: bool,
     /// What was not observed, one entry each.
     pub missing: Vec<String>,
@@ -957,7 +958,9 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         detail: Detail {
             process,
             exe_id,
-            denied,
+            // Final review of PR-4d-2, M1: refused, but a check for an exec (the runtime's
+            // world-readable `cmdline`) found a gap: `Partial` with it, not `Unavailable` without.
+            denied: denied && !dropped,
             missing,
         },
     }))
@@ -1359,8 +1362,11 @@ mod tests {
     use rustix::fs::{Mode, OFlags};
     use rustix::io::Errno;
     use sigil_model::{
-        MapsRead, NotObservable, ProcessExe, ProcessRef, ProcessRole, Timestamp, UntrustedText,
+        CoverageState, MapsRead, NotObservable, ProcessExe, ProcessRef, ProcessRole, Ref,
+        Timestamp, Unavailability, UntrustedText,
     };
+
+    use crate::analyze::runtime_processes::coverage;
 
     use super::{
         argv_gap, exec_seen, identity_change, observe_with, read_up_to, request, stack_moved,
@@ -1693,6 +1699,39 @@ mod tests {
         let new = root.join("fs").join(format!("{comm}.new"));
         std::fs::write(&new, b"new").unwrap();
         std::fs::rename(&new, root.join("fs").join(comm)).unwrap();
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Points a process's `exe` at `<root>/locked/<comm>`, in a directory of mode 000: `stat`
+    /// through it is refused (`EACCES`), as for another user's process, while the link's path
+    /// still reads. False when the refusal does not hold (root). The caller sets the directory's
+    /// mode back (`unlock`) before its `TempDir` is removed.
+    fn lock_exe(root: &Path, pid: u32, comm: &str) -> bool {
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join(comm), comm).unwrap();
+        let exe = root.join(pid.to_string()).join("exe");
+        std::fs::remove_file(&exe).unwrap();
+        symlink(locked.join(comm), &exe).unwrap();
+        set_mode(&locked, 0o000);
+        std::fs::metadata(locked.join(comm)).is_err()
+    }
+
+    fn unlock(root: &Path) {
+        set_mode(&root.join("locked"), 0o755);
+    }
+
+    /// The `processes.observed` state of a process.
+    fn entry(f: &ProcFacts, pid: u32) -> CoverageState {
+        let process = detail(f, pid).process.clone();
+        coverage(f)
+            .into_iter()
+            .find(|c| c.scope == Ref::Process(process.clone()))
+            .unwrap_or_else(|| panic!("no entry for {pid}"))
+            .state
     }
 
     /// The `dev:ino` of the fixture's file `<root>/fs/<comm>`.
@@ -2159,6 +2198,55 @@ mod tests {
                 assert!(d.missing.is_empty(), "{pid} {moved:?}: {d:?}");
                 assert!(d.exe_id.is_some(), "{pid} {moved:?}");
             }
+        }
+    }
+
+    /// Final review of PR-4d-2, M1: another user's runtime, read without root. Its identity and
+    /// `maps` are refused, at listing and since, which raises no gap of its own: the entry is
+    /// `Unavailable`. Its world-readable `cmdline` is still compared: when its arguments changed,
+    /// the entry is `Partial` and keeps that gap.
+    #[test]
+    fn a_refused_runtime_whose_arguments_changed_is_partial_with_the_gap() {
+        for changed in [false, true] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            if !lock_exe(root, 10, "ollama") {
+                unlock(root);
+                eprintln!("skipped: root stats through a mode-000 directory");
+                return;
+            }
+            set_mode(&root.join("10/maps"), 0o000);
+            let f = run_after_maps(root, &|pid| {
+                if changed && pid == 10 {
+                    std::fs::write(root.join("10/cmdline"), b"/x/ollama\0version\0").unwrap();
+                }
+            });
+            unlock(root);
+            assert_eq!(pids(&f), [10, 11], "{changed}");
+            assert_listed_role(&f);
+            let d = detail(&f, 10);
+            let mut missing = vec![
+                "exe: its identity cannot be read (PermissionDenied)",
+                "maps: cannot be read (PermissionDenied)",
+            ];
+            if changed {
+                missing.push(ARGV_CHANGED);
+            }
+            assert_eq!(d.missing, missing, "{changed}");
+            assert_eq!(d.exe_id, None, "{changed}");
+            assert_eq!(d.denied, !changed, "denied, arguments changed: {changed}");
+            let state = if changed {
+                CoverageState::Partial {
+                    missing: missing.iter().map(|m| m.to_string()).collect(),
+                }
+            } else {
+                CoverageState::Unavailable {
+                    why: Unavailability::PermissionDenied,
+                }
+            };
+            assert_eq!(entry(&f, 10), state, "{changed}");
         }
     }
 

@@ -212,10 +212,12 @@ never by path. It is on by default: the default policy audits `runtime_processes
     Otherwise `Complete`.
   - **Each process.** Every recorded process has an entry. One the second pass read is
     `Complete` when its executable's identity, all of `maps`, and `ns/mnt` were read and nothing
-    was dropped; `Unavailable` when both the identity and `maps` were refused; `Partial` for any
-    other gap. A recorded process that cannot be read again gets "the process cannot be read
+    was dropped; `Unavailable` when both the identity and `maps` were refused and the checks for
+    an exec found no gap (the runtime's arguments are still compared); `Partial` for any other
+    gap. A recorded process that cannot be read again gets "the process cannot be read
     again (why)", `Unavailable` when the cause is permission. Another user's service, read by a
-    non-root SIGIL, is `Unavailable(PermissionDenied)`: a gap, so INCOMPLETE. That is the usual
+    non-root SIGIL, is `Unavailable(PermissionDenied)` (`Partial` when its arguments changed): a
+    gap either way, so INCOMPLETE. That is the usual
     case for the systemd service, which runs as `ollama`. Run as root, or as that user, to
     observe it.
   - **A listener's holder outside the runtime's tree.** It is recorded for the listener it holds,
