@@ -32,7 +32,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::access::PrincipalClaim;
-use crate::artifact::{FileInstance, InstanceContent, ProcessExe, ProcessRef, Stability};
+use crate::artifact::{FileInstance, InstanceContent, MapsRead, ProcessExe, ProcessRef, Stability};
 use crate::code::{ArgValue, CallTarget, CheckResult, CheckUnknown, CodeFacts};
 use crate::coverage::{AbsenceBasis, CoverageState};
 use crate::evidence::{
@@ -261,8 +261,8 @@ pub enum ValidationError {
     /// A service unit's root, its instance, or a `ServiceUnit` source disagrees with the session
     /// (PR-4d-1).
     ServiceUnit { at: String, why: String },
-    /// An observed process's executable, a mapping, or `processes.observed` disagrees with the
-    /// session (P1–P4; PR-4d-2).
+    /// An observed process's executable, a mapping, `maps_read`, or `processes.observed`
+    /// disagrees with the session (P1–P6; PR-4d-2).
     Process { at: String, why: String },
 }
 
@@ -2183,6 +2183,11 @@ impl<'a> Validator<'a> {
     /// - P2: a mapping's instance has the mapping's `dev:ino`.
     /// - P3: `processes.observed` is scoped to the audit or to a recorded process, once each.
     /// - P4: a process is recorded once.
+    /// - P5: a required `processes.observed` has an entry for the audit and for each process read
+    ///   (below).
+    /// - P6: `maps_read` agrees with `mappings` and with the process's entry: `NotRead` has no
+    ///   mapping; a `Complete` entry is about a process read `Whole`, an `Unavailable` or
+    ///   `OutOfScope` one about a process whose `maps` was `NotRead`.
     fn process_links(&mut self) {
         use crate::artifact::DiscoverySource;
         let s = self.s;
@@ -2314,6 +2319,44 @@ impl<'a> Validator<'a> {
                         "processes.observed is required but has no entry for this process",
                     );
                 }
+            }
+        }
+        // P6 (code review of PR-4d-2, R-A): the entry's state alone cannot tell `maps` not read
+        // from `maps` read in part, so `maps_read` says it, and agrees with both.
+        for obs in &s.processes {
+            if obs.maps_read == MapsRead::NotRead && !obs.mappings.is_empty() {
+                self.process_error(
+                    &format!("processes[{}]", obs.process.pid),
+                    "maps_read is NotRead, but it has mappings",
+                );
+            }
+        }
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == crate::PROCESSES_OBSERVED)
+        {
+            let Ref::Process(p) = &c.scope else {
+                continue;
+            };
+            // A process that is not recorded is reported by P3.
+            let Some(obs) = s.processes.iter().find(|o| o.process == *p) else {
+                continue;
+            };
+            let (state, want) = match &c.state {
+                CoverageState::Complete => ("Complete", MapsRead::Whole),
+                CoverageState::Unavailable { .. } => ("Unavailable", MapsRead::NotRead),
+                CoverageState::OutOfScope { .. } => ("OutOfScope", MapsRead::NotRead),
+                _ => continue,
+            };
+            if obs.maps_read != want {
+                self.process_error(
+                    &format!("coverage[{} on process {}]", c.check, p.pid),
+                    format!(
+                        "is {state}, but the process's maps_read is {:?}",
+                        obs.maps_read
+                    ),
+                );
             }
         }
     }

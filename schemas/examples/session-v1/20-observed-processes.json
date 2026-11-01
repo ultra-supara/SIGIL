@@ -256,6 +256,7 @@
           }
         }
       ],
+      "maps_read": "Whole",
       "name": "ollama",
       "argv": ["/usr/local/bin/ollama", "serve"],
       "net_ns": {"Inode": 4026531840},
@@ -336,6 +337,7 @@
           }
         }
       ],
+      "maps_read": "Whole",
       "name": "llama-server",
       "argv": null,
       "net_ns": {"Inode": 4026531840},

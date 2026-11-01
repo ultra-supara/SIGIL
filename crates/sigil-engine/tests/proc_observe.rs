@@ -74,6 +74,7 @@ fn the_runtime_and_its_listeners_are_recorded() {
                 deleted: false
             },
             mappings: vec![],
+            maps_read: MapsRead::Whole,
             name: Some(t("ollama")),
             argv: Some(vec![t("/usr/local/bin/ollama"), t("serve")]),
             net_ns: NsInode::Inode(OWN_NET_NS),
@@ -639,6 +640,9 @@ fn the_runtime_and_its_descendants_are_observed() {
     assert!(matches!(mapping.same_mount_ns, Tri::Yes { .. }));
     let exe = std::fs::metadata(fake.fs("/usr/local/bin/ollama")).unwrap();
     assert_eq!(detail(&f, 4242).exe_id, Some((exe.dev(), exe.ino())));
+    for p in &f.processes {
+        assert_eq!(p.maps_read, MapsRead::Whole, "{}", p.process.pid);
+    }
     for pid in [4242, 4250, 4300] {
         assert!(
             detail(&f, pid).missing.is_empty(),
@@ -691,6 +695,7 @@ fn maps_over_its_budget_keeps_the_lines_read() {
         },
     );
     assert_eq!(f.processes[0].mappings.len(), 1);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Part);
     assert_eq!(
         detail(&f, 4242).missing,
         [format!("maps: over proc_maps_bytes ({limit} bytes read)")]
@@ -705,6 +710,7 @@ fn a_maps_line_not_understood_is_a_gap_and_the_others_stand() {
     serve_at(&fake, &format!("{}\ngarbage\n", maps_line(&a)));
     let f = run(&fake);
     assert_eq!(f.processes[0].mappings.len(), 1);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Part);
     assert_eq!(detail(&f, 4242).missing, ["maps: 1 lines not understood"]);
 }
 
@@ -725,6 +731,7 @@ fn unreadable_maps_and_executable_are_denied() {
     assert!(d.denied, "{d:?}");
     assert_eq!(d.exe_id, None);
     assert!(f.processes[0].mappings.is_empty());
+    assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
 }
 
 #[test]
@@ -735,9 +742,11 @@ fn unreadable_maps_alone_is_a_gap_not_a_denial() {
         eprintln!("skipped: root reads a mode-000 file");
         return;
     }
-    let d = detail(&run(&fake), 4242).clone();
+    let f = run(&fake);
+    let d = detail(&f, 4242);
     assert!(!d.denied);
     assert_eq!(d.missing, ["maps: cannot be read (PermissionDenied)"]);
+    assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
 }
 
 #[test]
@@ -819,12 +828,14 @@ fn the_total_maps_budget_spent_leaves_the_next_maps_unread() {
         },
     );
     assert_eq!(f.processes[0].mappings.len(), 1);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Whole);
     assert!(
         detail(&f, 4242).missing.is_empty(),
         "{:?}",
         detail(&f, 4242)
     );
     assert!(f.processes[1].mappings.is_empty());
+    assert_eq!(f.processes[1].maps_read, MapsRead::NotRead);
     let d = detail(&f, 4300);
     assert_eq!(
         d.missing,
@@ -848,6 +859,8 @@ fn a_maps_cut_by_the_total_budget_says_so() {
         },
     );
     assert_eq!(f.processes[0].mappings.len(), 1);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Part);
+    assert_eq!(f.processes[1].maps_read, MapsRead::NotRead);
     assert_eq!(
         detail(&f, 4242).missing,
         [format!(

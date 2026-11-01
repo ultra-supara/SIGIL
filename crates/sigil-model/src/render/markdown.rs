@@ -5,7 +5,7 @@
 //! code span, or HTML in the report. Tables are GFM, and a cell never contains a line break.
 
 use crate::artifact::{
-    DiscoverySource, FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs,
+    DiscoverySource, FileInstance, InstanceContent, MapsRead, NotReadReason, NsInode, ProcessObs,
 };
 use crate::coverage::{Coverage, CoverageState};
 use crate::evidence::{EvidenceRef, Loc, Observability, Ref};
@@ -1256,22 +1256,22 @@ fn process_row(p: &ProcessObs, s: &Session) -> Vec<String> {
     let exe = md::exe_cell(&p.exe);
     // PR-4d-2: the objects mapped, and how many are linked to a scanned file (by dev:ino).
     let linked = p.mappings.iter().filter(|m| m.instance.is_some()).count();
-    // What was observed, not a zero: a process whose `maps` was never read has no count (F-T1).
-    let counted = format!("{} ({linked} linked)", p.mappings.len());
+    // What was observed, not a zero: the count is how much of `maps` was read, and a process whose
+    // `maps` was not read has none (F-T1), only the reason its entry gives. The entry's state
+    // alone cannot tell `maps` not read from `maps` read in part.
     let found = s.coverage.iter().find(|c| {
         c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(p.process.clone())
     });
-    let mappings = match found.map(|c| &c.state) {
-        Some(CoverageState::Complete) => counted,
-        Some(CoverageState::Partial { .. }) => {
-            format!("{} ({linked} linked; partial)", p.mappings.len())
-        }
-        Some(CoverageState::Unavailable { why }) => {
-            format!("not observed ({})", unavailability(*why))
-        }
-        Some(_) => "not observed".to_string(),
-        None if p.mappings.is_empty() => "not read".to_string(),
-        None => counted,
+    let mappings = match p.maps_read {
+        MapsRead::Whole => format!("{} ({linked} linked)", p.mappings.len()),
+        MapsRead::Part => format!("{} ({linked} linked; partial)", p.mappings.len()),
+        MapsRead::NotRead => match found.map(|c| &c.state) {
+            Some(CoverageState::Unavailable { why }) => {
+                format!("not observed ({})", unavailability(*why))
+            }
+            Some(CoverageState::Partial { .. }) => "not observed".to_string(),
+            _ => "not read".to_string(),
+        },
     };
     let fd_table = match p.fd_table {
         Observability::Observed => "listed".to_string(),

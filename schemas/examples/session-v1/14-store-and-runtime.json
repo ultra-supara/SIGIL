@@ -219,6 +219,7 @@
       "roles": ["ollama serve"],
       "exe": {"NotObservable": "PermissionDenied"},
       "mappings": [],
+      "maps_read": "NotRead",
       "name": "ollama",
       "argv": ["/usr/local/bin/ollama", "serve"],
       "net_ns": {"Inode": 4026531840},

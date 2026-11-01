@@ -114,9 +114,9 @@ pub fn coverage(facts: &ProcFacts) -> Vec<Coverage> {
 #[cfg(test)]
 mod tests {
     use sigil_model::{
-        DiscoverySource, FileInstance, InstanceContent, InstanceId, MappingObs, NotObservable,
-        NsInode, Observability, ProcessExe, ProcessObs, ProcessRef, RootId, Stability, StatInfo,
-        Timestamp, Tri, UnknownReason, UntrustedText,
+        DiscoverySource, FileInstance, InstanceContent, InstanceId, MappingObs, MapsRead,
+        NotObservable, NsInode, Observability, ProcessExe, ProcessObs, ProcessRef, RootId,
+        Stability, StatInfo, Timestamp, Tri, UnknownReason, UntrustedText,
     };
 
     use super::link;
@@ -180,6 +180,11 @@ mod tests {
                     },
                 })
                 .collect(),
+            maps_read: if inos.is_empty() {
+                MapsRead::NotRead
+            } else {
+                MapsRead::Whole
+            },
             name: None,
             argv: None,
             net_ns: NsInode::Inode(1),

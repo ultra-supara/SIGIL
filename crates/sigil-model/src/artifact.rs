@@ -217,6 +217,8 @@ pub struct ProcessObs {
     pub exe: ProcessExe,
     /// Mappings observed in this process at `at`.
     pub mappings: Vec<MappingObs>,
+    /// How much of its `maps` was read, so how much `mappings` stands for (PR-4d-2).
+    pub maps_read: MapsRead,
     /// Its name (`comm`), as the process set it; `None` when it could not be read.
     pub name: Option<UntrustedText>,
     /// Its arguments (`cmdline`), as the process set them; `None` when not read. Read only for
@@ -226,6 +228,21 @@ pub struct ProcessObs {
     pub net_ns: NsInode,
     /// Whether its file descriptors could be listed (needed to attribute sockets to it).
     pub fd_table: Observability,
+}
+
+/// How much of a process's `maps` was read (PR-4d-2). `mappings` is every file-backed object
+/// mapped at `at` only when `Whole`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MapsRead {
+    /// Read to its end.
+    Whole,
+    /// Read in part (a budget cut it short, or lines were not understood): `mappings` is what
+    /// was read.
+    Part,
+    /// Not read, or what was read was dropped (an exec during the reads): `mappings` is empty.
+    /// Also a process whose `maps` SIGIL does not read (a listener's holder outside the
+    /// runtime's tree).
+    NotRead,
 }
 
 /// A namespace's inode, or why it could not be read.

@@ -172,6 +172,7 @@ fn the_executable_and_the_mappings_are_linked_by_dev_ino() {
             None
         ]
     );
+    assert_eq!(p.maps_read, MapsRead::Whole);
     assert_eq!(observed(&s, &Ref::Audit), Some(CoverageState::Complete));
     assert_eq!(
         observed(&s, &Ref::Process(p.process.clone())),
@@ -292,6 +293,40 @@ fn an_unreadable_runtime_is_unavailable_and_incomplete() {
     ));
 }
 
+/// Code review of PR-4d-2, R-A: the executable's identity is read and linked, but `maps` is
+/// refused. The entry is `Partial`, not `Unavailable`, and `maps` is `NotRead`: the Markdown says
+/// it was not observed, never "0 (0 linked)".
+#[test]
+fn a_runtime_whose_maps_is_refused_is_not_read_and_partial() {
+    let fake = FakeProc::new();
+    let prefix = install(&fake);
+    serve(&fake, "/opt/ollama/bin/ollama", "");
+    if !fake.deny(4242, "maps") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    let models = TempDir::new().unwrap();
+    let s = session(&fake, models.path(), Some(prefix));
+    let p = &s.processes[0];
+    assert_eq!(
+        p.exe,
+        ProcessExe::Instance {
+            instance: InstanceId::new("inst:install/bin/ollama").unwrap()
+        }
+    );
+    assert!(p.mappings.is_empty());
+    assert_eq!(p.maps_read, MapsRead::NotRead);
+    assert_eq!(
+        observed(&s, &Ref::Process(p.process.clone())),
+        Some(CoverageState::Partial {
+            missing: vec!["maps: cannot be read (PermissionDenied)".to_string()]
+        })
+    );
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(md.contains("| not observed |"), "{md}");
+    assert!(!md.contains("0 \\(0 linked"), "{md}");
+}
+
 /// Review of a93bfef: what was not observed of a process leaves its entry `Partial`, and the
 /// session incomplete.
 #[test]
@@ -316,6 +351,7 @@ fn a_runtime_s_maps_over_its_budget_is_partial() {
     let s = session_with(&fake, models.path(), None, budgets);
     let p = &s.processes[0];
     assert_eq!(p.mappings.len(), 1);
+    assert_eq!(p.maps_read, MapsRead::Part);
     match observed(&s, &Ref::Process(p.process.clone())) {
         Some(CoverageState::Partial { missing }) => assert!(
             missing[0].starts_with("maps: over proc_maps_bytes"),

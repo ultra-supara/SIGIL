@@ -55,7 +55,7 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         FileInstance => "FileInstance", InstanceContent => "InstanceContent", NotReadReason => "NotReadReason",
         LinkHop => "LinkHop", StatInfo => "StatInfo", Stability => "Stability",
         DiscoverySource => "DiscoverySource", ProcessRef => "ProcessRef", ProcessObs => "ProcessObs",
-        ProcessExe => "ProcessExe", MappingObs => "MappingObs",
+        ProcessExe => "ProcessExe", MappingObs => "MappingObs", MapsRead => "MapsRead",
         Basis => "Basis", ObsSource => "ObsSource", EvidenceRef => "EvidenceRef", Loc => "Loc",
         ConfigRef => "ConfigRef", ProfileRuleRef => "ProfileRuleRef", Support => "Support",
         Assumption => "Assumption", AssumptionAcceptance => "AssumptionAcceptance",
@@ -492,6 +492,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
             "ProcessExe",
             ProcessExe::NotObservable(NotObservable::NoProcess),
         ),
+        sample("MapsRead", MapsRead::Part),
         sample(
             "Basis",
             Basis::Observed {

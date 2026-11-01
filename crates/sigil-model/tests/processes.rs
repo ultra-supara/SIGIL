@@ -1,7 +1,8 @@
 //! The observed processes' links (PR-4d-2): an executable and its instance name each other (P1),
 //! a mapping's instance is the object mapped (P2), `processes.observed` is about the audit or a
-//! recorded process, once each (P3), a process is recorded once (P4), and a required
-//! `processes.observed` covers the audit and each process read (P5).
+//! recorded process, once each (P3), a process is recorded once (P4), a required
+//! `processes.observed` covers the audit and each process read (P5), and `maps_read` agrees with
+//! the mappings and the process's entry (P6).
 
 mod common;
 
@@ -157,6 +158,7 @@ fn bare(s: &Session, pid: u32) -> ProcessObs {
         deleted: false,
     };
     p.mappings.clear();
+    p.maps_read = MapsRead::NotRead;
     p
 }
 
@@ -232,6 +234,61 @@ fn a_recorded_process_that_holds_no_listener_needs_an_entry() {
     rejected_for(&s, "has no entry for this process");
 }
 
+/// Code review of PR-4d-2, R-A (P6): `NotRead` has no mapping.
+#[test]
+fn maps_not_read_has_no_mapping() {
+    let mut s = valid();
+    let runner = s.processes[1].process.clone();
+    s.processes[1].maps_read = MapsRead::NotRead;
+    set_state(
+        &mut s,
+        &runner,
+        CoverageState::Partial {
+            missing: vec!["maps: cut short".into()],
+        },
+    );
+    rejected_for(&s, "maps_read is NotRead, but it has mappings");
+}
+
+/// Code review of PR-4d-2, R-A (P6): a `Complete` entry is about a process whose `maps` was read
+/// whole.
+#[test]
+fn a_complete_entry_needs_maps_read_whole() {
+    let mut s = valid();
+    s.processes[1].maps_read = MapsRead::Part;
+    rejected_for(&s, "is Complete, but the process's maps_read is Part");
+    let mut s = valid();
+    s.processes[0].mappings.clear();
+    s.processes[0].maps_read = MapsRead::NotRead;
+    rejected_for(&s, "is Complete, but the process's maps_read is NotRead");
+}
+
+/// Code review of PR-4d-2, R-A (P6): an `Unavailable` or `OutOfScope` entry is about a process
+/// whose `maps` was not read.
+#[test]
+fn an_unavailable_or_out_of_scope_entry_needs_maps_not_read() {
+    let mut s = valid();
+    let serve = s.processes[0].process.clone();
+    set_state(
+        &mut s,
+        &serve,
+        CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied,
+        },
+    );
+    rejected_for(&s, "is Unavailable, but the process's maps_read is Whole");
+    let mut s = valid();
+    let runner = s.processes[1].process.clone();
+    set_state(
+        &mut s,
+        &runner,
+        CoverageState::OutOfScope {
+            why: "outside".into(),
+        },
+    );
+    rejected_for(&s, "is OutOfScope, but the process's maps_read is Whole");
+}
+
 #[test]
 fn the_processes_table_counts_mappings_and_links() {
     let md = sigil_model::render::markdown::render_session(&valid());
@@ -258,9 +315,64 @@ fn set_state(s: &mut Session, p: &ProcessRef, state: CoverageState) {
     };
 }
 
+/// The Markdown of `s`, which is valid.
+fn markdown(s: &Session) -> String {
+    assert_valid(s);
+    sigil_model::render::markdown::render_session(s)
+}
+
+/// The Mappings cell counts only what `maps_read` says was read, and says why when nothing was
+/// (code review of PR-4d-2, R-A): never a count for `NotRead`.
 #[test]
 fn a_process_whose_maps_was_not_read_is_not_shown_as_a_zero() {
-    // (a) serve could not be read: its row says so, not "0 (0 linked)".
+    // The reviewer's case: the executable's identity was read and linked, `maps` was refused.
+    // The entry is `Partial`, as for a read in part: only `maps_read` tells them apart.
+    let mut s = valid();
+    let serve = s.processes[0].process.clone();
+    set_state(
+        &mut s,
+        &serve,
+        CoverageState::Partial {
+            missing: vec!["maps: cannot be read (PermissionDenied)".into()],
+        },
+    );
+    s.processes[0].mappings.clear();
+    s.processes[0].maps_read = MapsRead::NotRead;
+    let md = markdown(&s);
+    assert!(md.contains("| not observed |"), "{md}");
+    assert!(!md.contains("0 \\(0 linked"), "{md}");
+
+    // A partial read says so.
+    let mut s = valid();
+    let runner = s.processes[1].process.clone();
+    set_state(
+        &mut s,
+        &runner,
+        CoverageState::Partial {
+            missing: vec!["maps: cut short".into()],
+        },
+    );
+    s.processes[1].maps_read = MapsRead::Part;
+    let md = markdown(&s);
+    assert!(md.contains("4 \\(3 linked\\; partial\\)"), "{md}");
+
+    // A listener's holder outside the runtime's tree: out of scope, not read.
+    let mut s = valid();
+    let holder = bare(&s, 7);
+    hold(&mut s, &holder.process.clone());
+    s.coverage.push(coverage(
+        PROCESSES_OBSERVED,
+        Ref::Process(holder.process.clone()),
+        CoverageState::OutOfScope {
+            why: "neither the runtime nor one of its descendants".into(),
+        },
+    ));
+    s.processes.push(holder);
+    let md = markdown(&s);
+    assert!(md.contains("| not read |"), "{md}");
+    assert!(!md.contains("0 \\(0 linked"), "{md}");
+
+    // Denied: serve could not be read at all.
     let mut s = valid();
     let serve = s.processes[0].process.clone();
     set_state(
@@ -271,44 +383,20 @@ fn a_process_whose_maps_was_not_read_is_not_shown_as_a_zero() {
         },
     );
     s.processes[0].mappings.clear();
+    s.processes[0].maps_read = MapsRead::NotRead;
     s.processes[0].exe = ProcessExe::NotObservable(NotObservable::PermissionDenied);
     inst(&mut s, "inst:install/bin/ollama")
         .discovered_by
         .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
-    assert_valid(&s);
-    let md = sigil_model::render::markdown::render_session(&s);
+    let md = markdown(&s);
     assert!(md.contains("not observed \\(permission denied\\)"), "{md}");
-    assert!(!md.contains("0 \\(0 linked\\)"), "{md}");
-
-    // (b) a listener's holder with no entry and no mappings: "not read".
-    let mut s = valid();
-    let holder = bare(&s, 7);
-    hold(&mut s, &holder.process.clone());
-    s.processes.push(holder);
-    assert_valid(&s);
-    let md = sigil_model::render::markdown::render_session(&s);
-    assert!(md.contains("| not read |"), "{md}");
-    assert!(!md.contains("0 \\(0 linked\\)"), "{md}");
-
-    // (c) a partial read says so.
-    let mut s = valid();
-    let runner = s.processes[1].process.clone();
-    set_state(
-        &mut s,
-        &runner,
-        CoverageState::Partial {
-            missing: vec!["maps: cut short".into()],
-        },
-    );
-    assert_valid(&s);
-    let md = sigil_model::render::markdown::render_session(&s);
-    assert!(md.contains("4 \\(3 linked\\; partial\\)"), "{md}");
+    assert!(!md.contains("0 \\(0 linked"), "{md}");
 }
 
 #[test]
 fn a_runtime_from_before_the_check_is_not_shown_as_a_zero() {
-    // (d) example 14: the runtime has no mappings and no entry.
-    let md = sigil_model::render::markdown::render_session(&store_and_runtime());
+    // Example 14: the runtime has no mappings, `maps` not read, and no entry.
+    let md = markdown(&store_and_runtime());
     assert!(md.contains("| not read |"), "{md}");
-    assert!(!md.contains("0 \\(0 linked\\)"), "{md}");
+    assert!(!md.contains("0 \\(0 linked"), "{md}");
 }

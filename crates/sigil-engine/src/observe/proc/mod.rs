@@ -46,9 +46,9 @@ use std::path::Path;
 use rustix::fs::{AtFlags, Mode, OFlags};
 use rustix::io::Errno;
 use sigil_model::{
-    Basis, Listener, ListenerId, ListenerOwner, MappingObs, NotObservable, NsInode, ObsSource,
-    Observability, ProcessExe, ProcessObs, ProcessRef, ProcessRole, Protocol, Timestamp, Tri,
-    UnknownReason, UntrustedText,
+    Basis, Listener, ListenerId, ListenerOwner, MappingObs, MapsRead, NotObservable, NsInode,
+    ObsSource, Observability, ProcessExe, ProcessObs, ProcessRef, ProcessRole, Protocol, Timestamp,
+    Tri, UnknownReason, UntrustedText,
 };
 
 /// The role of the runtime's server process.
@@ -156,6 +156,8 @@ struct Second {
     /// The process as recorded, for one the listing pass did not record.
     obs: Option<ProcessObs>,
     mappings: Vec<MappingObs>,
+    /// How much of `maps` `mappings` stands for.
+    maps_read: MapsRead,
     detail: Detail,
 }
 
@@ -378,6 +380,7 @@ fn observe_with(
                 }
                 if let Some(obs) = recorded.get_mut(&i) {
                     obs.mappings = read.mappings;
+                    obs.maps_read = read.maps_read;
                 }
                 facts.details.push(read.detail);
             }
@@ -669,6 +672,8 @@ fn observation(
         roles,
         exe,
         mappings: vec![],
+        // Until the second pass reads `maps`, if it does.
+        maps_read: MapsRead::NotRead,
         name: comm.map(UntrustedText::from_bytes),
         argv,
         net_ns,
@@ -743,7 +748,8 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         missing.push(format!("exe: its identity cannot be read ({why:?})"));
     }
     let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
-    let (mut mappings, maps_denied) = mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
+    let (mut mappings, mut maps_read, maps_denied) =
+        mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
     let denied = exe_id == Err(NotObservable::PermissionDenied) && maps_denied;
     let mut exe_id = exe_id.ok();
     let obs = recorded.is_none().then(|| {
@@ -768,11 +774,14 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
     if exec_seen(recorded, first.as_deref(), last.as_deref()) {
         missing.push("exe: the process runs another executable than when it was listed".into());
         exe_id = None;
+        // What was read may be the new image's: dropped, so not read.
         mappings.clear();
+        maps_read = MapsRead::NotRead;
     }
     Pass::Read(Box::new(Second {
         obs,
         mappings,
+        maps_read,
         detail: Detail {
             process,
             exe_id,
@@ -857,21 +866,23 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
 }
 
 /// The file-backed mappings of `maps`, one per distinct (dev, ino, path, deleted) in the order
-/// first seen (one inode reached by two paths gives two), and whether `maps` was refused for
-/// want of permission (PR-4d-2). It is read up to `max_maps_bytes`, and no more than what is
-/// left of `max_maps_total_bytes`.
+/// first seen (one inode reached by two paths gives two), how much of `maps` they stand for, and
+/// whether `maps` was refused for want of permission (PR-4d-2). It is read up to
+/// `max_maps_bytes`, and no more than what is left of `max_maps_total_bytes`: `NotRead` when it
+/// cannot be read or nothing is left, `Part` when it is over a budget or has lines not
+/// understood.
 fn mappings(
     dir: BorrowedFd<'_>,
     process: &ProcessRef,
     ctx: &Ctx<'_>,
     same_mount_ns: &Tri<()>,
     missing: &mut Vec<String>,
-) -> (Vec<MappingObs>, bool) {
+) -> (Vec<MappingObs>, MapsRead, bool) {
     let per_process = ctx.budgets.max_maps_bytes;
     let remaining = ctx.maps_left.get();
     if remaining == 0 {
         missing.push("maps: not read (proc_maps_total_bytes reached)".into());
-        return (vec![], false);
+        return (vec![], MapsRead::NotRead, false);
     }
     let limit = per_process.min(remaining);
     let (bytes, over) = match read_up_to(dir, "maps", limit) {
@@ -879,7 +890,11 @@ fn mappings(
         Err(e) => {
             let why = not_observable(e);
             missing.push(format!("maps: cannot be read ({why:?})"));
-            return (vec![], why == NotObservable::PermissionDenied);
+            return (
+                vec![],
+                MapsRead::NotRead,
+                why == NotObservable::PermissionDenied,
+            );
         }
     };
     ctx.maps_left
@@ -923,7 +938,12 @@ fn mappings(
     if malformed > 0 {
         missing.push(format!("maps: {malformed} lines not understood"));
     }
-    (out, false)
+    let read = if over || malformed > 0 {
+        MapsRead::Part
+    } else {
+        MapsRead::Whole
+    };
+    (out, read, false)
 }
 
 /// The listening sockets a process's fds refer to, and whether its fd table was listed
@@ -1057,7 +1077,7 @@ mod tests {
     use std::path::Path;
 
     use rustix::fs::{Mode, OFlags};
-    use sigil_model::{NotObservable, ProcessExe, ProcessRef, Timestamp, UntrustedText};
+    use sigil_model::{MapsRead, NotObservable, ProcessExe, ProcessRef, Timestamp, UntrustedText};
 
     use super::{
         exec_seen, observe_with, read_up_to, request, Detail, ProcBudgets, ProcFacts, EXITED,
@@ -1182,6 +1202,7 @@ mod tests {
         let f = run(root, &|| std::fs::remove_dir_all(root.join("10")).unwrap());
         assert_eq!(pids(&f), [10, 11]);
         assert!(f.processes[0].mappings.is_empty());
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
         assert_eq!(
             *detail(&f, 10),
             Detail {
@@ -1246,6 +1267,7 @@ mod tests {
             return;
         }
         assert_eq!(pids(&f), [10, 11]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
         let d = detail(&f, 10);
         assert!(d.denied, "{d:?}");
         assert_eq!(
@@ -1308,6 +1330,8 @@ mod tests {
         });
         assert_eq!(pids(&f), [10, 11]);
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        // Code review of PR-4d-2, R-A: what was read is dropped, so `maps` counts as not read.
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
         let d = detail(&f, 10);
         assert_eq!(d.exe_id, None);
         assert_eq!(
