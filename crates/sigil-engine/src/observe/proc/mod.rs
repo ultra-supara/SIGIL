@@ -29,12 +29,16 @@
 //! through `exe`, which follows the link to the file the process runs and never opens it),
 //! `maps` up to `proc_maps_bytes` (and `proc_maps_total_bytes` over all of them), and `ns/mnt`.
 //! A mapping is one per distinct (dev, ino, path, deleted): one inode reached by two paths gives
-//! two. It is an observation only: nothing is derived from one, or from its absence (F-T1). An
-//! exec keeps the PID and the start time: the executable's path and identity (the runtime's
-//! also read by the listing pass), and the runtime's arguments, are read again after `maps`, and
-//! what was read is dropped when one changed (`second`).
-//! Linking them to scanned files is `analyze::runtime_processes`. A listener's holder outside the
-//! runtime's tree is not read again; one that may be the runtime gets a [`Detail`] saying so.
+//! two. It is an observation only: nothing is derived from one, or from its absence (F-T1).
+//! Linking executables and mappings to scanned files is `analyze::runtime_processes`. A
+//! listener's holder outside the runtime's tree is not read again; one that may be the runtime
+//! gets a [`Detail`] saying so.
+//!
+//! An exec keeps the PID and the start time. The listing pass reads the executable's path of
+//! every process it records, but its identity only of the runtime. The second pass reads the
+//! path and the identity before `maps` and again after it, then the runtime's arguments, then
+//! `stat` again: a process that exited meanwhile is gone, and what was read of one whose path,
+//! identity, stack address or arguments changed is dropped (`second`).
 //!
 //! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
 //! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
@@ -163,6 +167,9 @@ struct Ctx<'a> {
     own_mnt_ns: Option<u64>,
     /// The bytes of `maps` still to be read in this observation (`max_maps_total_bytes`).
     maps_left: Cell<u64>,
+    /// Called with each process's PID right after its `maps` was read: the tests' way to change
+    /// it during the second pass's reads. A no-op outside them.
+    after_maps: &'a dyn Fn(u32),
 }
 
 /// What the second pass read of one process.
@@ -223,17 +230,19 @@ enum Scan {
 
 /// Reads the process and listener tables under `proc_root` (`/proc` outside tests).
 pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBudgets) -> ProcFacts {
-    observe_with(proc_root, at, boot_id, budgets, &|| {})
+    observe_with(proc_root, at, boot_id, budgets, &|| {}, &|_| {})
 }
 
-/// As [`observe`], calling `between` after the listing pass and before the second: the tests' way
-/// to change a process meanwhile.
+/// As [`observe`], calling `between` after the listing pass and before the second, and
+/// `after_maps` with each process's PID right after the second pass read its `maps`: the tests'
+/// way to change a process meanwhile.
 fn observe_with(
     proc_root: &Path,
     at: &Timestamp,
     boot_id: &str,
     budgets: ProcBudgets,
     between: &dyn Fn(),
+    after_maps: &dyn Fn(u32),
 ) -> ProcFacts {
     let mut facts = ProcFacts {
         processes: vec![],
@@ -381,6 +390,7 @@ fn observe_with(
         budgets,
         own_mnt_ns,
         maps_left: Cell::new(budgets.max_maps_total_bytes),
+        after_maps,
     };
     let observed = descendants(&scanned);
     for (i, s) in scanned.iter().enumerate() {
@@ -759,23 +769,31 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// path it records is the one last read.
 ///
 /// An exec keeps the PID and the start time, and an exec of the same path keeps the path too.
-/// The reads are, in order: `stat`; the executable's path, then its identity (a zombie is gone
-/// here); `ns/mnt`; `maps`; the identity again; the path again; and, for the runtime, `cmdline`
-/// again. What was read is taken as another program's, and its identity and mappings are
-/// dropped (`maps` counts as not read), when:
+/// The reads are, in order: `stat` (the start time, and where the stack starts); the
+/// executable's path, then its identity (a zombie is gone here); `ns/mnt`; `maps`; the identity
+/// again; the path again; for the runtime, `cmdline` again; and `stat` again. That last read
+/// decides whether the process exited during the others, which an exit ends early or empties:
+/// then it is `Gone`. Otherwise what was read is taken as another program's, and its identity
+/// and mappings are dropped (`maps` counts as not read), when:
 /// - the path changed since the listing pass, or between its two reads (`exec_seen`);
 /// - the identity changed between its two reads, or since the listing pass read the runtime's
 ///   (`identity_changed`);
+/// - `startstack` or `arg_start` moved between the two `stat` reads (`stack_moved`);
 /// - the runtime's arguments are not the ones its role rests on (`argv_changed`).
 ///
 /// The role and the argv recorded at listing are kept: they held then, and the gap says that
 /// this pass may have read another program.
 ///
-/// Code review of PR-4d-2, R-B: several `/proc` reads are not one atomic snapshot. SIGIL checks
-/// that the executable's path and identity, and for the runtime its arguments, are the same
-/// before and after `maps`. An exec of the same file with the same arguments between those reads
-/// cannot be told apart; what the session states (that file, those arguments, those mappings at
-/// `at`) still holds of the process then.
+/// Code review of PR-4d-2, R-B, and review of R2: several `/proc` reads are not one atomic
+/// snapshot. An exec between them is seen by the executable's path or identity, by the
+/// runtime's arguments, or by `startstack` or `arg_start`, which an exec places anew under ASLR;
+/// an exit is seen by the last `stat`. The kernel ends a `maps` read early at an exec or an
+/// exit, so a read cut short so is never kept once the exec or the exit is seen. What cannot be
+/// told apart is an exec of the same file (for the runtime, with the same arguments) while those
+/// two fields are not shown (0 to a reader not permitted to see them) or do not move (ASLR off).
+/// What holds then is that every mapping kept was mapped, during the reads, by the process
+/// running that file (with those arguments), and that `Whole` means read to an end such an exec
+/// may have brought early.
 fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
     let dir = match open_dir(ctx.root, &s.pid.to_string()) {
         Ok(dir) => dir,
@@ -783,16 +801,10 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         Err(e) => return Pass::Unreadable(not_observable(e)),
     };
     let dir = dir.as_fd();
-    match read_limited(dir, "stat", 4096) {
-        Ok(Read::Whole(bytes)) => match parse::stat_start_ticks(&String::from_utf8_lossy(&bytes)) {
-            Some(ticks) if ticks == start_ticks => {}
-            Some(_) => return Pass::Gone,
-            None => return Pass::Unreadable(NotObservable::ReadIncomplete),
-        },
-        Ok(Read::OverLimit) => return Pass::Unreadable(NotObservable::ReadIncomplete),
-        Err(Errno::NOENT | Errno::SRCH) => return Pass::Gone,
-        Err(e) => return Pass::Unreadable(not_observable(e)),
-    }
+    let first_stack = match restat(dir, start_ticks) {
+        Ok(stat) => parse::stat_stack_addresses(&stat),
+        Err(pass) => return pass,
+    };
     let process = ProcessRef {
         pid: s.pid,
         start_ticks,
@@ -814,6 +826,7 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
     let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
     let (mut mappings, mut maps_read, maps_denied) =
         mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
+    (ctx.after_maps)(s.pid);
     let denied = first_id == Err(NotObservable::PermissionDenied) && maps_denied;
     let again_id = exe_identity(dir);
     let obs = recorded.is_none().then(|| {
@@ -841,12 +854,20 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         RuntimeMatch::Confirmed(argv) => argv_changed(argv, read_limited(dir, "cmdline", 64 << 10)),
         _ => false,
     };
+    // Review of R2: read last, `stat` says whether the process exited during the reads above,
+    // which an exit ends early (`maps`) or empties (`cmdline`): then none of them is a change.
+    let last_stack = match restat(dir, start_ticks) {
+        Ok(stat) if matches!(parse::stat_state(&stat), Some(b'Z' | b'X')) => return Pass::Gone,
+        Ok(stat) => parse::stat_stack_addresses(&stat),
+        Err(pass) => return pass,
+    };
     let other_exe = exec_seen(recorded, first.as_deref(), last.as_deref())
-        || identity_changed(s.exe_id.as_ref(), &first_id, &again_id);
+        || identity_changed(s.exe_id.as_ref(), &first_id, &again_id)
+        || stack_moved(first_stack, last_stack);
     if other_exe {
         missing.push(
-            "exe: the process ran another executable (its path or identity changed) since it was \
-             listed or during the reads"
+            "exe: the process ran another executable (its path, identity or stack address \
+             changed) since it was listed or during the reads"
                 .into(),
         );
     }
@@ -882,14 +903,43 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
 /// second pass's reads, and `last`, after them) than the one expected: the path recorded by the
 /// listing pass, or else the first one read. Then what was read in between may be another
 /// image's (an exec keeps the start time). The path only: `deleted` may change meanwhile. An
-/// exec of the same path is not seen here, but by `identity_changed` when the file changed, and
-/// by `argv_changed` when the runtime's arguments did.
+/// exec of the same path is not seen here, but by `identity_changed` when the file changed, by
+/// `stack_moved`, and by `argv_changed` when the runtime's arguments changed.
 fn exec_seen(recorded: Option<&ProcessExe>, first: Option<&[u8]>, last: Option<&[u8]>) -> bool {
     let expected = match recorded {
         Some(ProcessExe::Path { path, .. }) => Some(path.as_bytes()),
         _ => first,
     };
     expected.is_some_and(|want| [first, last].into_iter().flatten().any(|path| path != want))
+}
+
+/// `stat` read by the second pass (PR-4d-2) while its PID is still the process listed (the same
+/// start time): its text. Otherwise `Gone` when the process is gone or its PID is another
+/// process now, and `Unreadable` when `stat` cannot be read.
+fn restat(dir: BorrowedFd<'_>, start_ticks: u64) -> Result<String, Pass> {
+    let text = match read_limited(dir, "stat", 4096) {
+        Ok(Read::Whole(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+        Ok(Read::OverLimit) => return Err(Pass::Unreadable(NotObservable::ReadIncomplete)),
+        Err(Errno::NOENT | Errno::SRCH) => return Err(Pass::Gone),
+        Err(e) => return Err(Pass::Unreadable(not_observable(e))),
+    };
+    match parse::stat_start_ticks(&text) {
+        Some(ticks) if ticks == start_ticks => Ok(text),
+        Some(_) => Err(Pass::Gone),
+        None => Err(Pass::Unreadable(NotObservable::ReadIncomplete)),
+    }
+}
+
+/// Whether `startstack` or `arg_start` moved between the second pass's first `stat` read and its
+/// last (review of R2): an exec places both anew under ASLR, also one of the same file with the
+/// same arguments. A field is compared only when both reads show it: the kernel shows 0 to a
+/// reader not permitted to see it, and a line too short shows neither.
+fn stack_moved(first: Option<(u64, u64)>, last: Option<(u64, u64)>) -> bool {
+    let (Some(first), Some(last)) = (first, last) else {
+        return false;
+    };
+    let moved = |a: u64, b: u64| a != 0 && b != 0 && a != b;
+    moved(first.0, last.0) || moved(first.1, last.1)
 }
 
 /// Whether the executable's identity changed (code review of PR-4d-2, R-B): the second pass's
@@ -1198,8 +1248,8 @@ mod tests {
     };
 
     use super::{
-        argv_changed, exec_seen, identity_changed, observe_with, read_up_to, request, Detail,
-        ProcBudgets, ProcFacts, Read, EXITED, RUNTIME_ROLE,
+        argv_changed, exec_seen, identity_changed, observe_with, read_up_to, request, stack_moved,
+        Detail, ProcBudgets, ProcFacts, Read, EXITED, RUNTIME_ROLE,
     };
 
     /// A process directory. Its `exe` links to a file of the fixture, `<root>/fs/<comm>`.
@@ -1224,15 +1274,36 @@ mod tests {
         symlink(&exe, dir.join("exe")).unwrap();
     }
 
-    /// Writes a process's `stat`, in state `state`.
+    /// Where a fixture process's stack and its arguments start (`stat` fields 28 and 48).
+    const STACK: (u64, u64) = (140_000_000_100, 140_000_000_200);
+
+    /// Writes a process's `stat`, in state `state`, its stack at `STACK`.
     fn stat(root: &Path, pid: u32, ppid: u32, comm: &str, state: char, start: u64) {
-        let fields: Vec<String> = (5..=21).map(|n| n.to_string()).collect();
+        stat_stack(root, pid, ppid, comm, state, start, STACK);
+    }
+
+    /// Writes a process's `stat`, all 52 fields, in state `state`, its stack and its arguments
+    /// starting at `stack`. Each other field from the 5th holds its number.
+    fn stat_stack(
+        root: &Path,
+        pid: u32,
+        ppid: u32,
+        comm: &str,
+        state: char,
+        start: u64,
+        stack: (u64, u64),
+    ) {
+        let fields: Vec<String> = (5..=52)
+            .map(|n| match n {
+                22 => start.to_string(),
+                28 => stack.0.to_string(),
+                48 => stack.1.to_string(),
+                _ => n.to_string(),
+            })
+            .collect();
         std::fs::write(
             root.join(pid.to_string()).join("stat"),
-            format!(
-                "{pid} ({comm}) {state} {ppid} {} {start} 0 0\n",
-                fields.join(" ")
-            ),
+            format!("{pid} ({comm}) {state} {ppid} {}\n", fields.join(" ")),
         )
         .unwrap();
     }
@@ -1259,7 +1330,14 @@ mod tests {
 
     fn run(root: &Path, between: &dyn Fn()) -> ProcFacts {
         let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
-        observe_with(root, &at, "b", ProcBudgets::default(), between)
+        observe_with(root, &at, "b", ProcBudgets::default(), between, &|_| {})
+    }
+
+    /// As `run`, calling `after_maps` with each process's PID right after the second pass read
+    /// its `maps`.
+    fn run_after_maps(root: &Path, after_maps: &dyn Fn(u32)) -> ProcFacts {
+        let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
+        observe_with(root, &at, "b", ProcBudgets::default(), &|| {}, after_maps)
     }
 
     fn pids(f: &ProcFacts) -> Vec<u32> {
@@ -1453,14 +1531,22 @@ mod tests {
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
         let d = detail(&f, 10);
         assert_eq!(d.exe_id, None);
-        assert_eq!(
-            d.missing,
-            ["exe: the process ran another executable (its path or identity changed) since it was listed or during the reads"]
-        );
+        assert_eq!(d.missing, [RAN_ANOTHER]);
     }
 
     /// One file-backed mapping, so that a process with none had its mappings dropped.
     const MAPPED: &str = "7f0000000000-7f0000001000 r-xp 00000000 08:01 1234 /x/lib.so\n";
+
+    /// The gap of a process seen to run another executable.
+    const RAN_ANOTHER: &str = "exe: the process ran another executable (its path, identity or stack address changed) since it was listed or during the reads";
+
+    /// Replaces the fixture's file `<root>/fs/<comm>` with another at the same path: written
+    /// beside it and renamed over it, so both exist at once and their inodes differ.
+    fn replace(root: &Path, comm: &str) {
+        let new = root.join("fs").join(format!("{comm}.new"));
+        std::fs::write(&new, b"new").unwrap();
+        std::fs::rename(&new, root.join("fs").join(comm)).unwrap();
+    }
 
     /// The `dev:ino` of the fixture's file `<root>/fs/<comm>`.
     fn id(root: &Path, comm: &str) -> (u64, u64) {
@@ -1518,22 +1604,16 @@ mod tests {
         let root = d.path();
         fixture(root);
         std::fs::write(root.join("10/maps"), MAPPED).unwrap();
-        let exe = root.join("fs/ollama");
         let listed = id(root, "ollama");
-        let f = run(root, &|| {
-            // Written beside it and renamed over it: both exist at once, so their inodes differ.
-            let new = root.join("fs/ollama.new");
-            std::fs::write(&new, b"new").unwrap();
-            std::fs::rename(&new, &exe).unwrap();
-        });
+        let f = run(root, &|| replace(root, "ollama"));
         assert_ne!(id(root, "ollama"), listed, "the file was not replaced");
-        assert_eq!(std::fs::read_link(root.join("10/exe")).unwrap(), exe);
+        assert_eq!(
+            std::fs::read_link(root.join("10/exe")).unwrap(),
+            root.join("fs/ollama")
+        );
         assert_eq!(pids(&f), [10, 11]);
         let d = detail(&f, 10);
-        assert_eq!(
-            d.missing,
-            ["exe: the process ran another executable (its path or identity changed) since it was listed or during the reads"]
-        );
+        assert_eq!(d.missing, [RAN_ANOTHER]);
         assert_eq!(d.exe_id, None);
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
@@ -1561,6 +1641,182 @@ mod tests {
         assert!(d.missing.is_empty(), "{d:?}");
         assert_eq!(d.exe_id, Some(id(root, "runner")));
         assert_eq!(f.processes[1].maps_read, MapsRead::Whole);
+    }
+
+    /// Review of R2: another file at the runtime's path, run after its `maps` was read, keeps
+    /// the path the last read sees; only the identity read again after `maps` sees it.
+    #[test]
+    fn another_file_run_at_the_same_path_after_maps_is_seen_by_the_identity_read_again() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let listed = id(root, "ollama");
+        let f = run_after_maps(root, &|pid| {
+            if pid == 10 {
+                replace(root, "ollama");
+            }
+        });
+        assert_ne!(id(root, "ollama"), listed, "the file was not replaced");
+        assert_eq!(pids(&f), [10, 11]);
+        let d = detail(&f, 10);
+        assert_eq!(d.missing, [RAN_ANOTHER]);
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        assert_listed_role(&f);
+    }
+
+    /// Review of R2: the runtime's arguments are read again after its `maps`, so a change
+    /// right after `maps` is seen.
+    #[test]
+    fn the_runtimes_arguments_changed_after_maps_are_seen() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let f = run_after_maps(root, &|pid| {
+            if pid == 10 {
+                std::fs::write(root.join("10/cmdline"), b"/x/ollama\0version\0").unwrap();
+            }
+        });
+        assert_eq!(pids(&f), [10, 11]);
+        let d = detail(&f, 10);
+        assert_eq!(
+            d.missing,
+            ["cmdline: the runtime's arguments changed, or cannot be read again, since it was listed"]
+        );
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        assert_listed_role(&f);
+    }
+
+    /// Review of R2: a runtime that exits after its `maps` was read (its `exe` no longer
+    /// resolves, its `cmdline` is empty) ran no other executable: the last `stat` says it exited.
+    /// It stays recorded as the listing pass saw it, with `EXITED`; what was read is dropped, as a
+    /// `maps` read ends early at an exit.
+    #[test]
+    fn a_runtime_that_exits_after_maps_stays_recorded_as_exited() {
+        for state in ['Z', 'X'] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            let f = run_after_maps(root, &|pid| {
+                if pid == 10 {
+                    dangle(root, 10);
+                    std::fs::write(root.join("10/cmdline"), b"").unwrap();
+                    stat(root, 10, 1, "ollama", state, 100);
+                }
+            });
+            assert_eq!(pids(&f), [10, 11], "{state}");
+            assert!(f.processes[0].mappings.is_empty(), "{state}");
+            assert_eq!(f.processes[0].maps_read, MapsRead::NotRead, "{state}");
+            assert_listed_role(&f);
+            assert_eq!(
+                *detail(&f, 10),
+                Detail {
+                    process: ProcessRef {
+                        pid: 10,
+                        start_ticks: 100,
+                        boot_id: "b".to_string(),
+                    },
+                    exe_id: None,
+                    denied: false,
+                    missing: vec![EXITED.to_string()],
+                },
+                "{state}"
+            );
+        }
+    }
+
+    /// Review of R2: a descendant that exits after its `maps` was read is gone, as one that
+    /// exited before: not recorded, and no gap. So is one whose directory is gone.
+    #[test]
+    fn a_descendant_that_exits_after_maps_is_gone() {
+        for state in ['Z', 'X', '-'] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("11/maps"), MAPPED).unwrap();
+            let f = run_after_maps(root, &|pid| {
+                if pid != 11 {
+                    return;
+                }
+                if state == '-' {
+                    std::fs::remove_dir_all(root.join("11")).unwrap();
+                } else {
+                    dangle(root, 11);
+                    stat(root, 11, 10, "runner", state, 200);
+                }
+            });
+            assert_eq!(pids(&f), [10], "{state}");
+            assert_eq!(f.details.len(), 1, "{state}: {:?}", f.details);
+            assert!(f.process_gaps.is_empty(), "{state}: {:?}", f.process_gaps);
+        }
+    }
+
+    /// Review of R2: an exec of the same file with the same arguments keeps the start time,
+    /// the executable's path and identity, and `cmdline`, but places the stack anew under ASLR.
+    /// `stat`'s `startstack` or `arg_start` moved between its first read and its last is an exec;
+    /// a field shown as 0 (to a reader not permitted to see it) says nothing.
+    #[test]
+    fn an_exec_seen_only_by_the_stack_addresses_drops_what_was_read() {
+        let (stack, args) = STACK;
+        for (moved, seen) in [
+            ((stack + 4096, args), true),
+            ((stack, args + 4096), true),
+            ((0, 0), false),
+            ((stack, args), false),
+        ] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            let f = run_after_maps(root, &|pid| {
+                if pid == 10 {
+                    stat_stack(root, 10, 1, "ollama", 'S', 100, moved);
+                }
+            });
+            assert_eq!(pids(&f), [10, 11], "{moved:?}");
+            let d = detail(&f, 10);
+            assert_listed_role(&f);
+            if seen {
+                assert_eq!(d.missing, [RAN_ANOTHER], "{moved:?}");
+                assert_eq!(d.exe_id, None, "{moved:?}");
+                assert!(f.processes[0].mappings.is_empty(), "{moved:?}");
+                assert_eq!(f.processes[0].maps_read, MapsRead::NotRead, "{moved:?}");
+            } else {
+                assert!(d.missing.is_empty(), "{moved:?}: {d:?}");
+                assert_eq!(d.exe_id, Some(id(root, "ollama")), "{moved:?}");
+                assert_eq!(f.processes[0].mappings.len(), 1, "{moved:?}");
+                assert_eq!(f.processes[0].maps_read, MapsRead::Whole, "{moved:?}");
+            }
+        }
+    }
+
+    /// Review of R2: an exec places `startstack` and `arg_start` anew under ASLR. A field moved
+    /// between the two reads is an exec; one either read shows as 0 (not permitted), or one
+    /// missing, says nothing.
+    #[test]
+    fn an_exec_is_seen_by_a_stack_address_that_moved() {
+        for (first, last, moved) in [
+            (Some((1, 2)), Some((1, 2)), false),
+            (Some((1, 2)), Some((3, 2)), true),
+            (Some((1, 2)), Some((1, 3)), true),
+            (Some((1, 2)), Some((3, 4)), true),
+            // Not shown, or not read: nothing is concluded.
+            (Some((1, 2)), Some((0, 0)), false),
+            (Some((0, 0)), Some((1, 2)), false),
+            (Some((0, 2)), Some((1, 2)), false),
+            (Some((0, 2)), Some((1, 3)), true),
+            (None, Some((1, 2)), false),
+            (Some((1, 2)), None, false),
+            (None, None, false),
+        ] {
+            assert_eq!(stack_moved(first, last), moved, "{first:?} {last:?}");
+        }
     }
 
     /// Code review of PR-4d-2, R-B: the executable's identity changed when the second pass's two

@@ -138,6 +138,19 @@ pub fn stat_state(stat: &str) -> Option<u8> {
     }
 }
 
+/// `startstack` (field 28) and `arg_start` (field 48) of `/proc/<pid>/stat`: where the stack and
+/// the arguments start, which an exec places anew under ASLR. The kernel shows 0 for both to a
+/// reader not permitted to see them. Counted after the last `)` as [`stat_start_ticks`]
+/// (PR-4d-2).
+pub fn stat_stack_addresses(stat: &str) -> Option<(u64, u64)> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    // `rest` starts at field 3 (state); field 28 is the 26th of it, and field 48 the 20th after.
+    let mut fields = rest.split_whitespace();
+    let start_stack = fields.nth(25)?.parse().ok()?;
+    let arg_start = fields.nth(19)?.parse().ok()?;
+    Some((start_stack, arg_start))
+}
+
 /// One file-backed line of `/proc/<pid>/maps` (PR-4d-2): the object's device as `st_dev`
 /// encodes it, its inode, its path as the kernel printed it (a newline is `\012`), and whether
 /// the kernel marked it deleted. The kernel appends ` (deleted)` to the path, so a live file whose
@@ -494,5 +507,29 @@ mod tests {
         assert_eq!(stat_state("4300 (x)"), None);
         assert_eq!(stat_state("4300 (x) ZZ 1"), None);
         assert_eq!(stat_state("no parenthesis"), None);
+    }
+
+    /// Review of R2: `startstack` is field 28 and `arg_start` field 48, counted after the last
+    /// `)`.
+    #[test]
+    fn the_stack_addresses_are_fields_28_and_48_after_the_name() {
+        let fields = |last: u32| (3..=last).map(|n| n.to_string()).collect::<Vec<_>>();
+        let stat = format!("4242 (ollama) {}", fields(52).join(" "));
+        assert_eq!(stat_stack_addresses(&stat), Some((28, 48)));
+        let stat = format!("4242 (a) b (c)) {}", fields(48).join(" "));
+        assert_eq!(stat_stack_addresses(&stat), Some((28, 48)));
+        // Shown as 0 to a reader not permitted to see them: read as such.
+        let mut zeros = fields(52);
+        zeros[28 - 3] = "0".into();
+        zeros[48 - 3] = "0".into();
+        let stat = format!("4242 (ollama) {}", zeros.join(" "));
+        assert_eq!(stat_stack_addresses(&stat), Some((0, 0)));
+        let stat = format!("4242 (ollama) {}", fields(47).join(" "));
+        assert_eq!(stat_stack_addresses(&stat), None);
+        let mut bad = fields(52);
+        bad[48 - 3] = "-1".into();
+        let stat = format!("4242 (ollama) {}", bad.join(" "));
+        assert_eq!(stat_stack_addresses(&stat), None);
+        assert_eq!(stat_stack_addresses("no parenthesis"), None);
     }
 }
