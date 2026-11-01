@@ -530,8 +530,9 @@ fn a_runtime_whose_stat_is_gone_has_exited() {
 #[test]
 fn the_runtimes_role_and_its_argv_are_one_read_of_cmdline() {
     // Re-review of #74: the role rests on `cmdline`, and the argv recorded must be that same
-    // evidence, so `cmdline` is read once. It is never opened for a process whose `comm` is not
-    // `ollama`, even one that is recorded (nginx, fronting).
+    // evidence, so it is one read. It is never opened for a process whose `comm` is not
+    // `ollama`, even one that is recorded (nginx, fronting). Code review of PR-4d-2, R-B: the
+    // second pass opens the runtime's once more, only to compare it with that read.
     let mut fake = FakeProc::new();
     fake.process(&serve(4242, &[7001]));
     fake.listen("0.0.0.0", 11434, 7001);
@@ -552,7 +553,7 @@ fn the_runtimes_role_and_its_argv_are_one_read_of_cmdline() {
         fake.pid_dir(1).join("cmdline"),
     ]);
     let f = run(&fake);
-    assert_eq!(opens.counts(), [1, 0, 0, 0]);
+    assert_eq!(opens.counts(), [2, 0, 0, 0]);
 
     let runtime = f.processes.iter().find(|p| p.process.pid == 4242).unwrap();
     assert_eq!(runtime.roles, [ProcessRole::new(RUNTIME_ROLE).unwrap()]);

@@ -14,10 +14,11 @@
 //!   completely; otherwise its owner is `Unknown`.
 //! - **The runtime.** `ollama serve`: `argv[0]`'s basename is `ollama` and `argv[1]` is `serve`.
 //!   When `exe` can be read, its basename must also be `ollama`. `cmdline` is read only for
-//!   processes whose `comm` is `ollama`, and only once: the argv recorded for the runtime is the
-//!   one its role rests on. A process whose name or arguments cannot be read may be
-//!   the runtime: it is a gap, and the listeners it holds are kept. So is the runtime when it
-//!   cannot be recorded (its `stat`); the listeners it holds are kept with an `Unknown` owner.
+//!   processes whose `comm` is `ollama`, and the argv recorded for the runtime is the one read
+//!   its role rests on; the second pass reads the runtime's again only to compare (PR-4d-2). A
+//!   process whose name or arguments cannot be read may be the runtime: it is a gap, and the
+//!   listeners it holds are kept. So is the runtime when it cannot be recorded (its `stat`); the
+//!   listeners it holds are kept with an `Unknown` owner.
 //!
 //! Processes are read one at a time, and each one's directory is closed before the next, so the
 //! number of open files does not grow with the process table.
@@ -28,7 +29,10 @@
 //! through `exe`, which follows the link to the file the process runs and never opens it),
 //! `maps` up to `proc_maps_bytes` (and `proc_maps_total_bytes` over all of them), and `ns/mnt`.
 //! A mapping is one per distinct (dev, ino, path, deleted): one inode reached by two paths gives
-//! two. It is an observation only: nothing is derived from one, or from its absence (F-T1).
+//! two. It is an observation only: nothing is derived from one, or from its absence (F-T1). An
+//! exec keeps the PID and the start time: the executable's path and identity (the runtime's
+//! also read by the listing pass), and the runtime's arguments, are read again after `maps`, and
+//! what was read is dropped when one changed (`second`).
 //! Linking them to scanned files is `analyze::runtime_processes`. A listener's holder outside the
 //! runtime's tree is not read again; one that may be the runtime gets a [`Detail`] saying so.
 //!
@@ -132,7 +136,8 @@ pub struct ProcFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detail {
     pub process: ProcessRef,
-    /// Its executable's `dev:ino` (`stat` through `exe`), when it could be read.
+    /// Its executable's `dev:ino` (`stat` through `exe`), when it could be read and the process
+    /// was not seen to run another program meanwhile.
     pub exe_id: Option<(u64, u64)>,
     /// Both the executable's identity and `maps` were refused for want of permission.
     pub denied: bool,
@@ -196,6 +201,9 @@ struct Scanned {
     /// Its parent and start time (`stat`), or why they cannot be read.
     lineage: Result<(u32, u64), NotObservable>,
     runtime: RuntimeMatch,
+    /// For a confirmed runtime only, its executable's `dev:ino` (`stat` through `exe`) or why it
+    /// cannot be read: what the second pass compares its own reads with (PR-4d-2).
+    exe_id: Option<Result<(u64, u64), NotObservable>>,
     fronting: bool,
     /// The listening sockets its fds refer to.
     listening: Vec<u64>,
@@ -596,6 +604,9 @@ fn scan(
         Some(b"ollama") => runtime_match(dir),
         Some(_) => RuntimeMatch::Rejected,
     };
+    // Code review of PR-4d-2, R-B: an exec of another file at the same path keeps the path, so
+    // the second pass also compares the runtime's executable identity with the one listed here.
+    let exe_id = matches!(runtime, RuntimeMatch::Confirmed(_)).then(|| exe_identity(dir));
     let fronting = comm
         .as_deref()
         .is_some_and(|c| FRONTING.iter().any(|f| f.as_bytes() == c));
@@ -621,6 +632,7 @@ fn scan(
         comm,
         lineage,
         runtime,
+        exe_id,
         fronting,
         listening: listening_held,
         fd_table,
@@ -657,8 +669,8 @@ fn exe(dir: BorrowedFd<'_>) -> Result<(Vec<u8>, bool), NotObservable> {
     }
 }
 
-/// The process as recorded. `argv` only for the runtime: the one its role rests on, never read
-/// again.
+/// The process as recorded. `argv` only for the runtime: the one its role rests on, which the
+/// second pass reads again only to compare (`argv_changed`).
 fn observation(
     dir: BorrowedFd<'_>,
     pid: u32,
@@ -745,6 +757,25 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// directory or `stat` cannot be read again. `recorded` is the executable the listing pass
 /// recorded; for a process it did not record (`None`), its `ProcessObs` is read too, and the
 /// path it records is the one last read.
+///
+/// An exec keeps the PID and the start time, and an exec of the same path keeps the path too.
+/// The reads are, in order: `stat`; the executable's path, then its identity (a zombie is gone
+/// here); `ns/mnt`; `maps`; the identity again; the path again; and, for the runtime, `cmdline`
+/// again. What was read is taken as another program's, and its identity and mappings are
+/// dropped (`maps` counts as not read), when:
+/// - the path changed since the listing pass, or between its two reads (`exec_seen`);
+/// - the identity changed between its two reads, or since the listing pass read the runtime's
+///   (`identity_changed`);
+/// - the runtime's arguments are not the ones its role rests on (`argv_changed`).
+///
+/// The role and the argv recorded at listing are kept: they held then, and the gap says that
+/// this pass may have read another program.
+///
+/// Code review of PR-4d-2, R-B: several `/proc` reads are not one atomic snapshot. SIGIL checks
+/// that the executable's path and identity, and for the runtime its arguments, are the same
+/// before and after `maps`. An exec of the same file with the same arguments between those reads
+/// cannot be told apart; what the session states (that file, those arguments, those mappings at
+/// `at`) still holds of the process then.
 fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
     let dir = match open_dir(ctx.root, &s.pid.to_string()) {
         Ok(dir) => dir,
@@ -768,11 +799,11 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         boot_id: ctx.when.boot_id.to_string(),
     };
     let mut missing = vec![];
-    // An exec keeps the start time, so the executable's path is read before the reads below and
-    // again after them (`exec_seen`).
+    // An exec keeps the start time, so the executable's path and identity are read before the
+    // reads below and again after them.
     let first = exe(dir).ok().map(|(path, _)| path);
-    let exe_id = exe_identity(dir);
-    if let Err(why) = exe_id {
+    let first_id = exe_identity(dir);
+    if let Err(why) = first_id {
         // `exe` gives `ENOENT` for a zombie or a process gone meanwhile, but also for a live one
         // whose executable's file system no longer resolves it (FUSE `hard_remove`).
         if why == NotObservable::NoProcess && exited(dir) {
@@ -783,8 +814,8 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
     let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
     let (mut mappings, mut maps_read, maps_denied) =
         mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
-    let denied = exe_id == Err(NotObservable::PermissionDenied) && maps_denied;
-    let mut exe_id = exe_id.ok();
+    let denied = first_id == Err(NotObservable::PermissionDenied) && maps_denied;
+    let again_id = exe_identity(dir);
     let obs = recorded.is_none().then(|| {
         observation(
             dir,
@@ -804,13 +835,36 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         },
         None => exe(dir).ok().map(|(path, _)| path),
     };
-    if exec_seen(recorded, first.as_deref(), last.as_deref()) {
-        missing.push("exe: the process runs another executable than when it was listed".into());
-        exe_id = None;
-        // What was read may be the new image's: dropped, so not read.
+    // Code review of PR-4d-2, R-B: `ollama serve` re-exec'd as `ollama version` keeps the path,
+    // and the file too, but not its arguments.
+    let other_argv = match &s.runtime {
+        RuntimeMatch::Confirmed(argv) => argv_changed(argv, read_limited(dir, "cmdline", 64 << 10)),
+        _ => false,
+    };
+    let other_exe = exec_seen(recorded, first.as_deref(), last.as_deref())
+        || identity_changed(s.exe_id.as_ref(), &first_id, &again_id);
+    if other_exe {
+        missing.push(
+            "exe: the process ran another executable (its path or identity changed) since it was \
+             listed or during the reads"
+                .into(),
+        );
+    }
+    if other_argv {
+        missing.push(
+            "cmdline: the runtime's arguments changed, or cannot be read again, since it was \
+             listed"
+                .into(),
+        );
+    }
+    let exe_id = if other_exe || other_argv {
+        // What was read may be another program's: dropped, so not read.
         mappings.clear();
         maps_read = MapsRead::NotRead;
-    }
+        None
+    } else {
+        first_id.ok()
+    };
     Pass::Read(Box::new(Second {
         obs,
         mappings,
@@ -827,13 +881,39 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
 /// Whether the process ran another executable at some read of its path (`first`, before the
 /// second pass's reads, and `last`, after them) than the one expected: the path recorded by the
 /// listing pass, or else the first one read. Then what was read in between may be another
-/// image's (an exec keeps the start time). The path only: `deleted` may change meanwhile.
+/// image's (an exec keeps the start time). The path only: `deleted` may change meanwhile. An
+/// exec of the same path is not seen here, but by `identity_changed` when the file changed, and
+/// by `argv_changed` when the runtime's arguments did.
 fn exec_seen(recorded: Option<&ProcessExe>, first: Option<&[u8]>, last: Option<&[u8]>) -> bool {
     let expected = match recorded {
         Some(ProcessExe::Path { path, .. }) => Some(path.as_bytes()),
         _ => first,
     };
     expected.is_some_and(|want| [first, last].into_iter().flatten().any(|path| path != want))
+}
+
+/// Whether the executable's identity changed (code review of PR-4d-2, R-B): the second pass's
+/// two reads of it (`first`, before `maps`, and `again`, after it) differ as read, an error
+/// being a reading too; or the listing pass read one (`listed`, for the runtime only) and
+/// `first` is not that one. An error counts there too: a setuid exec makes the process
+/// non-dumpable, and `exe` then gives `EACCES`. A listing that read no identity says nothing.
+fn identity_changed(
+    listed: Option<&Result<(u64, u64), NotObservable>>,
+    first: &Result<(u64, u64), NotObservable>,
+    again: &Result<(u64, u64), NotObservable>,
+) -> bool {
+    let since_listing = matches!(listed, Some(Ok(id)) if *first != Ok(*id));
+    since_listing || first != again
+}
+
+/// Whether the runtime's arguments, read again after its `maps` (`again`, up to 64 KiB as the
+/// listing pass reads them), are not the ones its role rests on (`listed`): `cmdline` cannot be
+/// read, is over 64 KiB, or does not parse to exactly them (code review of PR-4d-2, R-B).
+fn argv_changed(listed: &[Vec<u8>], again: Result<Read, Errno>) -> bool {
+    match again {
+        Ok(Read::Whole(bytes)) => parse::cmdline(&bytes) != listed,
+        Ok(Read::OverLimit) | Err(_) => true,
+    }
 }
 
 /// Whether the process is a zombie or gone, by its `stat` read again (PR-4d-2): gone, or in
@@ -1108,14 +1188,18 @@ fn request(read: usize, limit: u64, buffer: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use std::os::fd::AsFd;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
     use std::path::Path;
 
     use rustix::fs::{Mode, OFlags};
-    use sigil_model::{MapsRead, NotObservable, ProcessExe, ProcessRef, Timestamp, UntrustedText};
+    use rustix::io::Errno;
+    use sigil_model::{
+        MapsRead, NotObservable, ProcessExe, ProcessRef, ProcessRole, Timestamp, UntrustedText,
+    };
 
     use super::{
-        exec_seen, observe_with, read_up_to, request, Detail, ProcBudgets, ProcFacts, EXITED,
+        argv_changed, exec_seen, identity_changed, observe_with, read_up_to, request, Detail,
+        ProcBudgets, ProcFacts, Read, EXITED, RUNTIME_ROLE,
     };
 
     /// A process directory. Its `exe` links to a file of the fixture, `<root>/fs/<comm>`.
@@ -1371,8 +1455,164 @@ mod tests {
         assert_eq!(d.exe_id, None);
         assert_eq!(
             d.missing,
-            ["exe: the process runs another executable than when it was listed"]
+            ["exe: the process ran another executable (its path or identity changed) since it was listed or during the reads"]
         );
+    }
+
+    /// One file-backed mapping, so that a process with none had its mappings dropped.
+    const MAPPED: &str = "7f0000000000-7f0000001000 r-xp 00000000 08:01 1234 /x/lib.so\n";
+
+    /// The `dev:ino` of the fixture's file `<root>/fs/<comm>`.
+    fn id(root: &Path, comm: &str) -> (u64, u64) {
+        let m = std::fs::metadata(root.join("fs").join(comm)).unwrap();
+        (m.dev(), m.ino())
+    }
+
+    /// The runtime keeps the role and the argv the listing pass read: they held then.
+    fn assert_listed_role(f: &ProcFacts) {
+        let runtime = &f.processes[0];
+        assert_eq!(runtime.roles, [ProcessRole::new(RUNTIME_ROLE).unwrap()]);
+        assert_eq!(
+            runtime.argv,
+            Some(vec![
+                UntrustedText::new("/x/ollama"),
+                UntrustedText::new("serve")
+            ])
+        );
+    }
+
+    /// Code review of PR-4d-2, R-B: an exec of the same path keeps the PID, the start time and
+    /// the path, but not the arguments (`ollama serve` re-execs as `ollama version`). What the
+    /// second pass read may be another program's: the runtime keeps no identity or mappings. A
+    /// descendant's arguments are not read again.
+    #[test]
+    fn an_exec_of_the_same_path_with_other_arguments_keeps_no_identity_or_mappings() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let f = run(root, &|| {
+            std::fs::write(root.join("10/cmdline"), b"/x/ollama\0version\0").unwrap();
+            std::fs::write(root.join("11/cmdline"), b"/x/runner\0--other\0").unwrap();
+        });
+        assert_eq!(pids(&f), [10, 11]);
+        let d = detail(&f, 10);
+        assert_eq!(
+            d.missing,
+            ["cmdline: the runtime's arguments changed, or cannot be read again, since it was listed"]
+        );
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        assert_listed_role(&f);
+        let d = detail(&f, 11);
+        assert!(d.missing.is_empty(), "{d:?}");
+        assert_eq!(d.exe_id, Some(id(root, "runner")));
+    }
+
+    /// Code review of PR-4d-2, R-B: the file at the runtime's path replaced, and run again, keeps
+    /// the path, but not the executable's identity the listing pass read.
+    #[test]
+    fn an_exec_of_another_file_at_the_same_path_keeps_no_identity_or_mappings() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let exe = root.join("fs/ollama");
+        let listed = id(root, "ollama");
+        let f = run(root, &|| {
+            // Written beside it and renamed over it: both exist at once, so their inodes differ.
+            let new = root.join("fs/ollama.new");
+            std::fs::write(&new, b"new").unwrap();
+            std::fs::rename(&new, &exe).unwrap();
+        });
+        assert_ne!(id(root, "ollama"), listed, "the file was not replaced");
+        assert_eq!(std::fs::read_link(root.join("10/exe")).unwrap(), exe);
+        assert_eq!(pids(&f), [10, 11]);
+        let d = detail(&f, 10);
+        assert_eq!(
+            d.missing,
+            ["exe: the process ran another executable (its path or identity changed) since it was listed or during the reads"]
+        );
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        assert_listed_role(&f);
+    }
+
+    /// Code review of PR-4d-2, R-B: the same file run with the same arguments raises no gap. The
+    /// runtime keeps its identity and its mappings, read whole; so does its descendant, which has
+    /// no identity read at listing and no arguments read again.
+    #[test]
+    fn the_same_file_with_the_same_arguments_keeps_its_identity_and_mappings() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let f = run(root, &|| {});
+        assert_eq!(pids(&f), [10, 11]);
+        let d = detail(&f, 10);
+        assert!(d.missing.is_empty(), "{d:?}");
+        assert_eq!(d.exe_id, Some(id(root, "ollama")));
+        assert_eq!(f.processes[0].mappings.len(), 1, "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::Whole);
+        assert_listed_role(&f);
+        let d = detail(&f, 11);
+        assert!(d.missing.is_empty(), "{d:?}");
+        assert_eq!(d.exe_id, Some(id(root, "runner")));
+        assert_eq!(f.processes[1].maps_read, MapsRead::Whole);
+    }
+
+    /// Code review of PR-4d-2, R-B: the executable's identity changed when the second pass's two
+    /// reads of it differ, as read (an error is a reading too), or when the first is not the one
+    /// the listing pass read. A listing that read no identity says nothing.
+    #[test]
+    fn an_exec_is_seen_by_the_executables_identity() {
+        type Id = Result<(u64, u64), NotObservable>;
+        let (a, b): (Id, Id) = (Ok((1, 2)), Ok((1, 3)));
+        let denied: Id = Err(NotObservable::PermissionDenied);
+        let gone: Id = Err(NotObservable::NoProcess);
+        for (listed, first, again, changed) in [
+            // Within the pass.
+            (None, a, a, false),
+            (None, a, b, true),
+            (None, a, denied, true),
+            (None, denied, a, true),
+            (None, denied, denied, false),
+            (None, denied, gone, true),
+            // Across the passes.
+            (Some(a), a, a, false),
+            (Some(a), b, b, true),
+            (Some(a), denied, denied, true),
+            (Some(a), a, b, true),
+            (Some(denied), a, a, false),
+        ] {
+            assert_eq!(
+                identity_changed(listed.as_ref(), &first, &again),
+                changed,
+                "{listed:?} {first:?} {again:?}"
+            );
+        }
+    }
+
+    /// Code review of PR-4d-2, R-B: the runtime's arguments read again are the ones its role
+    /// rests on only when `cmdline` is read whole and parses to exactly them.
+    #[test]
+    fn the_runtimes_arguments_read_again_are_the_listed_ones_or_a_change() {
+        let listed = [b"/x/ollama".to_vec(), b"serve".to_vec()];
+        let whole = |bytes: &[u8]| -> Result<Read, Errno> { Ok(Read::Whole(bytes.to_vec())) };
+        for (case, again, changed) in [
+            ("equal", whole(b"/x/ollama\0serve\0"), false),
+            ("different", whole(b"/x/ollama\0version\0"), true),
+            ("a prefix", whole(b"/x/ollama\0"), true),
+            ("longer", whole(b"/x/ollama\0serve\0--x\0"), true),
+            ("empty", whole(b""), true),
+            ("over 64 KiB", Ok(Read::OverLimit), true),
+            ("refused", Err(Errno::ACCESS), true),
+            ("gone", Err(Errno::SRCH), true),
+        ] {
+            assert_eq!(argv_changed(&listed, again), changed, "{case}");
+        }
     }
 
     /// Review of PR-4d-2: one `read(2)` asks for no more than `limit + 1` bytes in all, and
