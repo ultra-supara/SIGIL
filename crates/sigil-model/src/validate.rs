@@ -2188,9 +2188,9 @@ impl<'a> Validator<'a> {
     /// - P5: a required `processes.observed` has an entry for the audit and for each recorded
     ///   process. The runtime's entry is never `OutOfScope`, required or not.
     /// - P6: `maps_read` agrees with `mappings` and with the process's entry: `NotRead` has no
-    ///   mapping, `Part` at least one; a `Complete` entry is about a process read `Whole`; an `Unavailable` or
-    ///   `OutOfScope` one about a process whose `maps` was `NotRead` and whose executable is not
-    ///   linked; an `OutOfScope` one about a listener's holder.
+    ///   mapping, `Part` at least one; a `Complete` entry is about a process read `Whole`; an
+    ///   `Unavailable` or `OutOfScope` one about a process whose `maps` was `NotRead` and whose
+    ///   executable is not linked; an `OutOfScope` one about a listener's holder.
     fn process_links(&mut self) {
         use crate::artifact::DiscoverySource;
         use crate::listener::ListenerOwner;
