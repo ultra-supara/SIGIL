@@ -49,11 +49,13 @@ pub fn link(processes: &mut [ProcessObs], details: &[Detail], instances: &mut [F
             p.exe = ProcessExe::Instance {
                 instance: instances[i].id.clone(),
             };
-            instances[i]
-                .discovered_by
-                .push(DiscoverySource::ProcessExe {
-                    process: p.process.clone(),
-                });
+            // Once per process, however often it is linked (as the store merges its sources).
+            let source = DiscoverySource::ProcessExe {
+                process: p.process.clone(),
+            };
+            if !instances[i].discovered_by.contains(&source) {
+                instances[i].discovered_by.push(source);
+            }
         }
         for m in &mut p.mappings {
             m.instance = one((m.dev, m.ino)).map(|i| instances[i].id.clone());
@@ -233,6 +235,34 @@ mod tests {
         assert!(matches!(processes[1].exe, ProcessExe::Path { .. }));
         assert_eq!(instances[1].discovered_by, vec![DiscoverySource::Walk]);
         assert_eq!(instances[2].discovered_by, vec![DiscoverySource::Walk]);
+    }
+
+    /// Review of a93bfef: linking twice names a process once, as the store merges its sources.
+    #[test]
+    fn linking_twice_names_the_process_once() {
+        let mut instances = vec![placed("inst:a", 1)];
+        let mut processes = vec![obs(10, &[1])];
+        let details = vec![Detail {
+            process: process(10),
+            exe_id: Some((7, 1)),
+            denied: false,
+            missing: vec![],
+        }];
+        link(&mut processes, &details, &mut instances);
+        link(&mut processes, &details, &mut instances);
+        assert_eq!(
+            instances[0].discovered_by,
+            vec![
+                DiscoverySource::Walk,
+                DiscoverySource::ProcessExe {
+                    process: process(10)
+                }
+            ]
+        );
+        assert_eq!(
+            processes[0].mappings[0].instance,
+            Some(InstanceId::new("inst:a").unwrap())
+        );
     }
 
     #[test]

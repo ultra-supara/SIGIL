@@ -18,6 +18,7 @@ use tempfile::TempDir;
 
 mod common;
 use common::proc::*;
+use common::{blob, hex, inst, manifest, LIB, MODEL_MEDIA};
 
 fn elf(e_type: u16) -> Vec<u8> {
     let mut h = vec![0u8; 64];
@@ -63,6 +64,15 @@ fn observation() -> ObservationMeta {
 }
 
 fn session(fake: &FakeProc, models: &Path, install: Option<PathBuf>) -> Session {
+    session_with(fake, models, install, ProcBudgets::default())
+}
+
+fn session_with(
+    fake: &FakeProc,
+    models: &Path,
+    install: Option<PathBuf>,
+    proc_budgets: ProcBudgets,
+) -> Session {
     let req = ObserveRequest {
         store: StoreRequest {
             models_dir: models.to_path_buf(),
@@ -75,7 +85,7 @@ fn session(fake: &FakeProc, models: &Path, install: Option<PathBuf>) -> Session 
             }),
         },
         proc_root: fake.path().to_path_buf(),
-        proc_budgets: ProcBudgets::default(),
+        proc_budgets,
     };
     let s = observe_session(
         &req,
@@ -280,4 +290,141 @@ fn an_unreadable_runtime_is_unavailable_and_incomplete() {
         s.outcome.completeness,
         Completeness::Incomplete { .. }
     ));
+}
+
+/// Review of a93bfef: what was not observed of a process leaves its entry `Partial`, and the
+/// session incomplete.
+#[test]
+fn a_runtime_s_maps_over_its_budget_is_partial() {
+    let fake = FakeProc::new();
+    let lines: Vec<String> = ["/usr/lib/liba.so", "/usr/lib/libb.so"]
+        .iter()
+        .map(|path| {
+            let file = fake.fs(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, path.as_bytes()).unwrap();
+            maps_line(&std::fs::canonicalize(&file).unwrap())
+        })
+        .collect();
+    serve(&fake, "/opt/ollama/bin/ollama", &lines.join("\n"));
+    let models = TempDir::new().unwrap();
+    // The first line and its newline: the second is over the budget.
+    let budgets = ProcBudgets {
+        max_maps_bytes: lines[0].len() as u64 + 1,
+        ..ProcBudgets::default()
+    };
+    let s = session_with(&fake, models.path(), None, budgets);
+    let p = &s.processes[0];
+    assert_eq!(p.mappings.len(), 1);
+    match observed(&s, &Ref::Process(p.process.clone())) {
+        Some(CoverageState::Partial { missing }) => assert!(
+            missing[0].starts_with("maps: over proc_maps_bytes"),
+            "{missing:?}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(observed(&s, &Ref::Audit), Some(CoverageState::Complete));
+    let Completeness::Incomplete {
+        missing_required, ..
+    } = &s.outcome.completeness
+    else {
+        panic!("a runtime observed in part is complete");
+    };
+    assert!(
+        missing_required
+            .iter()
+            .any(|c| c.as_str() == PROCESSES_OBSERVED),
+        "{missing_required:?}"
+    );
+}
+
+/// Review of a93bfef: a process list cut short may hide a descendant, so the audit is `Partial`.
+#[test]
+fn a_process_list_cut_short_leaves_the_audit_partial() {
+    let fake = FakeProc::new();
+    serve(&fake, "/opt/ollama/bin/ollama", "");
+    let models = TempDir::new().unwrap();
+    // PID 1 and the runtime: one of them is listed, whichever comes first.
+    let budgets = ProcBudgets {
+        max_processes: 1,
+        ..ProcBudgets::default()
+    };
+    let s = session_with(&fake, models.path(), None, budgets);
+    match observed(&s, &Ref::Audit) {
+        Some(CoverageState::Partial { missing }) => assert!(
+            missing
+                .iter()
+                .any(|m| m.starts_with("the process list was not read to its end")),
+            "{missing:?}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review of a93bfef: a runner, a child of `ollama serve` that runs the same executable, maps the
+/// model blob it serves. The mapping is linked to the store's blob, and the executable names both
+/// processes.
+#[test]
+fn a_runner_s_mapping_of_a_model_blob_is_linked() {
+    let fake = FakeProc::new();
+    let prefix = install(&fake);
+    let models = TempDir::new().unwrap();
+    let weights = blob(models.path(), b"weights");
+    manifest(models.path(), LIB, None, &[(MODEL_MEDIA, &weights)]);
+    let rel = format!("blobs/sha256-{}", hex(b"weights"));
+    let path = std::fs::canonicalize(models.path().join(&rel)).unwrap();
+    serve(&fake, "/opt/ollama/bin/ollama", "");
+    fake.process(&Proc {
+        pid: 4300,
+        comm: "ollama",
+        argv: &[
+            "/opt/ollama/bin/ollama",
+            "runner",
+            "--model",
+            path.to_str().unwrap(),
+        ],
+        exe: Some("/opt/ollama/bin/ollama"),
+        start_ticks: 4100,
+        ppid: 4242,
+        maps: &maps_line(&path),
+        ..Proc::default()
+    });
+    let s = session(&fake, models.path(), Some(prefix));
+    let by_pid = |pid| s.processes.iter().find(|p| p.process.pid == pid).unwrap();
+    let (server, runner) = (by_pid(4242), by_pid(4300));
+    let linked: Vec<Option<&InstanceId>> = runner
+        .mappings
+        .iter()
+        .map(|m| m.instance.as_ref())
+        .collect();
+    assert_eq!(linked, [Some(&inst(&rel))]);
+    let bin = s
+        .instances
+        .iter()
+        .find(|i| i.id.as_str() == "inst:install/bin/ollama")
+        .unwrap();
+    assert_eq!(
+        bin.discovered_by,
+        vec![
+            DiscoverySource::Walk,
+            DiscoverySource::ProcessExe {
+                process: server.process.clone()
+            },
+            DiscoverySource::ProcessExe {
+                process: runner.process.clone()
+            }
+        ]
+    );
+    for p in [server, runner] {
+        assert_eq!(
+            p.exe,
+            ProcessExe::Instance {
+                instance: bin.id.clone()
+            }
+        );
+    }
+    assert_eq!(
+        observed(&s, &Ref::Process(runner.process.clone())),
+        Some(CoverageState::Complete)
+    );
 }

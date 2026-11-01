@@ -431,6 +431,18 @@ fn hidden_processes_leave_the_audit_incomplete_but_a_visible_finding_stands() {
         (s.outcome.verdict, s.outcome.completeness.clone()),
         (Verdict::Warn, missing_binds_and_processes())
     );
+    // Hidden processes are refused ones, not a part of them (review of a93bfef).
+    let audit = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Audit)
+        .map(|c| &c.state);
+    assert_eq!(
+        audit,
+        Some(&CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied
+        })
+    );
 }
 
 #[test]
