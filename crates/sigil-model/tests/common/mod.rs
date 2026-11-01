@@ -1476,6 +1476,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("17-open-release", open_release()),
         ("18-capability-policy", capability_policy()),
         ("19-service-unit", service_unit()),
+        ("20-observed-processes", observed_processes()),
     ]
 }
 

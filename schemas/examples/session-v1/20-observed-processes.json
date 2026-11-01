@@ -1,0 +1,400 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  ],
+  "request": {
+    "mode": "Observe",
+    "roots": [
+      {"id": "install", "path": "/usr/local"},
+      {"id": "models", "path": "/usr/share/ollama/.ollama/models"}
+    ],
+    "audit": ["runtime_artifacts", "runtime_processes"],
+    "required_checks": ["artifacts.discovery", "processes.observed"],
+    "budgets": {
+      "fds_per_process": 65536,
+      "files": 4096,
+      "proc_maps_bytes": 16777216,
+      "processes_listed": 32768,
+      "tcp_table_bytes": 16777216
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": false
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Exec"}},
+      "slices": [
+        {
+          "id": "sha256:2020202020202020202020202020202020202020202020202020202020202020#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2020202020202020202020202020202020202020202020202020202020202020"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2121212121212121212121212121212121212121212121212121212121212121",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Exec"}},
+      "slices": [
+        {
+          "id": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2121212121212121212121212121212121212121212121212121212121212121"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "size": 5,
+      "format": "Other",
+      "slices": []
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:install/bin/ollama",
+      "root": "install",
+      "path": "/usr/local/bin/ollama",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2020202020202020202020202020202020202020202020202020202020202020"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1020,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Walk",
+        {
+          "ProcessExe": {
+            "process": {
+              "pid": 4242,
+              "start_ticks": 1000,
+              "boot_id": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libggml-cpu-haswell.so",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1022,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    },
+    {
+      "id": "inst:install/lib/ollama/llama-server",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/llama-server",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2121212121212121212121212121212121212121212121212121212121212121"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1021,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Walk",
+        {
+          "ProcessExe": {
+            "process": {
+              "pid": 4300,
+              "start_ticks": 1200,
+              "boot_id": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "inst:models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "root": "models",
+      "path": "/usr/share/ollama/.ollama/models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1030,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    }
+  ],
+  "models": [],
+  "processes": [
+    {
+      "process": {
+        "pid": 4242,
+        "start_ticks": 1000,
+        "boot_id": "00000000-0000-4000-8000-000000000000"
+      },
+      "at": "2026-10-07T07:00:01Z",
+      "roles": ["ollama serve"],
+      "exe": {"Instance": {"instance": "inst:install/bin/ollama"}},
+      "mappings": [
+        {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1020,
+          "path_text": "/usr/local/bin/ollama",
+          "deleted": false,
+          "instance": "inst:install/bin/ollama",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 5001,
+          "path_text": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "deleted": false,
+          "instance": null,
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        }
+      ],
+      "name": "ollama",
+      "argv": ["/usr/local/bin/ollama", "serve"],
+      "net_ns": {"Inode": 4026531840},
+      "fd_table": "Observed"
+    },
+    {
+      "process": {
+        "pid": 4300,
+        "start_ticks": 1200,
+        "boot_id": "00000000-0000-4000-8000-000000000000"
+      },
+      "at": "2026-10-07T07:00:01Z",
+      "roles": [],
+      "exe": {"Instance": {"instance": "inst:install/lib/ollama/llama-server"}},
+      "mappings": [
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1021,
+          "path_text": "/usr/local/lib/ollama/llama-server",
+          "deleted": false,
+          "instance": "inst:install/lib/ollama/llama-server",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1022,
+          "path_text": "/usr/local/lib/ollama/libggml-cpu-haswell.so",
+          "deleted": false,
+          "instance": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1030,
+          "path_text": "/usr/share/ollama/.ollama/models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+          "deleted": false,
+          "instance": "inst:models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 5001,
+          "path_text": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "deleted": false,
+          "instance": null,
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        }
+      ],
+      "name": "llama-server",
+      "argv": null,
+      "net_ns": {"Inode": 4026531840},
+      "fd_table": "Observed"
+    }
+  ],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "hints": [],
+  "code": [],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "scope": {"Root": "install"},
+      "state": "Complete",
+      "budget": null
+    },
+    {"check": "processes.observed", "scope": "Audit", "state": "Complete", "budget": null},
+    {
+      "check": "processes.observed",
+      "scope": {
+        "Process": {
+          "pid": 4242,
+          "start_ticks": 1000,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        }
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "processes.observed",
+      "scope": {
+        "Process": {
+          "pid": 4300,
+          "start_ticks": 1200,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        }
+      },
+      "state": "Complete",
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}
