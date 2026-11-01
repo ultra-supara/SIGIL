@@ -120,6 +120,108 @@ pub fn link_inode(link: &[u8], kind: &str) -> Option<u64> {
     inode.parse().ok()
 }
 
+/// `ppid` (field 4) of `/proc/<pid>/stat`, counted after the last `)` as [`stat_start_ticks`]
+/// (PR-4d-2).
+pub fn stat_ppid(stat: &str) -> Option<u32> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    // `rest` starts at field 3 (state); field 4 is the 2nd of it.
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// One file-backed line of `/proc/<pid>/maps` (PR-4d-2): the object's device as `st_dev`
+/// encodes it, its inode, its path as the kernel printed it (a newline is `\012`), and whether
+/// the kernel marked it deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapsLine {
+    pub dev: u64,
+    pub ino: u64,
+    pub path: Vec<u8>,
+    pub deleted: bool,
+}
+
+/// What one `maps` line is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MapsRow {
+    File(MapsLine),
+    /// Anonymous, `[heap]`, `[stack]`, `[vdso]`, …: no file behind it.
+    NotFile,
+    Malformed,
+}
+
+/// `start-end perms offset MAJ:MIN inode [path]` (proc_pid_maps(5)). The path is what follows
+/// the inode and the spaces that pad it, and may contain spaces. A mapping is file-backed when its
+/// inode is not 0 and its path starts with `/`.
+pub fn maps_row(line: &[u8]) -> MapsRow {
+    let hex = |f: &[u8]| !f.is_empty() && f.iter().all(u8::is_ascii_hexdigit);
+    let mut rest = line;
+    let mut fields: [&[u8]; 5] = [&[]; 5];
+    for field in &mut fields {
+        rest = trim_spaces(rest);
+        let end = rest.iter().position(|b| *b == b' ').unwrap_or(rest.len());
+        if end == 0 {
+            return MapsRow::Malformed;
+        }
+        *field = &rest[..end];
+        rest = &rest[end..];
+    }
+    let [range, perms, offset, dev, inode] = fields;
+    let range_ok = match range.iter().position(|b| *b == b'-') {
+        Some(i) => hex(&range[..i]) && hex(&range[i + 1..]),
+        None => false,
+    };
+    if !range_ok || perms.len() != 4 || !hex(offset) {
+        return MapsRow::Malformed;
+    }
+    let Some(dev) = device(dev) else {
+        return MapsRow::Malformed;
+    };
+    let Some(ino) = std::str::from_utf8(inode)
+        .ok()
+        .filter(|t| t.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|t| t.parse::<u64>().ok())
+    else {
+        return MapsRow::Malformed;
+    };
+    let path = trim_spaces(rest);
+    if ino == 0 || !path.starts_with(b"/") {
+        return MapsRow::NotFile;
+    }
+    let (path, deleted) = match path.strip_suffix(b" (deleted)") {
+        Some(path) => (path, true),
+        None => (path, false),
+    };
+    MapsRow::File(MapsLine {
+        dev,
+        ino,
+        path: path.to_vec(),
+        deleted,
+    })
+}
+
+fn trim_spaces(mut s: &[u8]) -> &[u8] {
+    while let [b' ', rest @ ..] = s {
+        s = rest;
+    }
+    s
+}
+
+/// `MAJ:MIN` (hex, as `maps` prints a device) as `st_dev` encodes it: the kernel's
+/// `new_encode_dev`, a 12-bit major and a 20-bit minor. `None` for anything else.
+pub fn device(text: &[u8]) -> Option<u64> {
+    let text = std::str::from_utf8(text).ok()?;
+    let (major, minor) = text.split_once(':')?;
+    let hex = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if !hex(major) || !hex(minor) {
+        return None;
+    }
+    let major = u64::from_str_radix(major, 16).ok()?;
+    let minor = u64::from_str_radix(minor, 16).ok()?;
+    if major > 0xfff || minor > 0xf_ffff {
+        return None;
+    }
+    Some((minor & 0xff) | (major << 8) | ((minor & !0xff) << 12))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +386,86 @@ mod tests {
                 String::from_utf8_lossy(link)
             );
         }
+    }
+
+    #[test]
+    fn maps_lines_are_read_as_the_kernel_prints_them() {
+        let file = |dev, ino, path: &str, deleted| {
+            MapsRow::File(MapsLine {
+                dev,
+                ino,
+                path: path.as_bytes().to_vec(),
+                deleted,
+            })
+        };
+        let cases: Vec<(&str, MapsRow)> = vec![
+            (
+                "564f4427d000-564f44294000 r--p 00000000 103:04 2101920                   /usr/bin/zsh",
+                file(66308, 2101920, "/usr/bin/zsh", false),
+            ),
+            (
+                "7f00-7f10 r-xp 00001000 fd:01 42 /opt/a b/lib x.so",
+                file(0xfd01, 42, "/opt/a b/lib x.so", false),
+            ),
+            (
+                "7f00-7f10 r-xp 00000000 08:02 7 /tmp/gone.so (deleted)",
+                file(0x0802, 7, "/tmp/gone.so", true),
+            ),
+            (
+                "7f00-7f10 rw-s 00000000 00:01 9 /memfd:x (deleted)",
+                file(0x0001, 9, "/memfd:x", true),
+            ),
+            (
+                "7f00-7f10 r--p 00000000 08:02 7 /a\\012b",
+                file(0x0802, 7, "/a\\012b", false),
+            ),
+            ("7f00-7f10 rw-p 00000000 00:00 0 ", MapsRow::NotFile),
+            ("7f00-7f10 rw-p 00000000 00:00 0 [heap]", MapsRow::NotFile),
+            ("7ffd-7ffe r-xp 00000000 00:00 0                          [vdso]", MapsRow::NotFile),
+            ("7f00-7f10 rw-p 00000000 00:00 0", MapsRow::NotFile),
+            ("7f00-7f10 r--p 00000000 08:02 7 relative/path", MapsRow::NotFile),
+            ("garbage", MapsRow::Malformed),
+            ("7f00-7f10 r--p 00000000 08:02 x /a", MapsRow::Malformed),
+            ("7f00-7f10 r--p 00000000 0802 7 /a", MapsRow::Malformed),
+            ("7f00 r--p 00000000 08:02 7 /a", MapsRow::Malformed),
+            ("7f00-7f10 r--pq 00000000 08:02 7 /a", MapsRow::Malformed),
+            ("7f00-7f10 r--p 0000000g 08:02 7 /a", MapsRow::Malformed),
+        ];
+        for (line, want) in cases {
+            assert_eq!(maps_row(line.as_bytes()), want, "{line}");
+        }
+    }
+
+    #[test]
+    fn devices_are_encoded_as_st_dev() {
+        // R-1: `103:04` is 66308, `stat`'s dev of the same file.
+        assert_eq!(device(b"103:04"), Some(66308));
+        assert_eq!(device(b"00:00"), Some(0));
+        // A minor over 255 moves its high bits above the major.
+        assert_eq!(device(b"00:1a2"), Some(0xa2 | (0x100 << 12)));
+        assert_eq!(
+            device(b"fff:fffff"),
+            Some(0xff | (0xfff << 8) | (0xfff00 << 12))
+        );
+        for bad in [
+            &b"1000:00"[..],
+            b"00:100000",
+            b"103",
+            b":04",
+            b"103:",
+            b"1g:04",
+            b"+1:04",
+        ] {
+            assert_eq!(device(bad), None, "{}", String::from_utf8_lossy(bad));
+        }
+    }
+
+    #[test]
+    fn the_parent_is_read_after_the_last_parenthesis() {
+        assert_eq!(stat_ppid("4242 (ollama) S 1 4242 4242 0"), Some(1));
+        assert_eq!(stat_ppid("4300 (a) b (c)) R 4242 4300"), Some(4242));
+        assert_eq!(stat_ppid("4300 (x) S"), None);
+        assert_eq!(stat_ppid("4300 (x) S -1"), None);
+        assert_eq!(stat_ppid("no parenthesis"), None);
     }
 }
