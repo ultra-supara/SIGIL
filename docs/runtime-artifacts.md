@@ -118,7 +118,7 @@ never by path. It is on by default: the default policy audits `runtime_processes
     otherwise the PID is another process now. A process gone then (exited, its PID reused, or a
     zombie) is not read: a runtime stays as listed, with the gap "the process exited before its
     executable and mappings were read", and a descendant that holds no recorded listener is not
-    recorded (one already recorded as a listener's holder stays recorded, with the `EXITED` gap).
+    recorded (one already recorded as a listener's holder stays recorded, with the same gap).
   - **Roles.** A descendant has no role.
   - **What may be missed.** A process started after its parent was listed, and a descendant whose
     parent exited before the listing: it was reparented, so the search does not reach it.
