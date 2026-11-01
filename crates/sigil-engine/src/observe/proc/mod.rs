@@ -34,8 +34,8 @@
 //! listener's holder outside the runtime's tree is not read again; one that may be the runtime
 //! gets a [`Detail`] saying so.
 //!
-//! An exec keeps the PID and the start time. The listing pass reads the executable's path of
-//! every process it records, but its identity and its stack addresses (`stat`) only of the
+//! An exec keeps the PID and the start time. The listing pass reads `stat` and the executable's
+//! path of every process it records, but keeps the identity and the stack addresses only of the
 //! runtime. The second pass reads `stat`, then the path and the identity before `maps` and again
 //! after it, then the runtime's arguments, then `stat` again: a process that exited meanwhile is
 //! gone, and what was read of one whose path, identity, stack address or arguments changed is
@@ -825,7 +825,7 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// is an exec that changes nothing compared: of the same file (for the runtime, with the same
 /// arguments) while the stack addresses are not shown (0 to a reader not permitted to see them)
 /// or do not move (ASLR off), or of a descendant between the passes, of which only a recorded
-/// path is compared. What holds then is that every mapping kept was mapped, during the reads, by
+/// path, if any, is compared. What holds then is that every mapping kept was mapped, during the reads, by
 /// the process running that file (with those arguments), and that `Whole` means read to an end
 /// such an exec may have brought early.
 fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
