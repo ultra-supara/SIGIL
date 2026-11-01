@@ -167,9 +167,18 @@ struct Ctx<'a> {
     own_mnt_ns: Option<u64>,
     /// The bytes of `maps` still to be read in this observation (`max_maps_total_bytes`).
     maps_left: Cell<u64>,
-    /// Called with each process's PID right after its `maps` was read: the tests' way to change
-    /// it during the second pass's reads. A no-op outside them.
-    after_maps: &'a dyn Fn(u32),
+    /// Called with each process's PID at each `Stage` of its reads: the tests' way to change it
+    /// during the second pass. A no-op outside them.
+    during: &'a dyn Fn(Stage, u32),
+}
+
+/// Where the second pass calls its test hook (`Ctx::during`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// Right after `maps` was read.
+    AfterMaps,
+    /// Right before the last read, `stat`: after the runtime's `cmdline` was read again.
+    BeforeLastStat,
 }
 
 /// What the second pass read of one process.
@@ -230,19 +239,19 @@ enum Scan {
 
 /// Reads the process and listener tables under `proc_root` (`/proc` outside tests).
 pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBudgets) -> ProcFacts {
-    observe_with(proc_root, at, boot_id, budgets, &|| {}, &|_| {})
+    observe_with(proc_root, at, boot_id, budgets, &|| {}, &|_, _| {})
 }
 
-/// As [`observe`], calling `between` after the listing pass and before the second, and
-/// `after_maps` with each process's PID right after the second pass read its `maps`: the tests'
-/// way to change a process meanwhile.
+/// As [`observe`], calling `between` after the listing pass and before the second, and `during`
+/// with each process's PID at each `Stage` of the second pass's reads: the tests' way to change a
+/// process meanwhile.
 fn observe_with(
     proc_root: &Path,
     at: &Timestamp,
     boot_id: &str,
     budgets: ProcBudgets,
     between: &dyn Fn(),
-    after_maps: &dyn Fn(u32),
+    during: &dyn Fn(Stage, u32),
 ) -> ProcFacts {
     let mut facts = ProcFacts {
         processes: vec![],
@@ -390,7 +399,7 @@ fn observe_with(
         budgets,
         own_mnt_ns,
         maps_left: Cell::new(budgets.max_maps_total_bytes),
-        after_maps,
+        during,
     };
     let observed = descendants(&scanned);
     for (i, s) in scanned.iter().enumerate() {
@@ -833,7 +842,7 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
     let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
     let (mut mappings, mut maps_read, maps_denied) =
         mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
-    (ctx.after_maps)(s.pid);
+    (ctx.during)(Stage::AfterMaps, s.pid);
     let denied = first_id == Err(NotObservable::PermissionDenied) && maps_denied;
     let again_id = exe_identity(dir);
     let obs = recorded.is_none().then(|| {
@@ -863,10 +872,11 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         }
         _ => None,
     };
+    (ctx.during)(Stage::BeforeLastStat, s.pid);
     // Review of R2: read last, `stat` says whether the process exited during the reads above,
     // which an exit ends early (`maps`) or empties (`cmdline`): then none of them is a change.
     let last_stack = match restat(dir, start_ticks) {
-        Ok(stat) if matches!(parse::stat_state(&stat), Some(b'Z' | b'X')) => return Pass::Gone,
+        Ok(stat) if zombie(&stat) => return Pass::Gone,
         Ok(stat) => parse::stat_stack_addresses(&stat),
         Err(pass) => return pass,
     };
@@ -1006,13 +1016,15 @@ fn argv_gap(listed: &[Vec<u8>], again: Result<Read, Errno>) -> Option<String> {
 /// state `Z` or `X`.
 fn exited(dir: BorrowedFd<'_>) -> bool {
     match read_limited(dir, "stat", 4096) {
-        Ok(Read::Whole(bytes)) => matches!(
-            parse::stat_state(&String::from_utf8_lossy(&bytes)),
-            Some(b'Z' | b'X')
-        ),
+        Ok(Read::Whole(bytes)) => zombie(&String::from_utf8_lossy(&bytes)),
         Ok(Read::OverLimit) => false,
         Err(e) => matches!(e, Errno::NOENT | Errno::SRCH),
     }
+}
+
+/// Whether a `stat` text says the process is a zombie or dead: state `Z` or `X` (PR-4d-2).
+fn zombie(stat: &str) -> bool {
+    matches!(parse::stat_state(stat), Some(b'Z' | b'X'))
 }
 
 /// The executable's `dev:ino`: `stat` through the `exe` link, which the kernel resolves to the
@@ -1285,7 +1297,7 @@ mod tests {
 
     use super::{
         argv_gap, exec_seen, identity_change, observe_with, read_up_to, request, stack_moved,
-        Detail, ProcBudgets, ProcFacts, Read, EXITED, RUNTIME_ROLE,
+        Detail, ProcBudgets, ProcFacts, Read, Stage, EXITED, RUNTIME_ROLE,
     };
 
     /// A process directory. Its `exe` links to a file of the fixture, `<root>/fs/<comm>`.
@@ -1366,14 +1378,30 @@ mod tests {
 
     fn run(root: &Path, between: &dyn Fn()) -> ProcFacts {
         let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
-        observe_with(root, &at, "b", ProcBudgets::default(), between, &|_| {})
+        observe_with(root, &at, "b", ProcBudgets::default(), between, &|_, _| {})
     }
 
-    /// As `run`, calling `after_maps` with each process's PID right after the second pass read
-    /// its `maps`.
-    fn run_after_maps(root: &Path, after_maps: &dyn Fn(u32)) -> ProcFacts {
+    /// As `run`, calling `hook` with each process's PID at `stage` of the second pass's reads.
+    fn run_at(root: &Path, stage: Stage, hook: &dyn Fn(u32)) -> ProcFacts {
         let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
-        observe_with(root, &at, "b", ProcBudgets::default(), &|| {}, after_maps)
+        let during = |at_stage: Stage, pid: u32| {
+            if at_stage == stage {
+                hook(pid);
+            }
+        };
+        observe_with(root, &at, "b", ProcBudgets::default(), &|| {}, &during)
+    }
+
+    /// As `run`, calling `hook` with each process's PID right after the second pass read its
+    /// `maps`.
+    fn run_after_maps(root: &Path, hook: &dyn Fn(u32)) -> ProcFacts {
+        run_at(root, Stage::AfterMaps, hook)
+    }
+
+    /// As `run`, calling `hook` with each process's PID right before the second pass's last
+    /// read, `stat`.
+    fn run_before_last_stat(root: &Path, hook: &dyn Fn(u32)) -> ProcFacts {
+        run_at(root, Stage::BeforeLastStat, hook)
     }
 
     fn pids(f: &ProcFacts) -> Vec<u32> {
@@ -1926,6 +1954,92 @@ mod tests {
                 assert_eq!(runtime.maps_read, MapsRead::Whole);
             }
         }
+    }
+
+    /// Review of R2, follow-up: `stat` is the second pass's last read, after the runtime's
+    /// `cmdline`. A runtime that exits right before it stays recorded with `EXITED`; a
+    /// descendant is gone.
+    #[test]
+    fn a_process_that_exits_right_before_the_last_stat_is_gone() {
+        for state in ['Z', 'X'] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            std::fs::write(root.join("11/maps"), MAPPED).unwrap();
+            let f = run_before_last_stat(root, &|pid| match pid {
+                10 => {
+                    dangle(root, 10);
+                    std::fs::write(root.join("10/cmdline"), b"").unwrap();
+                    stat(root, 10, 1, "ollama", state, 100);
+                }
+                11 => {
+                    dangle(root, 11);
+                    stat(root, 11, 10, "runner", state, 200);
+                }
+                _ => {}
+            });
+            assert_eq!(pids(&f), [10], "{state}");
+            assert!(f.processes[0].mappings.is_empty(), "{state}");
+            assert_eq!(f.processes[0].maps_read, MapsRead::NotRead, "{state}");
+            assert_eq!(f.details.len(), 1, "{state}: {:?}", f.details);
+            assert_eq!(detail(&f, 10).missing, [EXITED], "{state}");
+            assert!(f.process_gaps.is_empty(), "{state}: {:?}", f.process_gaps);
+        }
+    }
+
+    /// Review of R2, follow-up: the last `stat` is read after every other read, so a stack
+    /// address moved right before it is seen.
+    #[test]
+    fn a_stack_address_moved_right_before_the_last_stat_is_seen() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let f = run_before_last_stat(root, &|pid| {
+            if pid == 10 {
+                stat_stack(root, 10, 1, "ollama", 'S', 100, (STACK.0, STACK.1 + 4096));
+            }
+        });
+        let d = detail(&f, 10);
+        assert_eq!(d.missing, [RAN_ANOTHER]);
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+    }
+
+    /// Review of R2, follow-up: a last `stat` that cannot be read is not taken as read: the
+    /// runtime stays recorded and says why, refused; a descendant is a process gap.
+    #[test]
+    fn a_last_stat_that_cannot_be_read_is_not_taken_as_read() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        let f = run_before_last_stat(root, &|pid| {
+            if pid == 10 || pid == 11 {
+                let stat = root.join(pid.to_string()).join("stat");
+                std::fs::set_permissions(stat, std::fs::Permissions::from_mode(0o000)).unwrap();
+            }
+        });
+        if std::fs::read(root.join("10/stat")).is_ok() {
+            eprintln!("skipped: root reads a mode-000 file");
+            return;
+        }
+        assert_eq!(pids(&f), [10]);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        let d = detail(&f, 10);
+        assert_eq!(d.exe_id, None);
+        assert!(d.denied, "{d:?}");
+        assert_eq!(
+            d.missing,
+            ["the process cannot be read again (PermissionDenied)"]
+        );
+        assert_eq!(
+            f.process_gaps,
+            ["process 11 cannot be read again (PermissionDenied); a descendant is not recorded"]
+        );
     }
 
     /// Review of R2: an exec places `startstack` and `arg_start` anew under ASLR. A field moved
