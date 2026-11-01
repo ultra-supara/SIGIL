@@ -1,9 +1,13 @@
 # SIGIL safety harness: /proc access allowlist (contract C-6, docs/adr/ADR-002-execution-modes.md).
 #
-# Format:  <scope> <pattern>  # <reason>
+# Format:  <scope> <pattern> [ops=<op>,…]  # <reason>
 # Scopes:  runtime = accesses made by SIGIL's own process runtime, allowed in every mode;
 #          observe = the documented observe-mode inputs (`sigil inspect ollama --mode observe`).
 # Pattern: `/`-separated segments; {pid} matches digits, `self` or `thread-self`; {n} matches digits.
+# Ops:     the operations an entry allows; without `ops=`, every path-taking call. `open` (open, openat,
+#          openat2), `readlink` (readlink, readlinkat), `stat` (stat, lstat, newfstatat, statx, access,
+#          faccessat, faccessat2), `list` (getdents64). A magic link (`exe`, `fd/{n}`, `ns/*`) is never
+#          opened: an open would reach what it names. C-5 already refuses a write-capable open.
 #
 # A traced run fails on any /proc access that matches no entry of its scopes. Adding or widening an
 # entry is an intentional, reviewed change: name the reading code and the plan section it serves.
@@ -13,10 +17,12 @@ observe  /proc/net/tcp6         # listener table (observe::proc; plan §4.6.8)
 observe  /proc                  # enumerate PIDs to attribute listening sockets (observe::proc)
 observe  /proc/{pid}            # the process directory, opened to read its entries relative to it (observe::proc)
 observe  /proc/{pid}/fd         # list a process's fds to find socket inodes (observe::proc)
-observe  /proc/{pid}/fd/{n}     # readlink an fd to read socket:[inode], never followed (observe::proc)
+observe  /proc/{pid}/fd/{n}  ops=readlink   # readlink an fd to read socket:[inode], never followed (observe::proc)
 observe  /proc/{pid}/comm       # process name: selects candidates, marks fronting hints (observe::proc)
 observe  /proc/{pid}/cmdline    # argv of an `ollama` process: the runtime role rests on it (observe::proc; plan §4.2)
-observe  /proc/{pid}/exe        # readlink only, never followed: confirms the runtime's executable (observe::proc; plan §4.2)
+observe  /proc/{pid}/exe     ops=readlink,stat   # readlink, and stat through it for the executable's dev:ino; never opened (observe::proc; plan §4.2, PR-4d-2)
 observe  /proc/{pid}/stat       # start time, part of a process's identity (observe::proc; plan §4.2)
-observe  /proc/{pid}/ns/net     # readlink only: the network namespace, SIGIL's own and the runtime's (observe::proc; plan §4.6.8)
+observe  /proc/{pid}/ns/net  ops=readlink   # readlink only: the network namespace, SIGIL's own and the runtime's (observe::proc; plan §4.6.8)
+observe  /proc/{pid}/maps       # the files a runtime process has mapped, read up to proc_maps_bytes (observe::proc; plan §4.6.2, PR-4d-2)
+observe  /proc/{pid}/ns/mnt  ops=readlink   # readlink only: the mount namespace a mapping's path is read in, SIGIL's own and a runtime process's (observe::proc; PR-4d-2)
 observe  /proc/sys/kernel/random/boot_id   # the boot the observed processes belong to, part of their identity (observe::host; plan §4.2)
