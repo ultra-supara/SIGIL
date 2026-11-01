@@ -22,6 +22,18 @@ fn rejected_for(s: &Session, why: &str) {
     );
 }
 
+/// Makes `p` a listener's holder, so that only the term under test can make P5 call it read.
+fn hold(s: &mut Session, p: &ProcessRef) {
+    s.listeners.push(Listener {
+        id: id(&format!("listener:tcp/127.0.0.1:11434#{}", p.pid)),
+        protocol: Protocol::Tcp,
+        address: "127.0.0.1".to_string(),
+        port: 11434,
+        socket_inode: u64::from(p.pid),
+        owner: ListenerOwner::Process { process: p.clone() },
+    });
+}
+
 fn inst<'a>(s: &'a mut Session, id: &str) -> &'a mut FileInstance {
     s.instances
         .iter_mut()
@@ -178,6 +190,7 @@ fn a_runtime_with_no_mappings_and_no_linked_exe_needs_an_entry() {
     s.processes[0].exe = ProcessExe::NotObservable(NotObservable::PermissionDenied);
     s.processes[0].mappings.clear();
     let serve = s.processes[0].process.clone();
+    hold(&mut s, &serve);
     drop_entry(&mut s, &serve);
     inst(&mut s, "inst:install/bin/ollama")
         .discovered_by
@@ -190,6 +203,7 @@ fn a_process_with_a_linked_exe_and_no_mappings_needs_an_entry() {
     let mut s = valid();
     s.processes[1].mappings.clear();
     let runner = s.processes[1].process.clone();
+    hold(&mut s, &runner);
     drop_entry(&mut s, &runner);
     rejected_for(&s, "has no entry for this process");
 }
@@ -205,6 +219,7 @@ fn a_process_with_mappings_and_an_unlinked_exe_needs_an_entry() {
         .discovered_by
         .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
     let runner = s.processes[1].process.clone();
+    hold(&mut s, &runner);
     drop_entry(&mut s, &runner);
     rejected_for(&s, "has no entry for this process");
 }
