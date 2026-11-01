@@ -971,7 +971,7 @@
       }
     },
     "MapsRead": {
-      "description": "How much of a process's maps was read (PR-4d-2): Whole (to its end: mappings is every file-backed object mapped), Part (a budget cut it short, or lines were not understood: mappings is what was read), or NotRead (not read, what was read was dropped, or a process whose maps SIGIL does not read: mappings is empty). Optional on read: a session from before it never read maps, so a missing maps_read reads as NotRead.",
+      "description": "How much of a process's maps was read (PR-4d-2): Whole (to its end: mappings is every file-backed object mapped), Part (a budget cut it short, or lines were not understood: mappings is what was read, at least one), or NotRead (not read, a read in part that kept no mapping, what was read was dropped, or a process whose maps SIGIL does not read: mappings is empty). Optional on read: a session from before it never read maps, so a missing maps_read reads as NotRead.",
       "type": "string",
       "enum": ["Whole", "Part", "NotRead"]
     },

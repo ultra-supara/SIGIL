@@ -229,7 +229,7 @@ fn a_listener_holder_needs_an_out_of_scope_entry() {
         PROCESSES_OBSERVED,
         Ref::Process(holder.process),
         CoverageState::OutOfScope {
-            why: "neither the runtime nor one of its descendants".into(),
+            why: "not found among the runtime and its descendants".into(),
         },
     ));
     assert_valid(&s);
@@ -245,7 +245,7 @@ fn the_runtime_is_never_out_of_scope() {
     for c in &mut s.coverage {
         if c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(serve.clone()) {
             c.state = CoverageState::OutOfScope {
-                why: "neither the runtime nor one of its descendants".into(),
+                why: "not found among the runtime and its descendants".into(),
             };
         }
     }
@@ -382,7 +382,7 @@ fn a_process_whose_maps_was_not_read_is_not_shown_as_a_zero() {
         PROCESSES_OBSERVED,
         Ref::Process(holder.process.clone()),
         CoverageState::OutOfScope {
-            why: "neither the runtime nor one of its descendants".into(),
+            why: "not found among the runtime and its descendants".into(),
         },
     ));
     s.processes.push(holder);

@@ -16,7 +16,10 @@
 //! | a process | `Unavailable(PermissionDenied)` | Both its executable's identity and `maps` were refused |
 //! | a process | `Partial` | Anything else not observed (`Detail::missing`), as for a listener's holder outside the runtime's tree that may be the runtime, whose executable and mappings are not read |
 //! | a process | `Complete` | Its executable's identity, all of `maps`, and `ns/mnt` were read |
-//! | a process | `OutOfScope` ([`OUTSIDE_THE_RUNTIME`]) | No `Detail`: a listener's holder outside the runtime's tree, whose executable and mappings are not read |
+//! | a process | `OutOfScope` ([`OUTSIDE_THE_RUNTIME`]) | In `ProcFacts::outside`: a listener's holder outside the runtime's tree, whose executable and mappings are not read |
+//!
+//! A recorded process with neither a `Detail` nor a place in `outside` gets no entry: validation
+//! then refuses the session, rather than it being out of scope unseen.
 
 use std::collections::BTreeMap;
 
@@ -28,8 +31,11 @@ use sigil_model::{
 use crate::observe::proc::{Detail, ProcFacts};
 
 /// Why a recorded process the second pass did not read has `processes.observed` `OutOfScope`: a
-/// listener's holder, outside the runtime's tree, whose executable and mappings are not read.
-pub const OUTSIDE_THE_RUNTIME: &str = "neither the runtime nor one of its descendants";
+/// listener's holder, outside the runtime's tree, whose executable and mappings are not read. It
+/// says what was observed: the descendants are found through the parents that `stat` gives, so a
+/// process under one that cannot be read is not found among them, though it may be one. The
+/// audit's entry is then `Partial` (a process gap).
+pub const OUTSIDE_THE_RUNTIME: &str = "not found among the runtime and its descendants";
 
 /// Links each process's executable and mappings to the one instance with the same `dev:ino`.
 pub fn link(processes: &mut [ProcessObs], details: &[Detail], instances: &mut [FileInstance]) {
@@ -68,8 +74,9 @@ pub fn link(processes: &mut [ProcessObs], details: &[Detail], instances: &mut [F
     }
 }
 
-/// `processes.observed`: one entry for the audit, and one for each recorded process: from its
-/// [`Detail`] when it has one, else `OutOfScope` ([`OUTSIDE_THE_RUNTIME`]).
+/// `processes.observed`: one entry for the audit, one for each [`Detail`], and `OutOfScope`
+/// ([`OUTSIDE_THE_RUNTIME`]) for each process the observation placed outside the runtime's tree
+/// (`ProcFacts::outside`). A recorded process with neither gets none, which validation refuses.
 pub fn coverage(facts: &ProcFacts) -> Vec<Coverage> {
     let Ok(check) = CheckId::new(PROCESSES_OBSERVED) else {
         return vec![];
@@ -114,15 +121,13 @@ pub fn coverage(facts: &ProcFacts) -> Vec<Coverage> {
         };
         out.push(entry(Ref::Process(d.process.clone()), state));
     }
-    // Code review of PR-4d-2, R-C: every other recorded process holds a listener outside the
-    // runtime's tree, so its executable and mappings are not read. Out of scope, not a gap.
-    for p in &facts.processes {
-        if !facts.details.iter().any(|d| d.process == p.process) {
-            let state = CoverageState::OutOfScope {
-                why: OUTSIDE_THE_RUNTIME.to_string(),
-            };
-            out.push(entry(Ref::Process(p.process.clone()), state));
-        }
+    // Code review of PR-4d-2, R-C: a listener's holder outside the runtime's tree, whose
+    // executable and mappings are not read. Out of scope, not a gap.
+    for p in &facts.outside {
+        let state = CoverageState::OutOfScope {
+            why: OUTSIDE_THE_RUNTIME.to_string(),
+        };
+        out.push(entry(Ref::Process(p.clone()), state));
     }
     out
 }
@@ -135,8 +140,10 @@ mod tests {
         Stability, StatInfo, Timestamp, Tri, UnknownReason, UntrustedText,
     };
 
-    use super::link;
-    use crate::observe::proc::Detail;
+    use sigil_model::{CoverageState, Ref};
+
+    use super::{coverage, link, OUTSIDE_THE_RUNTIME};
+    use crate::observe::proc::{Detail, ProcFacts};
 
     fn process(pid: u32) -> ProcessRef {
         ProcessRef {
@@ -283,6 +290,46 @@ mod tests {
         assert_eq!(
             processes[0].mappings[0].instance,
             Some(InstanceId::new("inst:a").unwrap())
+        );
+    }
+
+    /// Review of R1: `OutOfScope` is only for a process the observation placed outside the
+    /// runtime's tree. A recorded process with neither a `Detail` nor that place has no entry, so
+    /// P5 refuses the session instead of it being out of scope unseen.
+    #[test]
+    fn out_of_scope_is_only_for_a_process_placed_outside_the_tree() {
+        let facts = ProcFacts {
+            processes: vec![obs(10, &[]), obs(11, &[]), obs(12, &[])],
+            listeners: vec![],
+            own_net_ns: None,
+            process_list: Observability::Observed,
+            pid1_visible: true,
+            gaps: vec![],
+            details: vec![Detail {
+                process: process(10),
+                exe_id: None,
+                denied: false,
+                missing: vec![],
+            }],
+            process_gaps: vec![],
+            outside: vec![process(11)],
+        };
+        let entries: Vec<(Ref, CoverageState)> = coverage(&facts)
+            .into_iter()
+            .map(|c| (c.scope, c.state))
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                (Ref::Audit, CoverageState::Complete),
+                (Ref::Process(process(10)), CoverageState::Complete),
+                (
+                    Ref::Process(process(11)),
+                    CoverageState::OutOfScope {
+                        why: OUTSIDE_THE_RUNTIME.to_string()
+                    }
+                ),
+            ]
         );
     }
 

@@ -119,6 +119,11 @@ pub struct ProcFacts {
     /// read or read again, whose parent cannot be read, or that may be the runtime (PR-4d-2).
     /// Kept apart from `gaps`, which say what may hide the runtime's sockets.
     pub process_gaps: Vec<String>,
+    /// The recorded processes the second pass did not read, by PID: listeners' holders not found
+    /// among the runtime and its descendants, and not the runtime as far as was read (PR-4d-2).
+    /// Each one's `processes.observed` is `OutOfScope`. A holder that may be the runtime has a
+    /// [`Detail`] instead.
+    pub outside: Vec<ProcessRef>,
 }
 
 /// What the second pass read of one runtime or descendant, beyond its `ProcessObs`; or, for a
@@ -231,6 +236,7 @@ fn observe_with(
         gaps: vec![],
         details: vec![],
         process_gaps: vec![],
+        outside: vec![],
     };
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let root = match rustix::fs::openat(rustix::fs::CWD, proc_root, flags, Mode::empty()) {
@@ -416,21 +422,27 @@ fn observe_with(
             },
         }
     }
-    // Code review of PR-4d-2, R-C: a listener's holder outside the runtime's tree that may be the
-    // runtime. Its executable and mappings were not read, which is a gap if it is.
+    // Code review of PR-4d-2, R-C: a recorded process outside the runtime's tree holds a
+    // listener (`scan`), and the second pass did not read it. One that may be the runtime is a
+    // gap if it is; any other is outside the check's scope.
     for (i, obs) in &recorded {
-        if facts.details.iter().any(|d| d.process == obs.process) {
+        // Read by the second pass, which gave it its `Detail`.
+        if observed.contains(&scanned[*i].pid) {
             continue;
         }
-        if let RuntimeMatch::Unknown(why) = &scanned[*i].runtime {
-            facts.details.push(Detail {
+        match &scanned[*i].runtime {
+            RuntimeMatch::Unknown(why) => facts.details.push(Detail {
                 process: obs.process.clone(),
                 exe_id: None,
                 denied: false,
                 missing: vec![format!(
                     "the process may be the runtime ({why}); its executable and mappings were not read"
                 )],
-            });
+            }),
+            // A confirmed runtime is always in its own tree.
+            RuntimeMatch::Rejected | RuntimeMatch::Confirmed(_) => {
+                facts.outside.push(obs.process.clone())
+            }
         }
     }
     facts.processes = recorded.into_values().collect();
@@ -891,7 +903,8 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
 /// whether `maps` was refused for want of permission (PR-4d-2). It is read up to
 /// `max_maps_bytes`, and no more than what is left of `max_maps_total_bytes`: `NotRead` when it
 /// cannot be read or nothing is left, `Part` when it is over a budget or has lines not
-/// understood.
+/// understood, and `NotRead` again when such a read kept no mapping. One read to its end is
+/// `Whole`, mappings or none.
 fn mappings(
     dir: BorrowedFd<'_>,
     process: &ProcessRef,
@@ -959,10 +972,11 @@ fn mappings(
     if malformed > 0 {
         missing.push(format!("maps: {malformed} lines not understood"));
     }
-    let read = if over || malformed > 0 {
-        MapsRead::Part
-    } else {
-        MapsRead::Whole
+    // A read in part that kept no mapping is no count at all (review of R1): its gaps say why.
+    let read = match (over || malformed > 0, out.is_empty()) {
+        (false, _) => MapsRead::Whole,
+        (true, false) => MapsRead::Part,
+        (true, true) => MapsRead::NotRead,
     };
     (out, read, false)
 }

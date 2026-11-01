@@ -240,9 +240,10 @@ pub enum MapsRead {
     /// Read to its end.
     Whole,
     /// Read in part (a budget cut it short, or lines were not understood): `mappings` is what
-    /// was read.
+    /// was read, at least one.
     Part,
-    /// Not read, or what was read was dropped (an exec during the reads): `mappings` is empty.
+    /// Not read, a read in part that kept no mapping, or what was read was dropped (an exec
+    /// during the reads): `mappings` is empty.
     /// Also a process whose `maps` SIGIL does not read (a listener's holder outside the
     /// runtime's tree). What a session from before `maps_read` reads as.
     #[default]

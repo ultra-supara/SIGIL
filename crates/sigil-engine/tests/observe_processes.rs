@@ -276,6 +276,13 @@ fn a_fronting_listener_holder_outside_the_runtime_s_tree_is_out_of_scope() {
         Some(CoverageState::Complete)
     );
     assert_eq!(observed(&s, &Ref::Audit), Some(CoverageState::Complete));
+    // Review of R1: it says what was observed, that it was not found among them, which is all a
+    // search through readable parents can say.
+    let coverage = sigil_engine::explain::coverage(&s, sigil_engine::explain::Format::Text);
+    assert!(
+        coverage.contains("out of scope: not found among the runtime and its descendants"),
+        "{coverage}"
+    );
 }
 
 /// Code review of PR-4d-2, R-C: a listener's holder that may be the runtime (its `comm` cannot be

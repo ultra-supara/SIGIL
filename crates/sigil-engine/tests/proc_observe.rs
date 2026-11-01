@@ -183,6 +183,9 @@ fn fronting_listeners_are_kept_as_hints() {
             process: nginx.process.clone()
         }
     );
+    // Review of R1: outside the runtime's tree, it is not read again, and says so.
+    assert_eq!(f.outside, std::slice::from_ref(&nginx.process));
+    assert!(f.details.is_empty(), "{:?}", f.details);
 }
 
 #[test]
@@ -870,6 +873,55 @@ fn a_maps_cut_by_the_total_budget_says_so() {
     assert_eq!(
         detail(&f, 4300).missing,
         ["maps: not read (proc_maps_total_bytes reached)"]
+    );
+}
+
+/// Review of R1: a `maps` cut short before its first line keeps no mapping. It is `NotRead`, not
+/// a read in part of nothing, and its gap stands.
+#[test]
+fn a_maps_cut_before_its_first_line_is_not_read() {
+    let fake = FakeProc::new();
+    let a = so(&fake, "/a.so");
+    serve_at(&fake, &format!("{}\n", maps_line(&a)));
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_total_bytes: 3,
+            ..ProcBudgets::default()
+        },
+    );
+    assert!(f.processes[0].mappings.is_empty());
+    assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+    assert_eq!(
+        detail(&f, 4242).missing,
+        ["maps: over proc_maps_total_bytes (3 bytes were left)"]
+    );
+}
+
+/// Review of R1: a `maps` none of whose lines is understood keeps no mapping: `NotRead`.
+#[test]
+fn a_maps_with_no_line_understood_is_not_read() {
+    let fake = FakeProc::new();
+    serve_at(&fake, "garbage\n");
+    let f = run(&fake);
+    assert!(f.processes[0].mappings.is_empty());
+    assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+    assert_eq!(detail(&f, 4242).missing, ["maps: 1 lines not understood"]);
+}
+
+/// Review of R1: a `maps` read to its end with no file-backed line has no mapping, and that is
+/// all of it: `Whole`.
+#[test]
+fn a_maps_read_whole_with_no_file_backed_line_is_whole() {
+    let fake = FakeProc::new();
+    serve_at(&fake, "7f00-7f10 rw-p 00000000 00:00 0 [heap]\n");
+    let f = run(&fake);
+    assert!(f.processes[0].mappings.is_empty());
+    assert_eq!(f.processes[0].maps_read, MapsRead::Whole);
+    assert!(
+        detail(&f, 4242).missing.is_empty(),
+        "{:?}",
+        detail(&f, 4242)
     );
 }
 
