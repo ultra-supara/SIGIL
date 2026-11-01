@@ -818,8 +818,8 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// are dropped (`maps` counts as not read), when:
 /// - the path changed since the listing pass, or between its two reads (`exec_seen`);
 /// - the identity changed between its two reads, or since the listing pass read the runtime's,
-///   or those reads are not all the same because one failed (`identity_change`; a read at
-///   listing that failed is not compared);
+///   or those reads are not all the same because one failed (`identity_change`; the read at
+///   listing counts also when it failed, as an exec resets dumpability);
 /// - `startstack` or `arg_start` moved between the two `stat` reads, or since the listing pass
 ///   read the runtime's (`stack_moved`);
 /// - the runtime's arguments are not the ones its role rests on (`argv_gap`).
@@ -834,9 +834,10 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// executable's path and identity read before `maps` are compared with those read after it, and
 /// `startstack` and `arg_start` of the first `stat` with those of the last. Across the passes,
 /// the path the listing pass recorded is compared with both reads of it here; and, for the
-/// runtime only, the identity, `startstack` and `arg_start` the listing pass read are compared
-/// with the first reads here, and its arguments with the read after `maps`. A stack address is
-/// compared only where both reads show it (not 0); an exec places both anew under ASLR. An exit
+/// runtime only, the identity the listing pass read (or failed to read), and its `startstack`
+/// and `arg_start`, are compared with the first reads here, and its arguments with the read
+/// after `maps`. A stack address is compared only where both reads show it (not 0); an exec
+/// places both anew under ASLR. An exit
 /// is seen by the last `stat`. The kernel ends a `maps` read early at an exec or an exit, and a
 /// read so cut short is never kept once the exec or the exit is seen.
 ///
@@ -850,6 +851,9 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// those arguments) when its path and identity were read, before and after `maps`; every mapping
 /// kept was mapped by it during the reads, by that file's image unless it ran another program in
 /// between; and `Whole` means `maps` was read to an end that an exec may have brought early.
+/// Identity reads refused alike throughout, at listing and since (another user's process, read
+/// without root), are the same reading: the permission check that refuses them also refuses the
+/// path and `maps`, so no mapping is kept, and of the runtime only its arguments are compared.
 fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
     let dir = match open_dir(ctx.root, &s.pid.to_string()) {
         Ok(dir) => dir,
@@ -1012,21 +1016,21 @@ fn stack_moved(first: Option<(u64, u64)>, last: Option<(u64, u64)>) -> bool {
 
 /// What the reads of the executable's identity show (code review of PR-4d-2, R-B, and review of
 /// R2): the second pass's two (`first`, before `maps`, and `again`, after it), and the listing
-/// pass's when it read one (`listed`, for the runtime only; an error there says nothing).
-/// Whether two of them give two identities: another executable ran. And, when they are not all
-/// the same reading, the error of the last one that failed: what was read is then not tied to
-/// one executable, though no other one was seen. A setuid exec makes the process non-dumpable,
-/// and `exe` then gives `EACCES`; so do `PR_SET_DUMPABLE` and `setuid()` without an exec.
+/// pass's (`listed`, for the runtime only). Whether two of them give two identities: another
+/// executable ran. And, when they are not all the same reading, the error of the last one that
+/// failed: what was read is then not tied to one executable, though no other one was seen. A
+/// setuid exec makes the process non-dumpable, and `exe` then gives `EACCES`; so do
+/// `PR_SET_DUMPABLE` and `setuid()` without an exec. Final review of PR-4d-2, M2: a read at
+/// listing that failed counts too, as an exec resets dumpability, so reads refused then may
+/// succeed after one. Reads refused alike throughout (another user's process, read without
+/// root) are the same reading: no gap.
 fn identity_change(
     listed: Option<&Result<(u64, u64), NotObservable>>,
     first: &Result<(u64, u64), NotObservable>,
     again: &Result<(u64, u64), NotObservable>,
 ) -> (bool, Option<NotObservable>) {
-    let reads: Vec<&Result<(u64, u64), NotObservable>> = listed
-        .filter(|id| id.is_ok())
-        .into_iter()
-        .chain([first, again])
-        .collect();
+    let reads: Vec<&Result<(u64, u64), NotObservable>> =
+        listed.into_iter().chain([first, again]).collect();
     let ids: BTreeSet<&(u64, u64)> = reads.iter().filter_map(|r| r.as_ref().ok()).collect();
     let failed = if reads.windows(2).all(|w| w[0] == w[1]) {
         None
@@ -2250,6 +2254,43 @@ mod tests {
         }
     }
 
+    /// Final review of PR-4d-2, M2: an exec resets dumpability. A runtime whose identity was
+    /// refused at listing, and its stack addresses hidden, that then runs another file at the same
+    /// path with the same arguments reads its identity twice alike in the second pass. The
+    /// listing's refused read is compared too, so what was read is not kept.
+    #[test]
+    fn an_exec_after_an_identity_refused_at_listing_is_not_taken_for_the_listed_one() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+        stat_stack(root, 10, 1, "ollama", 'S', 100, (0, 0));
+        if !lock_exe(root, 10, "ollama") {
+            unlock(root);
+            eprintln!("skipped: root stats through a mode-000 directory");
+            return;
+        }
+        let f = run(root, &|| {
+            unlock(root);
+            // Another file at the same path; its stack addresses shown now.
+            let locked = root.join("locked");
+            std::fs::write(locked.join("ollama.new"), b"new").unwrap();
+            std::fs::rename(locked.join("ollama.new"), locked.join("ollama")).unwrap();
+            stat(root, 10, 1, "ollama", 'S', 100);
+        });
+        unlock(root);
+        assert_eq!(pids(&f), [10, 11]);
+        let d = detail(&f, 10);
+        assert_eq!(
+            d.missing,
+            ["exe: a read of its identity failed (PermissionDenied); what was read is not tied to one executable"]
+        );
+        assert_eq!(d.exe_id, None);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+        assert_listed_role(&f);
+    }
+
     /// Review of R2, follow-up: a last `stat` that cannot be read is not taken as read: the
     /// runtime stays recorded and says why, refused; a descendant is a process gap.
     #[test]
@@ -2310,8 +2351,9 @@ mod tests {
     /// Code review of PR-4d-2, R-B, and review of R2: the executable's identity changed when two
     /// reads of it give two identities: the second pass's two, or its first and the listing's.
     /// A read that fails while another does not, or fails otherwise, is named instead: what was
-    /// read is not tied to one executable, but no other one was seen. A listing that read no
-    /// identity says nothing.
+    /// read is not tied to one executable, but no other one was seen. Final review of PR-4d-2,
+    /// M2: so is a read at listing that failed, as an exec resets dumpability; reads refused
+    /// alike throughout are the same reading.
     #[test]
     fn an_exec_is_seen_by_the_executables_identity() {
         type Id = Result<(u64, u64), NotObservable>;
@@ -2338,8 +2380,20 @@ mod tests {
             ),
             (Some(a), a, b, (true, None)),
             (Some(a), b, gone, (true, Some(NotObservable::NoProcess))),
-            (Some(denied), a, a, (false, None)),
-            (Some(denied), a, b, (true, None)),
+            (Some(denied), a, a, failed(NotObservable::PermissionDenied)),
+            (
+                Some(denied),
+                a,
+                b,
+                (true, Some(NotObservable::PermissionDenied)),
+            ),
+            (Some(denied), denied, denied, (false, None)),
+            (
+                Some(gone),
+                denied,
+                denied,
+                failed(NotObservable::PermissionDenied),
+            ),
         ] {
             assert_eq!(
                 identity_change(listed.as_ref(), &first, &again),

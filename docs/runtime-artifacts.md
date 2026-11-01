@@ -148,9 +148,10 @@ never by path. It is on by default: the default policy audits `runtime_processes
     - the runtime's arguments are not the ones its role rests on, are over 64 KiB, or cannot be
       read again;
     - the reads of the identity compared (the second pass's two, and, for the runtime, the
-      listing pass's when it gave one) are not all the same because one failed. A read fails
-      without an exec too (`PR_SET_DUMPABLE`, `setuid()` without an exec, FUSE `hard_remove`, or
-      a transient error), so the gap says only that what was read is not tied to one executable.
+      listing pass's, also when it failed: an exec resets dumpability, so a read refused then may
+      succeed after one) are not all the same because one failed. A read fails without an exec
+      too (`PR_SET_DUMPABLE`, `setuid()` without an exec, FUSE `hard_remove`, or a transient
+      error), so the gap says only that what was read is not tied to one executable.
 
     The role and the arguments recorded at listing are kept: they held then. A process the
     listing pass did not record is still recorded, with the path read last.
@@ -164,7 +165,10 @@ never by path. It is on by default: the default policy audits `runtime_processes
     refused too. What the session states then: the process ran that file (with those arguments)
     when its path and identity were read, before and after `maps`; every mapping kept was mapped
     by it during the reads, by that file's image unless it ran another program in between; and
-    `Whole` means `maps` was read to an end that an exec may have brought early.
+    `Whole` means `maps` was read to an end that an exec may have brought early. Identity reads
+    refused alike throughout, at listing and since (another user's process, read without root),
+    are the same reading: the permission check that refuses them also refuses the path and
+    `maps`, so no mapping is kept, and of the runtime only its arguments are compared.
   - **The link.** When exactly one scanned instance has that `dev:ino`, the process's `exe` is
     that instance, and the instance records a `ProcessExe` source. Otherwise `exe` stays the path
     the link names.
