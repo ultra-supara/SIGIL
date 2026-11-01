@@ -6,7 +6,7 @@ Machine-readable contracts for SIGIL outputs.
 
 - `session-v1.schema.json`: the analysis session (`schema: "sigil-session/1"`). It is the source of truth that every export (AI-BOM v2, Markdown) is derived from. Defined by `crates/sigil-model`; see `docs/session-model.md`.
   - JSON Schema draft 2020-12, self-contained (no external `$ref`), strict (`additionalProperties: false` on every object). Enums are externally tagged with their variant names, and struct fields are snake_case.
-  - SIGIL writes every field. Every property is required, except the fields added to `sigil-session/1` later (`request.active` and `probes`, PR #76). Those are optional on read, and a missing one reads as an empty list.
+  - SIGIL writes every field. Every property is required, except the fields added to `sigil-session/1` later (from `request.active` and `probes`, PR #76, to `ProcessObs.maps_read`, PR-4d-2; `docs/session-model.md` lists them). Those are optional on read, and a missing one reads as what a session without it did: an empty list, `false`, or `NotRead`.
   - The schema is backward compatible, not forward compatible: an earlier SIGIL may refuse a newer session.
   - `$defs/SessionExcerpt` has the same fields, all optional, for documentation excerpts.
   - `crates/sigil-model/tests/schema.rs` checks that the schema's properties and variants equal the Rust model's, and that every variant has a sample that validates. `tests/compat.rs` reads real sessions written before PR #76.

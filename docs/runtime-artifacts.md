@@ -114,9 +114,10 @@ never by path. It is on by default: the default policy audits `runtime_processes
   - **The process set.** Every listed process's `stat` gives its parent. The runtime and its
     descendants, through any number of generations (a breadth-first search over the parent),
     are read again after the listing.
-  - **The PID check.** The second pass reads `stat` again; its start time must be the same,
-    otherwise the PID is another process now. A process gone then (exited, its PID reused, or a
-    zombie) is not read: a runtime stays as listed, with the gap "the process exited before its
+  - **The PID check.** The second pass reads `stat` first and again last; the start time must be
+    the same both times, otherwise the PID is another process now. A process found gone (exited,
+    or its PID reused) or a zombie during the second pass has exited, and nothing that pass read
+    of it is kept: a runtime stays as listed, with the gap "the process exited before its
     executable and mappings were read", and a descendant that holds no recorded listener is not
     recorded (one already recorded as a listener's holder stays recorded, with the same gap).
   - **Roles.** A descendant has no role.
@@ -125,20 +126,61 @@ never by path. It is on by default: the default policy audits `runtime_processes
 - **The executable.**
   - **Its identity.** `stat` through `/proc/<pid>/exe` gives the file the process runs (its
     `dev:ino`), also when it was deleted or is in another mount namespace. The file is never
-    opened. The link's path is read first and last; a process that executed another file between
-    the two reads has no identity and no mappings recorded, which is a gap.
+    opened.
+  - **An exec during the reads.** An exec keeps the PID and the start time, and an exec of the
+    same path keeps the path too. The listing pass also reads the runtime's identity, and keeps
+    the `startstack` and `arg_start` fields of its `stat`. The second pass reads, in order: `stat`;
+    the link's path, then the identity; `ns/mnt`; `maps`; the identity again, then the path
+    again (with the rest of its record, for a process the listing pass did not record); for the
+    runtime, `cmdline` again; and `stat` again. A process the last `stat` finds gone or a zombie
+    exited during the reads, which is not an exec (above). Otherwise, what the second pass read
+    is dropped (no identity, no mappings, `maps_read` `NotRead`), with a gap that says why, when:
+    - the path changed between its two reads, or since the listing pass recorded it;
+    - the identity changed between its two reads, or, for the runtime, since the listing pass
+      read it;
+    - `startstack` or `arg_start`, which an exec places anew under ASLR, moved between the two
+      `stat` reads, or, for the runtime, since the listing pass. A field is compared only where
+      both reads show it: the kernel shows 0 to a reader not permitted to see it;
+    - the runtime's arguments are not the ones its role rests on, are over 64 KiB, or cannot be
+      read again;
+    - a read of the identity failed while another one gave the identity or another error. That
+      is not taken as an exec (`PR_SET_DUMPABLE`, `setuid()` without an exec, or a transient
+      error fail it too); the gap says that what was read is not tied to one executable.
+
+    The role and the arguments recorded at listing are kept: they held then.
+  - **What cannot be told apart.** Several `/proc` reads are not one atomic snapshot. An exec
+    that changes nothing compared is not seen: one of the same file (for the runtime, with the
+    same arguments) while the stack fields are hidden (0) or do not move (ASLR off), or one by a
+    descendant between the passes, of which only a path the listing pass recorded, if any, is
+    compared. What the session states still holds then: every mapping kept was mapped, during
+    the reads, by the process running that file (with those arguments), and `Whole` means `maps`
+    was read to an end that such an exec may have brought early.
   - **The link.** When exactly one scanned instance has that `dev:ino`, the process's `exe` is
     that instance, and the instance records a `ProcessExe` source. Otherwise `exe` stays the path
     the link names.
 - **The mappings.**
   - **What is read.** `/proc/<pid>/maps`, up to `proc_maps_bytes` (default 16 MiB per process)
     and, over all processes, `proc_maps_total_bytes` (default 256 MiB). A read never takes more
-    than the budget left plus one byte. A budget over or reached is a gap; the processes after
-    the total is reached are not read.
+    than the budget left plus one byte. `proc_maps_entries` (default 65536) bounds the mappings
+    (below) read over all processes: a duplicate does not count, and one dropped later (an exec
+    or an exit seen) still does. A process that reaches it while its `maps` is parsed keeps as
+    many as were left, and parsing stops at the next one. A budget over or reached is a gap; once
+    either total is used up, the `maps` of the processes after it is not read.
   - **One mapping per object.** One `MappingObs` per distinct (device, inode, path, deleted): its
     device and inode, its path as the kernel printed it, and whether it was deleted. One inode
     reached by two paths gives two mappings. A live file whose name ends in " (deleted)" reads as
     deleted; the line cannot tell the two apart.
+  - **How much was read.** Each process's `maps_read` says what its mappings stand for:
+    - `Whole`: `maps` was read to its end;
+    - `Part`: a budget cut the read short, or some lines were not understood; it has at least one
+      mapping;
+    - `NotRead`: no mapping. `maps` was not read (it cannot be read, or a total was used up), a
+      read in part kept none, or what was read was dropped (an exec seen or not ruled out,
+      above). So is a process of which the second pass keeps nothing: a listener's holder
+      outside the runtime's tree, which it does not read, and a recorded process gone or
+      unreadable then.
+
+    A session from before PR-4d-2 has no `maps_read`; it reads as `NotRead`.
   - **The link.** A mapping is linked the same way as `exe`: to a backend, to the model blob a
     runner serves, or not at all (a library outside the walks). A `dev:ino` that two scanned
     instances share (a hard link seen twice, a blob reached from two roots) gives no link either:
@@ -155,15 +197,30 @@ never by path. It is on by default: the default policy audits `runtime_processes
   - **The audit.** `Unavailable(PermissionDenied)` when the process list was denied or hidden
     (`hidepid`). `Partial` when the list was cut short, or a process gap exists: a process that
     cannot be read, one whose parent cannot be read, one that may be the runtime (its `comm` or
-    `cmdline` cannot be read), or a runtime or descendant that cannot be read again. Otherwise
-    `Complete`.
-  - **Each process.** `Complete` when its executable's identity, all of `maps`, and `ns/mnt` were
-    read. `Unavailable` when both the identity and `maps` were refused; `Partial` for any other
-    gap. A recorded process that cannot be read again gets "the process cannot be read again
-    (why)", `Unavailable` when the cause is permission. Another user's service, read by a
+    `cmdline` cannot be read), or a descendant that cannot be read again and is not recorded.
+    Otherwise `Complete`.
+  - **Each process.** Every recorded process has an entry. One the second pass read is
+    `Complete` when its executable's identity, all of `maps`, and `ns/mnt` were read and nothing
+    was dropped; `Unavailable` when both the identity and `maps` were refused; `Partial` for any
+    other gap. A recorded process that cannot be read again gets "the process cannot be read
+    again (why)", `Unavailable` when the cause is permission. Another user's service, read by a
     non-root SIGIL, is `Unavailable(PermissionDenied)`: a gap, so INCOMPLETE. That is the usual
     case for the systemd service, which runs as `ollama`. Run as root, or as that user, to
     observe it.
+  - **A listener's holder outside the runtime's tree.** It is recorded for the listener it holds,
+    and not read again. Its entry is `OutOfScope` ("not found among the runtime and its
+    descendants"), which closes the check: it is not a gap. That says what was observed: the
+    descendants are found through the parents `stat` gives, so a process under one whose parent
+    cannot be read is not found among them, though it may be one; the audit's entry is then
+    `Partial`. A holder that may be the runtime is `Partial` instead: "the process may be the
+    runtime (why); its executable and mappings were not read".
+- **In the Markdown report.** The `Mappings` column of the Processes table counts only what was
+  read: `n (m linked)` when `maps` was read whole (`n` mappings, `m` of them linked), and
+  `n (m linked; partial)` when it was read in part. A process whose `maps` was not read has no
+  count, only what its entry says: `not observed (why)` when it is `Unavailable` (for example
+  `not observed (permission denied)`), `not observed` when it is `Partial` (the Coverage section
+  says why), and `not read` otherwise, as for an `OutOfScope` entry, or a session from before
+  PR-4d-2, which has no entry.
 
 ## The reference set
 
