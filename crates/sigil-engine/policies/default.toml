@@ -8,7 +8,7 @@ name = "default"
 
 [scope]
 audit = ["model_store"]
-observe_audit = ["exposure"]
+observe_audit = ["exposure", "runtime_processes"]
 active_audit = ["runtime_api"]
 # When an installation is inspected (`--install-dir`): its files against the official manifests.
 install_audit = ["runtime_artifacts"]
