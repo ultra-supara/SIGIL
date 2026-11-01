@@ -2174,3 +2174,174 @@ pub fn service_unit() -> Session {
     });
     s
 }
+
+/// Example 20 (PR-4d-2): observe mode with an installation. `ollama serve` and its runner (a
+/// descendant, with no role) run files the walk read. Each executable is linked by dev:ino, and
+/// its instance records `ProcessExe`. The runner's mappings name a backend and the model blob
+/// (linked), and libc (outside the walks, unlinked).
+pub fn observed_processes() -> Session {
+    let mut s = base(&["artifacts.discovery", "processes.observed"]);
+    s.request.mode = Mode::Observe;
+    s.request.audit = ids(&["runtime_artifacts", "runtime_processes"]);
+    // The model blob a runner maps is in the store.
+    s.request.roots.push(ScanRoot {
+        id: id("models"),
+        path: t(MODELS_DIR),
+    });
+    s.request.budgets.extend([
+        ("processes_listed".to_string(), 32_768),
+        ("fds_per_process".to_string(), 65_536),
+        ("tcp_table_bytes".to_string(), 16 << 20),
+        ("proc_maps_bytes".to_string(), 16 << 20),
+    ]);
+    let boot = "00000000-0000-4000-8000-000000000000".to_string();
+    let serve = ProcessRef {
+        pid: 4242,
+        start_ticks: 1000,
+        boot_id: boot.clone(),
+    };
+    let runner = ProcessRef {
+        pid: 4300,
+        start_ticks: 1200,
+        boot_id: boot,
+    };
+    let elf = |s: &mut Session, byte: u8, kind: ElfType| -> ArtifactId {
+        let artifact: ArtifactId = id(&format!("sha256:{}", hex(byte)));
+        s.artifacts.push(Artifact {
+            id: artifact.clone(),
+            size: 1_048_576,
+            format: Format::Elf { kind },
+            slices: vec![Slice {
+                id: SliceId::from_parts(&artifact, Arch::X86_64, 0),
+                arch: Arch::X86_64,
+                offset: 0,
+                size: 1_048_576,
+                sha256: id(&hex(byte)),
+            }],
+        });
+        artifact
+    };
+    let placed = |s: &mut Session,
+                  inst: &str,
+                  path: &str,
+                  byte: u8,
+                  kind: ElfType,
+                  ino: u64,
+                  by: &[&ProcessRef]| {
+        let artifact = elf(s, byte, kind);
+        let mut i = instance(&id(inst), INSTALL_ROOT, path, &artifact, ino);
+        i.stat.mode = 0o100755;
+        for p in by {
+            i.discovered_by.push(DiscoverySource::ProcessExe {
+                process: (*p).clone(),
+            });
+        }
+        s.instances.push(i);
+        id::<InstanceId>(inst)
+    };
+    let exe = placed(
+        &mut s,
+        "inst:install/bin/ollama",
+        "/usr/local/bin/ollama",
+        0x20,
+        ElfType::Exec,
+        1020,
+        &[&serve],
+    );
+    let server = placed(
+        &mut s,
+        "inst:install/lib/ollama/llama-server",
+        "/usr/local/lib/ollama/llama-server",
+        0x21,
+        ElfType::Exec,
+        1021,
+        &[&runner],
+    );
+    let backend = placed(
+        &mut s,
+        "inst:install/lib/ollama/libggml-cpu-haswell.so",
+        "/usr/local/lib/ollama/libggml-cpu-haswell.so",
+        0x22,
+        ElfType::Dyn,
+        1022,
+        &[],
+    );
+    let (_, blob, _) = add_blob(&mut s, 0x2a, 1030);
+    let observed = || Tri::Yes {
+        why: (),
+        basis: Basis::Observed {
+            source: ObsSource::Proc,
+        },
+        unresolved: vec![],
+    };
+    let mapping =
+        |p: &ProcessRef, ino: u64, path: &str, instance: Option<&InstanceId>| MappingObs {
+            process: p.clone(),
+            at: ts("2026-10-07T07:00:01Z"),
+            dev: 2049,
+            ino,
+            path_text: t(path),
+            deleted: false,
+            instance: instance.cloned(),
+            same_mount_ns: observed(),
+        };
+    let libc = "/usr/lib/x86_64-linux-gnu/libc.so.6";
+    let blob_path = format!("{MODELS_DIR}/blobs/sha256-{}", hex(0x2a));
+    s.processes.push(ProcessObs {
+        process: serve.clone(),
+        at: ts("2026-10-07T07:00:01Z"),
+        roles: ids(&["ollama serve"]),
+        exe: ProcessExe::Instance {
+            instance: exe.clone(),
+        },
+        mappings: vec![
+            mapping(&serve, 1020, "/usr/local/bin/ollama", Some(&exe)),
+            mapping(&serve, 5001, libc, None),
+        ],
+        name: Some(t("ollama")),
+        argv: Some(vec![t("/usr/local/bin/ollama"), t("serve")]),
+        net_ns: NsInode::Inode(4026531840),
+        fd_table: Observability::Observed,
+    });
+    s.processes.push(ProcessObs {
+        process: runner.clone(),
+        at: ts("2026-10-07T07:00:01Z"),
+        roles: vec![],
+        exe: ProcessExe::Instance {
+            instance: server.clone(),
+        },
+        mappings: vec![
+            mapping(
+                &runner,
+                1021,
+                "/usr/local/lib/ollama/llama-server",
+                Some(&server),
+            ),
+            mapping(
+                &runner,
+                1022,
+                "/usr/local/lib/ollama/libggml-cpu-haswell.so",
+                Some(&backend),
+            ),
+            mapping(&runner, 1030, &blob_path, Some(&blob)),
+            mapping(&runner, 5001, libc, None),
+        ],
+        name: Some(t("llama-server")),
+        argv: None,
+        net_ns: NsInode::Inode(4026531840),
+        fd_table: Observability::Observed,
+    });
+    s.coverage.push(coverage(
+        "artifacts.discovery",
+        Ref::Root(id(INSTALL_ROOT)),
+        CoverageState::Complete,
+    ));
+    for scope in [Ref::Audit, Ref::Process(serve), Ref::Process(runner)] {
+        s.coverage.push(coverage(
+            "processes.observed",
+            scope,
+            CoverageState::Complete,
+        ));
+    }
+    s
+}

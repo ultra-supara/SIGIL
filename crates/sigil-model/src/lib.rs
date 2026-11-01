@@ -53,7 +53,7 @@ pub use access::{
 pub use artifact::{
     Arch, Artifact, DiscoverySource, ElfType, FileInstance, Format, InstanceContent, LinkHop,
     MappingObs, NotReadReason, NsInode, ProcessExe, ProcessObs, ProcessRef, Slice, Stability,
-    StatInfo,
+    StatInfo, PROCESSES_OBSERVED,
 };
 pub use binary::{
     imports_over_gap, macho_architecture, BinaryFacts, ContainerFacts, DataSymbol, DataValue,

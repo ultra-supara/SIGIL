@@ -261,6 +261,9 @@ pub enum ValidationError {
     /// A service unit's root, its instance, or a `ServiceUnit` source disagrees with the session
     /// (PR-4d-1).
     ServiceUnit { at: String, why: String },
+    /// An observed process's executable, a mapping, or `processes.observed` disagrees with the
+    /// session (P1–P4; PR-4d-2).
+    Process { at: String, why: String },
 }
 
 impl fmt::Display for ValidationError {
@@ -397,6 +400,7 @@ impl fmt::Display for ValidationError {
             Code { at, why } => write!(f, "{at}: {why}"),
             Capability { at, why } => write!(f, "{at}: {why}"),
             ServiceUnit { at, why } => write!(f, "{at}: {why}"),
+            Process { at, why } => write!(f, "{at}: {why}"),
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -814,6 +818,7 @@ impl<'a> Validator<'a> {
         self.binaries();
         self.binary_inputs();
         self.service_units();
+        self.process_links();
         self.code_coverage();
         self.identity_coverage();
         self.import_hints();
@@ -2166,6 +2171,148 @@ impl<'a> Validator<'a> {
 
     fn unit_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
         self.errors.push(ValidationError::ServiceUnit {
+            at: at.to_string(),
+            why: why.into(),
+        });
+    }
+
+    /// PR-4d-2.
+    /// - P1: an executable and its instance name each other. A `ProcessExe` source names a
+    ///   recorded process whose `exe` is that instance, once. A process whose `exe` is an
+    ///   instance is named by that instance's `ProcessExe` source.
+    /// - P2: a mapping's instance has the mapping's `dev:ino`.
+    /// - P3: `processes.observed` is scoped to the audit or to a recorded process, once each.
+    /// - P4: a process is recorded once.
+    fn process_links(&mut self) {
+        use crate::artifact::DiscoverySource;
+        let s = self.s;
+        let index = self.index;
+        let mut recorded = HashSet::new();
+        for obs in &s.processes {
+            if !recorded.insert(&obs.process) {
+                self.process_error(&format!("processes[{}]", obs.process.pid), "recorded twice");
+            }
+        }
+        for inst in &s.instances {
+            let at = format!("instances[{}]", inst.id);
+            let mut named = HashSet::new();
+            for d in &inst.discovered_by {
+                let DiscoverySource::ProcessExe { process } = d else {
+                    continue;
+                };
+                if !named.insert(process) {
+                    self.process_error(&at, format!("names process {} twice", process.pid));
+                }
+                // A process that is not recorded is reported by `process`.
+                if let Some(obs) = s.processes.iter().find(|p| p.process == *process) {
+                    let linked = matches!(&obs.exe, ProcessExe::Instance { instance } if *instance == inst.id);
+                    if !linked {
+                        self.process_error(
+                                &at,
+                                format!(
+                                    "a ProcessExe source names process {}, whose executable is not this instance",
+                                    process.pid
+                                ),
+                            );
+                    }
+                }
+            }
+        }
+        for obs in &s.processes {
+            let at = format!("processes[{}]", obs.process.pid);
+            if let ProcessExe::Instance { instance } = &obs.exe {
+                if let Some(inst) = index.instances.get(instance.as_str()) {
+                    let named = inst.discovered_by.iter().any(|d| {
+                            matches!(d, DiscoverySource::ProcessExe { process } if *process == obs.process)
+                        });
+                    if !named {
+                        self.process_error(
+                            &at,
+                            format!("its executable {instance} has no ProcessExe source naming it"),
+                        );
+                    }
+                }
+            }
+            for m in &obs.mappings {
+                let Some(instance) = &m.instance else {
+                    continue;
+                };
+                if let Some(inst) = index.instances.get(instance.as_str()) {
+                    if (inst.stat.dev, inst.stat.ino) != (m.dev, m.ino) {
+                        self.process_error(
+                            &at,
+                            format!(
+                                "mapping {}:{} is linked to {instance}, whose stat is {}:{}",
+                                m.dev, m.ino, inst.stat.dev, inst.stat.ino
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        let mut scoped = HashSet::new();
+        let mut audit = false;
+        for c in s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == crate::PROCESSES_OBSERVED)
+        {
+            match &c.scope {
+                Ref::Audit => audit = true,
+                Ref::Process(p) => {
+                    if !recorded.contains(p) {
+                        self.process_error(
+                            "coverage",
+                            format!(
+                                "{} is about a process that is not recorded ({})",
+                                c.check, p.pid
+                            ),
+                        );
+                    }
+                    if !scoped.insert(p) {
+                        self.process_error(
+                            "coverage",
+                            format!("{} is about process {} twice", c.check, p.pid),
+                        );
+                    }
+                }
+                _ => self.process_error(
+                    "coverage",
+                    format!("{} is scoped to neither the audit nor a process", c.check),
+                ),
+            }
+        }
+        // P5 (external plan review): a required check has its audit entry, and an entry for each
+        // process the second pass read, i.e. each runtime and each process with a mapping or a
+        // linked executable. A process recorded only as a listener's holder needs none.
+        let required = s
+            .request
+            .required_checks
+            .iter()
+            .any(|c| c.as_str() == crate::PROCESSES_OBSERVED);
+        if required {
+            if !audit {
+                self.process_error(
+                    "coverage",
+                    "processes.observed is required but has no entry for the audit",
+                );
+            }
+            for obs in &s.processes {
+                let read = obs.roles.iter().any(|r| r.as_str() == "ollama serve")
+                    || !obs.mappings.is_empty()
+                    || matches!(obs.exe, ProcessExe::Instance { .. });
+                if read && !scoped.contains(&obs.process) {
+                    self.process_error(
+                        &format!("processes[{}]", obs.process.pid),
+                        "processes.observed is required but has no entry for this process",
+                    );
+                }
+            }
+        }
+    }
+
+    fn process_error(&mut self, at: &(impl fmt::Display + ?Sized), why: impl Into<String>) {
+        self.errors.push(ValidationError::Process {
             at: at.to_string(),
             why: why.into(),
         });
