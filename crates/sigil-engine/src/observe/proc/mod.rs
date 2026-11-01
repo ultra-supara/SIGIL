@@ -41,8 +41,8 @@
 //! path of every process it records, but keeps the identity and the stack addresses only of the
 //! runtime. The second pass reads `stat`, then the path and the identity before `maps` and again
 //! after it, then the runtime's arguments, then `stat` again: a process that exited meanwhile is
-//! gone, and what was read of one whose path, identity, stack address or arguments changed is
-//! dropped (`second`).
+//! gone, and the identity and mappings read of one whose path, identity, stack address or
+//! arguments changed are dropped (`second`).
 //!
 //! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
 //! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
@@ -160,8 +160,8 @@ pub struct Detail {
 
 /// Why a recorded process has no mappings: it exited (or its PID was reused) before the second
 /// pass ended, so nothing that pass read of it is kept.
-pub const EXITED: &str =
-    "the process exited before the second pass ended; nothing it read of the executable and mappings is kept";
+pub const EXITED: &str = "the process exited before the second pass ended; nothing the pass read \
+                          of its executable and mappings is kept";
 
 /// When the processes were read, and in which boot: part of each one's identity.
 #[derive(Clone, Copy)]
@@ -809,14 +809,16 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 ///
 /// An exec keeps the PID and the start time, and an exec of the same path keeps the path too.
 /// The reads are, in order: `stat` (the start time, and where the stack starts); the
-/// executable's path, then its identity (a zombie is gone here); `ns/mnt`; `maps`; the identity
-/// again; the path again; for the runtime, `cmdline` again; and `stat` again. That last read
-/// decides whether the process exited during the others, which an exit ends early or empties:
-/// then it is `Gone`. Otherwise what was read is taken as another program's, and its identity
-/// and mappings are dropped (`maps` counts as not read), when:
+/// executable's path, then its identity (when that gives `ENOENT` or `ESRCH`, `stat` once
+/// more: a zombie or a process gone is gone here); `ns/mnt`; `maps`; the identity again; the
+/// path again; for the runtime, `cmdline` again; and `stat` again. That last read decides
+/// whether the process exited during the others, which an exit ends early or empties: then it
+/// is `Gone`. Otherwise what was read may be another program's, and its identity and mappings
+/// are dropped (`maps` counts as not read), when:
 /// - the path changed since the listing pass, or between its two reads (`exec_seen`);
 /// - the identity changed between its two reads, or since the listing pass read the runtime's,
-///   or one of those reads failed while another did not (`identity_change`);
+///   or those reads are not all the same because one failed (`identity_change`; a read at
+///   listing that failed is not compared);
 /// - `startstack` or `arg_start` moved between the two `stat` reads, or since the listing pass
 ///   read the runtime's (`stack_moved`);
 /// - the runtime's arguments are not the ones its role rests on (`argv_gap`).
@@ -835,13 +837,18 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// with the first reads here, and its arguments with the read after `maps`. A stack address is
 /// compared only where both reads show it (not 0); an exec places both anew under ASLR. An exit
 /// is seen by the last `stat`. The kernel ends a `maps` read early at an exec or an exit, and a
-/// read so cut short is never kept once the exec or the exit is seen. What cannot be told apart
-/// is an exec that changes nothing compared: of the same file (for the runtime, with the same
-/// arguments) while the stack addresses are not shown (0 to a reader not permitted to see them)
-/// or do not move (ASLR off), or of a descendant between the passes, of which only a recorded
-/// path, if any, is compared. What holds then is that every mapping kept was mapped, during the reads, by
-/// the process running that file (with those arguments), and that `Whole` means read to an end
-/// such an exec may have brought early.
+/// read so cut short is never kept once the exec or the exit is seen.
+///
+/// What cannot be told apart is an exec that changes nothing compared: one of the same file (for
+/// the runtime, with the same arguments) while the stack addresses do not move (ASLR off,
+/// system-wide or by the process's own `ADDR_NO_RANDOMIZE` personality); one to another program
+/// and back to that file within the reads, under the same conditions; or one by a descendant
+/// between the passes, of which only a recorded path, if any, is compared. Stack addresses
+/// hidden (0) are not compared, but `stat` hides them under the same permission check as `maps`,
+/// which is then refused too. What the session states then: the process ran that file (with
+/// those arguments) when its path and identity were read, before and after `maps`; every mapping
+/// kept was mapped by it during the reads, by that file's image unless it ran another program in
+/// between; and `Whole` means `maps` was read to an end that an exec may have brought early.
 fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
     let dir = match open_dir(ctx.root, &s.pid.to_string()) {
         Ok(dir) => dir,
