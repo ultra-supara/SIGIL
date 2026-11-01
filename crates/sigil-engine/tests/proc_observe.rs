@@ -925,6 +925,169 @@ fn a_maps_cut_before_its_first_line_is_not_read() {
     );
 }
 
+/// The paths of a process's mappings, in the order kept.
+fn paths(p: &ProcessObs) -> Vec<UntrustedText> {
+    p.mappings.iter().map(|m| m.path_text.clone()).collect()
+}
+
+/// A fixture file's path, as its `maps` line names it.
+fn text(path: &std::path::Path) -> UntrustedText {
+    t(path.to_str().unwrap())
+}
+
+/// Code review of PR-4d-2, R-D: the mappings kept are bounded over all processes too
+/// (`proc_maps_entries`). A process keeps those within it, in the order first seen; the one that
+/// would exceed it is not kept, and no line after it is parsed (the line not understood at the
+/// end is no gap).
+#[test]
+fn the_entries_budget_keeps_the_first_mappings_and_says_so() {
+    let fake = FakeProc::new();
+    let (a, b, c) = (so(&fake, "/a.so"), so(&fake, "/b.so"), so(&fake, "/c.so"));
+    let maps = format!(
+        "{}\n{}\n{}\ngarbage\n",
+        maps_line(&a),
+        maps_line(&b),
+        maps_line(&c)
+    );
+    serve_at(&fake, &maps);
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_entries: 2,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(paths(&f.processes[0]), [text(&a), text(&b)]);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Part);
+    assert_eq!(
+        detail(&f, 4242).missing,
+        ["maps: over proc_maps_entries (2 records kept)"]
+    );
+}
+
+/// Code review of PR-4d-2, R-D: a duplicate is not kept, so it uses none of the budget, before
+/// the budget is reached or once it is: three lines naming two objects are read whole.
+#[test]
+fn a_duplicate_mapping_uses_none_of_the_entries_budget() {
+    for duplicate_last in [false, true] {
+        let fake = FakeProc::new();
+        let (a, b) = (so(&fake, "/a.so"), so(&fake, "/b.so"));
+        let lines = if duplicate_last {
+            [&a, &b, &a]
+        } else {
+            [&a, &a, &b]
+        };
+        let maps: String = lines.iter().map(|p| maps_line(p) + "\n").collect();
+        serve_at(&fake, &maps);
+        let f = run_with(
+            &fake,
+            ProcBudgets {
+                max_maps_entries: 2,
+                ..ProcBudgets::default()
+            },
+        );
+        assert_eq!(
+            paths(&f.processes[0]),
+            [text(&a), text(&b)],
+            "{duplicate_last}"
+        );
+        assert_eq!(
+            f.processes[0].maps_read,
+            MapsRead::Whole,
+            "{duplicate_last}"
+        );
+        assert!(
+            detail(&f, 4242).missing.is_empty(),
+            "{duplicate_last}: {:?}",
+            detail(&f, 4242)
+        );
+    }
+}
+
+/// Code review of PR-4d-2, R-D: once the mappings kept reach the budget, a process's `maps` is
+/// not read: never opened, so none of the byte budget goes to it.
+#[test]
+fn the_entries_budget_reached_leaves_the_next_maps_unopened() {
+    let fake = FakeProc::new();
+    let (a, b) = (so(&fake, "/a.so"), so(&fake, "/b.so"));
+    two_observed(&fake, &[&a], &b);
+    let opens = Opens::watch(&[
+        fake.pid_dir(4242).join("maps"),
+        fake.pid_dir(4300).join("maps"),
+    ]);
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_entries: 1,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(opens.counts(), [1, 0]);
+    assert_eq!(paths(&f.processes[0]), [text(&a)]);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Whole);
+    assert!(
+        detail(&f, 4242).missing.is_empty(),
+        "{:?}",
+        detail(&f, 4242)
+    );
+    assert!(f.processes[1].mappings.is_empty());
+    assert_eq!(f.processes[1].maps_read, MapsRead::NotRead);
+    let d = detail(&f, 4300);
+    assert_eq!(d.missing, ["maps: not read (proc_maps_entries reached)"]);
+    assert!(!d.denied);
+}
+
+/// Code review of PR-4d-2, R-D: a process that a byte budget and the entries budget both stop
+/// lists each reason once, the byte budget's first. In its read: `proc_maps_bytes` cuts the third
+/// line, and the entries budget stops at the second. Before it: the runtime spent both.
+#[test]
+fn a_maps_stopped_by_both_budgets_lists_each_once_the_bytes_first() {
+    let fake = FakeProc::new();
+    let (a, b, c) = (so(&fake, "/a.so"), so(&fake, "/b.so"), so(&fake, "/c.so"));
+    let (first, second) = (maps_line(&a), maps_line(&b));
+    serve_at(&fake, &format!("{first}\n{second}\n{}\n", maps_line(&c)));
+    // The first two lines, their newlines, and two bytes of the third.
+    let limit = (first.len() + second.len()) as u64 + 4;
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_bytes: limit,
+            max_maps_entries: 1,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(paths(&f.processes[0]), [text(&a)]);
+    assert_eq!(f.processes[0].maps_read, MapsRead::Part);
+    assert_eq!(
+        detail(&f, 4242).missing,
+        [
+            format!("maps: over proc_maps_bytes ({limit} bytes read)"),
+            "maps: over proc_maps_entries (1 records kept)".to_string(),
+        ]
+    );
+
+    let fake = FakeProc::new();
+    let (a, b) = (so(&fake, "/a.so"), so(&fake, "/b.so"));
+    two_observed(&fake, &[&a], &b);
+    let f = run_with(
+        &fake,
+        ProcBudgets {
+            max_maps_total_bytes: maps_line(&a).len() as u64 + 1,
+            max_maps_entries: 1,
+            ..ProcBudgets::default()
+        },
+    );
+    assert_eq!(f.processes[0].maps_read, MapsRead::Whole);
+    assert_eq!(f.processes[1].maps_read, MapsRead::NotRead);
+    assert_eq!(
+        detail(&f, 4300).missing,
+        [
+            "maps: not read (proc_maps_total_bytes reached)",
+            "maps: not read (proc_maps_entries reached)",
+        ]
+    );
+}
+
 /// Review of R1: a `maps` none of whose lines is understood keeps no mapping: `NotRead`.
 #[test]
 fn a_maps_with_no_line_understood_is_not_read() {

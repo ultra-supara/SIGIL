@@ -29,7 +29,9 @@
 //! through `exe`, which follows the link to the file the process runs and never opens it),
 //! `maps` up to `proc_maps_bytes` (and `proc_maps_total_bytes` over all of them), and `ns/mnt`.
 //! A mapping is one per distinct (dev, ino, path, deleted): one inode reached by two paths gives
-//! two. It is an observation only: nothing is derived from one, or from its absence (F-T1).
+//! two. No more than `proc_maps_entries` mappings are kept over all of them, a duplicate not
+//! counting; once that many are, a `maps` is not read. A mapping is an observation only: nothing
+//! is derived from one, or from its absence (F-T1).
 //! Linking executables and mappings to scanned files is `analyze::runtime_processes`. A
 //! listener's holder outside the runtime's tree is not read again; one that may be the runtime
 //! gets a [`Detail`] saying so.
@@ -87,6 +89,9 @@ pub struct ProcBudgets {
     pub max_maps_bytes: u64,
     /// Bytes of `maps` over all processes of one observation (PR-4d-2).
     pub max_maps_total_bytes: u64,
+    /// Mappings kept over all processes of one observation, after the dedup: a duplicate does
+    /// not count (code review of PR-4d-2, R-D).
+    pub max_maps_entries: u64,
 }
 
 impl Default for ProcBudgets {
@@ -97,6 +102,7 @@ impl Default for ProcBudgets {
             max_table_bytes: 16 << 20,
             max_maps_bytes: 16 << 20,
             max_maps_total_bytes: 256 << 20,
+            max_maps_entries: 65_536,
         }
     }
 }
@@ -168,6 +174,9 @@ struct Ctx<'a> {
     own_mnt_ns: Option<u64>,
     /// The bytes of `maps` still to be read in this observation (`max_maps_total_bytes`).
     maps_left: Cell<u64>,
+    /// The mappings still to be kept in this observation (`max_maps_entries`). One kept and then
+    /// dropped (`second`) still counts, as its bytes do.
+    entries_left: Cell<u64>,
     /// Called with each process's PID at each `Stage` of its reads: the tests' way to change it
     /// during the second pass. A no-op outside them.
     during: &'a dyn Fn(Stage, u32),
@@ -404,6 +413,7 @@ fn observe_with(
         budgets,
         own_mnt_ns,
         maps_left: Cell::new(budgets.max_maps_total_bytes),
+        entries_left: Cell::new(budgets.max_maps_entries),
         during,
     };
     let observed = descendants(&scanned);
@@ -1099,10 +1109,13 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
 /// The file-backed mappings of `maps`, one per distinct (dev, ino, path, deleted) in the order
 /// first seen (one inode reached by two paths gives two), how much of `maps` they stand for, and
 /// whether `maps` was refused for want of permission (PR-4d-2). It is read up to
-/// `max_maps_bytes`, and no more than what is left of `max_maps_total_bytes`: `NotRead` when it
-/// cannot be read or nothing is left, `Part` when it is over a budget or has lines not
-/// understood, and `NotRead` again when such a read kept no mapping. One read to its end is
-/// `Whole`, mappings or none.
+/// `max_maps_bytes`, and no more than what is left of `max_maps_total_bytes`; and no more
+/// mappings are kept than what is left of `max_maps_entries`, a duplicate not counting: no line
+/// after the one that would exceed it is parsed (code review of PR-4d-2, R-D). `NotRead` when it
+/// cannot be read or nothing is left of either total (then it is not opened), `Part` when it is
+/// over a budget or has lines not understood, and `NotRead` again when such a read kept no
+/// mapping. One read to its end is `Whole`, mappings or none. Each reason is one gap, in this
+/// order: the bytes' budget, the entries' budget, then the lines not understood.
 fn mappings(
     dir: BorrowedFd<'_>,
     process: &ProcessRef,
@@ -1112,8 +1125,15 @@ fn mappings(
 ) -> (Vec<MappingObs>, MapsRead, bool) {
     let per_process = ctx.budgets.max_maps_bytes;
     let remaining = ctx.maps_left.get();
+    let entries = ctx.entries_left.get();
+    // Each total used up is a gap, the bytes' first; either one leaves `maps` unopened.
     if remaining == 0 {
         missing.push("maps: not read (proc_maps_total_bytes reached)".into());
+    }
+    if entries == 0 {
+        missing.push("maps: not read (proc_maps_entries reached)".into());
+    }
+    if remaining == 0 || entries == 0 {
         return (vec![], MapsRead::NotRead, false);
     }
     let limit = per_process.min(remaining);
@@ -1146,11 +1166,18 @@ fn mappings(
     let mut out = vec![];
     let mut seen = BTreeSet::new();
     let mut malformed = 0usize;
+    let mut over_entries = false;
     for line in lines.into_iter().filter(|l| !l.is_empty()) {
         match parse::maps_row(line) {
             parse::MapsRow::File(m) => {
                 // One per distinct (dev, ino, path, deleted), not per VMA.
                 if seen.insert((m.dev, m.ino, m.path.clone(), m.deleted)) {
+                    // Code review of PR-4d-2, R-D: one more than the mappings left is not kept,
+                    // and the lines after it are not parsed.
+                    if out.len() as u64 >= entries {
+                        over_entries = true;
+                        break;
+                    }
                     out.push(MappingObs {
                         process: process.clone(),
                         at: ctx.when.at.clone(),
@@ -1167,11 +1194,19 @@ fn mappings(
             parse::MapsRow::Malformed => malformed += 1,
         }
     }
+    ctx.entries_left
+        .set(entries.saturating_sub(out.len() as u64));
+    if over_entries {
+        missing.push(format!(
+            "maps: over proc_maps_entries ({} records kept)",
+            out.len()
+        ));
+    }
     if malformed > 0 {
         missing.push(format!("maps: {malformed} lines not understood"));
     }
     // A read in part that kept no mapping is no count at all (review of R1): its gaps say why.
-    let read = match (over || malformed > 0, out.is_empty()) {
+    let read = match (over || over_entries || malformed > 0, out.is_empty()) {
         (false, _) => MapsRead::Whole,
         (true, false) => MapsRead::Part,
         (true, true) => MapsRead::NotRead,

@@ -21,6 +21,7 @@
       "fds_per_process": 65536,
       "files": 4096,
       "proc_maps_bytes": 16777216,
+      "proc_maps_entries": 65536,
       "proc_maps_total_bytes": 268435456,
       "processes_listed": 32768,
       "tcp_table_bytes": 16777216

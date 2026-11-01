@@ -2197,6 +2197,7 @@ pub fn observed_processes() -> Session {
         ("tcp_table_bytes".to_string(), 16 << 20),
         ("proc_maps_bytes".to_string(), 16 << 20),
         ("proc_maps_total_bytes".to_string(), 256 << 20),
+        ("proc_maps_entries".to_string(), 65_536),
     ]);
     let boot = "00000000-0000-4000-8000-000000000000".to_string();
     let serve = ProcessRef {

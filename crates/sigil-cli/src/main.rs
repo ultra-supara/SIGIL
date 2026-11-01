@@ -881,6 +881,7 @@ fn budgets(
             | "tcp_table_bytes"
             | "proc_maps_bytes"
             | "proc_maps_total_bytes"
+            | "proc_maps_entries"
                 if mode == Mode::Static =>
             {
                 return Err(usage("this budget applies to --mode observe only"));
@@ -890,6 +891,7 @@ fn budgets(
             "tcp_table_bytes" => proc_budgets.max_table_bytes = value,
             "proc_maps_bytes" => proc_budgets.max_maps_bytes = value,
             "proc_maps_total_bytes" => proc_budgets.max_maps_total_bytes = value,
+            "proc_maps_entries" => proc_budgets.max_maps_entries = value,
             "api_connect_ms" | "api_io_ms" | "api_response_bytes" if !probing => {
                 return Err(usage("this budget applies to --active api-probe only"));
             }
@@ -930,7 +932,7 @@ fn budgets(
                     "unknown budget; known: files_discovered, entries_listed, directory_entries, \
                      walk_depth, link_hops, manifest_bytes, in observe mode processes_listed, \
                      fds_per_process, tcp_table_bytes, proc_maps_bytes, proc_maps_total_bytes, \
-                     with --active api-probe \
+                     proc_maps_entries, with --active api-probe \
                      api_connect_ms, api_io_ms, api_response_bytes, with --install-dir or \
                      --service-unit install_files_discovered, install_entries_listed, \
                      install_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, and \

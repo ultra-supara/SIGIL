@@ -316,6 +316,10 @@ fn assemble(
                 "proc_maps_total_bytes".to_string(),
                 proc_budgets.max_maps_total_bytes,
             ),
+            (
+                "proc_maps_entries".to_string(),
+                proc_budgets.max_maps_entries,
+            ),
         ]);
     }
     // PR-4d-2: the observed executables and mappings, linked to every scanned instance.
