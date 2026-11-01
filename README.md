@@ -17,7 +17,7 @@ Inspection is local and read-only. SIGIL never executes the files it inspects, s
 | **Runtime components** | ELF component claims from file names, SONAMEs, embedded versions and commits, and reference hashes. Conflicting evidence stays visible. |
 | **Standalone binaries** | Digests and container facts for ELF executables, shared libraries, and object files, plus thin and universal Mach-O files. No model store or running runtime is needed. |
 | **Capabilities and code** | POSIX, libstdc++, and libc++ capability imports, Go function-name and export hints in ELF files, and—with `binary inspect --code`—direct call sites and argument values in x86-64 ELF code. |
-| **Runtime exposure** | In observe mode, listening sockets attributed to `ollama serve` through `/proc` file descriptors. The optional API probe records the response from one requested endpoint. |
+| **Runtime exposure** | In observe mode, listening sockets attributed to `ollama serve` through `/proc` file descriptors, and the executable and mapped files of `ollama serve` and its descendants, linked to the installation's files by `dev:ino`. The optional API probe records the response from one requested endpoint. |
 
 Use SIGIL to collect evidence for a security review, check a local deployment in CI, or inspect a native library before including it in an AI environment. Each finding links back to the facts and evidence that support it.
 

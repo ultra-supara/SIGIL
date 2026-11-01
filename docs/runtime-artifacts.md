@@ -103,6 +103,66 @@ executable its one `ExecStart=` names, and inspects that executable's installati
   `install_files_discovered reached (…)`). Anything else the walk finds missing in the
   installation (`lib/ollama`, a file over budget) is a gap, as with `--install-dir`.
 
+## Linked to the running processes (observe mode, PR-4d-2)
+
+In observe mode, SIGIL also reads the executable and the mapped files of `ollama serve` and of
+every process descended from it (its runners, `llama-server`, `gpu-discover`). The backends are
+loaded in those children (plan §0.4). SIGIL links them to the files the run walked, by `dev:ino`,
+never by path. It is on by default: the default policy audits `runtime_processes` in observe mode.
+
+- **Which processes.**
+  - **The process set.** Every listed process's `stat` gives its parent. The runtime and its
+    descendants, through any number of generations (a breadth-first search over the parent),
+    are read again after the listing.
+  - **The PID check.** The second pass reads `stat` again; its start time must be the same,
+    otherwise the PID is another process now. A process gone then (exited, its PID reused, or a
+    zombie) is not read: a runtime stays as listed, with the gap "the process exited before its
+    executable and mappings were read", and a descendant is not recorded.
+  - **Roles.** A descendant has no role.
+  - **What may be missed.** A process started after its parent was listed.
+- **The executable.**
+  - **Its identity.** `stat` through `/proc/<pid>/exe` gives the file the process runs (its
+    `dev:ino`), also when it was deleted or is in another mount namespace. The file is never
+    opened. The link's path is read first and last; a process that executed another file between
+    the two reads has no identity and no mappings recorded, which is a gap.
+  - **The link.** When exactly one scanned instance has that `dev:ino`, the process's `exe` is
+    that instance, and the instance records a `ProcessExe` source. Otherwise `exe` stays the path
+    the link names.
+- **The mappings.**
+  - **What is read.** `/proc/<pid>/maps`, up to `proc_maps_bytes` (default 16 MiB per process)
+    and, over all processes, `proc_maps_total_bytes` (default 256 MiB). A read never takes more
+    than the budget left plus one byte. A budget over or reached is a gap; the processes after
+    the total is reached are not read.
+  - **One mapping per object.** One `MappingObs` per distinct (device, inode, path, deleted): its
+    device and inode, its path as the kernel printed it, and whether it was deleted. One inode
+    reached by two paths gives two mappings. A live file whose name ends in " (deleted)" reads as
+    deleted; the line cannot tell the two apart.
+  - **The link.** A mapping is linked the same way as `exe`: to a backend, to the model blob a
+    runner serves, or not at all (a library outside the walks). A `dev:ino` that two scanned
+    instances share (a hard link seen twice, a blob reached from two roots) gives no link either:
+    it is `instance: None`, just as a file outside the walks is. An unlinked mapping can mean
+    either.
+  - **The mount namespace.** `same_mount_ns` says whether the process's `ns/mnt` is SIGIL's own,
+    that is, whether its path names the same file in SIGIL's view.
+  - **What a mapping does not say.** It is an observation: "this object was mapped in this process
+    at this time". A file missing from `maps` is never "not loaded" (F-T1).
+- **Known limit.** On a file system whose `stat` reports another device than `maps` shows (btrfs
+  subvolumes, overlayfs), a mapping stays unlinked: a miss, never a false link.
+- **Coverage: `processes.observed`** (scope `runtime_processes`, audited in observe mode by the
+  default policy).
+  - **The audit.** `Unavailable(PermissionDenied)` when the process list was denied or hidden
+    (`hidepid`). `Partial` when the list was cut short, or a process gap exists: a process that
+    cannot be read, one whose parent cannot be read, one that may be the runtime (its `comm` or
+    `cmdline` cannot be read), or a runtime or descendant that cannot be read again. Otherwise
+    `Complete`.
+  - **Each process.** `Complete` when its executable's identity, all of `maps`, and `ns/mnt` were
+    read. `Unavailable` when both the identity and `maps` were refused; `Partial` for any other
+    gap. A recorded process that cannot be read again gets "the process cannot be read again
+    (why)", `Unavailable` when the cause is permission. Another user's service, read by a
+    non-root SIGIL, is `Unavailable(PermissionDenied)`: a gap, so INCOMPLETE. That is the usual
+    case for the systemd service, which runs as `ollama`. Run as root, or as that user, to
+    observe it.
+
 ## The reference set
 
 | Set | Releases | Members per release |

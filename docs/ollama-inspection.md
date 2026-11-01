@@ -7,7 +7,7 @@
 | Mode | Ask for it with | Reads | Never |
 |---|---|---|---|
 | static (default) | `--mode static` | files under the model store, and with `--install-dir` (or the installation `--service-unit` names) `bin/ollama` and `lib/ollama/` of the installation ([runtime artifacts](runtime-artifacts.md)) | |
-| observe | `--mode observe` | also the allowlisted `/proc` entries ([exposure](exposure.md)) | |
+| observe | `--mode observe` | also the allowlisted `/proc` entries ([exposure](exposure.md)), and the executable and mappings of `ollama serve` and its descendants (`/proc/<pid>/exe`, `maps`; [runtime artifacts](runtime-artifacts.md#linked-to-the-running-processes-observe-mode-pr-4d-2)) | |
 | active | `--active api-probe`, with either mode | also one `GET /api/version` to a literal address | |
 | all modes | | | execute, load, or map what is inspected; spawn a process; write anything but `--out` |
 
@@ -55,7 +55,7 @@ cargo run -p sigil-cli -- rules
 - `--service-unit <file>`: a systemd unit; the installation its `ExecStart=` names is inspected as with `--install-dir`, and its `bin/ollama` records the unit and line ([runtime artifacts](runtime-artifacts.md#found-by-a-service-unit---service-unit-pr-4d-1)). It excludes `--install-dir`. A unit SIGIL cannot read or does not model, or one that names no `<prefix>/bin/ollama`, is an error (exit 1). Drop-ins are not read.
 - `--policy <file>`: a policy (TOML, [policy](policy.md)) that sets the audit scope, rule actions with reasons and expiry, accepted assumptions, and denied components and capabilities. Without it, the built-in policy applies. An installation's code is not analyzed yet, so a capability denial makes each file that imports a denied capability an open question: INCOMPLETE by default. Without `--install-dir` no binary is read, so a denial judges nothing.
 - `--policy-time now|RFC3339`: the instant at which policy expiry is judged (default `now`).
-- `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`, `manifest_bytes`). Budgets that run out leave the result incomplete, never silently clean. With `--install-dir`, the installation has its own: `install_files_discovered`, `install_entries_listed`, and `install_bytes` (summed over the whole installation, default 64 GiB), each ELF or Mach-O file's parse `binary_parse_bytes` (default 64 MiB) and `binary_imports` (default 4096 for ELF imports), and each ELF file's signature scan `binary_scan_bytes` (default 64 MiB of section bytes). With `--service-unit`, `service_unit_bytes` (default 1 MiB) bounds the unit's read, and the install budgets apply to the installation it names.
+- `--budget KEY=VALUE`: a read budget, by the name the session records (e.g. `files_discovered=4096`, `manifest_bytes`). Budgets that run out leave the result incomplete, never silently clean. With `--install-dir`, the installation has its own: `install_files_discovered`, `install_entries_listed`, and `install_bytes` (summed over the whole installation, default 64 GiB), each ELF or Mach-O file's parse `binary_parse_bytes` (default 64 MiB) and `binary_imports` (default 4096 for ELF imports), and each ELF file's signature scan `binary_scan_bytes` (default 64 MiB of section bytes). In observe mode, `proc_maps_bytes` (default 16 MiB per process) and `proc_maps_total_bytes` (default 256 MiB over all processes) bound the reads of the runtime processes' `maps`; anywhere else they are a usage error. With `--service-unit`, `service_unit_bytes` (default 1 MiB) bounds the unit's read, and the install budgets apply to the installation it names.
 - `--active api-probe [--api-addr IP[:PORT]] [--allow-remote]`: probe the API at a literal address (default `127.0.0.1:11434`; `localhost` means 127.0.0.1). A refused connection closes the check: nothing answers at that address from SIGIL's network namespace. That is not "no Ollama on this system": a runtime in another namespace (for example, outside SIGIL's container) or on another host is neither seen nor ruled out, and a version is the endpoint's own claim, not tied to an observed process or binary. A timeout or a reply that is not the Ollama API leaves the check open. The probe's budgets are `api_connect_ms` (at most 30000), `api_io_ms` (at most 60000), and `api_response_bytes` (at most 1048576).
 - `--fail-on warn|fail` and `--fail-on-incomplete`: exit codes for CI (below).
 
@@ -68,6 +68,8 @@ cargo run -p sigil-cli -- rules
 | 2 | Usage error (for example, an unknown flag, or `--out` inside the models, install, or unit directory) |
 | 3 | The verdict reached `--fail-on` |
 | 4 | The result is incomplete and `--fail-on-incomplete` was given (3 takes precedence) |
+
+A service run by another user (the systemd unit's `User=ollama`) cannot be observed by a non-root run: its executable, mappings, and sockets are `Unavailable(PermissionDenied)`, and the result is INCOMPLETE. Run observe mode as root, or as that user, to see them.
 
 A CI step that fails on a FAIL verdict or on an incomplete result, and keeps the report:
 

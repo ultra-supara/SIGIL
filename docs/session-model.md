@@ -216,6 +216,12 @@ The rule then yields an open question at most.
   session then has exactly one `ServiceUnit` source, naming that instance. A `ServiceUnit` source
   names an instance of that root, the key `ExecStart`, and a line from 1, and only the install
   root's `bin/ollama` (at the root's path plus `/bin/ollama`) carries one.
+- **Observed processes agree with what they link (PR-4d-2):**
+  - P1: a `ProcessExe` source names a recorded process whose `exe` is that instance, once; a process whose `exe` is an instance is named by that instance's `ProcessExe` source;
+  - P2: a mapping's instance has the mapping's `dev:ino`;
+  - P3: `processes.observed` entries are scoped to the audit or to a recorded process, once each;
+  - P4: a process is recorded once;
+  - P5: when `processes.observed` is required, there is an audit entry, and one entry for each runtime (role `ollama serve`), each process with a mapping or a linked executable, and each recorded process that holds no listener. Only a descendant that also holds a listener can lack its entry undetected. A session from before PR-4d-2 does not require the check, so P5 does not apply to it.
 - **Code facts agree with the request and the inputs (PR-5a, [below](#code-analysis-pr-5a)):**
   - C1: `request.code` is only for a binary inspection, with a `binary_code_bytes` budget. A
     binary inspection has code facts only with `request.code`;
@@ -915,7 +921,7 @@ The schema leaves these fields out of `required`. Every other field is required 
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`. A build from before PR-4d-1 refuses a session from `--service-unit`: its unit is discovered by `Argument` outside a binary root. A validation rule can refuse one too: by C6, a build from before #105 refuses a session with a `cxx.*` hint on a Mach-O import bound to `/usr/lib/libc++.1.dylib`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`. A build from before PR-4d-1 refuses a session from `--service-unit`: its unit is discovered by `Argument` outside a binary root. A build from before PR-4d-2 reads a session from it, since the types existed, but checks less of it. A validation rule can refuse one too: by C6, a build from before #105 refuses a session with a `cxx.*` hint on a Mach-O import bound to `/usr/lib/libc++.1.dylib`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet

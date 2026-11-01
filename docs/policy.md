@@ -19,7 +19,7 @@ name   = "default"             # required; recorded in the session with the file
 
 [scope]
 audit          = ["model_store"]   # audited in every inspect ollama run
-observe_audit  = ["exposure"]      # added in observe mode
+observe_audit  = ["exposure", "runtime_processes"]  # added in observe mode
 active_audit   = ["runtime_api"]   # added when an active feature is requested (--active)
 install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
 binary_audit   = ["binary"]        # audited in a binary inspection (binary inspect)
@@ -155,6 +155,7 @@ so requesting it gives an honest `INCOMPLETE`.
 |---|---|---|
 | `model_store` | `model_store.inventory`, `model_store.integrity`, `model_store.license` | PR-3a-2 |
 | `exposure` | `exposure.binds` | PR-3a-2 (observe mode) |
+| `runtime_processes` | `processes.observed` | PR-4d-2 (observe mode; [runtime artifacts](runtime-artifacts.md#linked-to-the-running-processes-observe-mode-pr-4d-2)) |
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
 | `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container`, `artifacts.identity` | PR-4a, PR-4b-1, PR-4c-2a (`--install-dir`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
@@ -333,7 +334,7 @@ A typo never silently weakens a policy.
 ## The default policy
 
 `crates/sigil-engine/policies/default.toml`:
-- audits `model_store`, plus `exposure` in observe mode, plus `runtime_api` when the API probe is
+- audits `model_store`, plus `exposure` and `runtime_processes` in observe mode, plus `runtime_api` when the API probe is
   requested (`--active api-probe`), plus `runtime_artifacts` when an installation is inspected
   (`--install-dir`);
 - in a binary inspection, audits `binary`, plus `binary_code` when code is analyzed;
@@ -341,6 +342,12 @@ A typo never silently weakens a policy.
 - accepts no assumption;
 - has no overrides;
 - denies no component or capability.
+
+**An observe session from before PR-4d-2.** The default policy file changed, so its SHA-256 did too:
+`session verify` of any older session with the built-in policy fails first on that digest, static
+sessions included. Only with `--policy` (a policy with the old `observe_audit`, or this one) does an
+older observe session reach `RequiredChecksChanged`: it did not require `processes.observed`. Run
+the inspection again.
 
 Each later PR adds its scope to the default when its collector exists. A run never reports a gap
 for a check SIGIL cannot perform yet unless that scope was requested.
