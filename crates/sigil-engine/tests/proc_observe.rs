@@ -126,6 +126,10 @@ fn an_unreadable_exe_leaves_the_role_on_the_cmdline() {
         [ProcessRole::new("ollama serve").unwrap()]
     );
     assert!(matches!(f.processes[0].exe, ProcessExe::NotObservable(_)));
+    // Re-review of PR-4d-2: its state says it is alive, so a missing `exe` is a gap, not an exit.
+    let d = detail(&f, 4242);
+    assert_eq!(d.exe_id, None);
+    assert_eq!(d.missing, ["exe: its identity cannot be read (NoProcess)"]);
 }
 
 #[test]

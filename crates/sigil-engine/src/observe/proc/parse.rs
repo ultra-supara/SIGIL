@@ -128,6 +128,16 @@ pub fn stat_ppid(stat: &str) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
+/// `state` (field 3) of `/proc/<pid>/stat`, one letter: `R`, `S`, … `Z` (zombie), `X` (dead).
+/// Counted after the last `)` as [`stat_start_ticks`] (PR-4d-2).
+pub fn stat_state(stat: &str) -> Option<u8> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    match rest.split_whitespace().next()?.as_bytes() {
+        [state] => Some(*state),
+        _ => None,
+    }
+}
+
 /// One file-backed line of `/proc/<pid>/maps` (PR-4d-2): the object's device as `st_dev`
 /// encodes it, its inode, its path as the kernel printed it (a newline is `\012`), and whether
 /// the kernel marked it deleted. The kernel appends ` (deleted)` to the path, so a live file whose
@@ -474,5 +484,15 @@ mod tests {
         assert_eq!(stat_ppid("4300 (x) S"), None);
         assert_eq!(stat_ppid("4300 (x) S -1"), None);
         assert_eq!(stat_ppid("no parenthesis"), None);
+    }
+
+    #[test]
+    fn the_state_is_read_after_the_last_parenthesis() {
+        assert_eq!(stat_state("4242 (ollama) S 1 4242"), Some(b'S'));
+        assert_eq!(stat_state("4300 (a ) Z (b)) Z 4242"), Some(b'Z'));
+        assert_eq!(stat_state("4300 (x) X"), Some(b'X'));
+        assert_eq!(stat_state("4300 (x)"), None);
+        assert_eq!(stat_state("4300 (x) ZZ 1"), None);
+        assert_eq!(stat_state("no parenthesis"), None);
     }
 }
