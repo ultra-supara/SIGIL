@@ -35,10 +35,11 @@
 //! gets a [`Detail`] saying so.
 //!
 //! An exec keeps the PID and the start time. The listing pass reads the executable's path of
-//! every process it records, but its identity only of the runtime. The second pass reads the
-//! path and the identity before `maps` and again after it, then the runtime's arguments, then
-//! `stat` again: a process that exited meanwhile is gone, and what was read of one whose path,
-//! identity, stack address or arguments changed is dropped (`second`).
+//! every process it records, but its identity and its stack addresses (`stat`) only of the
+//! runtime. The second pass reads `stat`, then the path and the identity before `maps` and again
+//! after it, then the runtime's arguments, then `stat` again: a process that exited meanwhile is
+//! gone, and what was read of one whose path, identity, stack address or arguments changed is
+//! dropped (`second`).
 //!
 //! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
 //! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
@@ -220,6 +221,10 @@ struct Scanned {
     /// For a confirmed runtime only, its executable's `dev:ino` (`stat` through `exe`) or why it
     /// cannot be read: what the second pass compares its own reads with (PR-4d-2).
     exe_id: Option<Result<(u64, u64), NotObservable>>,
+    /// For a confirmed runtime only, where its stack and its arguments start (`stat`'s
+    /// `startstack` and `arg_start`, from the read that gave `lineage`), when they could be read:
+    /// what the second pass compares its first `stat` read with (review of R2).
+    stack: Option<(u64, u64)>,
     fronting: bool,
     /// The listening sockets its fds refer to.
     listening: Vec<u64>,
@@ -601,18 +606,20 @@ fn scan(
         Err(Errno::NOENT | Errno::SRCH) => return Scan::Gone,
         _ => None,
     };
-    // PR-4d-2: every process's parent and start time, so the runtime's descendants are found.
-    let lineage = match read_limited(dir, "stat", 4096) {
+    // PR-4d-2: every process's parent and start time, so the runtime's descendants are found;
+    // and where its stack starts, kept below for the runtime only.
+    let (lineage, stack) = match read_limited(dir, "stat", 4096) {
         Ok(Read::Whole(bytes)) => {
             let text = String::from_utf8_lossy(&bytes);
-            match (parse::stat_ppid(&text), parse::stat_start_ticks(&text)) {
+            let lineage = match (parse::stat_ppid(&text), parse::stat_start_ticks(&text)) {
                 (Some(ppid), Some(start_ticks)) => Ok((ppid, start_ticks)),
                 _ => Err(NotObservable::ReadIncomplete),
-            }
+            };
+            (lineage, parse::stat_stack_addresses(&text))
         }
-        Ok(Read::OverLimit) => Err(NotObservable::ReadIncomplete),
+        Ok(Read::OverLimit) => (Err(NotObservable::ReadIncomplete), None),
         Err(Errno::NOENT | Errno::SRCH) => return Scan::Gone,
-        Err(e) => Err(not_observable(e)),
+        Err(e) => (Err(not_observable(e)), None),
     };
     let (listening_held, fd_table) = match sockets(dir, listening, budgets) {
         Some(found) => found,
@@ -625,7 +632,10 @@ fn scan(
     };
     // Code review of PR-4d-2, R-B: an exec of another file at the same path keeps the path, so
     // the second pass also compares the runtime's executable identity with the one listed here.
-    let exe_id = matches!(runtime, RuntimeMatch::Confirmed(_)).then(|| exe_identity(dir));
+    let confirmed = matches!(runtime, RuntimeMatch::Confirmed(_));
+    let exe_id = confirmed.then(|| exe_identity(dir));
+    // Review of R2, follow-up: so are its stack addresses, which an exec between the passes moves.
+    let stack = stack.filter(|_| confirmed);
     let fronting = comm
         .as_deref()
         .is_some_and(|c| FRONTING.iter().any(|f| f.as_bytes() == c));
@@ -652,6 +662,7 @@ fn scan(
         lineage,
         runtime,
         exe_id,
+        stack,
         fronting,
         listening: listening_held,
         fd_table,
@@ -792,7 +803,8 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// - the path changed since the listing pass, or between its two reads (`exec_seen`);
 /// - the identity changed between its two reads, or since the listing pass read the runtime's,
 ///   or one of those reads failed while another did not (`identity_change`);
-/// - `startstack` or `arg_start` moved between the two `stat` reads (`stack_moved`);
+/// - `startstack` or `arg_start` moved between the two `stat` reads, or since the listing pass
+///   read the runtime's (`stack_moved`);
 /// - the runtime's arguments are not the ones its role rests on (`argv_gap`).
 ///
 /// Each gap says what was seen: another executable; a read of the identity that failed, and
@@ -801,15 +813,21 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// have read another program.
 ///
 /// Code review of PR-4d-2, R-B, and review of R2: several `/proc` reads are not one atomic
-/// snapshot. An exec between them is seen by the executable's path or identity, by the
-/// runtime's arguments, or by `startstack` or `arg_start`, which an exec places anew under ASLR;
-/// an exit is seen by the last `stat`. The kernel ends a `maps` read early at an exec or an
-/// exit, and a read so cut short is never kept once the exec or the exit is seen. What cannot be
-/// told apart is an exec of the same file (for the runtime, with the same arguments) while those
-/// two fields are not shown (0 to a reader not permitted to see them) or do not move (ASLR off).
-/// What holds then is that every mapping kept was mapped, during the reads, by the process
-/// running that file (with those arguments), and that `Whole` means read to an end such an exec
-/// may have brought early.
+/// snapshot, so an exec or an exit between them is looked for. Within this pass, the
+/// executable's path and identity read before `maps` are compared with those read after it, and
+/// `startstack` and `arg_start` of the first `stat` with those of the last. Across the passes,
+/// the path the listing pass recorded is compared with both reads of it here; and, for the
+/// runtime only, the identity, `startstack` and `arg_start` the listing pass read are compared
+/// with the first reads here, and its arguments with the read after `maps`. A stack address is
+/// compared only where both reads show it (not 0); an exec places both anew under ASLR. An exit
+/// is seen by the last `stat`. The kernel ends a `maps` read early at an exec or an exit, and a
+/// read so cut short is never kept once the exec or the exit is seen. What cannot be told apart
+/// is an exec that changes nothing compared: of the same file (for the runtime, with the same
+/// arguments) while the stack addresses are not shown (0 to a reader not permitted to see them)
+/// or do not move (ASLR off), or of a descendant between the passes, of which only a recorded
+/// path is compared. What holds then is that every mapping kept was mapped, during the reads, by
+/// the process running that file (with those arguments), and that `Whole` means read to an end
+/// such an exec may have brought early.
 fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
     let dir = match open_dir(ctx.root, &s.pid.to_string()) {
         Ok(dir) => dir,
@@ -883,6 +901,7 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
     let (other_id, id_failed) = identity_change(s.exe_id.as_ref(), &first_id, &again_id);
     let other_exe = exec_seen(recorded, first.as_deref(), last.as_deref())
         || other_id
+        || stack_moved(s.stack, first_stack)
         || stack_moved(first_stack, last_stack);
     if other_exe {
         missing.push(
@@ -954,10 +973,11 @@ fn restat(dir: BorrowedFd<'_>, start_ticks: u64) -> Result<String, Pass> {
     }
 }
 
-/// Whether `startstack` or `arg_start` moved between the second pass's first `stat` read and its
-/// last (review of R2): an exec places both anew under ASLR, also one of the same file with the
-/// same arguments. A field is compared only when both reads show it: the kernel shows 0 to a
-/// reader not permitted to see it, and a line too short shows neither.
+/// Whether `startstack` or `arg_start` moved between two `stat` reads (review of R2): the second
+/// pass's first and last, or the listing pass's of the runtime and the second pass's first. An
+/// exec places both anew under ASLR, also one of the same file with the same arguments. A field
+/// is compared only when both reads show it: the kernel shows 0 to a reader not permitted to see
+/// it, and a line too short, or no read, shows neither.
 fn stack_moved(first: Option<(u64, u64)>, last: Option<(u64, u64)>) -> bool {
     let (Some(first), Some(last)) = (first, last) else {
         return false;
@@ -2006,6 +2026,45 @@ mod tests {
         assert_eq!(d.exe_id, None);
         assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
         assert_eq!(f.processes[0].maps_read, MapsRead::NotRead);
+    }
+
+    /// Review of R2, follow-up: the runtime's stack addresses read by the listing pass are
+    /// compared with the second pass's first `stat`, so an exec between the passes that moved
+    /// one is seen. One shown as 0 says nothing. A descendant's are not kept from the listing,
+    /// as its identity is not.
+    #[test]
+    fn a_stack_address_moved_between_the_passes_is_seen_for_the_runtime() {
+        let (stack, args) = STACK;
+        for (pid, moved, seen) in [
+            (10, (stack + 4096, args), true),
+            (10, (stack, args + 4096), true),
+            (10, (0, 0), false),
+            (11, (stack + 4096, args + 4096), false),
+        ] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture(root);
+            std::fs::write(root.join("10/maps"), MAPPED).unwrap();
+            let (ppid, comm, start) = if pid == 10 {
+                (1, "ollama", 100)
+            } else {
+                (10, "runner", 200)
+            };
+            let f = run(root, &|| {
+                stat_stack(root, pid, ppid, comm, 'S', start, moved)
+            });
+            assert_eq!(pids(&f), [10, 11], "{pid} {moved:?}");
+            let d = detail(&f, pid);
+            if seen {
+                assert_eq!(d.missing, [RAN_ANOTHER], "{moved:?}");
+                assert_eq!(d.exe_id, None, "{moved:?}");
+                assert!(f.processes[0].mappings.is_empty(), "{moved:?}");
+                assert_eq!(f.processes[0].maps_read, MapsRead::NotRead, "{moved:?}");
+            } else {
+                assert!(d.missing.is_empty(), "{pid} {moved:?}: {d:?}");
+                assert!(d.exe_id.is_some(), "{pid} {moved:?}");
+            }
+        }
     }
 
     /// Review of R2, follow-up: a last `stat` that cannot be read is not taken as read: the
