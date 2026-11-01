@@ -217,7 +217,10 @@ pub struct ProcessObs {
     pub exe: ProcessExe,
     /// Mappings observed in this process at `at`.
     pub mappings: Vec<MappingObs>,
-    /// How much of its `maps` was read, so how much `mappings` stands for (PR-4d-2).
+    /// How much of its `maps` was read, so how much `mappings` stands for (PR-4d-2). Optional on
+    /// read: a session from before it never read `maps`, so a missing field reads as `NotRead`.
+    /// Always written.
+    #[serde(default)]
     pub maps_read: MapsRead,
     /// Its name (`comm`), as the process set it; `None` when it could not be read.
     pub name: Option<UntrustedText>,
@@ -232,7 +235,7 @@ pub struct ProcessObs {
 
 /// How much of a process's `maps` was read (PR-4d-2). `mappings` is every file-backed object
 /// mapped at `at` only when `Whole`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MapsRead {
     /// Read to its end.
     Whole,
@@ -241,7 +244,8 @@ pub enum MapsRead {
     Part,
     /// Not read, or what was read was dropped (an exec during the reads): `mappings` is empty.
     /// Also a process whose `maps` SIGIL does not read (a listener's holder outside the
-    /// runtime's tree).
+    /// runtime's tree). What a session from before `maps_read` reads as.
+    #[default]
     NotRead,
 }
 

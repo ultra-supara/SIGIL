@@ -111,8 +111,9 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
 }
 
 /// Fields added to `sigil-session/1` after sessions without them were written (PR-3b-2, PR-4a,
-/// PR-4b-1, PR-5a, PR-4c-2b, PR-4c-3b). They are optional on read, where a missing list is empty
-/// and a missing `code` is false. `active`, `probes`, and `code` are always written;
+/// PR-4b-1, PR-5a, PR-4c-2b, PR-4c-3b, PR-4d-2). They are optional on read, where a missing list
+/// is empty, a missing `code` is false, and a missing `maps_read` is `NotRead`. `active`,
+/// `probes`, `code`, and `maps_read` are always written;
 /// `reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` only when
 /// non-empty, so sessions without them keep their bytes.
 const OPTIONAL_ON_READ: &[(&str, &str)] = &[
@@ -123,6 +124,7 @@ const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("Session", "binaries"),
     ("ElfFacts", "returns"),
     ("MachOFacts", "imports"),
+    ("ProcessObs", "maps_read"),
 ];
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.

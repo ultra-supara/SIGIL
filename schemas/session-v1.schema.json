@@ -956,7 +956,7 @@
     "ProcessObs": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["process", "at", "roles", "exe", "mappings", "maps_read", "name", "argv", "net_ns", "fd_table"],
+      "required": ["process", "at", "roles", "exe", "mappings", "name", "argv", "net_ns", "fd_table"],
       "properties": {
         "process": {"$ref": "#/$defs/ProcessRef"},
         "at": {"$ref": "#/$defs/Timestamp"},
@@ -971,7 +971,7 @@
       }
     },
     "MapsRead": {
-      "description": "How much of a process's maps was read (PR-4d-2): Whole (to its end: mappings is every file-backed object mapped), Part (a budget cut it short, or lines were not understood: mappings is what was read), or NotRead (not read, what was read was dropped, or a process whose maps SIGIL does not read: mappings is empty).",
+      "description": "How much of a process's maps was read (PR-4d-2): Whole (to its end: mappings is every file-backed object mapped), Part (a budget cut it short, or lines were not understood: mappings is what was read), or NotRead (not read, what was read was dropped, or a process whose maps SIGIL does not read: mappings is empty). Optional on read: a session from before it never read maps, so a missing maps_read reads as NotRead.",
       "type": "string",
       "enum": ["Whole", "Part", "NotRead"]
     },

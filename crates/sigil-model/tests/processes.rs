@@ -411,10 +411,45 @@ fn a_process_whose_maps_was_not_read_is_not_shown_as_a_zero() {
     assert!(!md.contains("0 \\(0 linked"), "{md}");
 }
 
+/// Example 14 as a session from before `maps_read` holds it: its JSON without the field.
+fn before_maps_read() -> Session {
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(map) => {
+                map.remove("maps_read");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas/examples/session-v1/14-store-and-runtime.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    strip(&mut value);
+    assert!(!value.to_string().contains("maps_read"));
+    serde_json::from_value(value).unwrap()
+}
+
+/// Review of R1: `maps_read` is optional on read. A session from before it never read `maps`, so
+/// the field reads as `NotRead`, and it is written again.
+#[test]
+fn a_session_from_before_maps_read_reads_it_as_not_read() {
+    let s = before_maps_read();
+    assert_eq!(s.processes[0].maps_read, MapsRead::NotRead);
+    assert_valid(&s);
+    let written = serde_json::to_value(&s).unwrap();
+    assert_eq!(
+        written["processes"][0]["maps_read"],
+        serde_json::json!("NotRead")
+    );
+}
+
 #[test]
 fn a_runtime_from_before_the_check_is_not_shown_as_a_zero() {
-    // Example 14: the runtime has no mappings, `maps` not read, and no entry.
-    let md = markdown(&store_and_runtime());
+    // Example 14, from before `maps_read`: the runtime has no mappings and no entry.
+    let md = markdown(&before_maps_read());
     assert!(md.contains("| not read |"), "{md}");
     assert!(!md.contains("0 \\(0 linked"), "{md}");
 }
