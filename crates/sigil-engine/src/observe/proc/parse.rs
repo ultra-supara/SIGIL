@@ -130,7 +130,8 @@ pub fn stat_ppid(stat: &str) -> Option<u32> {
 
 /// One file-backed line of `/proc/<pid>/maps` (PR-4d-2): the object's device as `st_dev`
 /// encodes it, its inode, its path as the kernel printed it (a newline is `\012`), and whether
-/// the kernel marked it deleted.
+/// the kernel marked it deleted. The kernel appends ` (deleted)` to the path, so a live file whose
+/// name ends in ` (deleted)` reads as deleted: the text cannot tell them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MapsLine {
     pub dev: u64,
@@ -169,7 +170,8 @@ pub fn maps_row(line: &[u8]) -> MapsRow {
         Some(i) => hex(&range[..i]) && hex(&range[i + 1..]),
         None => false,
     };
-    if !range_ok || perms.len() != 4 || !hex(offset) {
+    let perms_ok = matches!(perms, [b'r' | b'-', b'w' | b'-', b'x' | b'-', b's' | b'p']);
+    if !range_ok || !perms_ok || !hex(offset) {
         return MapsRow::Malformed;
     }
     let Some(dev) = device(dev) else {
@@ -429,6 +431,11 @@ mod tests {
             ("7f00-7f10 r--p 00000000 0802 7 /a", MapsRow::Malformed),
             ("7f00 r--p 00000000 08:02 7 /a", MapsRow::Malformed),
             ("7f00-7f10 r--pq 00000000 08:02 7 /a", MapsRow::Malformed),
+            ("7f00-7f10 zzzz 00000000 08:02 7 /a", MapsRow::Malformed),
+            ("7f00-7f10 r--p 00000000 08:02 0 /a", MapsRow::NotFile),
+            ("7f00-7f10 r--p 00000000 08:02 +7 /a", MapsRow::Malformed),
+            ("zz-7f10 r--p 00000000 08:02 7 /a", MapsRow::Malformed),
+            ("7f00- r--p 00000000 08:02 7 /a", MapsRow::Malformed),
             ("7f00-7f10 r--p 0000000g 08:02 7 /a", MapsRow::Malformed),
         ];
         for (line, want) in cases {
