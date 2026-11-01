@@ -1,8 +1,8 @@
 //! The observed processes' links (PR-4d-2): an executable and its instance name each other (P1),
 //! a mapping's instance is the object mapped (P2), `processes.observed` is about the audit or a
 //! recorded process, once each (P3), a process is recorded once (P4), a required
-//! `processes.observed` covers the audit and each process read (P5), and `maps_read` agrees with
-//! the mappings and the process's entry (P6).
+//! `processes.observed` covers the audit and every recorded process, and the runtime is never out
+//! of its scope (P5), and `maps_read` agrees with the mappings and the process's entry (P6).
 
 mod common;
 
@@ -23,7 +23,7 @@ fn rejected_for(s: &Session, why: &str) {
     );
 }
 
-/// Makes `p` a listener's holder, so that only the term under test can make P5 call it read.
+/// Makes `p` a listener's holder.
 fn hold(s: &mut Session, p: &ProcessRef) {
     s.listeners.push(Listener {
         id: id(&format!("listener:tcp/127.0.0.1:11434#{}", p.pid)),
@@ -113,7 +113,7 @@ fn processes_observed_is_about_the_audit_or_a_recorded_process_once() {
 }
 
 #[test]
-fn a_required_processes_observed_covers_the_audit_and_each_process_read() {
+fn a_required_processes_observed_covers_the_audit_and_each_recorded_process() {
     let mut s = valid();
     let runner = s.processes[1].process.clone();
     s.coverage.retain(|c| {
@@ -168,51 +168,15 @@ fn drop_entry(s: &mut Session, p: &ProcessRef) {
     });
 }
 
+/// Code review of PR-4d-2, R-C (P5): a required `processes.observed` has an entry for every
+/// recorded process, whatever it is. The reviewer's case: a descendant that holds a listener,
+/// with no role, no mapping, and an executable not linked, escaped every term of the former P5.
 #[test]
-fn a_listener_holder_needs_no_entry() {
+fn every_recorded_process_needs_an_entry() {
     let mut s = valid();
-    let holder = bare(&s, 7);
-    s.listeners.push(Listener {
-        id: id("listener:tcp/127.0.0.1:11434#7001"),
-        protocol: Protocol::Tcp,
-        address: "127.0.0.1".to_string(),
-        port: 11434,
-        socket_inode: 7001,
-        owner: ListenerOwner::Process {
-            process: holder.process.clone(),
-        },
-    });
-    s.processes.push(holder);
-    assert_valid(&s);
-}
-
-#[test]
-fn a_runtime_with_no_mappings_and_no_linked_exe_needs_an_entry() {
-    let mut s = valid();
-    s.processes[0].exe = ProcessExe::NotObservable(NotObservable::PermissionDenied);
-    s.processes[0].mappings.clear();
-    let serve = s.processes[0].process.clone();
-    hold(&mut s, &serve);
-    drop_entry(&mut s, &serve);
-    inst(&mut s, "inst:install/bin/ollama")
-        .discovered_by
-        .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
-    rejected_for(&s, "has no entry for this process");
-}
-
-#[test]
-fn a_process_with_a_linked_exe_and_no_mappings_needs_an_entry() {
-    let mut s = valid();
-    s.processes[1].mappings.clear();
     let runner = s.processes[1].process.clone();
-    hold(&mut s, &runner);
-    drop_entry(&mut s, &runner);
-    rejected_for(&s, "has no entry for this process");
-}
-
-#[test]
-fn a_process_with_mappings_and_an_unlinked_exe_needs_an_entry() {
-    let mut s = valid();
+    s.processes[1].mappings.clear();
+    s.processes[1].maps_read = MapsRead::NotRead;
     s.processes[1].exe = ProcessExe::Path {
         path: t("/usr/local/lib/ollama/llama-server"),
         deleted: false,
@@ -220,18 +184,72 @@ fn a_process_with_mappings_and_an_unlinked_exe_needs_an_entry() {
     inst(&mut s, "inst:install/lib/ollama/llama-server")
         .discovered_by
         .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
-    let runner = s.processes[1].process.clone();
     hold(&mut s, &runner);
+    set_state(
+        &mut s,
+        &runner,
+        CoverageState::Partial {
+            missing: vec!["maps: cannot be read (PermissionDenied)".into()],
+        },
+    );
+    assert_valid(&s);
     drop_entry(&mut s, &runner);
     rejected_for(&s, "has no entry for this process");
-}
 
-#[test]
-fn a_recorded_process_that_holds_no_listener_needs_an_entry() {
+    // The runtime, with no mapping and no linked executable.
+    let mut s = valid();
+    let serve = s.processes[0].process.clone();
+    s.processes[0].exe = ProcessExe::NotObservable(NotObservable::PermissionDenied);
+    s.processes[0].mappings.clear();
+    s.processes[0].maps_read = MapsRead::NotRead;
+    inst(&mut s, "inst:install/bin/ollama")
+        .discovered_by
+        .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
+    hold(&mut s, &serve);
+    drop_entry(&mut s, &serve);
+    rejected_for(&s, "has no entry for this process");
+
+    // A process that holds no listener.
     let mut s = valid();
     let bare = bare(&s, 7);
     s.processes.push(bare);
     rejected_for(&s, "has no entry for this process");
+}
+
+/// Code review of PR-4d-2, R-C (P5): a listener's holder outside the runtime's tree has an entry
+/// too, `OutOfScope`, as the engine gives it.
+#[test]
+fn a_listener_holder_needs_an_out_of_scope_entry() {
+    let mut s = valid();
+    let holder = bare(&s, 7);
+    hold(&mut s, &holder.process);
+    s.processes.push(holder.clone());
+    rejected_for(&s, "has no entry for this process");
+    s.coverage.push(coverage(
+        PROCESSES_OBSERVED,
+        Ref::Process(holder.process),
+        CoverageState::OutOfScope {
+            why: "neither the runtime nor one of its descendants".into(),
+        },
+    ));
+    assert_valid(&s);
+}
+
+/// Code review of PR-4d-2, R-C (P5): the runtime is never out of scope.
+#[test]
+fn the_runtime_is_never_out_of_scope() {
+    let mut s = valid();
+    let serve = s.processes[0].process.clone();
+    s.processes[0].mappings.clear();
+    s.processes[0].maps_read = MapsRead::NotRead;
+    for c in &mut s.coverage {
+        if c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(serve.clone()) {
+            c.state = CoverageState::OutOfScope {
+                why: "neither the runtime nor one of its descendants".into(),
+            };
+        }
+    }
+    rejected_for(&s, "is OutOfScope, but the process is the runtime");
 }
 
 /// Code review of PR-4d-2, R-A (P6): `NotRead` has no mapping.

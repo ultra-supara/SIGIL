@@ -29,7 +29,8 @@
 //! `maps` up to `proc_maps_bytes` (and `proc_maps_total_bytes` over all of them), and `ns/mnt`.
 //! A mapping is one per distinct (dev, ino, path, deleted): one inode reached by two paths gives
 //! two. It is an observation only: nothing is derived from one, or from its absence (F-T1).
-//! Linking them to scanned files is `analyze::runtime_processes`.
+//! Linking them to scanned files is `analyze::runtime_processes`. A listener's holder outside the
+//! runtime's tree is not read again; one that may be the runtime gets a [`Detail`] saying so.
 //!
 //! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
 //! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
@@ -111,7 +112,8 @@ pub struct ProcFacts {
     /// What could not be read, and might hide the runtime or its sockets: a table, the process
     /// list, a process that could not be identified.
     pub gaps: Vec<String>,
-    /// What the second pass read of each runtime and descendant, by PID (PR-4d-2).
+    /// What the second pass read of each runtime and descendant, by PID, then what was not read
+    /// of each listener's holder outside the runtime's tree that may be the runtime (PR-4d-2).
     pub details: Vec<Detail>,
     /// What may hide a runtime or a descendant from the second pass: a process that cannot be
     /// read or read again, whose parent cannot be read, or that may be the runtime (PR-4d-2).
@@ -119,7 +121,9 @@ pub struct ProcFacts {
     pub process_gaps: Vec<String>,
 }
 
-/// What the second pass read of one runtime or descendant, beyond its `ProcessObs` (PR-4d-2).
+/// What the second pass read of one runtime or descendant, beyond its `ProcessObs`; or, for a
+/// listener's holder outside the runtime's tree that may be the runtime, that nothing was
+/// (PR-4d-2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detail {
     pub process: ProcessRef,
@@ -410,6 +414,23 @@ fn observe_with(
                     s.pid
                 )),
             },
+        }
+    }
+    // Code review of PR-4d-2, R-C: a listener's holder outside the runtime's tree that may be the
+    // runtime. Its executable and mappings were not read, which is a gap if it is.
+    for (i, obs) in &recorded {
+        if facts.details.iter().any(|d| d.process == obs.process) {
+            continue;
+        }
+        if let RuntimeMatch::Unknown(why) = &scanned[*i].runtime {
+            facts.details.push(Detail {
+                process: obs.process.clone(),
+                exe_id: None,
+                denied: false,
+                missing: vec![format!(
+                    "the process may be the runtime ({why}); its executable and mappings were not read"
+                )],
+            });
         }
     }
     facts.processes = recorded.into_values().collect();

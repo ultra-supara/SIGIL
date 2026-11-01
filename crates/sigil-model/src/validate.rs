@@ -2183,8 +2183,8 @@ impl<'a> Validator<'a> {
     /// - P2: a mapping's instance has the mapping's `dev:ino`.
     /// - P3: `processes.observed` is scoped to the audit or to a recorded process, once each.
     /// - P4: a process is recorded once.
-    /// - P5: a required `processes.observed` has an entry for the audit and for each process read
-    ///   (below).
+    /// - P5: a required `processes.observed` has an entry for the audit and for each recorded
+    ///   process. The runtime's entry is never `OutOfScope`, required or not.
     /// - P6: `maps_read` agrees with `mappings` and with the process's entry: `NotRead` has no
     ///   mapping; a `Complete` entry is about a process read `Whole`, an `Unavailable` or
     ///   `OutOfScope` one about a process whose `maps` was `NotRead`.
@@ -2286,12 +2286,9 @@ impl<'a> Validator<'a> {
                 ),
             }
         }
-        // P5 (external plan review): a required check has its audit entry, and an entry for each
-        // process the second pass read. The engine records a non-runtime process only as a
-        // descendant or as a listener's holder, so a process is read when it is the runtime, has a
-        // mapping, has a linked executable, or holds no listener (a descendant, even with no
-        // mapping and an unlinked executable: non-dumpable, setuid, or an exec between the
-        // passes). Only a descendant that also holds a listener escapes.
+        // P5 (external plan review; code review of PR-4d-2, R-C): a required check has its audit
+        // entry, and an entry for every recorded process, whatever it is. The engine gives one to
+        // each: a listener's holder outside the runtime's tree has `OutOfScope` (below).
         let required = s
             .request
             .required_checks
@@ -2305,15 +2302,7 @@ impl<'a> Validator<'a> {
                 );
             }
             for obs in &s.processes {
-                let holds_listener = s.listeners.iter().any(|l| match &l.owner {
-                    crate::listener::ListenerOwner::Process { process } => *process == obs.process,
-                    _ => false,
-                });
-                let read = obs.roles.iter().any(|r| r.as_str() == crate::RUNTIME_ROLE)
-                    || !obs.mappings.is_empty()
-                    || matches!(obs.exe, ProcessExe::Instance { .. })
-                    || !holds_listener;
-                if read && !scoped.contains(&obs.process) {
+                if !scoped.contains(&obs.process) {
                     self.process_error(
                         &format!("processes[{}]", obs.process.pid),
                         "processes.observed is required but has no entry for this process",
@@ -2343,6 +2332,12 @@ impl<'a> Validator<'a> {
             let Some(obs) = s.processes.iter().find(|o| o.process == *p) else {
                 continue;
             };
+            let at = format!("coverage[{} on process {}]", c.check, p.pid);
+            // P5: the runtime is what `processes.observed` is about.
+            let runtime = obs.roles.iter().any(|r| r.as_str() == crate::RUNTIME_ROLE);
+            if runtime && matches!(c.state, CoverageState::OutOfScope { .. }) {
+                self.process_error(&at, "is OutOfScope, but the process is the runtime");
+            }
             let (state, want) = match &c.state {
                 CoverageState::Complete => ("Complete", MapsRead::Whole),
                 CoverageState::Unavailable { .. } => ("Unavailable", MapsRead::NotRead),
@@ -2351,7 +2346,7 @@ impl<'a> Validator<'a> {
             };
             if obs.maps_read != want {
                 self.process_error(
-                    &format!("coverage[{} on process {}]", c.check, p.pid),
+                    &at,
                     format!(
                         "is {state}, but the process's maps_read is {:?}",
                         obs.maps_read

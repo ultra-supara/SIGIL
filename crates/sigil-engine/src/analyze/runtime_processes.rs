@@ -14,8 +14,9 @@
 //! | `Audit` | `Partial` | The list was cut short, or a process gap (`ProcFacts::process_gaps`): a process that cannot be read or read again, whose parent cannot be read, or that may be the runtime |
 //! | `Audit` | `Complete` | Otherwise |
 //! | a process | `Unavailable(PermissionDenied)` | Both its executable's identity and `maps` were refused |
-//! | a process | `Partial` | Anything else not observed (`Detail::missing`) |
+//! | a process | `Partial` | Anything else not observed (`Detail::missing`), as for a listener's holder outside the runtime's tree that may be the runtime, whose executable and mappings are not read |
 //! | a process | `Complete` | Its executable's identity, all of `maps`, and `ns/mnt` were read |
+//! | a process | `OutOfScope` ([`OUTSIDE_THE_RUNTIME`]) | No `Detail`: a listener's holder outside the runtime's tree, whose executable and mappings are not read |
 
 use std::collections::BTreeMap;
 
@@ -25,6 +26,10 @@ use sigil_model::{
 };
 
 use crate::observe::proc::{Detail, ProcFacts};
+
+/// Why a recorded process the second pass did not read has `processes.observed` `OutOfScope`: a
+/// listener's holder, outside the runtime's tree, whose executable and mappings are not read.
+pub const OUTSIDE_THE_RUNTIME: &str = "neither the runtime nor one of its descendants";
 
 /// Links each process's executable and mappings to the one instance with the same `dev:ino`.
 pub fn link(processes: &mut [ProcessObs], details: &[Detail], instances: &mut [FileInstance]) {
@@ -63,7 +68,8 @@ pub fn link(processes: &mut [ProcessObs], details: &[Detail], instances: &mut [F
     }
 }
 
-/// `processes.observed`: one entry for the audit, and one for each process the second pass read.
+/// `processes.observed`: one entry for the audit, and one for each recorded process: from its
+/// [`Detail`] when it has one, else `OutOfScope` ([`OUTSIDE_THE_RUNTIME`]).
 pub fn coverage(facts: &ProcFacts) -> Vec<Coverage> {
     let Ok(check) = CheckId::new(PROCESSES_OBSERVED) else {
         return vec![];
@@ -107,6 +113,16 @@ pub fn coverage(facts: &ProcFacts) -> Vec<Coverage> {
             }
         };
         out.push(entry(Ref::Process(d.process.clone()), state));
+    }
+    // Code review of PR-4d-2, R-C: every other recorded process holds a listener outside the
+    // runtime's tree, so its executable and mappings are not read. Out of scope, not a gap.
+    for p in &facts.processes {
+        if !facts.details.iter().any(|d| d.process == p.process) {
+            let state = CoverageState::OutOfScope {
+                why: OUTSIDE_THE_RUNTIME.to_string(),
+            };
+            out.push(entry(Ref::Process(p.process.clone()), state));
+        }
     }
     out
 }

@@ -5,6 +5,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use sigil_engine::analyze::runtime_processes::OUTSIDE_THE_RUNTIME;
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
 use sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT;
@@ -237,6 +238,79 @@ fn a_process_that_may_be_the_runtime_leaves_the_audit_open() {
         ),
         "{:?}",
         observed(&s, &Ref::Audit)
+    );
+}
+
+/// Code review of PR-4d-2, R-C: a fronting process outside the runtime's tree, recorded because
+/// it holds a listener, has an entry too: `OutOfScope`, as its executable and mappings are not
+/// read. The session validates, and the runtime's entries stand.
+#[test]
+fn a_fronting_listener_holder_outside_the_runtime_s_tree_is_out_of_scope() {
+    let mut fake = FakeProc::new();
+    serve(&fake, "/opt/ollama/bin/ollama", "");
+    fake.process(&Proc {
+        pid: 200,
+        comm: "nginx",
+        argv: &["nginx"],
+        exe: Some("/usr/sbin/nginx"),
+        sockets: &[7002],
+        start_ticks: 300,
+        ..Proc::default()
+    });
+    fake.listen("0.0.0.0", 80, 7002);
+    let models = TempDir::new().unwrap();
+    let s = session(&fake, models.path(), None);
+    let pids: Vec<u32> = s.processes.iter().map(|p| p.process.pid).collect();
+    assert_eq!(pids, [200, 4242]);
+    let nginx = &s.processes[0];
+    assert!(nginx.mappings.is_empty());
+    assert_eq!(nginx.maps_read, MapsRead::NotRead);
+    assert_eq!(
+        observed(&s, &Ref::Process(nginx.process.clone())),
+        Some(CoverageState::OutOfScope {
+            why: OUTSIDE_THE_RUNTIME.to_string()
+        })
+    );
+    assert_eq!(
+        observed(&s, &Ref::Process(s.processes[1].process.clone())),
+        Some(CoverageState::Complete)
+    );
+    assert_eq!(observed(&s, &Ref::Audit), Some(CoverageState::Complete));
+}
+
+/// Code review of PR-4d-2, R-C: a listener's holder that may be the runtime (its `comm` cannot be
+/// read) is outside any runtime's tree, so it is not read again. Its entry is `Partial`, and says
+/// why.
+#[test]
+fn a_listener_holder_that_may_be_the_runtime_is_partial() {
+    let mut fake = FakeProc::new();
+    fake.process(&Proc {
+        pid: 4500,
+        comm: "ollama",
+        argv: &["/opt/ollama/bin/ollama", "serve"],
+        sockets: &[7001],
+        start_ticks: 4300,
+        ..Proc::default()
+    });
+    fake.listen("127.0.0.1", 11434, 7001);
+    if !fake.deny(4500, "comm") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    let models = TempDir::new().unwrap();
+    let s = session(&fake, models.path(), None);
+    let p = &s.processes[0];
+    assert_eq!(p.process.pid, 4500);
+    assert_eq!(p.maps_read, MapsRead::NotRead);
+    assert_eq!(
+        observed(&s, &Ref::Process(p.process.clone())),
+        Some(CoverageState::Partial {
+            missing: vec![
+                "the process may be the runtime (its name cannot be read); its executable and \
+                 mappings were not read"
+                    .to_string()
+            ]
+        })
     );
 }
 
