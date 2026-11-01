@@ -314,6 +314,44 @@ fn a_listener_holder_that_may_be_the_runtime_is_partial() {
     );
 }
 
+/// Review of R1: a descendant of the runtime that holds a recorded listener, and whose `comm`
+/// cannot be read (so it may be the runtime), is read by the second pass. It has that one entry,
+/// never a second one as a listener's holder that may be the runtime.
+#[test]
+fn a_descendant_that_may_be_the_runtime_and_holds_a_listener_has_one_entry() {
+    let mut fake = FakeProc::new();
+    serve(&fake, "/opt/ollama/bin/ollama", "");
+    fake.process(&Proc {
+        pid: 4300,
+        comm: "ollama",
+        argv: &["/opt/ollama/bin/ollama", "runner"],
+        exe: Some("/opt/ollama/bin/ollama"),
+        sockets: &[7001],
+        start_ticks: 4100,
+        ppid: 4242,
+        ..Proc::default()
+    });
+    fake.listen("127.0.0.1", 11434, 7001);
+    if !fake.deny(4300, "comm") {
+        eprintln!("skipped: root reads a mode-000 file");
+        return;
+    }
+    let models = TempDir::new().unwrap();
+    let s = session(&fake, models.path(), None);
+    let child = s.processes.iter().find(|p| p.process.pid == 4300).unwrap();
+    assert!(child.roles.is_empty());
+    assert_eq!(child.maps_read, MapsRead::Whole);
+    let entries: Vec<&CoverageState> = s
+        .coverage
+        .iter()
+        .filter(|c| {
+            c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(child.process.clone())
+        })
+        .map(|c| &c.state)
+        .collect();
+    assert_eq!(entries, [&CoverageState::Complete]);
+}
+
 #[test]
 fn a_dev_ino_two_instances_share_links_neither() {
     let fake = FakeProc::new();
