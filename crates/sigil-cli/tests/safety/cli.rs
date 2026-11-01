@@ -743,7 +743,10 @@ fn observe_mode_reads_the_runtime_s_executable_and_mappings_only_through_the_all
         &mut line,
     )
     .unwrap();
-    let child: u32 = line.trim().parse().unwrap();
+    let child: u32 = line
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("the fake runtime reported no child pid ({e}): {line:?}"));
     let parent = runtime.0.id();
     let models = fixtures::ollama_store(&fx.target);
     let session = fx.out.join("session.json");
@@ -762,6 +765,8 @@ fn observe_mode_reads_the_runtime_s_executable_and_mappings_only_through_the_all
     assert!(r.status.unwrap().success(), "{}", r.stderr);
     for pid in [parent, child] {
         let dir = PathBuf::from(format!("/proc/{pid}"));
+        // The engine reads each entry relative to the process's open `/proc/<pid>` directory, so
+        // the calls are matched by that dirfd and the entry's name.
         let at = |name: &str, call: &[&str]| {
             r.events.iter().any(|e| {
                 call.contains(&e.name.as_str())
