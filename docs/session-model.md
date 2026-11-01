@@ -897,7 +897,7 @@ names that name its component, and the values of the database's version fields
 versions of one kind whose major keys disagree, or two values of one commit field) needs the
 database, so the engine decides it; `validate` checks the other four statuses, that a
 `Conflicting` claim has two identity assertions or versions at least, and I1. `Required`
-assertions come with PR-4d, and code checks with M1 profiles.
+assertions come in a later PR, and code checks with M1 profiles.
 
 ## Fields added to `sigil-session/1`
 

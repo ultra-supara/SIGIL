@@ -282,6 +282,15 @@ pub fn artifact_type(a: Option<&crate::artifact::Artifact>) -> String {
     }
 }
 
+/// Why a check could not run, as reports show it.
+pub fn unavailability(why: Unavailability) -> &'static str {
+    match why {
+        Unavailability::PermissionDenied => "permission denied",
+        Unavailability::NotFound => "not found",
+        Unavailability::PlatformUnsupported => "platform unsupported",
+    }
+}
+
 /// A coverage state.
 pub fn coverage_state(state: &CoverageState) -> Shown {
     match state {
@@ -307,11 +316,9 @@ pub fn coverage_state(state: &CoverageState) -> Shown {
             SkipReason::ModeDisabled => "skipped: not run in this mode".to_string(),
             SkipReason::Flag { flag } => format!("skipped: {flag}"),
         }),
-        CoverageState::Unavailable { why } => Shown::own(match why {
-            Unavailability::PermissionDenied => "unavailable: permission denied",
-            Unavailability::NotFound => "unavailable: not found",
-            Unavailability::PlatformUnsupported => "unavailable: platform unsupported",
-        }),
+        CoverageState::Unavailable { why } => {
+            Shown::own(format!("unavailable: {}", unavailability(*why)))
+        }
         CoverageState::Unsupported { what } => Shown::own(format!("unsupported: {what}")),
         CoverageState::BudgetExceeded {
             budget,

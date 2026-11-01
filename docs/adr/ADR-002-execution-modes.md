@@ -25,7 +25,7 @@ This ADR turns the promises into named contracts and states **exactly how each i
 | Mode | Purpose | CLI paths |
 |---|---|---|
 | **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `session verify`, `explain`, and `rules`, which read only a saved session (and a policy file) or nothing |
-| **observe** | static, plus reads of the documented `/proc` entries: sockets and fd tables, `stat` of every process, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (never opened) | `inspect ollama --mode observe` |
+| **observe** | static, plus reads of the documented `/proc` entries: sockets and fd tables, `/proc/<pid>/stat` of every process, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (never opened) | `inspect ollama --mode observe` |
 | **active** | Explicitly requested features that contact something | `inspect ollama --active api-probe`, with `--mode static` or `--mode observe`. Off by default |
 
 PR-1 made the contracts below checkable for the v0.1 CLI. Since PR-3b-1 they are checked over the v2 commands.

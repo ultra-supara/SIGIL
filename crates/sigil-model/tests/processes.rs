@@ -244,3 +244,71 @@ fn the_processes_table_counts_mappings_and_links() {
         "{md}"
     );
 }
+
+fn set_state(s: &mut Session, p: &ProcessRef, state: CoverageState) {
+    for c in &mut s.coverage {
+        if c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(p.clone()) {
+            c.state = state.clone();
+        }
+    }
+    // A required check that is not complete is reported as missing.
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![CheckId::new(PROCESSES_OBSERVED).unwrap()],
+        gaps: vec![],
+    };
+}
+
+#[test]
+fn a_process_whose_maps_was_not_read_is_not_shown_as_a_zero() {
+    // (a) serve could not be read: its row says so, not "0 (0 linked)".
+    let mut s = valid();
+    let serve = s.processes[0].process.clone();
+    set_state(
+        &mut s,
+        &serve,
+        CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied,
+        },
+    );
+    s.processes[0].mappings.clear();
+    s.processes[0].exe = ProcessExe::NotObservable(NotObservable::PermissionDenied);
+    inst(&mut s, "inst:install/bin/ollama")
+        .discovered_by
+        .retain(|d| !matches!(d, DiscoverySource::ProcessExe { .. }));
+    assert_valid(&s);
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(md.contains("not observed \\(permission denied\\)"), "{md}");
+    assert!(!md.contains("0 \\(0 linked\\)"), "{md}");
+
+    // (b) a listener's holder with no entry and no mappings: "not read".
+    let mut s = valid();
+    let holder = bare(&s, 7);
+    hold(&mut s, &holder.process.clone());
+    s.processes.push(holder);
+    assert_valid(&s);
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(md.contains("| not read |"), "{md}");
+    assert!(!md.contains("0 \\(0 linked\\)"), "{md}");
+
+    // (c) a partial read says so.
+    let mut s = valid();
+    let runner = s.processes[1].process.clone();
+    set_state(
+        &mut s,
+        &runner,
+        CoverageState::Partial {
+            missing: vec!["maps: cut short".into()],
+        },
+    );
+    assert_valid(&s);
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(md.contains("4 \\(3 linked\\; partial\\)"), "{md}");
+}
+
+#[test]
+fn a_runtime_from_before_the_check_is_not_shown_as_a_zero() {
+    // (d) example 14: the runtime has no mappings and no entry.
+    let md = sigil_model::render::markdown::render_session(&store_and_runtime());
+    assert!(md.contains("| not read |"), "{md}");
+    assert!(!md.contains("0 \\(0 linked\\)"), "{md}");
+}

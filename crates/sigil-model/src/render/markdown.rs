@@ -7,15 +7,15 @@
 use crate::artifact::{
     DiscoverySource, FileInstance, InstanceContent, NotReadReason, NsInode, ProcessObs,
 };
-use crate::coverage::Coverage;
-use crate::evidence::{EvidenceRef, Loc, Observability};
+use crate::coverage::{Coverage, CoverageState};
+use crate::evidence::{EvidenceRef, Loc, Observability, Ref};
 use crate::finding::{CondState, OpenQuestion};
 use crate::hint::{FeatureHint, Signal};
 use crate::model::{BlobLookup, Model};
 use crate::reference::{MemberResult, ARTIFACTS_RELEASE, INSTALL_ROOT};
 use crate::session::Session;
 use crate::text::UntrustedText;
-use crate::ReleaseBasis;
+use crate::{ReleaseBasis, PROCESSES_OBSERVED};
 
 use super::code::{
     capability_cell, coverage_line, no_capability_imports_kept, IMPORTS_CUT_SHORT,
@@ -24,7 +24,7 @@ use super::code::{
 use super::md::{self, esc, joined, section, table};
 use super::{
     action, active_feature, coverage_state, kind, mode, not_observable, open_claim, subject,
-    treatment, unknown_reason,
+    treatment, unavailability, unknown_reason,
 };
 
 /// The report: the run, the outcome, findings, open questions, policy violations, the coverage
@@ -1236,7 +1236,7 @@ fn reference_cell(s: &Session, i: &FileInstance, compared: bool) -> String {
 
 fn processes(out: &mut String, s: &Session) {
     section(out, "Processes");
-    let rows = s.processes.iter().map(process_row).collect();
+    let rows = s.processes.iter().map(|p| process_row(p, s)).collect();
     table(
         out,
         &[
@@ -1251,12 +1251,28 @@ fn processes(out: &mut String, s: &Session) {
     );
 }
 
-fn process_row(p: &ProcessObs) -> Vec<String> {
+fn process_row(p: &ProcessObs, s: &Session) -> Vec<String> {
     let name = md::name_cell(p.name.as_ref());
     let exe = md::exe_cell(&p.exe);
     // PR-4d-2: the objects mapped, and how many are linked to a scanned file (by dev:ino).
     let linked = p.mappings.iter().filter(|m| m.instance.is_some()).count();
-    let mappings = format!("{} ({linked} linked)", p.mappings.len());
+    // What was observed, not a zero: a process whose `maps` was never read has no count (F-T1).
+    let counted = format!("{} ({linked} linked)", p.mappings.len());
+    let found = s.coverage.iter().find(|c| {
+        c.check.as_str() == PROCESSES_OBSERVED && c.scope == Ref::Process(p.process.clone())
+    });
+    let mappings = match found.map(|c| &c.state) {
+        Some(CoverageState::Complete) => counted,
+        Some(CoverageState::Partial { .. }) => {
+            format!("{} ({linked} linked; partial)", p.mappings.len())
+        }
+        Some(CoverageState::Unavailable { why }) => {
+            format!("not observed ({})", unavailability(*why))
+        }
+        Some(_) => "not observed".to_string(),
+        None if p.mappings.is_empty() => "not read".to_string(),
+        None => counted,
+    };
     let fd_table = match p.fd_table {
         Observability::Observed => "listed".to_string(),
         Observability::NotObservable(why) => format!("not listed ({})", not_observable(why)),

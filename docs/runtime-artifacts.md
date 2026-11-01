@@ -117,9 +117,11 @@ never by path. It is on by default: the default policy audits `runtime_processes
   - **The PID check.** The second pass reads `stat` again; its start time must be the same,
     otherwise the PID is another process now. A process gone then (exited, its PID reused, or a
     zombie) is not read: a runtime stays as listed, with the gap "the process exited before its
-    executable and mappings were read", and a descendant is not recorded.
+    executable and mappings were read", and a descendant that holds no recorded listener is not
+    recorded (one already recorded as a listener's holder stays recorded, with the `EXITED` gap).
   - **Roles.** A descendant has no role.
-  - **What may be missed.** A process started after its parent was listed.
+  - **What may be missed.** A process started after its parent was listed, and a descendant whose
+    parent exited before the listing: it was reparented, so the search does not reach it.
 - **The executable.**
   - **Its identity.** `stat` through `/proc/<pid>/exe` gives the file the process runs (its
     `dev:ino`), also when it was deleted or is in another mount namespace. The file is never
@@ -560,7 +562,7 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 
 - Mach-O sections and `__gopclntab`: a Mach-O is not scanned for signatures yet.
 - Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
-  it (PR-4d).
+  it (a later PR).
 - Releases outside the embedded set, and releases built from a source commit.
 - Optional members: an installation without a GPU backend's directory is INCOMPLETE against a
   release that ships it.

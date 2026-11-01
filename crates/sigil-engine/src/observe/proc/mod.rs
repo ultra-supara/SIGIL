@@ -94,7 +94,8 @@ impl Default for ProcBudgets {
 /// What was observed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcFacts {
-    /// The runtime processes, and the processes that hold a recorded listener, by PID.
+    /// The runtime processes, the processes that hold a recorded listener, and the runtimes'
+    /// descendants (PR-4d-2), by PID.
     pub processes: Vec<ProcessObs>,
     /// By ID.
     pub listeners: Vec<Listener>,

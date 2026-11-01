@@ -31,7 +31,7 @@ sigil-wasm ───────────────────────
 ## Modes
 
 - **static** (default): files only.
-- **observe**: also the allowlisted `/proc` entries: the sockets and fd tables, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (the file is never opened), with `stat` of every process.
+- **observe**: also the allowlisted `/proc` entries: the sockets and fd tables, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (the file is never opened), with `/proc/<pid>/stat` of every process.
 - **active**: explicitly requested features that contact something; today only the API probe.
 
 The contracts of each mode, and how each is checked: [ADR-002](adr/ADR-002-execution-modes.md).
