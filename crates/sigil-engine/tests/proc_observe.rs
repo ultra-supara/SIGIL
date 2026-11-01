@@ -601,8 +601,9 @@ fn the_runtime_and_its_descendants_are_observed() {
         maps: &maps,
         ..Proc::default()
     });
+    // A lower PID than its parent: one pass in PID order would miss it.
     fake.process(&Proc {
-        pid: 4400,
+        pid: 4250,
         comm: "gpu-discover",
         ppid: 4300,
         start_ticks: 4200,
@@ -617,8 +618,8 @@ fn the_runtime_and_its_descendants_are_observed() {
     });
     let f = run(&fake);
     let pids: Vec<u32> = f.processes.iter().map(|p| p.process.pid).collect();
-    assert_eq!(pids, [4242, 4300, 4400]);
-    let runner = &f.processes[1];
+    assert_eq!(pids, [4242, 4250, 4300]);
+    let runner = &f.processes[2];
     assert!(runner.roles.is_empty());
     assert_eq!(runner.argv, None);
     assert_eq!(runner.name, Some(t("llama-server")));
@@ -634,7 +635,7 @@ fn the_runtime_and_its_descendants_are_observed() {
     assert!(matches!(mapping.same_mount_ns, Tri::Yes { .. }));
     let exe = std::fs::metadata(fake.fs("/usr/local/bin/ollama")).unwrap();
     assert_eq!(detail(&f, 4242).exe_id, Some((exe.dev(), exe.ino())));
-    for pid in [4242, 4300, 4400] {
+    for pid in [4242, 4250, 4300] {
         assert!(
             detail(&f, pid).missing.is_empty(),
             "{pid}: {:?}",
@@ -676,20 +677,19 @@ fn maps_over_its_budget_keeps_the_lines_read() {
     let first = maps_line(&a);
     let maps = format!("{first}\n{}\n", maps_line(&b));
     serve_at(&fake, &maps);
+    // The first line, its newline, and two bytes of the second: that cut line is not read.
+    let limit = first.len() as u64 + 3;
     let f = run_with(
         &fake,
         ProcBudgets {
-            max_maps_bytes: first.len() as u64 + 3,
+            max_maps_bytes: limit,
             ..ProcBudgets::default()
         },
     );
     assert_eq!(f.processes[0].mappings.len(), 1);
-    let d = detail(&f, 4242);
-    assert!(
-        d.missing
-            .iter()
-            .any(|m| m.starts_with("maps: over proc_maps_bytes")),
-        "{d:?}"
+    assert_eq!(
+        detail(&f, 4242).missing,
+        [format!("maps: over proc_maps_bytes ({limit} bytes read)")]
     );
 }
 

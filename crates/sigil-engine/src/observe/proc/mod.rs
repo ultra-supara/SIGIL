@@ -124,7 +124,7 @@ pub struct Detail {
     pub missing: Vec<String>,
 }
 
-/// Why a runtime has no mappings: it exited between the two passes.
+/// Why a recorded process has no mappings: it exited between the two passes.
 pub const EXITED: &str = "the process exited before its executable and mappings were read";
 
 /// When the processes were read, and in which boot: part of each one's identity.
@@ -148,6 +148,15 @@ struct Second {
     obs: Option<ProcessObs>,
     mappings: Vec<MappingObs>,
     detail: Detail,
+}
+
+/// What the second pass found of one process.
+enum Pass {
+    /// It exited, is a zombie, or its PID is another process now (another start time).
+    Gone,
+    /// Its directory or `stat` could not be read again.
+    Unreadable(NotObservable),
+    Read(Box<Second>),
 }
 
 /// Whether a process is the runtime.
@@ -350,8 +359,9 @@ fn observe_with(
         if !observed.contains(&s.pid) {
             continue;
         }
-        match second(&ctx, s, start_ticks, !recorded.contains_key(&i)) {
-            Some(read) => {
+        let recorded_exe = recorded.get(&i).map(|obs| &obs.exe);
+        match second(&ctx, s, start_ticks, recorded_exe) {
+            Pass::Read(read) => {
                 if let Some(obs) = read.obs {
                     recorded.insert(i, obs);
                 }
@@ -360,9 +370,10 @@ fn observe_with(
                 }
                 facts.details.push(read.detail);
             }
-            // Gone: a runtime stays as the listing pass recorded it; a descendant is not
-            // recorded.
-            None => {
+            // A recorded process (a runtime, or a descendant recorded because it holds a
+            // listener) stays recorded as the listing pass saw it, with `EXITED`. A descendant
+            // not otherwise recorded is not recorded.
+            Pass::Gone => {
                 if let Some(obs) = recorded.get(&i) {
                     facts.details.push(Detail {
                         process: obs.process.clone(),
@@ -372,6 +383,19 @@ fn observe_with(
                     });
                 }
             }
+            // Still there, but not readable: never taken as gone.
+            Pass::Unreadable(why) => match recorded.get(&i) {
+                Some(obs) => facts.details.push(Detail {
+                    process: obs.process.clone(),
+                    exe_id: None,
+                    denied: why == NotObservable::PermissionDenied,
+                    missing: vec![format!("the process cannot be read again ({why:?})")],
+                }),
+                None => facts.lineage_gaps.push(format!(
+                    "process {} cannot be read again ({why:?}); a descendant is not recorded",
+                    s.pid
+                )),
+            },
         }
     }
     facts.processes = recorded.into_values().collect();
@@ -664,16 +688,26 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
     }
 }
 
-/// The second pass over one runtime or descendant (PR-4d-2). `None` when it exited, or its PID
-/// is another process now (another start time). `build` reads its `ProcessObs` too, for a
-/// process the listing pass did not record.
-fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, build: bool) -> Option<Second> {
-    let dir = open_dir(ctx.root, &s.pid.to_string()).ok()?;
+/// The second pass over one runtime or descendant (PR-4d-2): `Gone` when it exited, is a
+/// zombie, or its PID is another process now (another start time); `Unreadable` when its
+/// directory or `stat` cannot be read again. `recorded` is the executable the listing pass
+/// recorded; for a process it did not record (`None`), its `ProcessObs` is read too.
+fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
+    let dir = match open_dir(ctx.root, &s.pid.to_string()) {
+        Ok(dir) => dir,
+        Err(Errno::NOENT | Errno::SRCH) => return Pass::Gone,
+        Err(e) => return Pass::Unreadable(not_observable(e)),
+    };
     let dir = dir.as_fd();
     match read_limited(dir, "stat", 4096) {
-        Ok(Read::Whole(bytes))
-            if parse::stat_start_ticks(&String::from_utf8_lossy(&bytes)) == Some(start_ticks) => {}
-        _ => return None,
+        Ok(Read::Whole(bytes)) => match parse::stat_start_ticks(&String::from_utf8_lossy(&bytes)) {
+            Some(ticks) if ticks == start_ticks => {}
+            Some(_) => return Pass::Gone,
+            None => return Pass::Unreadable(NotObservable::ReadIncomplete),
+        },
+        Ok(Read::OverLimit) => return Pass::Unreadable(NotObservable::ReadIncomplete),
+        Err(Errno::NOENT | Errno::SRCH) => return Pass::Gone,
+        Err(e) => return Pass::Unreadable(not_observable(e)),
     }
     let process = ProcessRef {
         pid: s.pid,
@@ -682,13 +716,27 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, build: bool) -> Option<S
     };
     let mut missing = vec![];
     let exe_id = exe_identity(dir);
-    if let Err(why) = exe_id {
-        missing.push(format!("exe: its identity cannot be read ({why:?})"));
+    match exe_id {
+        // Same start time, but no executable: a zombie, or it exited meanwhile.
+        Err(NotObservable::NoProcess) => return Pass::Gone,
+        Err(why) => missing.push(format!("exe: its identity cannot be read ({why:?})")),
+        Ok(_) => {}
     }
     let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
-    let (mappings, maps_denied) = mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
+    let (mut mappings, maps_denied) = mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
     let denied = exe_id == Err(NotObservable::PermissionDenied) && maps_denied;
-    let obs = build.then(|| {
+    let mut exe_id = exe_id.ok();
+    // An exec keeps the start time. Read last, so that one before or during the reads above is
+    // seen: another executable than the one recorded means they are the new image's, not kept.
+    // The path only: `deleted` may change meanwhile.
+    if let Some(ProcessExe::Path { path, .. }) = recorded {
+        if matches!(exe(dir), Ok((now, _)) if now != path.as_bytes()) {
+            missing.push("exe: the process runs another executable than when it was listed".into());
+            exe_id = None;
+            mappings.clear();
+        }
+    }
+    let obs = recorded.is_none().then(|| {
         observation(
             dir,
             s.pid,
@@ -699,16 +747,16 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, build: bool) -> Option<S
             ctx.when,
         )
     });
-    Some(Second {
+    Pass::Read(Box::new(Second {
         obs,
         mappings,
         detail: Detail {
             process,
-            exe_id: exe_id.ok(),
+            exe_id,
             denied,
             missing,
         },
-    })
+    }))
 }
 
 /// The executable's `dev:ino`: `stat` through the `exe` link, which the kernel resolves to the
@@ -930,13 +978,14 @@ fn read_up_to(dir: BorrowedFd<'_>, name: &str, limit: u64) -> Result<(Vec<u8>, b
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::Path;
 
-    use sigil_model::Timestamp;
+    use sigil_model::{ProcessRef, Timestamp};
 
-    use super::{observe_with, ProcBudgets};
+    use super::{observe_with, Detail, ProcBudgets, ProcFacts, EXITED};
 
+    /// A process directory. Its `exe` links to a file of the fixture, `<root>/fs/<comm>`.
     fn process(root: &Path, pid: u32, ppid: u32, comm: &str, argv: &[&str], start: u64) {
         let dir = root.join(pid.to_string());
         std::fs::create_dir_all(dir.join("fd")).unwrap();
@@ -957,14 +1006,14 @@ mod tests {
         std::fs::write(dir.join("maps"), "").unwrap();
         symlink("net:[1]", dir.join("ns/net")).unwrap();
         symlink("mnt:[2]", dir.join("ns/mnt")).unwrap();
+        let exe = root.join("fs").join(comm);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, comm).unwrap();
+        symlink(&exe, dir.join("exe")).unwrap();
     }
 
-    /// A descendant whose PID is another process by the second pass (another start time) is
-    /// not recorded.
-    #[test]
-    fn a_pid_reused_between_the_passes_is_not_recorded() {
-        let d = tempfile::TempDir::new().unwrap();
-        let root = d.path();
+    /// A proc root with PID 1, `ollama serve` as PID 10 (start 100), and its child 11 (start 200).
+    fn fixture(root: &Path) {
         std::fs::create_dir_all(root.join("self/ns")).unwrap();
         std::fs::create_dir_all(root.join("net")).unwrap();
         std::fs::write(root.join("net/tcp"), "").unwrap();
@@ -974,14 +1023,128 @@ mod tests {
         process(root, 1, 0, "init", &["/sbin/init"], 1);
         process(root, 10, 1, "ollama", &["/x/ollama", "serve"], 100);
         process(root, 11, 10, "runner", &["/x/runner"], 200);
-        let reuse = || process(root, 11, 10, "runner", &["/x/runner"], 300);
+    }
+
+    fn run(root: &Path, between: &dyn Fn()) -> ProcFacts {
         let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
-        let f = observe_with(root, &at, "b", ProcBudgets::default(), &|| {
+        observe_with(root, &at, "b", ProcBudgets::default(), between)
+    }
+
+    fn pids(f: &ProcFacts) -> Vec<u32> {
+        f.processes.iter().map(|p| p.process.pid).collect()
+    }
+
+    fn detail(f: &ProcFacts, pid: u32) -> &Detail {
+        f.details
+            .iter()
+            .find(|d| d.process.pid == pid)
+            .unwrap_or_else(|| panic!("no detail for {pid}: {:?}", f.details))
+    }
+
+    /// A descendant whose PID is another process by the second pass (another start time) is
+    /// not recorded.
+    #[test]
+    fn a_pid_reused_between_the_passes_is_not_recorded() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        let f = run(root, &|| {
             std::fs::remove_dir_all(root.join("11")).unwrap();
-            reuse();
+            process(root, 11, 10, "runner", &["/x/runner"], 300);
         });
-        let pids: Vec<u32> = f.processes.iter().map(|p| p.process.pid).collect();
-        assert_eq!(pids, [10]);
+        assert_eq!(pids(&f), [10]);
         assert_eq!(f.details.len(), 1);
+    }
+
+    /// Review of PR-4d-2: a descendant that cannot be read again is not dropped silently.
+    #[test]
+    fn a_descendant_that_cannot_be_read_again_is_a_lineage_gap() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        let stat = root.join("11/stat");
+        let f = run(root, &|| {
+            std::fs::set_permissions(&stat, std::fs::Permissions::from_mode(0o000)).unwrap();
+        });
+        if std::fs::read(&stat).is_ok() {
+            eprintln!("skipped: root reads a mode-000 file");
+            return;
+        }
+        assert_eq!(pids(&f), [10]);
+        assert_eq!(
+            f.lineage_gaps,
+            ["process 11 cannot be read again (PermissionDenied); a descendant is not recorded"]
+        );
+        assert_eq!(f.details.len(), 1);
+    }
+
+    /// A runtime gone by the second pass stays recorded as the listing pass saw it.
+    #[test]
+    fn a_runtime_gone_by_the_second_pass_stays_recorded_as_exited() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        let f = run(root, &|| std::fs::remove_dir_all(root.join("10")).unwrap());
+        assert_eq!(pids(&f), [10, 11]);
+        assert!(f.processes[0].mappings.is_empty());
+        assert_eq!(
+            *detail(&f, 10),
+            Detail {
+                process: ProcessRef {
+                    pid: 10,
+                    start_ticks: 100,
+                    boot_id: "b".to_string(),
+                },
+                exe_id: None,
+                denied: false,
+                missing: vec![EXITED.to_string()],
+            }
+        );
+    }
+
+    /// A zombie keeps its `stat` (and start time), but its `exe` no longer resolves: it is gone.
+    #[test]
+    fn a_descendant_whose_exe_no_longer_resolves_is_gone() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        let exe = root.join("11/exe");
+        let f = run(root, &|| {
+            std::fs::remove_file(&exe).unwrap();
+            symlink(root.join("fs/deleted"), &exe).unwrap();
+        });
+        assert_eq!(pids(&f), [10]);
+        assert_eq!(f.details.len(), 1);
+        assert!(f.lineage_gaps.is_empty(), "{:?}", f.lineage_gaps);
+    }
+
+    /// Review of PR-4d-2: an exec keeps the start time. When the runtime runs another executable
+    /// by the second pass, its identity and mappings are the new image's: not kept.
+    #[test]
+    fn an_exec_between_the_passes_keeps_no_identity_or_mappings() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture(root);
+        std::fs::write(
+            root.join("10/maps"),
+            "7f0000000000-7f0000001000 r-xp 00000000 08:01 1234 /x/lib.so\n",
+        )
+        .unwrap();
+        let other = root.join("fs/other/ollama");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, b"other").unwrap();
+        let exe = root.join("10/exe");
+        let f = run(root, &|| {
+            std::fs::remove_file(&exe).unwrap();
+            symlink(&other, &exe).unwrap();
+        });
+        assert_eq!(pids(&f), [10, 11]);
+        assert!(f.processes[0].mappings.is_empty(), "{:?}", f.processes[0]);
+        let d = detail(&f, 10);
+        assert_eq!(d.exe_id, None);
+        assert_eq!(
+            d.missing,
+            ["exe: the process runs another executable than when it was listed"]
+        );
     }
 }
