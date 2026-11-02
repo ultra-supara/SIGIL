@@ -43,6 +43,7 @@ impl PathGap {
 }
 
 type Identity = (u64, u64);
+type AnchoredPath = (Vec<Vec<u8>>, VecDeque<Vec<u8>>, bool);
 fn components(path: &[u8]) -> Vec<Vec<u8>> {
     path.split(|b| *b == b'/')
         .filter(|p| !p.is_empty())
@@ -351,7 +352,7 @@ impl<'a> PathIndex<'a> {
         tail_bytes: usize,
         prepaid: usize,
         charge: &mut impl FnMut() -> bool,
-    ) -> Result<(Vec<Vec<u8>>, VecDeque<Vec<u8>>, bool), PathGap> {
+    ) -> Result<AnchoredPath, PathGap> {
         if !path.starts_with(b"/") || path.contains(&0) {
             return Err(PathGap::OutsideRoots);
         }
@@ -389,7 +390,7 @@ impl<'a> PathIndex<'a> {
         tail_count: usize,
         tail_bytes: usize,
         charge: &mut impl FnMut() -> bool,
-    ) -> Result<(Vec<Vec<u8>>, VecDeque<Vec<u8>>, bool), PathGap> {
+    ) -> Result<AnchoredPath, PathGap> {
         let (current, mut pending, terminal) =
             self.anchored(target, tail_count, tail_bytes, 0, charge)?;
         if target.ends_with(b"/") {

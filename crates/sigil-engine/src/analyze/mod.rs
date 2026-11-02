@@ -4,6 +4,7 @@
 pub mod binary;
 pub mod components;
 pub mod container;
+pub mod deps;
 pub mod exposure;
 pub mod hints;
 pub mod identity;

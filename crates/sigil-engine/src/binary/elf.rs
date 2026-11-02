@@ -15,7 +15,7 @@ use object::read::elf::{
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
 use sigil_model::{
-    imports_over_gap, BudgetUse, ContainerFacts, ElfFacts, ElfImport, UntrustedText,
+    imports_over_gap, BudgetUse, ContainerFacts, ElfAbi, ElfFacts, ElfImport, UntrustedText,
     BINARY_CODE_BYTES, SCAN_NO_SECTIONS, SYMBOLS_NO_DYNSYM_GAP, SYMBOLS_NO_SECTIONS_GAP,
     SYMBOLS_UNREADABLE_SECTIONS_GAP,
 };
@@ -372,6 +372,11 @@ pub(crate) fn parts<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         gaps,
     };
     let mut facts = empty();
+    facts.abi = Some(ElfAbi {
+        is_64: header.is_type_64(),
+        little_endian: endian.is_little_endian(),
+        machine: header.e_machine(endian).0,
+    });
     facts.interp = e.interp();
     let dynamic = e.dynamic(&mut facts);
     facts.build_id = e.build_id();

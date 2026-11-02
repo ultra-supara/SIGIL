@@ -257,6 +257,7 @@ impl SafeFs {
                 parent,
                 name,
                 lstat,
+                ..
             } => match FileType::from_raw_mode(lstat.st_mode) {
                 FileType::Directory => {
                     let parent = parent

@@ -331,17 +331,49 @@ impl Collector<'_> {
         let Some(stat) = entry.stat else {
             return Ok(());
         };
+        let needs_proof = matches!(
+            &content,
+            InstanceContent::NotRead {
+                why: NotReadReason::Directory | NotReadReason::NotFollowed
+            }
+        );
+        let mut placement_stability = Stability::NoChangeDetected;
+        let mut path_proof = None;
+        if needs_proof {
+            // For directories and own links, the test hook separates two placement
+            // observations; it does not parse or open the link target.
+            let first = self.fs.observe_entry(&self.root, &entry.rel);
+            (self.during_read)(&entry.rel);
+            let last = self.fs.observe_entry(&self.root, &entry.rel);
+            match (first, last) {
+                (Ok(a), Ok(b))
+                    if a.entry.stat == entry.stat
+                        && b.entry.stat == entry.stat
+                        && a.entry.kind == entry.kind
+                        && b.entry.kind == entry.kind
+                        && a.trace == b.trace =>
+                {
+                    path_proof = a.trace.proof();
+                }
+                (_, Err(WalkError::NotFound)) => placement_stability = Stability::Vanished,
+                _ => placement_stability = Stability::ChangedDuringRead,
+            }
+            if placement_stability != Stability::NoChangeDetected {
+                self.errors
+                    .push(format!("{}: {placement_stability:?}", entry.rel.display()));
+            }
+        }
         let resolved = link_chain.first().map(|hop| hop.target.clone());
         self.instances.push(FileInstance {
             id: instance_id(&self.root, &entry.rel)?,
             root: self.root.clone(),
             path: self.path(&entry.rel),
-            path_proof: None,
+            path_proof,
             link_chain,
             resolved,
             content,
             stat,
-            stability: Stability::NoChangeDetected,
+            stability: placement_stability,
             discovered_by: vec![DiscoverySource::Walk],
         });
         Ok(())
@@ -358,7 +390,7 @@ impl Collector<'_> {
 
     /// A symlink: its own `lstat` and its target text, compared as such. It is never followed,
     /// wherever it leads, so nothing outside the two places is read through it. It is stable if a
-    /// second `readlinkat` gives the same text.
+    /// second strict observation gives the same link identity, target and parent chain.
     fn link(&mut self, entry: &Entry, target: &str) -> Result<(), String> {
         let Some(stat) = entry.stat else {
             return Ok(());
@@ -375,20 +407,7 @@ impl Collector<'_> {
             InstanceContent::NotRead {
                 why: NotReadReason::NotFollowed,
             },
-        )?;
-        (self.during_read)(&entry.rel);
-        let unchanged = matches!(
-            self.fs.entry_at(&self.root, &entry.rel).map(|e| e.kind),
-            Ok(EntryType::Symlink { target: now }) if now == target
-        );
-        if !unchanged {
-            if let Some(last) = self.instances.last_mut() {
-                last.stability = Stability::ChangedDuringRead;
-            }
-            self.errors
-                .push(format!("{}: ChangedDuringRead", entry.rel.display()));
-        }
-        Ok(())
+        )
     }
 
     /// Reads a regular file, without following any symlink, within the cumulative byte budget.
@@ -525,5 +544,89 @@ mod tests {
         assert!(f.binaries.is_empty(), "{:?}", f.binaries);
         let f = collect_with(d.path(), InstallBudgets::default(), &|_| {}).unwrap();
         assert_eq!(f.binaries.len(), 1);
+    }
+    #[test]
+    fn a_parent_swap_preserving_the_leaf_inode_cannot_mint_a_path_proof() {
+        use std::cell::Cell;
+        use std::os::unix::fs::MetadataExt;
+        let d = tempfile::TempDir::new().unwrap();
+        let lib = d.path().join("lib/ollama");
+        let replacement = d.path().join("replacement");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::create_dir(&replacement).unwrap();
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so"),
+        )
+        .unwrap();
+        std::fs::write(lib.join("libx.so"), &bytes).unwrap();
+        std::fs::hard_link(lib.join("libx.so"), replacement.join("libx.so")).unwrap();
+        let seen = std::fs::symlink_metadata(lib.join("libx.so")).unwrap();
+        let switched = Cell::new(false);
+        let swap = |rel: &RelPath| {
+            if rel.display() == "lib/ollama/libx.so" && !switched.replace(true) {
+                std::fs::rename(&lib, d.path().join("old-ollama")).unwrap();
+                std::fs::rename(&replacement, &lib).unwrap();
+            }
+        };
+        let facts = collect_with(d.path(), InstallBudgets::default(), &swap).unwrap();
+        assert!(switched.get());
+        let now = std::fs::symlink_metadata(lib.join("libx.so")).unwrap();
+        assert_eq!((seen.dev(), seen.ino()), (now.dev(), now.ino()));
+        let x = facts
+            .instances
+            .iter()
+            .find(|i| i.path.as_bytes().ends_with(b"/libx.so"))
+            .unwrap();
+        assert_eq!((x.stat.dev, x.stat.ino), (seen.dev(), seen.ino()));
+        assert_eq!(x.stability, Stability::ChangedDuringRead);
+        assert!(x.path_proof.is_none());
+        assert!(matches!(
+            x.content,
+            sigil_model::InstanceContent::Read { .. }
+        ));
+        assert!(
+            facts.binaries.is_empty(),
+            "unstable placement cannot publish parsed facts"
+        );
+        assert!(matches!(facts.discovery.state, CoverageState::Error { .. }));
+    }
+
+    #[test]
+    fn replacing_a_link_with_identical_target_text_is_still_an_identity_change() {
+        use std::cell::Cell;
+        use std::os::unix::fs::MetadataExt;
+        let d = tempfile::TempDir::new().unwrap();
+        let lib = d.path().join("lib/ollama");
+        std::fs::create_dir_all(&lib).unwrap();
+        let path = lib.join("link.so");
+        symlink("unread-target.so", &path).unwrap();
+        let seen = std::fs::symlink_metadata(&path).unwrap();
+        let switched = Cell::new(false);
+        let swap = |rel: &RelPath| {
+            if rel.display() == "lib/ollama/link.so" && !switched.replace(true) {
+                // Keep the old link alive elsewhere so immediate inode reuse cannot mask the test.
+                std::fs::rename(&path, d.path().join("old-link.so")).unwrap();
+                symlink("unread-target.so", &path).unwrap();
+            }
+        };
+        let facts = collect_with(d.path(), InstallBudgets::default(), &swap).unwrap();
+        assert!(switched.get());
+        let now = std::fs::symlink_metadata(&path).unwrap();
+        assert_ne!((seen.dev(), seen.ino()), (now.dev(), now.ino()));
+        let link = facts
+            .instances
+            .iter()
+            .find(|i| i.path.as_bytes().ends_with(b"/link.so"))
+            .unwrap();
+        assert_eq!(link.link_chain[0].target.as_bytes(), b"unread-target.so");
+        assert_eq!(link.stability, Stability::ChangedDuringRead);
+        assert!(link.path_proof.is_none());
+        assert!(matches!(
+            link.content,
+            sigil_model::InstanceContent::NotRead {
+                why: sigil_model::NotReadReason::NotFollowed
+            }
+        ));
+        assert!(matches!(facts.discovery.state, CoverageState::Error { .. }));
     }
 }

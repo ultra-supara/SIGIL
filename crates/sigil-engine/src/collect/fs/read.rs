@@ -13,7 +13,7 @@ use sigil_model::{
 };
 
 use super::path::RelPath;
-use super::resolve::{mode, End, Strict};
+use super::resolve::{mode, End, Strict, StrictTrace};
 use super::SafeFs;
 
 /// What a parse sees (PR-4b-1): the open file, its size, the content's ID, and its first bytes.
@@ -194,7 +194,7 @@ impl SafeFs {
                     Ok(fd) => {
                         let seen = Snapshot::of(&lstat);
                         let seen = (seen.dev, seen.ino);
-                        self.read_open(index, rel, place, fd, spec, false, seen, None)
+                        self.read_open(index, rel, place, fd, spec, false, None, seen, None)
                     }
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
@@ -302,6 +302,7 @@ impl SafeFs {
                 parent,
                 name,
                 lstat,
+                trace,
             } => {
                 if FileType::from_raw_mode(lstat.st_mode) != FileType::RegularFile {
                     return place.not_read(&lstat, NotReadReason::NotRegularFile);
@@ -313,7 +314,7 @@ impl SafeFs {
                     Ok(fd) => {
                         let seen = Snapshot::of(&lstat);
                         let seen = (seen.dev, seen.ino);
-                        self.read_open(index, rel, place, fd, spec, true, seen, hook)
+                        self.read_open(index, rel, place, fd, spec, true, Some(trace), seen, hook)
                     }
                     Err(Errno::ACCESS | Errno::PERM) => {
                         place.not_read(&lstat, NotReadReason::PermissionDenied)
@@ -349,6 +350,7 @@ impl SafeFs {
         fd: OwnedFd,
         spec: ReadSpec,
         strict: bool,
+        trace: Option<StrictTrace>,
         seen: (u64, u64),
         hook: Hook<'_>,
     ) -> FileRead {
@@ -409,24 +411,33 @@ impl SafeFs {
             Ok(st) => Snapshot::of(&st),
             Err(e) => return FileRead::failed(e.to_string()),
         };
-        let now = if strict {
+        let (now, after_trace) = if strict {
             match self.resolve_strict(index, rel) {
-                Strict::Entry { lstat, .. } => {
-                    Some((Snapshot::of(&lstat).dev, Snapshot::of(&lstat).ino))
-                }
-                Strict::NotFound => None,
-                // It is reached through a link now, or is no longer reached at all.
-                _ => Some((u64::MAX, u64::MAX)),
+                Strict::Entry { lstat, trace, .. } => (
+                    Some((Snapshot::of(&lstat).dev, Snapshot::of(&lstat).ino)),
+                    Some(trace),
+                ),
+                Strict::NotFound => (None, None),
+                _ => (Some((u64::MAX, u64::MAX)), None),
             }
         } else {
-            match self.resolve(index, rel).end {
+            let now = match self.resolve(index, rel).end {
                 End::Entry { lstat, .. } => {
                     Some((Snapshot::of(&lstat).dev, Snapshot::of(&lstat).ino))
                 }
                 End::NotFound => None,
-                // It resolves to something else now (a directory, a link out of the roots, ...).
                 _ => Some((u64::MAX, u64::MAX)),
-            }
+            };
+            (now, None)
+        };
+        let mut observed_stability = stability(seen, &before, &after, now);
+        if strict && now.is_some() && trace.as_ref() != after_trace.as_ref() {
+            observed_stability = Stability::ChangedDuringRead;
+        }
+        let path_proof = if strict && observed_stability == Stability::NoChangeDetected {
+            trace.as_ref().and_then(StrictTrace::proof)
+        } else {
+            None
         };
         let artifact = Artifact {
             id: artifact_id.clone(),
@@ -434,13 +445,14 @@ impl SafeFs {
             format: Format::Other,
             slices: vec![],
         };
-        let instance = place.into_instance(
+        let mut instance = place.into_instance(
             stat_info(&st),
             InstanceContent::Read {
                 artifact: artifact_id,
             },
-            stability(seen, &before, &after, now),
+            observed_stability,
         );
+        instance.path_proof = path_proof;
         FileRead {
             instance: Some(instance),
             artifact: Some(artifact),

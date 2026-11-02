@@ -1617,9 +1617,7 @@ impl<'a> Validator<'a> {
             self.dependency_error(at, "dependency needs a stable read ELF placement");
             return None;
         };
-        let Some(artifact) = self.index.artifacts.get(artifact.as_str()).copied() else {
-            return None;
-        };
+        let artifact = self.index.artifacts.get(artifact.as_str()).copied()?;
         if instance.stability != Stability::NoChangeDetected
             || instance.stat.mode & 0o170_000 != 0o100_000
             || !matches!(

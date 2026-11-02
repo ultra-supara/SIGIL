@@ -38,7 +38,10 @@ fn one_allowlist_is_shared_by_configuration_and_observation() {
 fn role_and_value_ids_include_the_complete_process_and_origin() {
     let p = process();
     let runtime = ProcessRole::new(RUNTIME_ROLE).unwrap();
-    assert_eq!(observed_role(&p, &[runtime.clone()]).unwrap(), runtime);
+    assert_eq!(
+        observed_role(&p, std::slice::from_ref(&runtime)).unwrap(),
+        runtime
+    );
     let anonymous = observed_role(&p, &[]).unwrap();
     assert!(anonymous.as_str().starts_with("observed:"));
     assert_eq!(anonymous.as_str().len(), 9 + 64);

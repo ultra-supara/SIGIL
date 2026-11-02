@@ -162,7 +162,7 @@ fn collect_with(
             &mut parsed,
             during_read,
         );
-        let Some(instance) = read.instance else {
+        let Some(mut instance) = read.instance else {
             return Err(fatal(path, &outcome(&read.outcome)));
         };
         // A file read, or over budget, is recorded with its open fd's `stat`: it must be the file
@@ -215,6 +215,7 @@ fn collect_with(
             id: root,
             path: recorded(path),
         });
+        instance.path_proof = None;
         facts.instances.push(instance);
     }
     (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &facts.artifacts);

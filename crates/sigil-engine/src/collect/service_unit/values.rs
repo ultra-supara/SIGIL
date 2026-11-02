@@ -91,9 +91,11 @@ fn tokens(mut raw: &[u8]) -> Vec<&[u8]> {
     out
 }
 
+type EnvironmentToken = (Vec<u8>, Result<Vec<u8>, ()>);
+
 /// Return None for unrelated keys. Return an Unknown payload for a recognizable allowlisted
 /// name whose assignment syntax is unsupported, including a missing '=' or unclosed quote.
-fn environment_token(raw: &[u8]) -> Option<(Vec<u8>, Result<Vec<u8>, ()>)> {
+fn environment_token(raw: &[u8]) -> Option<EnvironmentToken> {
     let body = if matches!(raw.first(), Some(b'\'' | b'"')) {
         &raw[1..]
     } else {

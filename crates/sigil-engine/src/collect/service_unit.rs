@@ -182,9 +182,11 @@ fn collect_with(
         // It may carry the raw file name.
         ReadOutcome::Failed(m) => return Err(fail(&UntrustedText::new(m).terminal_line())),
     }
-    let (Some(instance), Some(artifact)) = (read.instance, read.artifact) else {
+    let (Some(mut instance), Some(artifact)) = (read.instance, read.artifact) else {
         return Err(fail("not read"));
     };
+    // The published root is the unit file, not SafeFs's private parent directory.
+    instance.path_proof = None;
     match instance.stability {
         Stability::NoChangeDetected => {}
         Stability::ChangedDuringRead => return Err(fail("changed during the read")),
