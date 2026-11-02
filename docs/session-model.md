@@ -70,7 +70,7 @@ insufficient, and evidence that settles the other way contradicts the condition.
 | `Behavior` | a `rule_support` entry, by profile, rule, and slice | `ReferenceVerified`, `TargetVerified`, `Assumed` accepted by policy | never (a refuted rule is a `ProfileMismatch`) | `FeatureMatch`, `Assumed` not accepted |
 | `Load` | one fact of a `loads` entry, by file and context | `Yes` | `No` | `Unknown`, or a basis that is not sufficient, or unresolved premises |
 | `Access` | one capability of an `access` entry | `UntrustedHolder` | `TrustedOnly` | `Undetermined` |
-| `Value` | a `values` entry, and the state needed (`Known` or `Absent`) | the needed state | the other state | `Unknown`, or a `Configured` origin (never an effective value) |
+| `Value` | a `values` entry, and the state needed (`Known` or `Absent`) | the needed state | the other state | `Unknown`, a `Configured` origin, or an `InitialEnvironment` read for a current-environment condition |
 | `Binding` | a `bindings` entry, by role, call site, and analyzed definer | `Verified`, `Assumed` accepted by policy | `Mismatch` | `Unknown`, `Assumed` not accepted |
 | `Identity` | a `components` entry, by slice and component | `ReferenceMatched` | never | any other status |
 | `Observed` | facts: artifacts, instances, configuration, processes | either way, with at least one fact | either way | no fact, or a code, value, or access reference (those have their own kinds) |
@@ -79,7 +79,9 @@ A basis is sufficient when it is observed, derived, a rule support that settles 
 assumption accepted by policy.
 
 Insufficient evidence makes the condition `Unknown { reason: InsufficientEvidence, evidence }`.
-The rule then yields an open question at most.
+The rule then yields an open question at most. A Known or Absent `InitialEnvironment` value
+never settles a current-environment condition: `/proc/<pid>/environ` is an initial exec
+observation, not a current getenv result.
 
 ## What `Session::validate` checks
 
@@ -289,6 +291,40 @@ The rule then yields an open question at most.
   - `Incomplete` names exactly the required checks that are not closed and the open questions treated as gaps;
   - `Complete` requires every required check to have coverage, all of it closing.
 
+- **Dependency candidates and values (PR-4d-3, DV1–DV19):** detailed observed sources,
+  candidate contexts and new check commitments obey the following invariants. Legacy records
+  without those additions keep their previous behavior. Structural validation checks internal
+  consistency, including exact recorded path reachability and search-rule sources. Collector
+  and analyzer tests establish producer guarantees; validation does not attest observation
+  truth, reproduce every host-loader stage, or re-collect anything.
+
+| ID | Invariant | Rejection example |
+|---|---|---|
+| DV1 | A detailed observed value is in observe mode, source Proc, with a recorded full ProcessRef | a static value uses InitialEnvironment |
+| DV2 | Cwd reads require Cwd keys, EffectiveUid User keys, EffectiveGid Group keys, InitialEnvironment allowlisted Env keys | EffectiveUid on Group |
+| DV3 | InitialEnvironment requires request.observe_env; only a complete read produces Absent | environment observation under opt-out |
+| DV4 | Detailed observation role is the process's known runtime role or an `observed:<64 lowercase hex>` label; no child semantic role is inferred | parent runtime role assigned to unrelated descendant values |
+| DV5 | A contextual Candidate's requester is a stable read placement of from's artifact/slice | from names another file's slice |
+| DV6 | Its needed name is declared by that ELF; its terminal candidate is stable/read compatible ET_DYN | SONAME-only or wrong machine match |
+| DV7 | ABI metadata is present on both sides and all three fields agree; x86_64/aarch64 slice labels agree with e_machine | Arch::Other accidentally equals another machine |
+| DV8 | loader_chain is ordered, nonempty, unique, ends at requester and consists of compatible stable ELF placements connected by locally valid exact-prefix contextual Candidates of the same process/static context | unrelated ancestors or mutually self-certifying longer chains |
+| DV9 | process=None implies no contextual values; process=Some references a recorded process | orphan process context |
+| DV10 | Contextual values are the exact required source-witness input set, belong to the full process identity and are unique per recorded key; only qualified Cwd and LD_LIBRARY_PATH are allowed | unused/ambiguous values or another worker's initial environment |
+| DV11 | LdLibraryPath needs Known initial LD_LIBRARY_PATH under opt-in; configured/Unknown/Absent values cannot supply a directory | Configured setting silently used as effective startup env |
+| DV12 | Newly required values.observed has an audit entry and an entry for every recorded process; known outside holders are OutOfScope while maybe-runtime holders stay Partial | a no-listener descendant disappears from value coverage |
+| DV13 | With known recorded process and observer mount namespaces, a decided mapping namespace comparison agrees with their equality | same namespace recorded but mapping says No |
+| DV14 | Every attached path_proof has a published containing directory root, exact ordered normal parent names, stable own placement semantics and at most 40 parents; missing proof supplies no ancestors | a fabricated root, dot component or truncated parent list |
+| DV15 | A contextual Candidate is reachable from its reconstructed lookup path through shared recorded directory/link evidence, with exact terminal InstanceId membership; DirectPath additionally requires raw slash and matching reconstructed search_dir | search_dir=/opt/other while candidate=/opt/ollama/libfoo.so |
+| DV16 | Validation builds borrowed process/value/coverage/declaration/path/source-component indexes once; per-candidate checks use direct components and bounded paths; prefix grounding sorts once then walks a trie | a candidate loop rescans whole tables/settings or every adjacency scans all Candidates |
+| DV17 | Context.search agrees with via and derives exact search_dir from the indicated ELF entry/owner, shared default or selected initial value | Runpath with no DT_RUNPATH, /usr/local labeled DefaultDir |
+| DV18 | Each prefix edge is backed by a locally valid detailed Candidate with that exact ordered prefix and full process/static identity; process roots match recorded executable and observer namespace | declaration-only ancestor, invalid parent or a legacy Candidate supplies ancestry |
+| DV19 | Complete consistent normal parent facts may be shared across stable in-root leaves without claiming per-leaf traversal binding | A's proof repairs missing parent observations, but cannot repair unstable B or conflicting parent IDs |
+
+The exact observation-label digest is a producer guarantee (SHA-256 of the serialized full
+ProcessRef); validation checks the `observed:<64 lowercase hex>` shape and known role
+membership. ProcessRef remains the authoritative identity. Similarly, environment absence
+needs a complete producer read; structural checks cannot prove the recorded stream truthful.
+
 It does **not**:
 - evaluate policy, derive required checks, or decide whether a `NotPresent` basis is acceptable
   for a particular check;
@@ -303,12 +339,23 @@ the outcome from a policy: see [`docs/policy.md`](policy.md).
 ## Validation cost
 
 Validation builds borrowed indexes once per call for roots, artifacts, slices, instances,
-binary facts, import names, dependency declarations, all three input coverage checks, and fat
+binary facts, import names, dependency declarations, input coverage checks, and fat
 Mach-O architectures. Membership-only indexes use the standard library's randomized hash
 maps/sets, with capacity reserved from the session. Checks share those indexes instead of
 repeatedly building the same ID sets or walking the whole session. Sorted traversal remains
 where diagnostics depend on it. For repeated binary inputs of fixed size, these paths take
 expected O(N log N) work and O(N) auxiliary space; they no longer do O(N²) lookups.
+
+For detailed dependency/value records, the same index also borrows full ProcessRefs, ValueIds,
+observed process/key occurrence counts, roles, listeners and check/scope coverage summaries.
+It indexes raw ELF/source component offsets once and builds the shared pure `PathIndex` once.
+Generation and validation use that resolver for normal parents, symlinks and exact terminal
+InstanceId membership. Per-candidate checks use direct source components and bounded path
+walks instead of rescanning all values, settings or candidates. Grounding contextual chains
+sorts R relations once by chain length and walks a prefix trie: O(R log R + L), for L total
+chain references. Diagnostic order remains the original relation order. Fixed path limits
+(40 normal parents, 40 link hops, 65,536 bytes and 256 lookup components) apply to saved JSON
+as well as generated sessions.
 
 The hot path also avoids diagnostic strings on success, cloned call lists, and temporary
 per-input collections. Empty/singleton function, call, and capability tables stay inline;
@@ -642,8 +689,9 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
   discovered by `Argument` (named on the command line).
 - **Coverage.** Each input has one `binary.container` entry, scope `Instance`: its status
   (B9 above), and one `binary.identity` entry (S1 above). Under the default policy, the request's
-  audit is `binary`. Without code analysis, its required checks are `binary.container` and
-  `binary.identity`. With code analysis, each input also has one `binary.code` entry (below).
+  audit is `binary`. Without code analysis, its required checks are `binary.container`,
+  `binary.identity`, and `binary.dependencies`. With code analysis, each input also has one
+  `binary.code` entry (below).
   `request.budgets` holds `binary_scan_bytes` (default 64 MiB).
 - **Facts.** An ELF or Mach-O input's facts are `BinaryFacts` records and their `Declares`
   relations, as for an installation. A fat Mach-O has one record per valid architecture slice.
@@ -673,8 +721,9 @@ the input implies (C3, `expected_binary_code`):
   a change or a removal, or `Unsupported` with `not a supported ELF or Mach-O container`;
 - **`Unsupported` with `code analysis: x86-64 ELF64 little-endian only` (`CODE_UNSUPPORTED`),
   with no budget**, for a container whose code is not analyzed: a Mach-O or fat file, an ELF of
-  another machine, and an x32 or big-endian ELF. The model records no ELF class or byte order, so
-  an x32 or big-endian ELF has the arch `x86_64`, and this state is admitted for it too;
+  another machine, and an x32 or big-endian ELF. `ElfFacts.abi` records class, byte order and
+  machine when available; legacy facts can omit it.
+  An x32 or big-endian ELF can still have the arch `x86_64`, and this state is admitted for it too;
 - **`Complete` or `Partial`, with the budget `binary_code_bytes`**: its `used` (the bytes read for
   code) and its `limit` (the request's). `Partial { missing }` lists the gaps. A container with
   gaps of its own is still analyzed. An input whose slice was not parsed is `Partial` with
@@ -815,7 +864,9 @@ synthetic. It shows:
   relocation, with three constant arguments;
 - `binary.code` `Complete`, with the 78 bytes read for code.
 
-`crates/sigil-model/tests/docs.rs` checks it as it checks the example above.
+`crates/sigil-model/tests/docs.rs` checks it as it checks the example above. The preserved
+example predates PR-4d-3's expanded catalog; a new inspection also requires
+`binary.dependencies`.
 
 ```json
 {
@@ -900,9 +951,51 @@ database, so the engine decides it; `validate` checks the other four statuses, t
 `Conflicting` claim has two identity assertions or versions at least, and I1. `Required`
 assertions come in a later PR, and code checks with M1 profiles.
 
+## Dependency and value provenance (PR-4d-3)
+
+[Dependency candidates and process values](dependencies-and-values.md) describes the search,
+configured-value and observation boundaries. A detailed `Relation::Candidate.context` names
+the requester placement, search directory, optional full ProcessRef, exact input ValueIds and
+ordered loader chain. Its `DependencyContext.search` is mandatory: one of `DirectPath`,
+`DefaultDir { index }`, `Runpath { entry, component }`,
+`Rpath { owner, entry, component }`, or `LdLibraryPath { value, component }`. Indices are zero
+based against recorded bytes. The witness must derive the exact search directory, agree with
+`via`, and refer to the actual setting owner or value. A legacy Candidate can omit the entire
+context; a new context cannot omit its search witness.
+
+`FileInstance.path_proof` is an optional `RecordedPathProof`: the published directory root's
+`root_dev`/`root_ino` followed by ordered `RecordedDirectory { name, dev, ino }` parents. These
+are the normal root-relative directories actually checked by no-follow traversal, excluding
+the root and final leaf. Names are exact nonempty components without dot, dotdot, slash or
+NUL; at most 40 parents are recorded. The leaf's identity is its own stat. Named-file roots
+keep `None` and authorize only their exact endpoint. A followed alias's terminal stat cannot
+stand in for the link's own identity.
+
+Complete consistent parent observations may be shared with another stable in-root leaf that
+has no proof of its own. This is composed snapshot evidence, not a claim that the second leaf
+was read through the first leaf's observed parent-fd chain. Missing parent observations,
+conflicting identities, unstable leaves and foreign-root records remain gaps. Directory
+FileInstances and own symlinks retain their own observation semantics; no inferred directory
+instances or dependency-triggered reads are added. Proofs are observations, not attestations
+or atomic snapshots.
+
+`ValueOrigin::ObservedProcess.read` identifies `Cwd`, `EffectiveUid`, `EffectiveGid` or
+`InitialEnvironment`; missing legacy detail is `None`. A detailed value belongs to its full
+ProcessRef. Descendants retain no inferred role or inherited environment. Initial environment
+Known/Absent values may qualify startup candidate inputs but never current-environment
+conditions. `ProcessObs.mnt_ns` records the process's own mount-namespace observation, separate
+from mapping records; unavailable evidence cannot authorize host-path interpretation.
+
+[Example 21](../schemas/examples/session-v1/21-deps-values.json) contains 37 values and three
+contextual candidates. It is a focused evidence example, not a full current-catalog inspection.
+Markdown and HTML escape source witnesses and input text. AI-BOM retains its summary/session
+digest boundary: raw values and dependency relations remain in session JSON.
+
 ## Fields added to `sigil-session/1`
 
-A field added after sessions without it were written is optional on read, so those sessions still load. A missing one reads as what such a session did: an empty list, `false`, or `NotRead` (the table). SIGIL always writes it, so a session it writes has every field.
+A field added after sessions without it were written is optional on read, so those sessions
+still load. Missing fields read as an empty list, `false`, `NotRead`, or `None` (the table).
+Some are always written; empty lists and optional `None` additions may be omitted as described below.
 
 | Field | Added in | Missing reads as |
 |---|---|---|
@@ -914,16 +1007,28 @@ A field added after sessions without it were written is optional on read, so tho
 | `binaries[].container.Elf.returns` | PR-4c-2b | `[]` (no returned value read) |
 | `binaries[].container.MachO.imports` | PR-4c-3b | `[]` (no import read) |
 | `processes[].maps_read` | PR-4d-2 | `NotRead` (`maps` not read) |
+| `ElfFacts.abi` (`binaries[].container.Elf.abi`) | PR-4d-3 | `None` (ABI unavailable) |
+| `ProcessObs.mnt_ns` (`processes[].mnt_ns`) | PR-4d-3 | `None` (no coherent namespace observation) |
+| `ValueOrigin.ObservedProcess.read` (`values[].origin.ObservedProcess.read`) | PR-4d-3 | `None` (legacy source detail) |
+| `Relation.Candidate.context` (`relations[].Candidate.context`) | PR-4d-3 | `None` (legacy candidate) |
+| `FileInstance.path_proof` (`instances[].path_proof`) | PR-4d-3 | `None` (no recorded parent proof) |
 
-The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
+The schema leaves these backward-compatible additions out of `required`. New definitions
+have their own required fields: `DependencyContext.search` is mandatory in both the schema
+and serde when the new context object is present.
+The five PR-4d-3 optional outer fields all default to `None` and are omitted when `None`.
 
-`reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` are the exceptions to
-"always writes it": SIGIL writes them only when they have entries, so a session without
-`--install-dir` keeps its bytes, and an earlier SIGIL still reads it.
+`reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` are written only
+when they have entries. The new optional outer fields are written only when present; legacy
+missing fields do not become fabricated evidence on read.
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
 - An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`. A build from before PR-4d-1 refuses a session from `--service-unit`: its unit is discovered by `Argument` outside a binary root. A build from before PR-4d-2 refuses a session that records a process, since each one has `maps_read`; it reads any other, since the other types existed, but checks less of it. A validation rule can refuse one too: by C6, a build from before #105 refuses a session with a `cxx.*` hint on a Mach-O import bound to `/usr/lib/libc++.1.dylib`.
+- A pre-PR-4d-3 reader can reject the new ABI, namespace, read, context and proof fields and
+  DirectPath variant. Current readers still load and render old sessions. Policy compatibility
+  is separate: the expanded check catalog and changed built-in policy digest can make current
+  verification refuse an old decision ([policy](policy.md#the-default-policy)).
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet

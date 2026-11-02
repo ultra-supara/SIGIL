@@ -62,6 +62,7 @@ fn example_12_is_the_claim_the_engine_derives_from_its_facts() {
     let facts = BinaryFacts {
         slice: session.components[0].subject.clone(),
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             // No SONAME: one would add a self-name the example does not have.
             soname: None,

@@ -8,9 +8,10 @@
 use std::collections::VecDeque;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
+use super::read::Snapshot;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, Stat};
 use rustix::io::Errno;
-use sigil_model::{LinkHop, UntrustedText};
+use sigil_model::{LinkHop, RecordedDirectory, RecordedPathProof, UntrustedText};
 
 use super::path::{link_target, LinkTarget, RelPath};
 use super::SafeFs;
@@ -53,6 +54,39 @@ pub(crate) enum End {
     Failed(String),
 }
 
+/// Complete root-to-parent identities captured by a strict no-follow traversal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StrictTrace {
+    root: (u64, u64),
+    // Internal complete trace, including beyond the serialized proof cap. This is metadata
+    // from the already traversed path; it is not an expansion of discovery.
+    parents: Vec<(String, (u64, u64))>,
+}
+impl StrictTrace {
+    pub(crate) fn proof(&self) -> Option<RecordedPathProof> {
+        if self.parents.len() > sigil_model::dependency_path::MAX_PROOF_PARENTS {
+            return None;
+        }
+        Some(RecordedPathProof {
+            root_dev: self.root.0,
+            root_ino: self.root.1,
+            parents: self
+                .parents
+                .iter()
+                .map(|(name, (dev, ino))| RecordedDirectory {
+                    name: UntrustedText::new(name),
+                    dev: *dev,
+                    ino: *ino,
+                })
+                .collect(),
+        })
+    }
+}
+fn identity(st: &Stat) -> (u64, u64) {
+    let s = Snapshot::of(st);
+    (s.dev, s.ino)
+}
+
 /// The result of resolving a path without following any symlink ([`SafeFs::resolve_strict`]).
 pub(crate) enum Strict {
     /// The last component, by its own `lstat` (a symlink included, not followed): `parent` is the
@@ -61,6 +95,7 @@ pub(crate) enum Strict {
         parent: Option<OwnedFd>,
         name: String,
         lstat: Stat,
+        trace: StrictTrace,
     },
     /// The path is the root itself.
     Root,
@@ -137,6 +172,14 @@ impl SafeFs {
         let Some((last, dirs)) = parts.split_last() else {
             return Strict::Root;
         };
+        let root_stat = match rustix::fs::fstat(self.roots[root].fd.as_fd()) {
+            Ok(st) => st,
+            Err(e) => return Strict::from_errno(e),
+        };
+        let mut trace = StrictTrace {
+            root: identity(&root_stat),
+            parents: vec![],
+        };
         let mut stack: Vec<(String, OwnedFd)> = vec![];
         for name in dirs {
             if name == "." || name == ".." {
@@ -156,7 +199,21 @@ impl SafeFs {
                     };
                 }
                 FileType::Directory => match self.open_dir(parent, name) {
-                    Ok(fd) => stack.push((name.clone(), fd)),
+                    Ok(fd) => {
+                        let opened = match rustix::fs::fstat(&fd) {
+                            Ok(st) => st,
+                            Err(e) => return Strict::from_errno(e),
+                        };
+                        if FileType::from_raw_mode(opened.st_mode) != FileType::Directory
+                            || identity(&opened) != identity(&lstat)
+                        {
+                            return Strict::Failed(
+                                "a directory changed between lstat and no-follow open".into(),
+                            );
+                        }
+                        trace.parents.push((name.clone(), identity(&opened)));
+                        stack.push((name.clone(), fd));
+                    }
                     Err(e) => return Strict::from_errno(e),
                 },
                 _ => return Strict::NotADirectory,
@@ -168,6 +225,7 @@ impl SafeFs {
                 parent: stack.pop().map(|(_, fd)| fd),
                 name: last.clone(),
                 lstat,
+                trace,
             },
             Err(e) => Strict::from_errno(e),
         }

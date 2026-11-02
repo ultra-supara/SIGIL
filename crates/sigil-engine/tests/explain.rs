@@ -48,7 +48,9 @@ fn session(store: &Path, fake: &FakeProc) -> Session {
 
 fn session_with(store: &Path, fake: &FakeProc, active: &ActiveInput) -> Session {
     let req = ObserveRequest {
+        observe_env: false,
         store: StoreRequest {
+            deps_budgets: Default::default(),
             models_dir: store.to_path_buf(),
             model_filter: None,
             budgets: FsBudgets::default(),

@@ -1078,6 +1078,7 @@ fn binary_inspection(path: &Path) -> sigil_model::Session {
     let observation = observation();
     binary_session(
         &BinaryRequest {
+            deps_budgets: Default::default(),
             paths: vec![path.to_path_buf()],
             budgets: NamedBudgets::default(),
         },
@@ -1098,6 +1099,7 @@ fn install_inspection(directory: &Path) -> sigil_model::Session {
     let observation = observation();
     store_session(
         &StoreRequest {
+            deps_budgets: Default::default(),
             models_dir: models.path().to_path_buf(),
             model_filter: None,
             budgets: FsBudgets::default(),

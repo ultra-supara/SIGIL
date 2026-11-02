@@ -7,7 +7,7 @@
 use std::borrow::Borrow;
 use std::collections::{hash_map::Entry, BTreeMap, HashMap, HashSet};
 
-use crate::artifact::{Artifact, FileInstance, Slice};
+use crate::artifact::{Artifact, FileInstance, ProcessObs, ProcessRef, Slice};
 use crate::binary::{macho_architecture, BinaryFacts, ContainerFacts, LookedUp};
 use crate::binary_input::{
     is_binary_root, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY, NAME_AND_HASH_ONLY,
@@ -15,6 +15,8 @@ use crate::binary_input::{
 use crate::coverage::Coverage;
 use crate::evidence::Ref;
 use crate::id::SliceId;
+use crate::listener::ListenerOwner;
+use crate::load::{ProcessValue, TriValue, ValueKey, ValueOrigin};
 use crate::relation::{DeclKind, Relation};
 use crate::session::{ScanRoot, Session};
 use crate::text::UntrustedText;
@@ -86,8 +88,12 @@ impl<'a, T> Occurrences<'a, T> {
     }
 }
 
-fn record<'a, T>(map: &mut HashMap<&'a str, Occurrences<'a, T>>, id: &'a str, value: &'a T) {
-    map.entry(id)
+fn record<'a, K: Eq + std::hash::Hash, T>(
+    map: &mut HashMap<K, Occurrences<'a, T>>,
+    key: K,
+    value: &'a T,
+) {
+    map.entry(key)
         .and_modify(|entry| entry.count += 1)
         .or_insert(Occurrences {
             first: value,
@@ -109,8 +115,58 @@ fn first<'a, T>(
     }
 }
 
+// Keep ValueKey's public derives unchanged. Hash only the borrowed view used here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ObservedKey<'a> {
+    Env(&'a UntrustedText),
+    Cwd,
+    User,
+    Group,
+}
+
+impl<'a> ObservedKey<'a> {
+    pub fn of(key: &'a ValueKey) -> Self {
+        match key {
+            ValueKey::Env(name) => Self::Env(name),
+            ValueKey::Cwd => Self::Cwd,
+            ValueKey::User => Self::User,
+            ValueKey::Group => Self::Group,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ObservedValues<'a> {
+    pub count: usize,
+    pub has_unknown: bool,
+    pub keys: HashMap<ObservedKey<'a>, Occurrences<'a, ProcessValue>>,
+}
+
+// Deterministic indexed query charges in private unit tests; absent in production.
+// A charge is nominal, including short-circuited misses, not measured CPU/hash work.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct DependencyIndexWork {
+    pub build_rows: usize,
+    pub lookup_steps: std::cell::Cell<usize>,
+}
+
 #[derive(Default)]
 pub(crate) struct SessionIndex<'a> {
+    pub dependency_paths: crate::dependency_path::PathIndex<'a>,
+    pub search_parts: crate::dependency_search::SearchPartsIndex<'a>,
+    pub process_observations: HashMap<&'a ProcessRef, &'a ProcessObs>,
+    pub process_roles: HashSet<(&'a ProcessRef, &'a crate::id::ProcessRole)>,
+    pub process_values: HashMap<&'a str, &'a ProcessValue>,
+    pub observed_values: HashMap<&'a ProcessRef, ObservedValues<'a>>,
+    pub listener_processes: HashSet<&'a ProcessRef>,
+    pub required_checks: HashSet<&'a str>,
+    pub coverage_by_check: HashMap<&'a str, Vec<&'a Coverage>>,
+    pub coverage_occurrences: HashMap<&'a str, HashMap<&'a Ref, Occurrences<'a, Coverage>>>,
+    pub elf_declarations: HashMap<&'a str, HashSet<&'a UntrustedText>>,
+    #[cfg(test)]
+    pub dependency_work: DependencyIndexWork,
+
     pub roots: HashMap<&'a str, &'a ScanRoot>,
     pub artifacts: HashMap<&'a str, &'a Artifact>,
     pub instances: HashMap<&'a str, &'a FileInstance>,
@@ -170,6 +226,11 @@ impl<'a> SessionIndex<'a> {
             containers: HashMap::with_capacity(coverage_counts[0]),
             code_coverage: HashMap::with_capacity(coverage_counts[1]),
             identity_coverage: HashMap::with_capacity(coverage_counts[2]),
+            dependency_paths: crate::dependency_path::PathIndex::new(
+                &s.request.roots,
+                &s.instances,
+            ),
+            search_parts: crate::dependency_search::SearchPartsIndex::new(&s.binaries, &s.values),
             ..Self::default()
         };
         for root in &s.request.roots {
@@ -289,6 +350,7 @@ impl<'a> SessionIndex<'a> {
                     .push((*kind, needed));
             }
         }
+        index.dependency_value_indexes(s);
         index
     }
 }
@@ -338,5 +400,157 @@ impl<'a> SessionLookup<'a> {
                 })
             }
         }
+    }
+}
+
+impl<'a> SessionIndex<'a> {
+    fn note_dependency_build(&mut self) {
+        #[cfg(test)]
+        {
+            self.dependency_work.build_rows += 1;
+        }
+    }
+
+    fn note_dependency_lookup(&self, steps: usize) {
+        #[cfg(test)]
+        {
+            self.dependency_work
+                .lookup_steps
+                .set(self.dependency_work.lookup_steps.get() + steps);
+        }
+        #[cfg(not(test))]
+        let _ = steps;
+    }
+
+    fn dependency_value_indexes(&mut self, s: &'a Session) {
+        for process in &s.processes {
+            self.note_dependency_build();
+            // Match the original .find: the first full ProcessRef wins, including its roles.
+            if let Entry::Vacant(entry) = self.process_observations.entry(&process.process) {
+                entry.insert(process);
+                for role in &process.roles {
+                    self.process_roles.insert((&process.process, role));
+                }
+            }
+        }
+        for value in &s.values {
+            self.note_dependency_build();
+            self.process_values
+                .entry(value.id.as_str())
+                .or_insert(value);
+            if let ValueOrigin::ObservedProcess { process, .. } = &value.origin {
+                let rows = self.observed_values.entry(process).or_default();
+                rows.count += 1;
+                rows.has_unknown |= matches!(value.value, TriValue::Unknown { .. });
+                // Include duplicate IDs/keys and legacy read=None rows in the count. They must
+                // still defeat Complete, exactly as the original collected Vec did.
+                record(&mut rows.keys, ObservedKey::of(&value.key), value);
+            }
+        }
+        for coverage in &s.coverage {
+            self.note_dependency_build();
+            record(
+                self.coverage_occurrences
+                    .entry(coverage.check.as_str())
+                    .or_default(),
+                &coverage.scope,
+                coverage,
+            );
+            self.coverage_by_check
+                .entry(coverage.check.as_str())
+                .or_default()
+                .push(coverage);
+        }
+        for check in &s.request.required_checks {
+            self.note_dependency_build();
+            self.required_checks.insert(check.as_str());
+        }
+        for listener in &s.listeners {
+            self.note_dependency_build();
+            if let ListenerOwner::Process { process } = &listener.owner {
+                self.listener_processes.insert(process);
+            }
+        }
+        for relation in &s.relations {
+            self.note_dependency_build();
+            // Leave the existing declarations Vec index intact: its callers retain order and
+            // duplicates. This separate index answers ElfNeeded membership only.
+            if let Relation::Declares {
+                from,
+                needed,
+                kind: DeclKind::ElfNeeded,
+            } = relation
+            {
+                self.elf_declarations
+                    .entry(from.as_str())
+                    .or_default()
+                    .insert(needed);
+            }
+        }
+    }
+
+    pub fn process_observation(&self, process: &ProcessRef) -> Option<&'a ProcessObs> {
+        self.note_dependency_lookup(1);
+        self.process_observations.get(process).copied()
+    }
+
+    pub fn process_has_role(&self, process: &ProcessRef, role: &crate::id::ProcessRole) -> bool {
+        self.note_dependency_lookup(1);
+        self.process_roles.contains(&(process, role))
+    }
+
+    pub fn process_value(&self, id: &str) -> Option<&'a ProcessValue> {
+        self.note_dependency_lookup(1);
+        self.process_values.get(id).copied()
+    }
+
+    pub fn has_elf_declaration(&self, from: &str, needed: &UntrustedText) -> bool {
+        self.note_dependency_lookup(2);
+        self.elf_declarations
+            .get(from)
+            .is_some_and(|names| names.contains(needed))
+    }
+
+    pub fn new_check(&self, check: &str) -> bool {
+        self.note_dependency_lookup(2);
+        self.required_checks.contains(check) || self.coverage_by_check.contains_key(check)
+    }
+
+    pub fn coverage_occurrence(
+        &self,
+        check: &str,
+        scope: &Ref,
+    ) -> Option<&Occurrences<'a, Coverage>> {
+        self.note_dependency_lookup(2);
+        self.coverage_occurrences.get(check)?.get(scope)
+    }
+
+    pub fn observed_summary(&self, process: &ProcessRef) -> Option<&ObservedValues<'a>> {
+        self.note_dependency_lookup(1);
+        self.observed_values.get(process)
+    }
+
+    pub fn observed_key_occurrence<'b>(
+        &'b self,
+        process: &ProcessRef,
+        key: &'b ValueKey,
+    ) -> Option<&'b Occurrences<'a, ProcessValue>> {
+        self.note_dependency_lookup(2);
+        self.observed_values
+            .get(process)?
+            .keys
+            .get(&ObservedKey::of(key))
+    }
+
+    pub fn listener_holds_process(&self, process: &ProcessRef) -> bool {
+        self.note_dependency_lookup(1);
+        self.listener_processes.contains(process)
+    }
+
+    pub fn coverage_for_check(&self, check: &str) -> impl Iterator<Item = &'a Coverage> + '_ {
+        self.coverage_by_check
+            .get(check)
+            .into_iter()
+            .flat_map(|rows| rows.iter().copied())
     }
 }

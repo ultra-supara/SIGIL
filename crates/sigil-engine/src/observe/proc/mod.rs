@@ -47,9 +47,26 @@
 //! Every entry read is in the C-6 allowlist: `net/tcp{,6}`, the proc root's directory,
 //! `self/ns/{net,mnt}`, and, per process, `comm`, `cmdline`, `stat`, `exe` (`readlinkat`, and
 //! `stat` through it), `maps`, `ns/net`, `ns/mnt`, `fd`, and `fd/<n>`. No link but `exe` is
-//! followed, and nothing it leads to is opened.
+//! followed, and nothing it leads to is opened. Value collection adds only `cwd` readlink
+//! (never a target open or stat), bounded `status` open/read, and bounded `environ` open/read
+//! only with [`observe_values`]' explicit environment opt-in. The old [`observe`] wrapper
+//! never opens `environ`. Values retain only effective numeric Uid/Gid fields and allowlisted,
+//! minimized initial environment entries; this is not a current `getenv` observation.
+//!
+//! Value reads follow `maps` inside the same executable/stat validation window. A failed
+//! image guard invalidates the batch as Unknown; even equally refused executable identities
+//! cannot authorize Known/Absent values. Any incomplete, malformed, or duplicate environment
+//! stream invalidates all of its Env rows, including completed entries and absence queries.
+//! Source and budget diagnostics are recorded separately without raw environment text.
+//!
+//! These reads are not an atomic snapshot: cwd, credentials and namespaces may change without
+//! exec, and a namespace sample does not freeze that namespace during other reads. The checks
+//! cannot detect same-file/same-argv exec when compared stack addresses do not move or are
+//! hidden, or an exec away and back between sampled checks.
 
 pub mod parse;
+mod values;
+use values::ValueBatch;
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -60,8 +77,8 @@ use rustix::fs::{AtFlags, Mode, OFlags};
 use rustix::io::Errno;
 use sigil_model::{
     Basis, Listener, ListenerId, ListenerOwner, MappingObs, MapsRead, NotObservable, NsInode,
-    ObsSource, Observability, ProcessExe, ProcessObs, ProcessRef, ProcessRole, Protocol, Timestamp,
-    Tri, UnknownReason, UntrustedText,
+    ObsSource, Observability, ProcessExe, ProcessObs, ProcessRef, ProcessRole, ProcessValue,
+    Protocol, Timestamp, Tri, UnknownReason, UntrustedText,
 };
 
 /// The role of the runtime's server process.
@@ -94,6 +111,14 @@ pub struct ProcBudgets {
     /// not count, and one dropped later (an exec or an exit seen) does (code review of PR-4d-2,
     /// R-D).
     pub max_maps_entries: u64,
+    /// Bytes read from each process status.
+    pub max_status_bytes: u64,
+    /// Initial environment bytes per opted-in process.
+    pub max_environ_bytes: u64,
+    /// Initial environment bytes shared across this opted-in observation.
+    pub max_environ_total_bytes: u64,
+    /// Value record attempts shared across all selected processes.
+    pub max_process_values: u64,
 }
 
 impl Default for ProcBudgets {
@@ -105,6 +130,10 @@ impl Default for ProcBudgets {
             max_maps_bytes: 16 << 20,
             max_maps_total_bytes: 256 << 20,
             max_maps_entries: 65_536,
+            max_status_bytes: 65_536,
+            max_environ_bytes: 1_048_576,
+            max_environ_total_bytes: 33_554_432,
+            max_process_values: 65_536,
         }
     }
 }
@@ -119,6 +148,16 @@ pub struct ProcFacts {
     pub listeners: Vec<Listener>,
     /// SIGIL's own network namespace.
     pub own_net_ns: Option<u64>,
+    /// The separately sampled `self/ns/mnt` used during this observation.
+    pub own_mnt_ns: Option<u64>,
+    /// Minimized values bound to recorded process identities.
+    pub values: Vec<ProcessValue>,
+    /// Per-process value read failures, independent of mapping coverage.
+    pub value_details: Vec<ValueDetail>,
+    /// Value discovery/retention gaps without a recorded process.
+    pub value_gaps: Vec<String>,
+    /// Recorded listener holders proven outside the selected runtime tree.
+    pub value_outside: Vec<ProcessRef>,
     /// Whether the process list was read to its end within its budget, or why not:
     /// `PermissionDenied` when it could not be read for want of permission, `ReadIncomplete` for
     /// its budget or another read error. Each case is also a gap.
@@ -141,6 +180,14 @@ pub struct ProcFacts {
     /// Each one's `processes.observed` is `OutOfScope`. A holder that may be the runtime has a
     /// [`Detail`] instead.
     pub outside: Vec<ProcessRef>,
+}
+
+/// Value coverage for one selected or possibly-runtime process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueDetail {
+    pub process: ProcessRef,
+    pub denied: bool,
+    pub missing: Vec<String>,
 }
 
 /// What the second pass read of one runtime or descendant, beyond its `ProcessObs`; or, for a
@@ -177,6 +224,9 @@ struct Ctx<'a> {
     when: When<'a>,
     budgets: ProcBudgets,
     own_mnt_ns: Option<u64>,
+    observe_env: bool,
+    environ_left: Cell<u64>,
+    values_left: Cell<u64>,
     /// The bytes of `maps` still to be read in this observation (`max_maps_total_bytes`).
     maps_left: Cell<u64>,
     /// The mappings still to be read in this observation (`max_maps_entries`). One read and then
@@ -192,6 +242,8 @@ struct Ctx<'a> {
 enum Stage {
     /// Right after `maps` was read.
     AfterMaps,
+    /// Right after cwd/status/environ, before executable identity is checked again.
+    AfterValues,
     /// Right before the last read, `stat`: after the runtime's `cmdline` was read again.
     BeforeLastStat,
 }
@@ -203,6 +255,7 @@ struct Second {
     mappings: Vec<MappingObs>,
     /// How much of `maps` `mappings` stands for.
     maps_read: MapsRead,
+    mnt_ns: Option<NsInode>,
     detail: Detail,
 }
 
@@ -258,12 +311,27 @@ enum Scan {
 
 /// Reads the process and listener tables under `proc_root` (`/proc` outside tests).
 pub fn observe(proc_root: &Path, at: &Timestamp, boot_id: &str, budgets: ProcBudgets) -> ProcFacts {
-    observe_with(proc_root, at, boot_id, budgets, &|| {}, &|_, _| {})
+    observe_values(proc_root, at, boot_id, budgets, false)
 }
-
-/// As [`observe`], calling `between` after the listing pass and before the second, and `during`
-/// with each process's PID at each `Stage` of the second pass's reads: the tests' way to change a
-/// process meanwhile.
+/// Observe process values, reading allowlisted initial environment only when opted in.
+pub fn observe_values(
+    proc_root: &Path,
+    at: &Timestamp,
+    boot_id: &str,
+    budgets: ProcBudgets,
+    observe_env: bool,
+) -> ProcFacts {
+    observe_values_with(
+        proc_root,
+        at,
+        boot_id,
+        budgets,
+        observe_env,
+        &|| {},
+        &|_, _| {},
+    )
+}
+#[cfg(test)]
 fn observe_with(
     proc_root: &Path,
     at: &Timestamp,
@@ -272,10 +340,28 @@ fn observe_with(
     between: &dyn Fn(),
     during: &dyn Fn(Stage, u32),
 ) -> ProcFacts {
+    observe_values_with(proc_root, at, boot_id, budgets, false, between, during)
+}
+
+/// Observation with deterministic test hooks between and during the two passes.
+fn observe_values_with(
+    proc_root: &Path,
+    at: &Timestamp,
+    boot_id: &str,
+    budgets: ProcBudgets,
+    observe_env: bool,
+    between: &dyn Fn(),
+    during: &dyn Fn(Stage, u32),
+) -> ProcFacts {
     let mut facts = ProcFacts {
         processes: vec![],
         listeners: vec![],
         own_net_ns: None,
+        own_mnt_ns: None,
+        values: vec![],
+        value_details: vec![],
+        value_gaps: vec![],
+        value_outside: vec![],
         process_list: Observability::Observed,
         pid1_visible: false,
         gaps: vec![],
@@ -301,6 +387,7 @@ fn observe_with(
     let own_mnt_ns = rustix::fs::readlinkat(root, "self/ns/mnt", Vec::new())
         .ok()
         .and_then(|link| parse::link_inode(link.as_bytes(), "mnt"));
+    facts.own_mnt_ns = own_mnt_ns;
     let when = When { at, boot_id };
     let rows = read_tables(root, budgets, &mut facts.gaps);
     let listening: BTreeSet<u64> = rows.iter().map(|(_, row)| row.inode).collect();
@@ -419,6 +506,9 @@ fn observe_with(
         own_mnt_ns,
         maps_left: Cell::new(budgets.max_maps_total_bytes),
         entries_left: Cell::new(budgets.max_maps_entries),
+        observe_env,
+        environ_left: Cell::new(budgets.max_environ_total_bytes),
+        values_left: Cell::new(budgets.max_process_values),
         during,
     };
     let observed = descendants(&scanned);
@@ -430,7 +520,8 @@ fn observe_with(
             continue;
         }
         let recorded_exe = recorded.get(&i).map(|obs| &obs.exe);
-        match second(&ctx, s, start_ticks, recorded_exe) {
+        let (pass, batch) = second(&ctx, s, start_ticks, recorded_exe);
+        match pass {
             Pass::Read(read) => {
                 if let Some(obs) = read.obs {
                     recorded.insert(i, obs);
@@ -438,6 +529,7 @@ fn observe_with(
                 if let Some(obs) = recorded.get_mut(&i) {
                     obs.mappings = read.mappings;
                     obs.maps_read = read.maps_read;
+                    obs.mnt_ns = read.mnt_ns;
                 }
                 facts.details.push(read.detail);
             }
@@ -468,6 +560,15 @@ fn observe_with(
                 )),
             },
         }
+        if recorded.contains_key(&i) {
+            facts.value_details.push(batch.detail());
+            facts.values.extend(batch.values);
+        } else {
+            facts.value_gaps.push(format!(
+                "process {}: its values could not be retained because the descendant is not recorded: {}",
+                s.pid, batch.missing.join("; ")
+            ));
+        }
     }
     // Code review of PR-4d-2, R-C: a recorded process outside the runtime's tree holds a
     // listener (`scan`), and the second pass did not read it. One that may be the runtime is a
@@ -489,6 +590,21 @@ fn observe_with(
             RuntimeMatch::Rejected => facts.outside.push(obs.process.clone()),
             // A recorded runtime has a readable parent, so it is always in its own tree. Were it
             // not, it gets no entry, which validation refuses, never `OutOfScope`.
+            RuntimeMatch::Confirmed(_) => {}
+        }
+        match &scanned[*i].runtime {
+            RuntimeMatch::Unknown(why) => {
+                let mut batch = ValueBatch::new(&ctx, obs.process.clone(), &obs.roles);
+                batch.invalidate(
+                    UnknownReason::NotObservable(NotObservable::ReadIncomplete),
+                    &format!(
+                        "the process may be the runtime ({why}); its process values were not read"
+                    ),
+                );
+                facts.value_details.push(batch.detail());
+                facts.values.extend(batch.values);
+            }
+            RuntimeMatch::Rejected => facts.value_outside.push(obs.process.clone()),
             RuntimeMatch::Confirmed(_) => {}
         }
     }
@@ -758,6 +874,7 @@ fn observation(
         _ => (vec![], None),
     };
     ProcessObs {
+        mnt_ns: None,
         process: ProcessRef {
             pid,
             start_ticks,
@@ -854,7 +971,44 @@ fn descendants(scanned: &[Scanned]) -> BTreeSet<u32> {
 /// Identity reads refused alike throughout, at listing and since (another user's process, read
 /// without root), are the same reading: the permission check that refuses them also refuses the
 /// path and `maps`, so no mapping is kept, and of the runtime only its arguments are compared.
-fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&ProcessExe>) -> Pass {
+fn second(
+    ctx: &Ctx<'_>,
+    s: &Scanned,
+    start_ticks: u64,
+    recorded: Option<&ProcessExe>,
+) -> (Pass, ValueBatch) {
+    let process = ProcessRef {
+        pid: s.pid,
+        start_ticks,
+        boot_id: ctx.when.boot_id.to_string(),
+    };
+    let roles: Vec<ProcessRole> = match &s.runtime {
+        RuntimeMatch::Confirmed(_) => ProcessRole::new(RUNTIME_ROLE).ok().into_iter().collect(),
+        _ => vec![],
+    };
+    let mut batch = ValueBatch::new(ctx, process, &roles);
+    let pass = second_image(ctx, s, start_ticks, recorded, &mut batch);
+    match &pass {
+        Pass::Gone => batch.invalidate(
+            UnknownReason::NotObservable(NotObservable::NoProcess),
+            EXITED,
+        ),
+        Pass::Unreadable(why) => batch.invalidate(
+            UnknownReason::NotObservable(*why),
+            &format!("the process cannot be read again ({why:?}); its values are unknown"),
+        ),
+        Pass::Read(_) => {}
+    }
+    (pass, batch)
+}
+
+fn second_image(
+    ctx: &Ctx<'_>,
+    s: &Scanned,
+    start_ticks: u64,
+    recorded: Option<&ProcessExe>,
+    batch: &mut ValueBatch,
+) -> Pass {
     let dir = match open_dir(ctx.root, &s.pid.to_string()) {
         Ok(dir) => dir,
         Err(Errno::NOENT | Errno::SRCH) => return Pass::Gone,
@@ -883,10 +1037,12 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         }
         missing.push(format!("exe: its identity cannot be read ({why:?})"));
     }
-    let same_mount_ns = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
+    let (same_mount_ns, observed_mnt_ns) = mount_ns(dir, ctx.own_mnt_ns, &mut missing);
     let (mut mappings, mut maps_read, maps_denied) =
         mappings(dir, &process, ctx, &same_mount_ns, &mut missing);
     (ctx.during)(Stage::AfterMaps, s.pid);
+    batch.read(ctx, dir);
+    (ctx.during)(Stage::AfterValues, s.pid);
     let denied = first_id == Err(NotObservable::PermissionDenied) && maps_denied;
     let again_id = exe_identity(dir);
     let obs = recorded.is_none().then(|| {
@@ -946,7 +1102,43 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         ));
     }
     let dropped = other_exe || id_failed.is_some() || other_argv.is_some();
+    let value_guard = if dropped {
+        let mut reasons = vec![];
+        if other_exe {
+            reasons.push(
+                "the process ran another executable (its path, identity or stack address changed)"
+                    .to_string(),
+            );
+        }
+        if let Some(why) = id_failed {
+            reasons.push(format!("a read of executable identity failed ({why:?})"));
+        }
+        if let Some(why) = &other_argv {
+            reasons.push(why.clone());
+        }
+        Some(format!(
+            "process values invalidated: {}",
+            reasons.join("; ")
+        ))
+    } else {
+        let failed = s
+            .exe_id
+            .as_ref()
+            .and_then(|r| r.as_ref().err().copied())
+            .or_else(|| first_id.as_ref().err().copied())
+            .or_else(|| again_id.as_ref().err().copied());
+        failed.map(|why| {
+            format!("process values invalidated: executable identity was not established ({why:?})")
+        })
+    };
+    if let Some(why) = &value_guard {
+        batch.invalidate(
+            UnknownReason::NotObservable(NotObservable::ReadIncomplete),
+            why,
+        );
+    }
     missing.extend(other_argv);
+
     let exe_id = if dropped {
         // What was read may be another program's: dropped, so not read.
         mappings.clear();
@@ -959,6 +1151,7 @@ fn second(ctx: &Ctx<'_>, s: &Scanned, start_ticks: u64, recorded: Option<&Proces
         obs,
         mappings,
         maps_read,
+        mnt_ns: value_guard.is_none().then_some(observed_mnt_ns),
         detail: Detail {
             process,
             exe_id,
@@ -1085,7 +1278,11 @@ fn exe_identity(dir: BorrowedFd<'_>) -> Result<(u64, u64), NotObservable> {
 }
 
 /// Whether the process's mount namespace is SIGIL's: what a mapping's path means (PR-4d-2).
-fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) -> Tri<()> {
+fn mount_ns(
+    dir: BorrowedFd<'_>,
+    own: Option<u64>,
+    missing: &mut Vec<String>,
+) -> (Tri<()>, NsInode) {
     let unknown = |why| Tri::Unknown {
         reason: UnknownReason::NotObservable(why),
     };
@@ -1094,23 +1291,29 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
             Some(inode) => inode,
             None => {
                 missing.push("ns/mnt: not understood".into());
-                return unknown(NotObservable::ReadIncomplete);
+                return (
+                    unknown(NotObservable::ReadIncomplete),
+                    NsInode::NotObservable(NotObservable::ReadIncomplete),
+                );
             }
         },
         Err(e) => {
             let why = not_observable(e);
             missing.push(format!("ns/mnt: cannot be read ({why:?})"));
-            return unknown(why);
+            return (unknown(why), NsInode::NotObservable(why));
         }
     };
     let Some(ours) = own else {
         missing.push("ns/mnt: SIGIL's own cannot be read".into());
-        return unknown(NotObservable::ReadIncomplete);
+        return (
+            unknown(NotObservable::ReadIncomplete),
+            NsInode::Inode(theirs),
+        );
     };
     let basis = Basis::Observed {
         source: ObsSource::Proc,
     };
-    if theirs == ours {
+    let same = if theirs == ours {
         Tri::Yes {
             why: (),
             basis,
@@ -1121,7 +1324,8 @@ fn mount_ns(dir: BorrowedFd<'_>, own: Option<u64>, missing: &mut Vec<String>) ->
             basis,
             unresolved: vec![],
         }
-    }
+    };
+    (same, NsInode::Inode(theirs))
 }
 
 /// The file-backed mappings of `maps`, one per distinct (dev, ino, path, deleted) in the order
@@ -1367,14 +1571,14 @@ mod tests {
     use rustix::io::Errno;
     use sigil_model::{
         CoverageState, MapsRead, NotObservable, ProcessExe, ProcessRef, ProcessRole, Ref,
-        Timestamp, Unavailability, UntrustedText,
+        Timestamp, TriValue, Unavailability, UnknownReason, UntrustedText, ValueKey, ValueOrigin,
     };
 
     use crate::analyze::runtime_processes::coverage;
 
     use super::{
-        argv_gap, exec_seen, identity_change, observe_with, read_up_to, request, stack_moved,
-        Detail, ProcBudgets, ProcFacts, Read, Stage, EXITED, RUNTIME_ROLE,
+        argv_gap, exec_seen, identity_change, observe_values_with, observe_with, read_up_to,
+        request, stack_moved, Detail, ProcBudgets, ProcFacts, Read, Stage, EXITED, RUNTIME_ROLE,
     };
 
     /// A process directory. Its `exe` links to a file of the fixture, `<root>/fs/<comm>`.
@@ -1391,6 +1595,13 @@ mod tests {
         std::fs::write(dir.join("cmdline"), cmdline).unwrap();
         stat(root, pid, ppid, comm, 'S', start);
         std::fs::write(dir.join("maps"), "").unwrap();
+        symlink("/work", dir.join("cwd")).unwrap();
+        std::fs::write(
+            dir.join("status"),
+            b"Name:\tfixture\nUid:\t1000\t1001\t1002\t1003\nGid:\t2000\t2001\t2002\t2003\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("environ"), b"").unwrap();
         symlink("net:[1]", dir.join("ns/net")).unwrap();
         symlink("mnt:[2]", dir.join("ns/mnt")).unwrap();
         let exe = root.join("fs").join(comm);
@@ -2475,5 +2686,246 @@ mod tests {
         assert_eq!(read(9), (b"012345678".to_vec(), true));
         assert_eq!(read(10), (b"0123456789".to_vec(), false));
         assert_eq!(read(11), (b"0123456789".to_vec(), false));
+    }
+    fn value_run(
+        root: &Path,
+        budgets: ProcBudgets,
+        between: &dyn Fn(),
+        during: &dyn Fn(Stage, u32),
+    ) -> ProcFacts {
+        observe_values_with(
+            root,
+            &Timestamp::new("2026-11-02T00:00:00Z").unwrap(),
+            "b",
+            budgets,
+            true,
+            between,
+            during,
+        )
+    }
+    fn value_for_pid(f: &ProcFacts, pid: u32) -> Vec<&sigil_model::ProcessValue> {
+        f.values
+            .iter()
+            .filter(|v| {
+                matches!(&v.origin,
+        ValueOrigin::ObservedProcess { process, .. } if process.pid == pid)
+            })
+            .collect()
+    }
+    fn assert_values_unknown(f: &ProcFacts, pid: u32, typed: NotObservable, diagnostic: &str) {
+        let values = value_for_pid(f, pid);
+        assert!(!values.is_empty());
+        for v in values {
+            assert_eq!(
+                v.value,
+                TriValue::Unknown {
+                    reason: UnknownReason::NotObservable(typed)
+                },
+                "{v:?}"
+            );
+        }
+        let d = f
+            .value_details
+            .iter()
+            .find(|d| d.process.pid == pid)
+            .unwrap();
+        assert!(d.missing.join(";").contains(diagnostic), "{d:?}");
+        let entries = crate::analyze::values::observed_coverage(f);
+        assert!(
+            entries.iter().any(|entry| matches!(&entry.scope,
+        sigil_model::Ref::Process(process) if process.pid == pid)
+                && matches!(&entry.state, sigil_model::CoverageState::Partial { missing }
+            if missing.iter().any(|gap| gap.contains(diagnostic)))),
+            "{entries:?}"
+        );
+        let p = f.processes.iter().find(|p| p.process.pid == pid).unwrap();
+        assert_eq!(p.mnt_ns, None);
+    }
+    fn fixture_with_values(root: &Path) {
+        fixture(root);
+        for pid in [10, 11] {
+            std::fs::write(
+                root.join(format!("{pid}/environ")),
+                b"LD_LIBRARY_PATH=/stable\0GGML_FRESH=/seen\0",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn value_exec_and_pid_reuse_invalidate_cwd_ids_and_environment() {
+        for mutation in [
+            "path",
+            "inode",
+            "argv",
+            "stack",
+            "pid-reuse",
+            "zombie",
+            "exited",
+        ] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture_with_values(root);
+            let f = value_run(root, ProcBudgets::default(), &|| {}, &|stage, pid| {
+                if stage != Stage::AfterValues || pid != 10 {
+                    return;
+                }
+                match mutation {
+                    "path" => {
+                        let exe = root.join("10/exe");
+                        std::fs::write(root.join("fs/new"), b"another").unwrap();
+                        std::fs::remove_file(&exe).unwrap();
+                        symlink(root.join("fs/new"), exe).unwrap();
+                    }
+                    "inode" => {
+                        std::fs::write(root.join("fs/replacement"), b"replacement").unwrap();
+                        std::fs::rename(root.join("fs/replacement"), root.join("fs/ollama"))
+                            .unwrap();
+                    }
+                    "argv" => {
+                        std::fs::write(root.join("10/cmdline"), b"/x/ollama\0version\0").unwrap()
+                    }
+                    "stack" => stat_stack(root, 10, 1, "ollama", 'S', 100, (STACK.0 + 1, STACK.1)),
+                    "pid-reuse" => stat(root, 10, 1, "ollama", 'S', 999),
+                    "zombie" => stat(root, 10, 1, "ollama", 'Z', 100),
+                    "exited" => std::fs::remove_dir_all(root.join("10")).unwrap(),
+                    _ => unreachable!(),
+                }
+            });
+            let reason = match mutation {
+                "argv" => "arguments changed",
+                "pid-reuse" | "zombie" | "exited" => "exited",
+                _ => "another executable",
+            };
+            assert_values_unknown(
+                &f,
+                10,
+                if matches!(mutation, "pid-reuse" | "zombie" | "exited") {
+                    NotObservable::NoProcess
+                } else {
+                    NotObservable::ReadIncomplete
+                },
+                reason,
+            );
+            // Includes a dynamically discovered name, not only the nine reserved env queries.
+            assert!(value_for_pid(&f, 10)
+                .iter()
+                .any(|v| v.key == ValueKey::Env(UntrustedText::new("GGML_FRESH"))));
+            assert_eq!(
+                f.processes[0].roles,
+                [ProcessRole::new(RUNTIME_ROLE).unwrap()]
+            );
+        }
+    }
+
+    #[test]
+    fn value_final_stat_failure_invalidates_prior_reads_without_orphan_descendants() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture_with_values(root);
+        let f = value_run(root, ProcBudgets::default(), &|| {}, &|stage, pid| {
+            if stage == Stage::BeforeLastStat && [10, 11].contains(&pid) {
+                std::fs::write(root.join(format!("{pid}/stat")), b"malformed").unwrap();
+            }
+        });
+        assert_values_unknown(
+            &f,
+            10,
+            NotObservable::ReadIncomplete,
+            "cannot be read again",
+        );
+        assert!(value_for_pid(&f, 11).is_empty());
+        assert!(f
+            .value_gaps
+            .iter()
+            .any(|g| g.contains("process 11") && g.contains("ReadIncomplete")));
+    }
+
+    #[test]
+    fn value_failed_identity_is_unknown_even_when_all_identity_reads_fail_equally() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture_with_values(root);
+        // Preserve the exe link basename ollama, so runtime_match still confirms the argv.
+        // Missing target but live S-state stat: identity fails alike throughout, not an exit.
+        std::fs::remove_file(root.join("fs/ollama")).unwrap();
+        let f = value_run(root, ProcBudgets::default(), &|| {}, &|_, _| {});
+        assert_values_unknown(
+            &f,
+            10,
+            NotObservable::ReadIncomplete,
+            "identity was not established (NoProcess)",
+        );
+        // Do not change the legacy identity_change/refused-map semantics to make this test pass.
+    }
+
+    #[test]
+    fn value_exec_between_passes_uses_listing_identity_and_stack_guards() {
+        for changed_stack in [false, true] {
+            let d = tempfile::TempDir::new().unwrap();
+            let root = d.path();
+            fixture_with_values(root);
+            let f = value_run(
+                root,
+                ProcBudgets::default(),
+                &|| {
+                    if changed_stack {
+                        stat_stack(root, 10, 1, "ollama", 'S', 100, (STACK.0, STACK.1 + 1));
+                    } else {
+                        std::fs::write(root.join("fs/replacement"), b"replacement").unwrap();
+                        std::fs::rename(root.join("fs/replacement"), root.join("fs/ollama"))
+                            .unwrap();
+                    }
+                },
+                &|_, _| {},
+            );
+            assert_values_unknown(&f, 10, NotObservable::ReadIncomplete, "another executable");
+        }
+    }
+
+    #[test]
+    fn value_dropped_entries_still_consume_total_bytes_and_output_slots() {
+        let d = tempfile::TempDir::new().unwrap();
+        let root = d.path();
+        fixture_with_values(root);
+        let bytes = std::fs::read(root.join("10/environ")).unwrap().len() as u64;
+        // First process reserves12 + discovers GGML_FRESH=13; second can reserve12, but cannot
+        // read an environment once the total allowance was consumed by the invalidated first.
+        let f = value_run(
+            root,
+            ProcBudgets {
+                max_environ_total_bytes: bytes,
+                max_process_values: 25,
+                ..ProcBudgets::default()
+            },
+            &|| {},
+            &|stage, pid| {
+                if stage == Stage::AfterValues && pid == 10 {
+                    std::fs::write(root.join("10/cmdline"), b"/x/ollama\0version\0").unwrap();
+                }
+            },
+        );
+        assert_values_unknown(&f, 10, NotObservable::ReadIncomplete, "arguments changed");
+        assert_eq!(f.values.len(), 25);
+        let child = f
+            .value_details
+            .iter()
+            .find(|d| d.process.pid == 11)
+            .unwrap();
+        assert!(child
+            .missing
+            .iter()
+            .any(|m| m.contains("proc_environ_total_bytes")));
+        for v in value_for_pid(&f, 11)
+            .iter()
+            .filter(|v| matches!(v.key, ValueKey::Env(_)))
+        {
+            assert_eq!(
+                v.value,
+                TriValue::Unknown {
+                    reason: UnknownReason::NotObservable(NotObservable::ReadIncomplete)
+                }
+            );
+        }
     }
 }

@@ -116,6 +116,7 @@ mod tests {
         BinaryFacts {
             slice: SliceId::new(slice).unwrap(),
             container: ContainerFacts::Elf(ElfFacts {
+                abi: None,
                 interp: None,
                 soname: None,
                 needed: vec![],

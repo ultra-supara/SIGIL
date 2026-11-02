@@ -231,11 +231,11 @@ pub struct Event {
 
 /// Scans `s` and splits it at top-level commas, respecting quoted strings, fd annotations
 /// (`3<...>`, which may contain `->` inside `[...]`), `/* comments */` and `()`/`[]`/`{}` nesting.
-/// With `stop_at_close`, scanning ends at the first unmatched `)` and its byte index is returned.
-/// Byte ranges of the top-level parts, and the index of the closing `)` when requested.
+/// With `stop_at_close`, scanning ends at that unmatched closing delimiter and returns its index.
+/// Byte ranges of the top-level parts, and the closing delimiter index when requested.
 type Scan = (Vec<(usize, usize)>, Option<usize>);
 
-fn scan(s: &str, stop_at_close: bool) -> Result<Scan, String> {
+fn scan(s: &str, stop_at_close: Option<u8>) -> Result<Scan, String> {
     let b = s.as_bytes();
     let (mut depth, mut i, mut start) = (0usize, 0usize, 0usize);
     let mut parts = Vec::new();
@@ -271,7 +271,7 @@ fn scan(s: &str, stop_at_close: bool) -> Result<Scan, String> {
                 None => return Err("unterminated comment".into()),
             },
             b'(' | b'[' | b'{' => depth += 1,
-            b')' if depth == 0 && stop_at_close => {
+            b')' | b'}' if depth == 0 && stop_at_close == Some(b[i]) => {
                 parts.push((start, i));
                 return Ok((parts, Some(i)));
             }
@@ -289,8 +289,8 @@ fn scan(s: &str, stop_at_close: bool) -> Result<Scan, String> {
         }
         i += 1;
     }
-    if stop_at_close {
-        return Err("no closing ')'".into());
+    if stop_at_close.is_some() {
+        return Err("no closing delimiter".into());
     }
     parts.push((start, b.len()));
     Ok((parts, None))
@@ -309,7 +309,7 @@ pub fn parse_line(line: &str) -> Result<Option<(String, Vec<String>, String)>, S
         return Err(format!("bad syscall name {name:?}"));
     }
     let inner = &line[open + 1..];
-    let (parts, close) = scan(inner, true)?;
+    let (parts, close) = scan(inner, Some(b')'))?;
     let close = close.expect("stop_at_close returns the index");
     let mut args: Vec<String> = parts
         .iter()
@@ -407,11 +407,15 @@ pub fn fd_path(raw: &str) -> Option<PathBuf> {
 /// `name=value` argument itself.
 pub fn field<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
     let raw = raw.trim();
-    let inner = raw
-        .strip_prefix('{')
-        .and_then(|r| r.strip_suffix('}'))
-        .unwrap_or(raw);
-    let (parts, _) = scan(inner, false).ok()?;
+    // strace 7 can append an output struct (`{input} => {output}`). Only the
+    // balanced input struct supplies fields, including the clone3 permission flags.
+    let inner = if let Some(inner) = raw.strip_prefix('{') {
+        let (_, close) = scan(inner, Some(b'}')).ok()?;
+        &inner[..close?]
+    } else {
+        raw
+    };
+    let (parts, _) = scan(inner, None).ok()?;
     parts
         .iter()
         .map(|(a, z)| inner[*a..*z].trim())
@@ -458,6 +462,37 @@ mod tests {
         assert_eq!(name, "openat2");
         assert_eq!(field(&args[2], "flags"), Some("O_WRONLY|O_CREAT"));
         assert!(ret.starts_with("-1 EACCES"));
+    }
+
+    #[test]
+    fn parses_clone3_input_flags_with_strace7_output_struct() {
+        for expected in ["CLONE_VM|CLONE_THREAD", "CLONE_VM|SIGCHLD"] {
+            let line = format!(
+                "clone3({{flags={expected}, child_tid=0x1, parent_tid=0x1, exit_signal=0, stack=0x2, stack_size=0x200000, tls=0x3}} => {{parent_tid=[11]}}, 88) = 11"
+            );
+            let (name, args, ret) = parse_line(&line).unwrap().unwrap();
+            assert_eq!(name, "clone3");
+            assert_eq!(args.len(), 2);
+            assert_eq!(ret, "11");
+            assert_eq!(field(&args[0], "flags"), Some(expected));
+            // Output fields must never replace the input's process/thread decision.
+            assert_eq!(field(&args[0], "parent_tid"), Some("0x1"));
+        }
+    }
+
+    #[test]
+    fn struct_fields_come_only_from_balanced_input_even_with_quoted_arrows() {
+        let raw = r#"{note="quoted } => { text", nested={child=[1, 2]}, flags=CLONE_VM} => {flags=CLONE_THREAD}"#;
+        assert_eq!(field(raw, "flags"), Some("CLONE_VM"));
+        assert_eq!(field(raw, "note"), Some(r#""quoted } => { text""#));
+        assert_eq!(field(raw, "nested"), Some("{child=[1, 2]}"));
+        for raw in [
+            "{parent_tid=0x1} => {flags=CLONE_THREAD}",
+            "=> {flags=CLONE_THREAD}",
+            "{flags=CLONE_VM => {flags=CLONE_THREAD}",
+        ] {
+            assert_eq!(field(raw, "flags"), None, "{raw}");
+        }
     }
 
     #[test]

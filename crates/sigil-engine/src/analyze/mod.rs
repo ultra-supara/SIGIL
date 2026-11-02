@@ -4,6 +4,8 @@
 pub mod binary;
 pub mod components;
 pub mod container;
+pub mod deps;
+pub mod deps_coverage;
 pub mod exposure;
 pub mod hints;
 pub mod identity;
@@ -11,6 +13,7 @@ pub mod model_store;
 pub mod release;
 pub mod runtime_api;
 pub mod runtime_processes;
+pub mod values;
 
 use sigil_model::{
     Action, CondEvidence, CondId, CondState, Condition, EvidenceRef, Finding, FindingId,

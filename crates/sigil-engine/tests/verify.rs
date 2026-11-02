@@ -22,6 +22,7 @@ const DENY_SPAWN: &str = "schema = \"sigil-policy/1\"\nname = \"no-spawn\"\n[[ca
 /// `binary inspect --code` of spawn.so (one call of execve, one of connect) under `policy`.
 fn spawn(policy: &Policy) -> Session {
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/spawn.so")],
         budgets: NamedBudgets {
             binary: BinaryBudgets {
@@ -72,7 +73,7 @@ fn a_removed_violation_validates_but_does_not_verify() {
                 "policy violations the policy gives, and the session lacks: \
                  policy:capabilities.deny.posix.process_spawn on {slice}"
             ),
-            "the outcome is PASS + COMPLETE, and the policy gives FAIL + COMPLETE".to_string(),
+            "the outcome is PASS + INCOMPLETE, and the policy gives FAIL + INCOMPLETE".to_string(),
         ])
     );
 }
@@ -114,7 +115,7 @@ fn a_changed_decision_and_another_policy_are_named() {
                 "policy violations the session records otherwise than the policy gives: \
                  policy:capabilities.deny.posix.process_spawn on {slice}"
             ),
-            "the outcome is WARN + COMPLETE, and the policy gives FAIL + COMPLETE".to_string(),
+            "the outcome is WARN + INCOMPLETE, and the policy gives FAIL + INCOMPLETE".to_string(),
         ])
     );
 
@@ -189,6 +190,7 @@ fn a_finding_s_rule_is_this_build_s() {
     )
     .unwrap();
     let req = StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: d.to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),

@@ -457,6 +457,7 @@ mod tests {
             id: inst(rel),
             root: RootId::new("install").unwrap(),
             path: UntrustedText::new(format!("/usr/local/{rel}")),
+            path_proof: None,
             link_chain: vec![],
             resolved: None,
             content,
@@ -501,6 +502,7 @@ mod tests {
         BinaryFacts {
             slice: slice(c),
             container: ContainerFacts::Elf(ElfFacts {
+                abi: None,
                 interp: None,
                 soname: soname.map(UntrustedText::new),
                 needed: vec![],

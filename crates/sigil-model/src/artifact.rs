@@ -89,6 +89,25 @@ impl Arch {
     }
 }
 
+/// One observed normal directory component. Names are raw bytes, never display text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedDirectory {
+    pub name: UntrustedText,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+/// Directory-root identity and ordered normal parents, root-exclusive through the
+/// file's parent. At most 40 parents; the root and leaf are not parent entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedPathProof {
+    pub root_dev: u64,
+    pub root_ino: u64,
+    pub parents: Vec<RecordedDirectory>,
+}
+
 /// A file found at a path under a scan root, with what was observed about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,6 +118,11 @@ pub struct FileInstance {
     pub root: RootId,
     /// The path as discovered.
     pub path: UntrustedText,
+    /// Observed normal parents below a directory scan root; None for legacy facts and
+    /// exact named-file anchors. No ancestor evidence is inferred from a path spelling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_proof: Option<RecordedPathProof>,
+
     /// Every symlink hop, in resolution order. Empty when the path is not a symlink.
     pub link_chain: Vec<LinkHop>,
     /// The final path after following `link_chain`; `None` exactly when `link_chain` is empty. For
@@ -229,6 +253,11 @@ pub struct ProcessObs {
     pub argv: Option<Vec<UntrustedText>>,
     /// Its network namespace.
     pub net_ns: NsInode,
+    /// The process's own mount namespace. Optional on old sessions; recorded independently of
+    /// mappings because a process with an empty mapping list still has a namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mnt_ns: Option<NsInode>,
+
     /// Whether its file descriptors could be listed (needed to attribute sockets to it).
     pub fd_table: Observability,
 }

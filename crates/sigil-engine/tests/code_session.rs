@@ -38,6 +38,7 @@ fn hint_pairs(s: &Session) -> Vec<(String, String)> {
 #[test]
 fn a_binary_session_has_the_import_hints() {
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![fixture("net-plt-gcc.so")],
         budgets: Default::default(),
     };
@@ -65,6 +66,7 @@ fn an_install_session_has_the_import_hints() {
     std::fs::copy(fixture("net-plt-gcc.so"), tree.path().join("bin/ollama")).unwrap();
     let models = TempDir::new().unwrap();
     let req = StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: models.path().to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),
@@ -108,6 +110,7 @@ fn with_code_budgets() -> NamedBudgets {
 
 fn session_of(paths: &[PathBuf], budgets: NamedBudgets) -> Session {
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: paths.to_vec(),
         budgets,
     };

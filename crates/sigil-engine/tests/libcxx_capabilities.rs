@@ -78,6 +78,7 @@ fn inspect(file: &str, code: bool, policy: &Policy) -> Session {
         ..NamedBudgets::default()
     };
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/libcxx-capabilities")
             .join(file)],

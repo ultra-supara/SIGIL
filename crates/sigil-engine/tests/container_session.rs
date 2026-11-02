@@ -51,6 +51,7 @@ fn session(dir: &std::path::Path) -> Session {
     };
     let s = store_session(
         &StoreRequest {
+            deps_budgets: Default::default(),
             models_dir: models.path().to_path_buf(),
             model_filter: None,
             budgets: FsBudgets::default(),

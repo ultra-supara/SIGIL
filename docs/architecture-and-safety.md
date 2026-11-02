@@ -22,7 +22,7 @@ sigil-wasm ───────────────────────
 
 1. **Collect and observe.** The engine reads the model store through `SafeFs`; in observe mode it also reads the allowlisted `/proc` entries (including `maps` and `ns/mnt`, and `stat` through `exe`, of the runtime's processes); with `--active api-probe` the CLI asks `sigil-probe` for one API response.
 2. **Facts.** Each observation becomes a fact with its evidence. What could not be read becomes a coverage gap, not a fact.
-3. **Analysis.** Rules turn facts into findings, and record coverage for each check.
+3. **Analysis.** Rules turn facts into findings, and record coverage for each check. Dependency analysis uses only collected placements, values and recorded directory/link evidence; it performs no filesystem reads. Its candidates describe possibilities, with exact search-source witnesses and ordered hypothetical loader chains.
 4. **Policy.** The policy decides each finding (`fail`, `warn`, or `ignore`, which needs a reason) and which checks are required ([policy](policy.md)).
 5. **Outcome.** The verdict and the completeness, computed independently.
 6. **Session.** All of the above, validated (`Session::validate`) and written as canonical JSON.
@@ -31,7 +31,7 @@ sigil-wasm ───────────────────────
 ## Modes
 
 - **static** (default): files only.
-- **observe**: also the allowlisted `/proc` entries: the sockets and fd tables, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (the file is never opened), with `/proc/<pid>/stat` of every process.
+- **observe**: also the allowlisted `/proc` entries: the sockets and fd tables, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (the file is never opened), with `/proc/<pid>/stat` of every process. Selected processes also supply cwd through readlink only and effective Uid/Gid through bounded status open/read, inside the executable/stat validation window. Only explicit `--observe-env` permits environ open/read; the retained values are allowlisted, minimized initial environment observations ([process values](dependencies-and-values.md#observed-values)). Cwd targets are never opened or statted, and environ has no stat or memory-reading exception.
 - **active**: explicitly requested features that contact something; today only the API probe.
 
 The contracts of each mode, and how each is checked: [ADR-002](adr/ADR-002-execution-modes.md).

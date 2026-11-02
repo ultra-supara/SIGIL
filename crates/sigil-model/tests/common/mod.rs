@@ -205,6 +205,7 @@ pub fn instance(
         id: inst.clone(),
         root: id(root),
         path: t(path),
+        path_proof: None,
         link_chain: vec![],
         resolved: None,
         content: InstanceContent::Read {
@@ -1134,6 +1135,7 @@ pub fn add_observed_zen4_mapping(s: &mut Session) {
         },
     };
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process,
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&[ROLE]),
@@ -1478,6 +1480,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("18-capability-policy", capability_policy()),
         ("19-service-unit", service_unit()),
         ("20-observed-processes", observed_processes()),
+        ("21-deps-values", dependencies_and_values()),
     ]
 }
 
@@ -1594,6 +1597,7 @@ pub fn store_and_runtime() -> Session {
     let mut s = with_model();
     s.request.mode = Mode::Observe;
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: runtime_process(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&["ollama serve"]),
@@ -1725,6 +1729,7 @@ pub fn binary_inspect() -> Session {
         }],
     });
     let facts = ElfFacts {
+        abi: None,
         interp: None,
         soname: Some(t("libggml-base.so.0")),
         needed: vec![t("libm.so.6"), t("libc.so.6")],
@@ -1948,6 +1953,7 @@ pub fn binary_code() -> Session {
     s.binaries.push(BinaryFacts {
         slice: slice.clone(),
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: None,
             needed: vec![],
@@ -2293,6 +2299,7 @@ pub fn observed_processes() -> Session {
     let libc = "/usr/lib/x86_64-linux-gnu/libc.so.6";
     let blob_path = format!("{MODELS_DIR}/blobs/sha256-{}", hex(0x2a));
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: serve.clone(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&["ollama serve"]),
@@ -2310,6 +2317,7 @@ pub fn observed_processes() -> Session {
         fd_table: Observability::Observed,
     });
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: runner.clone(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: vec![],
@@ -2350,5 +2358,380 @@ pub fn observed_processes() -> Session {
             CoverageState::Complete,
         ));
     }
+    s
+}
+
+/// Synthetic observed normal-directory evidence for the new dependency fixtures only.
+/// Keep old example builders byte-for-byte compatible by enriching the returned session.
+pub fn with_install_path_proofs(mut s: Session) -> Session {
+    let root = s
+        .request
+        .roots
+        .iter()
+        .find(|root| root.id.as_str() == INSTALL_ROOT)
+        .unwrap();
+    assert_eq!(root.path.as_bytes(), b"/usr/local");
+    for file in s
+        .instances
+        .iter_mut()
+        .filter(|file| file.root.as_str() == INSTALL_ROOT)
+    {
+        assert!(file.link_chain.is_empty());
+        assert_eq!(file.resolved, None);
+        assert_eq!(file.stability, Stability::NoChangeDetected);
+        let parents: &[(&str, u64)] = match file.path.as_bytes() {
+            b"/usr/local/bin/ollama" => &[("bin", 52)],
+            b"/usr/local/lib/ollama/llama-server"
+            | b"/usr/local/lib/ollama/libggml-cpu-haswell.so" => &[("lib", 50), ("ollama", 51)],
+            path => panic!("add explicit synthetic directory evidence for {path:?}"),
+        };
+        let proof = RecordedPathProof {
+            root_dev: 2049,
+            root_ino: 49,
+            parents: parents
+                .iter()
+                .map(|(name, ino)| RecordedDirectory {
+                    name: t(name),
+                    dev: 2049,
+                    ino: *ino,
+                })
+                .collect(),
+        };
+        assert!(dependency_path::valid_proof(root, file, &proof));
+        file.path_proof = Some(proof);
+    }
+    s
+}
+
+pub const EXAMPLE_VALUE_ENV: [&str; 9] = [
+    "GGML_BACKEND_PATH",
+    "GGML_BACKEND_DIR",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "OLLAMA_HOST",
+    "OLLAMA_MODELS",
+    "OLLAMA_LIBRARY_PATH",
+    "CUDA_VISIBLE_DEVICES",
+    "HIP_VISIBLE_DEVICES",
+];
+
+pub fn example_observed_role(process: &ProcessRef, roles: &[ProcessRole]) -> ProcessRole {
+    use sha2::{Digest, Sha256};
+    if let [role] = roles {
+        return role.clone();
+    }
+    let bytes = serde_json::to_vec(process).unwrap();
+    id(&format!("observed:{:x}", Sha256::digest(bytes)))
+}
+fn example_value_id(role: &ProcessRole, key: &ValueKey, origin: &ValueOrigin) -> ValueId {
+    use sha2::{Digest, Sha256};
+    // Exact tuple order shared with the engine helper: origin, key, role.
+    let bytes = serde_json::to_vec(&(origin, key, role)).unwrap();
+    id(&format!("value:{:x}", Sha256::digest(bytes)))
+}
+fn example_value(
+    role: &ProcessRole,
+    key: ValueKey,
+    value: TriValue,
+    origin: ValueOrigin,
+) -> ProcessValue {
+    ProcessValue {
+        id: example_value_id(role, &key, &origin),
+        process_role: role.clone(),
+        key,
+        value,
+        origin,
+        applies_to: vec![],
+    }
+}
+
+/// Example 21 (PR-4d-3): supplied-unit settings, qualified process reads, and contextual
+/// dependency possibilities. Synthetic specification facts, never a live-system measurement.
+pub fn dependencies_and_values() -> Session {
+    let mut s = with_install_path_proofs(observed_processes());
+    s.request.observe_env = true;
+    s.observation.mnt_ns = Some(42);
+    for process in &mut s.processes {
+        process.mnt_ns = Some(NsInode::Inode(42));
+    }
+    s.request.required_checks.extend(ids::<CheckId>(&[
+        ARTIFACTS_DEPENDENCIES,
+        VALUES_CONFIGURED,
+        VALUES_OBSERVED,
+    ]));
+    s.request.budgets.extend([
+        ("service_unit_bytes".into(), 1 << 20),
+        ("service_unit_values".into(), 16_384),
+        ("proc_status_bytes".into(), 65_536),
+        ("proc_environ_bytes".into(), 1_048_576),
+        ("proc_environ_total_bytes".into(), 33_554_432),
+        ("process_values".into(), 65_536),
+        ("dependency_contexts".into(), 8_192),
+        ("dependency_candidates".into(), 65_536),
+        ("dependency_search_paths".into(), 65_536),
+    ]);
+    // Copy only the unit endpoint and root. observed_processes already owns the installation
+    // executable and mappings. Copying service_unit's install artifact would duplicate IDs.
+    let unit = service_unit();
+    let unit_instance = unit
+        .instances
+        .iter()
+        .find(|i| i.root.as_str() == SERVICE_UNIT_ROOT)
+        .unwrap()
+        .clone();
+    let InstanceContent::Read {
+        artifact: unit_artifact,
+    } = &unit_instance.content
+    else {
+        panic!()
+    };
+    s.artifacts.push(
+        unit.artifacts
+            .iter()
+            .find(|a| a.id == *unit_artifact)
+            .unwrap()
+            .clone(),
+    );
+    s.request.roots.push(
+        unit.request
+            .roots
+            .iter()
+            .find(|r| r.id.as_str() == SERVICE_UNIT_ROOT)
+            .unwrap()
+            .clone(),
+    );
+    s.instances.push(unit_instance.clone());
+    let source = unit
+        .instances
+        .iter()
+        .find(|i| i.id.as_str() == "inst:install/bin/ollama")
+        .unwrap()
+        .discovered_by
+        .iter()
+        .find(|d| matches!(d, DiscoverySource::ServiceUnit { .. }))
+        .unwrap()
+        .clone();
+    s.instances
+        .iter_mut()
+        .find(|i| i.id.as_str() == "inst:install/bin/ollama")
+        .unwrap()
+        .discovered_by
+        .push(source);
+    // with_install_path_proofs records the shared /usr/local root and each normal parent.
+    // $ORIGIN and cwd-relative lookup consume that explicit evidence. Directory names are
+    // not inferred merely from leaf paths, and no /usr ancestor facts are invented.
+    let configured_role: ProcessRole = id(RUNTIME_ROLE);
+    let configured = example_value(
+        &configured_role,
+        ValueKey::User,
+        TriValue::Known(t("ollama")),
+        ValueOrigin::Configured {
+            file: ConfigRef {
+                file: unit_instance.id.clone(),
+                key: t("User"),
+                line: 7,
+            },
+            directive: t("User"),
+        },
+    );
+    let configured_id = configured.id.clone();
+    s.values.push(configured);
+    let mut prediction_keys = vec![ValueKey::User, ValueKey::Group, ValueKey::Cwd];
+    prediction_keys.extend(EXAMPLE_VALUE_ENV.iter().map(|name| ValueKey::Env(t(name))));
+    for key in prediction_keys {
+        let name = match &key {
+            ValueKey::User => "systemd.User",
+            ValueKey::Group => "systemd.Group",
+            ValueKey::Cwd => "systemd.WorkingDirectory",
+            ValueKey::Env(_) => "systemd.Environment",
+        };
+        let from = if key == ValueKey::User {
+            vec![configured_id.clone()]
+        } else {
+            vec![]
+        };
+        s.values.push(example_value(
+            &configured_role,
+            key,
+            TriValue::Unknown {
+                reason: UnknownReason::NotModeled {
+                    what: "effective unit selection and drop-ins unexamined; supplied unit only"
+                        .into(),
+                },
+            },
+            ValueOrigin::PredictedLaunch {
+                rules: vec![name.into()],
+                from,
+            },
+        ));
+    }
+    let processes = s.processes.clone();
+    for process in &processes {
+        let role = example_observed_role(&process.process, &process.roles);
+        let origin = |read| ValueOrigin::ObservedProcess {
+            process: process.process.clone(),
+            source: ObsSource::Proc,
+            read: Some(read),
+        };
+        let cwd = if process.process.pid == 4300 {
+            "/usr/local/lib/ollama"
+        } else {
+            "/usr/local"
+        };
+        for (key, text, read) in [
+            (ValueKey::Cwd, cwd, ProcessValueRead::Cwd),
+            (ValueKey::User, "1000", ProcessValueRead::EffectiveUid),
+            (ValueKey::Group, "1000", ProcessValueRead::EffectiveGid),
+        ] {
+            s.values.push(example_value(
+                &role,
+                key,
+                TriValue::Known(t(text)),
+                origin(read),
+            ));
+        }
+        for name in EXAMPLE_VALUE_ENV {
+            let state = match (process.process.pid, name) {
+                (4300, "LD_LIBRARY_PATH" | "GGML_BACKEND_PATH") => {
+                    TriValue::Known(t("/usr/local/lib/ollama"))
+                }
+                (4300, "CUDA_VISIBLE_DEVICES") => TriValue::Known(t("")),
+                (4242, "OLLAMA_HOST") => TriValue::Known(t("http://127.0.0.1:11434")),
+                (4242, "OLLAMA_MODELS") => TriValue::Known(t(MODELS_DIR)),
+                _ => TriValue::Absent,
+            };
+            s.values.push(example_value(
+                &role,
+                ValueKey::Env(t(name)),
+                state,
+                origin(ProcessValueRead::InitialEnvironment),
+            ));
+        }
+    }
+    let runner = processes.iter().find(|p| p.process.pid == 4300).unwrap();
+    let requester = placed(&s, "inst:install/lib/ollama/llama-server");
+    let backend = placed(&s, "inst:install/lib/ollama/libggml-cpu-haswell.so");
+    let needed = t("libggml-cpu-haswell.so");
+    for artifact in &s.artifacts {
+        if !matches!(artifact.format, Format::Elf { .. }) {
+            continue;
+        }
+        let slice = &artifact.slices[0];
+        let is_requester = slice.id == requester.slice;
+        s.binaries.push(BinaryFacts {
+            slice: slice.id.clone(),
+            go: None,
+            gaps: vec![],
+            container: ContainerFacts::Elf(ElfFacts {
+                abi: Some(ElfAbi {
+                    is_64: true,
+                    little_endian: true,
+                    machine: 62,
+                }),
+                interp: None,
+                soname: None,
+                needed: if is_requester {
+                    vec![needed.clone()]
+                } else {
+                    vec![]
+                },
+                rpath: vec![],
+                runpath: if is_requester {
+                    vec![t("$ORIGIN")]
+                } else {
+                    vec![]
+                },
+                build_id: None,
+                comment: vec![],
+                stripped: Some(true),
+                exports: 0,
+                imports: vec![],
+                data: vec![],
+                returns: vec![],
+            }),
+        });
+    }
+    add_capability_table(&mut s);
+    s.relations.push(Relation::Declares {
+        from: requester.slice.clone(),
+        needed: needed.clone(),
+        kind: DeclKind::ElfNeeded,
+    });
+    let ld = s.values.iter().find(|v| matches!(&v.key, ValueKey::Env(n) if n.as_bytes() == b"LD_LIBRARY_PATH")
+        && matches!(&v.origin, ValueOrigin::ObservedProcess { process, .. } if *process == runner.process)).unwrap().id.clone();
+    for (via, process, inputs) in [
+        (SearchRule::Runpath, None, vec![]),
+        (SearchRule::Runpath, Some(runner.process.clone()), vec![]),
+        (
+            SearchRule::LdLibraryPath,
+            Some(runner.process.clone()),
+            vec![ld],
+        ),
+    ] {
+        let search = match via {
+            SearchRule::Runpath => DependencySearch::Runpath {
+                entry: 0,
+                component: 0,
+            },
+            SearchRule::LdLibraryPath => DependencySearch::LdLibraryPath {
+                value: inputs[0].clone(),
+                component: 0,
+            },
+            _ => unreachable!("example uses RUNPATH or initial environment"),
+        };
+        s.relations.push(Relation::Candidate {
+            from: requester.slice.clone(),
+            needed: needed.clone(),
+            candidate: backend.inst.clone(),
+            via,
+            context: Some(DependencyContext {
+                search,
+                requester: requester.inst.clone(),
+                search_dir: t("/usr/local/lib/ollama"),
+                process,
+                values: inputs,
+                loader_chain: vec![requester.inst.clone()],
+            }),
+        });
+    }
+    s.coverage.push(coverage(
+        VALUES_CONFIGURED,
+        Ref::Root(id(SERVICE_UNIT_ROOT)),
+        CoverageState::Partial {
+            missing: vec![
+                "effective unit selection and drop-ins unexamined; supplied unit only".into(),
+            ],
+        },
+    ));
+    s.coverage.push(coverage(
+        ARTIFACTS_DEPENDENCIES,
+        Ref::Root(id(INSTALL_ROOT)),
+        CoverageState::Partial {
+            missing: vec![
+                "ld.so.cache not read".into(),
+                "hardware-capability directories not modeled".into(),
+                "secure execution not modeled; candidates conditional".into(),
+                "common default directories are possibilities, not complete loader configuration"
+                    .into(),
+                "static placement context has no same-process initial environment".into(),
+            ],
+        },
+    ));
+    s.coverage.push(coverage(
+        VALUES_OBSERVED,
+        Ref::Audit,
+        CoverageState::Complete,
+    ));
+    for process in &processes {
+        s.coverage.push(coverage(
+            VALUES_OBSERVED,
+            Ref::Process(process.process.clone()),
+            CoverageState::Complete,
+        ));
+    }
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: ids(&[ARTIFACTS_DEPENDENCIES, VALUES_CONFIGURED]),
+        gaps: vec![],
+    };
     s
 }

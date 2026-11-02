@@ -36,6 +36,54 @@ pub(crate) use read::instance_id;
 pub use read::{FileRead, ParseInput, ReadOutcome, ReadSpec};
 pub use walk::{Entry, EntryType, Skip, Walk, WalkError};
 
+pub(crate) struct StrictObservation {
+    pub entry: Entry,
+    pub trace: resolve::StrictTrace,
+}
+impl SafeFs {
+    pub(crate) fn observe_entry(
+        &self,
+        root: &RootId,
+        rel: &RelPath,
+    ) -> Result<StrictObservation, WalkError> {
+        let index = self
+            .root_index(root)
+            .ok_or_else(|| WalkError::Failed(format!("unknown scan root {root}")))?;
+        let (parent, name, lstat, trace) = match self.resolve_strict(index, rel) {
+            resolve::Strict::Entry {
+                parent,
+                name,
+                lstat,
+                trace,
+            } => (parent, name, lstat, trace),
+            resolve::Strict::Root | resolve::Strict::NotADirectory => {
+                return Err(WalkError::NotADirectory)
+            }
+            resolve::Strict::Link { at } => return Err(WalkError::LinkNotFollowed { at }),
+            resolve::Strict::NotFound => return Err(WalkError::NotFound),
+            resolve::Strict::PermissionDenied => return Err(WalkError::PermissionDenied),
+            resolve::Strict::Failed(m) => return Err(WalkError::Failed(m)),
+        };
+        let parent = parent
+            .as_ref()
+            .map_or_else(|| self.roots[index].fd.as_fd(), |fd| fd.as_fd());
+        let entry = walk::entry_of(parent, &name, rel.clone()).map_err(|why| match why {
+            walk::Skip::PermissionDenied => WalkError::PermissionDenied,
+            other => WalkError::Failed(format!("{other:?}")),
+        })?;
+        let seen = read::stat_info(&lstat);
+        let Some(now) = entry.stat else {
+            return Err(WalkError::NotFound);
+        };
+        if (seen.dev, seen.ino, seen.mode) != (now.dev, now.ino, now.mode) {
+            return Err(WalkError::Failed(
+                "entry changed during strict observation".into(),
+            ));
+        }
+        Ok(StrictObservation { entry, trace })
+    }
+}
+
 /// Budgets that bound a scan (plan §4.9). Exceeding one is recorded, never fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FsBudgets {

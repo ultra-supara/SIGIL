@@ -99,12 +99,15 @@ written before `install_audit` existed loads unchanged, and adds nothing for an 
 `active_audit` when an active feature is requested, plus `install_audit` when the session has an
 `install` root (`--install-dir`). The session records the result. Evaluation computes it again from
 the recorded request, so the two always agree. A policy that lists `runtime_artifacts` in `audit`
-gets each of its checks `Skipped { Flag("--install-dir") }` on a run without `--install-dir`, and
-the result is INCOMPLETE.
+gets explicit `Skipped { by: Flag("--install-dir") }` coverage at scope `Audit` for its
+checks on a run without an installation. The result is INCOMPLETE. Likewise, requiring
+`values.observed` outside observe mode produces `Skipped { by: ModeDisabled }` at scope `Audit`.
+Requiring a check never opts into process observation, environment reads, a service unit, or
+additional filesystem reads.
 
 **A binary inspection** (`sigil binary inspect`, a session whose roots are `binary-<n>`) audits
-`binary_audit`: `["binary"]`, whose checks are `binary.container` and `binary.identity`, one
-entry each per input. The other lists and `extra_required` apply to `inspect ollama` only, so an
+`binary_audit`: `["binary"]`, whose checks are `binary.container`, `binary.identity`, and
+`binary.dependencies`, one entry each per input. The other lists and `extra_required` apply to `inspect ollama` only, so an
 organization's extra checks for an installation do not make every binary inspection incomplete.
 
 **With code analysis** (`request.code`), `binary_code_audit` is added after `binary_audit`, without
@@ -155,11 +158,11 @@ so requesting it gives an honest `INCOMPLETE`.
 |---|---|---|
 | `model_store` | `model_store.inventory`, `model_store.integrity`, `model_store.license` | PR-3a-2 |
 | `exposure` | `exposure.binds` | PR-3a-2 (observe mode) |
-| `runtime_processes` | `processes.observed` | PR-4d-2 (observe mode; [runtime artifacts](runtime-artifacts.md#linked-to-the-running-processes-observe-mode-pr-4d-2)) |
+| `runtime_processes` | `processes.observed`, `values.observed` | PR-4d-2, PR-4d-3 (observe mode; [runtime artifacts](runtime-artifacts.md#linked-to-the-running-processes-observe-mode-pr-4d-2)) |
 | `runtime_api` | `runtime_api.version` | PR-3b-2 (`--active api-probe`) |
-| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container`, `artifacts.identity` | PR-4a, PR-4b-1, PR-4c-2a (`--install-dir`) |
+| `runtime_artifacts` | `artifacts.discovery`, `artifacts.release`, `artifacts.container`, `artifacts.identity`, `artifacts.dependencies`, `values.configured` | PR-4a, PR-4b-1, PR-4c-2a, PR-4d-3 (`--install-dir` or `--service-unit`) |
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
-| `binary` | `binary.container`, `binary.identity` | PR-4b-2a, PR-4b-2b, and PR-4c-2a (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
+| `binary` | `binary.container`, `binary.identity`, `binary.dependencies` | PR-4b-2a, PR-4b-2b, PR-4c-2a, and PR-4d-3 (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
 | `binary_code` | `binary.code` | PR-5a (a binary inspection with code analysis) |
 
 **Rules** (kind, default severity):
@@ -198,7 +201,8 @@ have no rules: [`docs/runtime-artifacts.md`](runtime-artifacts.md).
 ## Inputs to the analysis
 
 Two parts of a policy decide what the analysis concludes, not only what is done with it:
-- **the required checks** (`[scope]`): collection runs for them;
+- **the required checks** (`[scope]`): determine the coverage required; inactive collectors
+  record skips rather than gaining permission for additional reads;
 - **the accepted assumptions** (`[assumptions]`): a condition may rest on an assumption only if it
   is accepted, so acceptance decides which conditions are settled.
 
@@ -343,11 +347,14 @@ A typo never silently weakens a policy.
 - has no overrides;
 - denies no component or capability.
 
-**An observe session from before PR-4d-2.** The default policy file changed, so its SHA-256 did too:
-`session verify` of any older session with the built-in policy fails first on that digest, static
-sessions included. Only with `--policy` (a policy with the old `observe_audit`, or this one) does an
-older observe session reach `RequiredChecksChanged`: it did not require `processes.observed`. Run
-the inspection again.
+**Sessions from before PR-4d-3.** The expanded scope catalog adds `artifacts.dependencies`,
+`values.configured`, `values.observed`, and `binary.dependencies`. The built-in policy text and
+SHA-256 intentionally changed too. Older sessions still load, validate, and render, but
+`session verify` with the current built-in policy can refuse their policy digest and required
+checks (`RequiredChecksChanged`). Earlier changes, including PR-4d-2's `processes.observed`,
+have the same boundary. Historical verification needs the original policy and matching build;
+to use today's checks, inspect again. Verification evaluates recorded analysis; it never
+re-reads the deployment or attests that collection was truthful.
 
 Each later PR adds its scope to the default when its collector exists. A run never reports a gap
 for a check SIGIL cannot perform yet unless that scope was requested.

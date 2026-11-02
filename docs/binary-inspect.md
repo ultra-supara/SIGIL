@@ -33,6 +33,8 @@ symlink, is one input. For each input, the session records:
   dylibs, RPATHs, and dynamic linker; and its imports, each with its library
   ([below](#mach-o-imports)). A fat file records each architecture slice's offset, size, digest,
   table CPU type/subtype, and alignment.
+- **One `binary.dependencies` coverage entry:** modeled candidate search and its gaps, per input.
+  Mach-O is declared only (`Unsupported`); relocatable objects are `OutOfScope`.
 - **One `binary.container` coverage entry:** the input's status.
 - **One `binary.identity` coverage entry:** whether every scan the signature database asks for
   was done within its budget ([below](#signatures)).
@@ -53,10 +55,12 @@ symlink, is one input. For each input, the session records:
 | Over the `binary_bytes` budget | `BudgetExceeded`: not read, later inputs still are |
 | Changed or removed while it was read | `Error` |
 
-Under the default policy, any `binary.container` or `binary.identity` status other than
-`Complete` makes the result `INCOMPLETE`, except a `binary.identity` of `OutOfScope` (a file
-named as an NVIDIA library, [below](#signatures)), which closes the check. The same holds for any
-policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
+Under the default policy, `binary.container`, `binary.identity`, and `binary.dependencies`
+are required. Any entry that does not close makes the result `INCOMPLETE`: `Complete`,
+`NotPresent`, and `OutOfScope` close a check. For example, `binary.identity` is `OutOfScope`
+for a file named as an NVIDIA library ([below](#signatures)). Dependency coverage concerns
+modeled searches within the collected inputs, with unsupported loader stages recorded as gaps.
+The same holds for any policy that sets `binary_audit = ["binary"]` or omits the key. Only an explicit
 `binary_audit = []` requires nothing, and the result is then `COMPLETE` whatever the statuses.
 With `--code`, `binary_code_audit` adds `binary.code` the same way, so a run with `--code`
 requires nothing only when both `binary_audit = []` and `binary_code_audit = []`.
@@ -88,6 +92,8 @@ with `component: <component> (<status>)`, the status in words, for example
   declared dependencies.
 - Neither shows that the code calls them. Without `--code`, no code is analyzed and no call site
   is recorded; with it, the call sites are the direct ones found in the code.
+
+When inspected inputs supply compatible placements, SIGIL records conditional ELF dependency candidates. It reads no additional library paths: [dependency candidates](dependencies-and-values.md#dependency-candidates).
 
 ## Capabilities and code (`--code`)
 
@@ -617,6 +623,9 @@ Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them
 | `binary_imports` | 4096 | imports kept per artifact |
 | `binary_scan_bytes` | 64 MiB | section bytes the signature scan reads, per artifact |
 | `binary_code_bytes` | 256 MiB | bytes read for code, per artifact; with `--code` only |
+| `dependency_contexts` | 8192 | seed/branch enqueue attempts, including duplicates and cycles |
+| `dependency_candidates` | 65536 | file attempts, before compatibility and duplicate checks |
+| `dependency_search_paths` | 65536 | path components, including expansion and recorded symlink-target additions |
 
 ## `--out`
 

@@ -61,7 +61,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 20);
+    assert_eq!(all.len(), 21);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -465,6 +465,7 @@ fn binaries_are_tabled_under_runtime_artifacts() {
     s.binaries.push(BinaryFacts {
         slice,
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: Some(t("libggml.so.0")),
             needed: vec![t("libggml-base.so.0"), t("libc.so.6")],
@@ -1413,6 +1414,7 @@ fn install_binaries_show_their_capability_keys() {
     s.binaries.push(BinaryFacts {
         slice: slice.clone(),
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: Some(t("libggml.so.0")),
             needed: vec![],
@@ -1637,6 +1639,7 @@ fn install_binaries_show_their_component() {
     let facts = |slice: SliceId| BinaryFacts {
         slice,
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: None,
             needed: vec![],
@@ -1750,6 +1753,7 @@ fn several_claims_on_one_slice_are_joined_and_their_versions_keyed() {
     s.binaries.push(BinaryFacts {
         slice: slice.clone(),
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: None,
             needed: vec![],
@@ -1819,6 +1823,7 @@ fn install_binaries_show_their_signature_keys() {
     s.binaries.push(BinaryFacts {
         slice: slice.clone(),
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: None,
             needed: vec![],

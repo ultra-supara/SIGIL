@@ -13,6 +13,8 @@ separate questions:
 - **Source:** plan §4.4.2, §4.4.3 (components), and §4.6.2. The session types are described in
   [`docs/session-model.md`](session-model.md), and the scope rule in [`docs/policy.md`](policy.md).
 
+Dependency candidates and configured/observed values are described in [Dependency candidates and process values](dependencies-and-values.md).
+
 ## What is read
 
 | Item | Read | Not read |
@@ -635,8 +637,9 @@ database knows one of its names (PR-4c-1). Nothing more is read.
 ## Not yet
 
 - Mach-O sections and `__gopclntab`: a Mach-O is not scanned for signatures yet.
-- Resolving NEEDED, RPATH, and RUNPATH to files, and the `Required` identity assertions that need
-  it (a later PR).
+- Backend loader profiles, symbol binding, and the `Required` identity assertions that need
+  stronger dependency/binding analysis. Conditional ELF candidates are already recorded
+  ([dependency candidates](dependencies-and-values.md#dependency-candidates)).
 - Releases outside the embedded set, and releases built from a source commit.
 - Optional members: an installation without a GPU backend's directory is INCOMPLETE against a
   release that ships it.

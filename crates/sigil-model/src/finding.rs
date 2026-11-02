@@ -18,7 +18,7 @@ use crate::id::{
     OpenQuestionId, PolicyRuleRef, PremiseId, ProcessRole, RuleId, SliceId, Timestamp, ValueId,
 };
 use crate::identity::IdentityStatus;
-use crate::load::{LoadContext, LoadFact, TriValue, ValueOrigin};
+use crate::load::{LoadContext, LoadFact, ProcessValueRead, TriValue, ValueOrigin};
 use crate::relation::{BindingState, RuleSupport, RuleSupportRef};
 use crate::session::Session;
 
@@ -196,7 +196,14 @@ impl Session {
                     .iter()
                     .find(|v| v.id == *value)
                     .ok_or_else(|| missing("value", value.to_string()))?;
-                if matches!(record.origin, ValueOrigin::Configured { .. }) {
+                if matches!(
+                    record.origin,
+                    ValueOrigin::Configured { .. }
+                        | ValueOrigin::ObservedProcess {
+                            read: Some(ProcessValueRead::InitialEnvironment),
+                            ..
+                        }
+                ) {
                     return Ok(Settles::Neither);
                 }
                 Ok(match (&record.value, needs) {

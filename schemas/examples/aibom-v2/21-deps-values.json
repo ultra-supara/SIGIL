@@ -1,0 +1,197 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "9cd584cb03179cb2afcc0f1938d061e4a694143a4f92d46f113545130ef3e222",
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "artifacts.dependencies",
+          "values.configured"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [
+      {
+        "process": {
+          "pid": 4242,
+          "start_ticks": 1000,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        },
+        "roles": [
+          "ollama serve"
+        ],
+        "name": "ollama",
+        "exe": {
+          "Instance": {
+            "instance": "inst:install/bin/ollama"
+          }
+        }
+      },
+      {
+        "process": {
+          "pid": 4300,
+          "start_ticks": 1200,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        },
+        "roles": [],
+        "name": "llama-server",
+        "exe": {
+          "Instance": {
+            "instance": "inst:install/lib/ollama/llama-server"
+          }
+        }
+      }
+    ],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:1919191919191919191919191919191919191919191919191919191919191919",
+      "size": 312,
+      "format": "Other",
+      "paths": [
+        "/etc/systemd/system/ollama.service"
+      ],
+      "slices": []
+    },
+    {
+      "id": "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Exec"
+        }
+      },
+      "paths": [
+        "/usr/local/bin/ollama"
+      ],
+      "slices": [
+        {
+          "id": "sha256:2020202020202020202020202020202020202020202020202020202020202020#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "2020202020202020202020202020202020202020202020202020202020202020",
+          "components": []
+        }
+      ]
+    },
+    {
+      "id": "sha256:2121212121212121212121212121212121212121212121212121212121212121",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Exec"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/llama-server"
+      ],
+      "slices": [
+        {
+          "id": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+          "components": []
+        }
+      ]
+    },
+    {
+      "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "paths": [
+        "/usr/local/lib/ollama/libggml-cpu-haswell.so"
+      ],
+      "slices": [
+        {
+          "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222#x86_64@0",
+          "arch": "x86_64",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "components": []
+        }
+      ]
+    },
+    {
+      "id": "sha256:2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "size": 5,
+      "format": "Other",
+      "paths": [
+        "/usr/share/ollama/.ollama/models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a"
+      ],
+      "slices": []
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "coverage": [
+    {
+      "check": "artifacts.dependencies",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 1
+      }
+    },
+    {
+      "check": "artifacts.discovery",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "processes.observed",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 3
+      }
+    },
+    {
+      "check": "values.configured",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 1
+      }
+    },
+    {
+      "check": "values.observed",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 3
+      }
+    }
+  ]
+}

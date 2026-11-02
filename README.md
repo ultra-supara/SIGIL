@@ -228,7 +228,7 @@ Changes to the model or browser bindings also require rebuilding `site/viewer/pk
 
 ## What's next
 
-The next steps build on the existing container, identity, and direct-call analysis: dependency resolution and backend loading, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned.
+The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned.
 
 The legacy `lift` and `assess` commands and their IR/emulator were removed. See [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md) for the transition and the [roadmap](docs/sigil-overview.md#roadmap) for milestones.
 
@@ -241,6 +241,7 @@ The legacy `lift` and `assess` commands and their IR/emulator were removed. See 
 | [Policy](docs/policy.md) | Scopes, rule overrides, denials, open questions, and session verification. |
 | [Session model](docs/session-model.md) | Evidence, claims, coverage, validation, and canonical form. |
 | [Runtime artifacts](docs/runtime-artifacts.md) | Release references, binary facts, and component identification. |
+| [Dependency candidates and values](docs/dependencies-and-values.md) | Conditional ELF candidates, configured values and minimized observations with their sources. |
 | [Model store](docs/model-store.md) / [Exposure](docs/exposure.md) | Integrity and license checks; listener attribution and visibility limits. |
 | [AI-BOM and comparison](docs/ai-bom-and-comparison.md) | AI-BOM v2 and the planned baseline comparison workflow. |
 | [Architecture and safety](docs/architecture-and-safety.md) | Crate boundaries, data flow, output handling, and safety contracts. |

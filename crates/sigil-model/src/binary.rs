@@ -223,10 +223,23 @@ impl MachOLibrary {
     }
 }
 
+/// ELF header facts needed to compare dependency candidates. Machine is `e_machine`, not an
+/// inference from a pathname or a SONAME. None on old facts means unrecorded compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElfAbi {
+    pub is_64: bool,
+    pub little_endian: bool,
+    pub machine: u16,
+}
+
 /// ELF facts, from the program headers first (what the loader reads), then the sections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElfFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abi: Option<ElfAbi>,
+
     /// `PT_INTERP`, without its NUL.
     pub interp: Option<UntrustedText>,
     /// `DT_SONAME`.

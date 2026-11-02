@@ -43,6 +43,7 @@ fn observation() -> ObservationMeta {
 
 fn request(dir: &Path, filter: Option<&str>) -> StoreRequest {
     StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: dir.to_path_buf(),
         model_filter: filter.map(str::to_string),
         budgets: FsBudgets::default(),

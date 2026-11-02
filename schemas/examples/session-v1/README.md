@@ -21,6 +21,8 @@ After an intended model change, regenerate them with
 `SIGIL_BLESS=1 cargo test -p sigil-model --test aibom`. The viewer's sample
 `site/viewer/samples/session-16-binary-code.json` is a copy of `16-binary-code.json`.
 
+`site/viewer/samples/session-21-deps-values.json` is a copy of `21-deps-values.json` and demonstrates the Dependencies and Process values tables, including initial-environment qualification.
+
 | File | Shows |
 |---|---|
 | `01-complete-pass` | Nothing found, every required check closed: PASS + COMPLETE |
@@ -43,3 +45,4 @@ After an intended model change, regenerate them with
 | `18-capability-policy` | Example 16's object with a second import, `execve`, that its code does not call directly (synthetic: the fixture imports only `connect`), evaluated under a policy that denies `posix.network` and `posix.process_spawn` (#51): the call of `connect` is a policy violation citing its call site, and `execve` an open question counted as a gap, since code analysis does not follow a call that is not direct: FAIL + INCOMPLETE |
 | `19-service-unit` | `--service-unit /etc/systemd/system/ollama.service` (PR-4d-1): the unit's `ExecStart=` at line 6 names `/usr/local/bin/ollama`, so `/usr/local` is inspected as with `--install-dir`. The unit is the `service-unit` root's one instance, discovered by `Argument`; `bin/ollama` is discovered by the walk and by the unit (`ServiceUnit`, `ExecStart`, line 6). Discovery is complete: PASS + COMPLETE |
 | `20-observed-processes` | `--mode observe --install-dir /usr/local` (PR-4d-2): `ollama serve` and its runner, a descendant with no role. Each one's executable is linked by dev:ino to the instance the walk read, which records `ProcessExe`. The runner's mappings link a backend and the model blob; libc, outside the walks, stays unlinked. `processes.observed` is complete on the audit and on both processes: PASS + COMPLETE |
+| `21-deps-values` | PR-4d-3 in observe mode with an explicitly supplied unit and `--observe-env`: one configured User with line provenance, twelve Unknown launch predictions because effective unit selection/drop-ins are unexamined, and separate cwd/effective-ID/initial-environment observations for `ollama serve` and its roleless descendant. The runner declares a backend and has static RUNPATH plus same-process RUNPATH/initial-LD_LIBRARY_PATH candidates. Cache, hardware-capability, secure-execution and loader-configuration gaps remain explicit: PASS + INCOMPLETE. Values and candidate relations stay in the session; its AI-BOM carries the changed session digest and coverage. |

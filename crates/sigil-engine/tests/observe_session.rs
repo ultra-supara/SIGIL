@@ -59,7 +59,9 @@ fn session_active(
     active: &ActiveInput,
 ) -> Session {
     let req = ObserveRequest {
+        observe_env: false,
         store: StoreRequest {
+            deps_budgets: Default::default(),
             models_dir: store.to_path_buf(),
             model_filter: None,
             budgets: FsBudgets::default(),
@@ -131,6 +133,7 @@ fn missing_binds_and_processes() -> Completeness {
         missing_required: vec![
             CheckId::new(BINDS).unwrap(),
             CheckId::new(PROCESSES_OBSERVED).unwrap(),
+            CheckId::new(sigil_model::VALUES_OBSERVED).unwrap(),
         ],
         gaps: vec![],
     }

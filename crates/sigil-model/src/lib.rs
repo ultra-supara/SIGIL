@@ -29,6 +29,8 @@ pub mod binary_input;
 pub mod canonical;
 pub mod code;
 pub mod coverage;
+pub mod dependency_path;
+pub mod dependency_search;
 pub mod evidence;
 pub mod finding;
 pub mod hint;
@@ -52,15 +54,16 @@ pub use access::{
 };
 pub use artifact::{
     Arch, Artifact, DiscoverySource, ElfType, FileInstance, Format, InstanceContent, LinkHop,
-    MappingObs, MapsRead, NotReadReason, NsInode, ProcessExe, ProcessObs, ProcessRef, Slice,
-    Stability, StatInfo, PROCESSES_OBSERVED, RUNTIME_ROLE,
+    MappingObs, MapsRead, NotReadReason, NsInode, ProcessExe, ProcessObs, ProcessRef,
+    RecordedDirectory, RecordedPathProof, Slice, Stability, StatInfo, PROCESSES_OBSERVED,
+    RUNTIME_ROLE,
 };
 pub use binary::{
     imports_over_gap, macho_architecture, BinaryFacts, ContainerFacts, DataSymbol, DataValue,
-    ElfFacts, ElfImport, FunctionReturn, GoBuildInfo, GoModule, GoSetting, LookedUp, MachOFacts,
-    MachOImport, MachOLibrary, ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY, DYNSYM_UNREAD_GAPS,
-    FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP, IMPORTS_OVER_GAP, LIBCXX, LIBSYSTEM,
-    LOAD_DYLIB_GAP_PREFIX, MH_OBJECT, SYMBOLS_NO_DYNSYM_GAP, SYMBOLS_NO_SECTIONS_GAP,
+    ElfAbi, ElfFacts, ElfImport, FunctionReturn, GoBuildInfo, GoModule, GoSetting, LookedUp,
+    MachOFacts, MachOImport, MachOLibrary, ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY,
+    DYNSYM_UNREAD_GAPS, FAT_CPU_MISMATCH_GAP, FAT_DUPLICATE_ARCH_GAP, IMPORTS_OVER_GAP, LIBCXX,
+    LIBSYSTEM, LOAD_DYLIB_GAP_PREFIX, MH_OBJECT, SYMBOLS_NO_DYNSYM_GAP, SYMBOLS_NO_SECTIONS_GAP,
     SYMBOLS_UNREADABLE_SECTIONS_GAP,
 };
 pub use binary_input::{
@@ -104,8 +107,9 @@ pub use identity::{
 };
 pub use listener::{Listener, ListenerOwner, Protocol};
 pub use load::{
-    CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase, ProcessValue, TriValue,
-    ValueKey, ValueOrigin,
+    allowlisted_env_name, CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase,
+    ProcessValue, ProcessValueRead, TriValue, ValueKey, ValueOrigin, VALUES_CONFIGURED,
+    VALUES_OBSERVED,
 };
 pub use model::{
     digest_hex, BlobLookup, LayerRole, LicenseText, Model, ModelLayer, ModelProvenance,
@@ -117,8 +121,9 @@ pub use reference::{
     INSTALL_ROOT, SERVICE_UNIT_ROOT,
 };
 pub use relation::{
-    BindingPremise, BindingState, DeclKind, ObligationResult, ObligationState, Relation,
-    RuleSupport, RuleSupportRef, SearchDir, SearchRule,
+    BindingPremise, BindingState, DeclKind, DependencyContext, DependencySearch, ObligationResult,
+    ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir, SearchRule,
+    ARTIFACTS_DEPENDENCIES, BINARY_DEPENDENCIES,
 };
 pub use render::aibom::AiBom;
 pub use session::{

@@ -3,6 +3,7 @@
 
 pub mod aibom;
 pub mod code;
+mod deps_values;
 pub mod html;
 pub mod markdown;
 mod md;

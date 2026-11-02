@@ -37,6 +37,10 @@ pub struct Proc<'a> {
     /// The text of its `maps`.
     pub maps: &'a str,
     pub mnt_ns: u64,
+    /// Raw process-namespace path; its target need not exist.
+    pub cwd: &'a str,
+    pub status: &'a [u8],
+    pub environ: &'a [u8],
 }
 
 impl Default for Proc<'_> {
@@ -52,6 +56,9 @@ impl Default for Proc<'_> {
             ppid: 1,
             maps: "",
             mnt_ns: OWN_MNT_NS,
+            cwd: "/work",
+            status: b"Name:\tfixture\nUid:\t1000\t1001\t1002\t1003\nGid:\t2000\t2001\t2002\t2003\n",
+            environ: b"",
         }
     }
 }
@@ -161,6 +168,9 @@ impl FakeProc {
         symlink(format!("net:[{}]", p.net_ns), dir.join("ns/net")).unwrap();
         symlink(format!("mnt:[{}]", p.mnt_ns), dir.join("ns/mnt")).unwrap();
         fs::write(dir.join("maps"), p.maps).unwrap();
+        symlink(p.cwd, dir.join("cwd")).unwrap();
+        fs::write(dir.join("status"), p.status).unwrap();
+        fs::write(dir.join("environ"), p.environ).unwrap();
         for (n, inode) in p.sockets.iter().enumerate() {
             symlink(
                 format!("socket:[{inode}]"),

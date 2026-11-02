@@ -75,7 +75,9 @@ fn session_with(
     proc_budgets: ProcBudgets,
 ) -> Session {
     let req = ObserveRequest {
+        observe_env: false,
         store: StoreRequest {
+            deps_budgets: Default::default(),
             models_dir: models.to_path_buf(),
             model_filter: None,
             budgets: FsBudgets::default(),

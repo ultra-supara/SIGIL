@@ -701,6 +701,7 @@ fn install_session() -> Session {
     s.binaries.push(BinaryFacts {
         slice,
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: None,
             needed: vec![],
