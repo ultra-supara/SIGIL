@@ -61,6 +61,7 @@ pub struct Function {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoundsSource {
     EhFrameFde,
+    MachOCompactUnwind,
 }
 
 /// A call or tail jump at an address, with its target and recovered argument values.
@@ -74,6 +75,13 @@ pub struct CallSite {
     pub target: CallTarget,
     /// In argument-register order.
     pub args: Vec<ArgValue>,
+    /// Whether argument positions (not values) are proved by archived ABI knowledge.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::session::present"
+    )]
+    pub args_layout: Option<ArgumentLayout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +106,13 @@ pub enum CallTarget {
     Import {
         symbol: UntrustedText,
         via: ImportVia,
+        /// Exact raw same-slice import witness; absent for ELF.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::session::present"
+        )]
+        macho_import: Option<crate::MachOImport>,
     },
     /// An indirect call through a recovered value (e.g. the return value of `dl_get_sym`).
     Indirect { value: ArgValue },
@@ -109,9 +124,13 @@ pub enum ImportVia {
     PltSec,
     Got,
     Reloc,
+    MachOStub,
+    MachOGot,
+    MachOReloc,
 }
 
-/// x86_64 general-purpose register (lowercase in JSON).
+/// Architecture-specific general-purpose register (lowercase in JSON).
+/// SP is distinct from the AArch64 zero register, which is never recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Reg {
@@ -131,6 +150,38 @@ pub enum Reg {
     R13,
     R14,
     R15,
+    X0,
+    X1,
+    X2,
+    X3,
+    X4,
+    X5,
+    X6,
+    X7,
+    X8,
+    X9,
+    X10,
+    X11,
+    X12,
+    X13,
+    X14,
+    X15,
+    X16,
+    X17,
+    X18,
+    X19,
+    X20,
+    X21,
+    X22,
+    X23,
+    X24,
+    X25,
+    X26,
+    X27,
+    X28,
+    X29,
+    X30,
+    Sp,
 }
 
 /// The value a register holds at a call or branch, as far as forward propagation recovers it.
@@ -381,4 +432,53 @@ pub enum BinaryParam {
     },
     /// Optimized away (e.g. an unused debug flag).
     Eliminated,
+}
+
+/// A complete location list or a proved leading prefix. Unknown values do not make
+/// a location layout partial. Stack/aggregate/variadic positions are not inferred.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum ArgumentLayout {
+    Complete,
+    Partial { reason: UntrustedText },
+}
+
+impl ArgValue {
+    /// Register holding this value; nested operands have their own register.
+    pub fn register(&self) -> Reg {
+        match self {
+            Self::ConstStr { reg, .. }
+            | Self::ConstInt { reg, .. }
+            | Self::ReturnOf { reg, .. }
+            | Self::Param { reg, .. }
+            | Self::Load { reg, .. }
+            | Self::Low { reg, .. }
+            | Self::Set { reg, .. }
+            | Self::Unknown { reg, .. } => *reg,
+        }
+    }
+}
+
+impl Reg {
+    pub fn arch(self) -> crate::Arch {
+        match self {
+            Self::Rax
+            | Self::Rbx
+            | Self::Rcx
+            | Self::Rdx
+            | Self::Rsi
+            | Self::Rdi
+            | Self::Rbp
+            | Self::Rsp
+            | Self::R8
+            | Self::R9
+            | Self::R10
+            | Self::R11
+            | Self::R12
+            | Self::R13
+            | Self::R14
+            | Self::R15 => crate::Arch::X86_64,
+            _ => crate::Arch::Aarch64,
+        }
+    }
 }

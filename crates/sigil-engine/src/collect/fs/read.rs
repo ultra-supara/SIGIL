@@ -440,6 +440,7 @@ impl SafeFs {
             None
         };
         let artifact = Artifact {
+            code_slice_inventory: None,
             id: artifact_id.clone(),
             size: total,
             format: Format::Other,

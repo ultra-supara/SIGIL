@@ -585,6 +585,7 @@ impl Recorder {
                             defined: None,
                             via,
                         } => CallTarget::Import {
+                            macho_import: None,
                             symbol: UntrustedText::from_bytes(name.to_vec()),
                             via: (*via).into(),
                         },
@@ -615,6 +616,7 @@ impl Recorder {
                         args.push(to_arg(v, reg(g)?, &keep, img, reader, run));
                     }
                     Some(CallSite {
+                        args_layout: None,
                         id: call_id(*ip)?,
                         caller: caller.clone(),
                         addr: *ip,
@@ -1515,6 +1517,7 @@ mod tests {
 
     fn import(s: &str, via: ImportVia) -> CallTarget {
         CallTarget::Import {
+            macho_import: None,
             symbol: text(s.as_bytes()),
             via,
         }
@@ -1575,6 +1578,7 @@ mod tests {
         assert_eq!(
             rec.call_sites,
             [CallSite {
+                args_layout: None,
                 id: cs(at[4]),
                 caller: fn_1000(),
                 addr: at[4],
@@ -1666,6 +1670,7 @@ mod tests {
             call: cs(site),
         };
         let site = |ip: u64, target, args| CallSite {
+            args_layout: None,
             id: cs(ip),
             caller: fn_1000(),
             addr: ip,
@@ -1756,6 +1761,7 @@ mod tests {
         assert_eq!(
             rec.call_sites,
             [CallSite {
+                args_layout: None,
                 id: cs(at[1]),
                 caller: fn_1000(),
                 addr: at[1],
@@ -2251,6 +2257,7 @@ mod tests {
         for (k, t) in internal.iter().enumerate() {
             let ip = entries[0] + k as u64;
             rec.call_sites.push(CallSite {
+                args_layout: None,
                 id: cs(ip),
                 caller: rec.functions[0].id.clone(),
                 addr: ip,

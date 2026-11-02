@@ -442,6 +442,7 @@ fn assemble(
         tool,
         knowledge,
         request: RunRequest {
+            code_analysis: None,
             mode,
             roots,
             audit,
@@ -562,6 +563,7 @@ pub fn binary_session(
             vec![capability_table()?]
         },
         request: RunRequest {
+            code_analysis: None,
             mode: Mode::Static,
             roots: facts.roots,
             audit,
@@ -802,6 +804,7 @@ mod tests {
             vec![]
         };
         Artifact {
+            code_slice_inventory: None,
             id,
             size,
             format,

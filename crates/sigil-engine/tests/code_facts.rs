@@ -74,7 +74,7 @@ fn outcome(name: &str) -> Outcome {
 
 fn import(c: &CallSite) -> Option<(&str, ImportVia)> {
     match &c.target {
-        CallTarget::Import { symbol, via } => Some((symbol.as_str().unwrap(), *via)),
+        CallTarget::Import { symbol, via, .. } => Some((symbol.as_str().unwrap(), *via)),
         _ => None,
     }
 }

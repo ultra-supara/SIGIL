@@ -24,6 +24,13 @@ pub struct Artifact {
     pub format: Format,
     /// One slice per architecture (a fat Mach-O has several). Empty for non-binaries.
     pub slices: Vec<Slice>,
+    /// Bounded inventory of code-relevant slice descriptors, independent of decoding.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::session::present"
+    )]
+    pub code_slice_inventory: Option<CodeSliceInventory>,
 }
 
 /// Container format of an artifact.
@@ -334,4 +341,12 @@ mod tests {
         }
         assert_eq!(Arch::from_name("mips"), None);
     }
+}
+
+/// Descriptor enumeration status; an inner parse failure alone does not lose a descriptor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum CodeSliceInventory {
+    Complete,
+    Partial { missing: Vec<String> },
 }

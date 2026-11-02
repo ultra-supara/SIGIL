@@ -144,6 +144,7 @@ impl World {
         let artifact = ArtifactId::new(format!("sha256:{hash}")).unwrap();
         let slice = SliceId::new(format!("{artifact}#x86_64@0")).unwrap();
         self.artifacts.push(Artifact {
+            code_slice_inventory: None,
             id: artifact.clone(),
             size: 64,
             format: Format::Elf { kind },

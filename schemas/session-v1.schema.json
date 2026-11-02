@@ -231,6 +231,77 @@
         }
       ]
     },
+    "CodeAnalysis": {
+      "type": "string",
+      "enum": [
+        "multiarch-v1"
+      ]
+    },
+    "ArgumentLayout": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Complete"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Partial"
+          ],
+          "properties": {
+            "Partial": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "reason": {
+                  "$ref": "#/$defs/UntrustedText"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CodeSliceInventory": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Complete"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Partial"
+          ],
+          "properties": {
+            "Partial": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "missing"
+              ],
+              "properties": {
+                "missing": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "Session": {
       "description": "One analysis run: the source of truth. Exports are derived from it.",
       "type": "object",
@@ -396,7 +467,8 @@
         "code": {
           "description": "Whether code was analyzed (`sigil binary inspect --code`, PR-5a): the direct call sites of the capability imports. Optional on read (missing means false), always written by SIGIL.",
           "type": "boolean"
-        }
+        },
+        "code_analysis": {"$ref": "#/$defs/CodeAnalysis"}
       }
     },
     "Mode": {"type": "string", "enum": ["Static", "Observe"]},
@@ -499,7 +571,8 @@
         "id": {"$ref": "#/$defs/ArtifactId"},
         "size": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
         "format": {"$ref": "#/$defs/Format"},
-        "slices": {"type": "array", "items": {"$ref": "#/$defs/Slice"}}
+        "slices": {"type": "array", "items": {"$ref": "#/$defs/Slice"}},
+        "code_slice_inventory": {"$ref": "#/$defs/CodeSliceInventory"}
       }
     },
     "Format": {
@@ -2062,7 +2135,7 @@
         "names": {"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}}
       }
     },
-    "BoundsSource": {"type": "string", "enum": ["EhFrameFde"]},
+    "BoundsSource": {"type": "string", "enum": ["EhFrameFde", "MachOCompactUnwind"]},
     "CallSite": {
       "type": "object",
       "additionalProperties": false,
@@ -2073,7 +2146,8 @@
         "addr": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
         "kind": {"$ref": "#/$defs/CallKind"},
         "target": {"$ref": "#/$defs/CallTarget"},
-        "args": {"type": "array", "items": {"$ref": "#/$defs/ArgValue"}}
+        "args": {"type": "array", "items": {"$ref": "#/$defs/ArgValue"}},
+        "args_layout": {"$ref": "#/$defs/ArgumentLayout"}
       }
     },
     "CallKind": {"type": "string", "enum": ["Call", "TailJump"]},
@@ -2122,7 +2196,8 @@
               "required": ["symbol", "via"],
               "properties": {
                 "symbol": {"$ref": "#/$defs/UntrustedText"},
-                "via": {"$ref": "#/$defs/ImportVia"}
+                "via": {"$ref": "#/$defs/ImportVia"},
+                "macho_import": {"$ref": "#/$defs/MachOImport"}
               }
             }
           }
@@ -2142,7 +2217,7 @@
         }
       ]
     },
-    "ImportVia": {"type": "string", "enum": ["Plt", "PltSec", "Got", "Reloc"]},
+    "ImportVia": {"type": "string", "enum": ["Plt", "PltSec", "Got", "Reloc", "MachOStub", "MachOGot", "MachOReloc"]},
     "Reg": {
       "type": "string",
       "enum": [
@@ -2161,7 +2236,39 @@
         "r12",
         "r13",
         "r14",
-        "r15"
+        "r15",
+        "x0",
+        "x1",
+        "x2",
+        "x3",
+        "x4",
+        "x5",
+        "x6",
+        "x7",
+        "x8",
+        "x9",
+        "x10",
+        "x11",
+        "x12",
+        "x13",
+        "x14",
+        "x15",
+        "x16",
+        "x17",
+        "x18",
+        "x19",
+        "x20",
+        "x21",
+        "x22",
+        "x23",
+        "x24",
+        "x25",
+        "x26",
+        "x27",
+        "x28",
+        "x29",
+        "x30",
+        "sp"
       ]
     },
     "ArgValue": {

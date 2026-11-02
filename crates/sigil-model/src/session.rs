@@ -142,6 +142,13 @@ pub struct RunRequest {
     /// of the capability imports. Optional on read (false when missing), always written.
     #[serde(default)]
     pub code: bool,
+    /// Explicit opt-in to the additive multiarchitecture evidence contract.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub code_analysis: Option<CodeAnalysis>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,4 +182,20 @@ pub struct ObservationMeta {
     pub net_ns: Option<u64>,
     /// SIGIL's own mount namespace inode; `None` when not read in this mode.
     pub mnt_ns: Option<u64>,
+}
+
+/// Versioned code-evidence contract. Absence retains all legacy semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CodeAnalysis {
+    #[serde(rename = "multiarch-v1")]
+    MultiarchV1,
+}
+
+/// Optional-on-read fields may be omitted, but an explicit null is not evidence.
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }

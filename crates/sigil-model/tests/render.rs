@@ -1376,6 +1376,7 @@ fn hostile_capabilities_are_escaped() {
     s.code[0].functions[0].names = vec![t(HOSTILE)];
     let site = &mut s.code[0].call_sites[0];
     site.target = CallTarget::Import {
+        macho_import: None,
         symbol: t(HOSTILE),
         via: ImportVia::Reloc,
     };

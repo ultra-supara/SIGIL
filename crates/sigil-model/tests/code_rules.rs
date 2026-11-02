@@ -66,11 +66,13 @@ fn connect_call(slice: &SliceId) -> CodeFacts {
             names: vec![UntrustedText::new("kernel")],
         }],
         call_sites: vec![CallSite {
+            args_layout: None,
             id: CallId::new("cs:0x1008").unwrap(),
             caller: FnId::new("fn:0x1000").unwrap(),
             addr: 0x1008,
             kind: CallKind::Call,
             target: CallTarget::Import {
+                macho_import: None,
                 symbol: UntrustedText::new("connect"),
                 via: ImportVia::Plt,
             },

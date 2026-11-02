@@ -1,0 +1,342 @@
+//! Additive evidence contract. Coverage aggregation is a separate, required gate.
+use std::collections::BTreeSet;
+
+use super::Validator;
+use crate::code_abi::{self, CodeAbi};
+use crate::{
+    Arch, ArgValue, ArgumentLayout, BinaryParam, BoundsSource, CallTarget, ContainerFacts, Format,
+    ImportVia, KnowledgeKind, MachOImport, Ref, Reg, SliceId, UntrustedText, ARTIFACTS_CODE,
+    BINARY_CODE, INSTALL_ROOT,
+};
+
+impl Validator<'_> {
+    pub(super) fn multiarch_code(&mut self) {
+        let s = self.s;
+        let marked = s.request.code_analysis.is_some();
+        if !marked {
+            for a in &s.artifacts {
+                if a.code_slice_inventory.is_some() {
+                    self.code_error(&a.id, "code_slice_inventory needs multiarch-v1");
+                }
+            }
+            for c in &s.coverage {
+                if matches!(c.check.as_str(), BINARY_CODE | ARTIFACTS_CODE)
+                    && matches!(c.scope, Ref::Slice(_))
+                {
+                    self.code_error("coverage", "slice code coverage needs multiarch-v1");
+                }
+            }
+            for f in &s.code {
+                if self
+                    .index
+                    .slices
+                    .get(f.slice.as_str())
+                    .is_some_and(|(_, a, slice)| {
+                        slice.arch != Arch::X86_64 || !matches!(a.format, Format::Elf { .. })
+                    })
+                {
+                    self.code_error(&f.slice, "nonlegacy code facts need multiarch-v1");
+                }
+                for function in &f.functions {
+                    if function.bounds == BoundsSource::MachOCompactUnwind {
+                        self.code_error(&f.slice, "compact unwind needs multiarch-v1");
+                    }
+                }
+                for c in &f.call_sites {
+                    if c.args_layout.is_some() {
+                        self.code_error(&c.id, "argument layout needs multiarch-v1");
+                    }
+                    if matches!(&c.target, CallTarget::Import { via, macho_import, .. } if is_macho(*via) || macho_import.is_some())
+                    {
+                        self.code_error(&c.id, "Mach-O import witness needs multiarch-v1");
+                    }
+                }
+            }
+            return;
+        }
+
+        // Task 4 must replace this gate with the complete slice/inventory/parent coverage
+        // contract before any producer or saved-session reader accepts MultiarchV1.
+        self.code_error(
+            "request.code_analysis",
+            "multiarch coverage validation is not enabled",
+        );
+        if !s.request.code {
+            self.code_error("request", "marker needs request.code");
+        }
+        if !s
+            .request
+            .roots
+            .iter()
+            .any(|r| crate::is_binary_root(&r.id) || r.id.as_str() == INSTALL_ROOT)
+        {
+            self.code_error("request", "marker needs a binary or installation root");
+        }
+        let references: Vec<_> = s
+            .knowledge
+            .iter()
+            .filter(|k| k.id == code_abi::ID)
+            .collect();
+        let db = match references.as_slice() {
+            [k] if k.kind == KnowledgeKind::SignatureDb => {
+                code_abi::archived(&k.version, k.sha256.as_str())
+            }
+            _ => None,
+        };
+        if db.is_none() {
+            self.code_error(
+                "knowledge",
+                "exactly one archived SignatureDb/code-abi-signatures version/hash is required",
+            );
+        }
+
+        // Index exact imports once per slice, rather than scanning every import for each call.
+        let imports: std::collections::HashMap<&SliceId, BTreeSet<&MachOImport>> = s
+            .binaries
+            .iter()
+            .filter_map(|b| {
+                let ContainerFacts::MachO(m) = &b.container else {
+                    return None;
+                };
+                Some((&b.slice, m.imports.iter().collect()))
+            })
+            .collect();
+        let elf_imports: std::collections::HashMap<&SliceId, BTreeSet<&UntrustedText>> = s
+            .binaries
+            .iter()
+            .filter_map(|b| {
+                let ContainerFacts::Elf(e) = &b.container else {
+                    return None;
+                };
+                Some((&b.slice, e.imports.iter().map(|i| &i.name).collect()))
+            })
+            .collect();
+        for facts in &s.code {
+            let Some((_, artifact, slice)) = self.index.slices.get(facts.slice.as_str()) else {
+                continue;
+            };
+            let Some(binary) = self.index.binaries.get(facts.slice.as_str()) else {
+                self.code_error(&facts.slice, "multiarch code facts require a parsed slice");
+                continue;
+            };
+            let macho = matches!(binary.container, ContainerFacts::MachO(_));
+            if !matches!(slice.arch, Arch::X86_64 | Arch::Aarch64) {
+                self.code_error(&facts.slice, "unsupported code architecture");
+            }
+            let functions: std::collections::HashMap<_, _> =
+                facts.functions.iter().map(|f| (&f.id, f)).collect();
+            for f in &facts.functions {
+                if f.entry >= f.end {
+                    self.code_error(&f.id, "function bounds need entry < end");
+                }
+                if f.bounds == BoundsSource::MachOCompactUnwind
+                    && !matches!(&binary.container, ContainerFacts::MachO(m) if m.file_type == crate::MH_OBJECT)
+                {
+                    self.code_error(
+                        &f.id,
+                        "compact unwind requires Mach-O object explicit-length bounds",
+                    );
+                }
+            }
+            let abi = match (&binary.container, slice.arch) {
+                (ContainerFacts::Elf(e), Arch::Aarch64)
+                    if matches!(
+                        e.abi,
+                        Some(crate::ElfAbi {
+                            is_64: true,
+                            little_endian: true,
+                            machine: 183
+                        })
+                    ) =>
+                {
+                    Some(CodeAbi::ElfAarch64)
+                }
+                (ContainerFacts::MachO(m), Arch::Aarch64)
+                    if m.is_64 && m.cpu_type == 0x0100_000c =>
+                {
+                    Some(CodeAbi::DarwinArm64)
+                }
+                (ContainerFacts::MachO(m), Arch::X86_64)
+                    if m.is_64 && m.cpu_type == 0x0100_0007 =>
+                {
+                    Some(CodeAbi::DarwinX86_64)
+                }
+                _ => None,
+            };
+            let legacy =
+                matches!(artifact.format, Format::Elf { .. }) && slice.arch == Arch::X86_64;
+            let has_gap = binary
+                .gaps
+                .iter()
+                .any(|g| g.starts_with("code: argument layout partial:"));
+            for c in &facts.call_sites {
+                let register_limit = if slice.arch == Arch::Aarch64 { 8 } else { 6 };
+                if c.args.len() > register_limit {
+                    self.code_error(&c.id, "call exceeds the argument-register ABI limit");
+                }
+                if functions
+                    .get(&c.caller)
+                    .is_some_and(|f| c.addr < f.entry || c.addr >= f.end)
+                {
+                    self.code_error(&c.id, "call address outside caller bounds");
+                }
+                let unknown = UntrustedText::new("");
+                let (symbol, library) = if let CallTarget::Import {
+                    symbol,
+                    via,
+                    macho_import,
+                } = &c.target
+                {
+                    if macho {
+                        if !is_macho(*via)
+                            || !macho_import.as_ref().is_some_and(|m| {
+                                m.name == *symbol
+                                    && imports.get(&facts.slice).is_some_and(|set| set.contains(m))
+                            })
+                        {
+                            self.code_error(&c.id, "Mach-O import witness must exactly match name/library/weak in this slice and route");
+                        }
+                    } else {
+                        if is_macho(*via) || macho_import.is_some() {
+                            self.code_error(
+                                &c.id,
+                                "ELF cannot carry a Mach-O import witness or route",
+                            );
+                        }
+                        if !elf_imports
+                            .get(&facts.slice)
+                            .is_some_and(|set| set.contains(symbol))
+                        {
+                            self.code_error(&c.id, "import target is absent from its parsed slice");
+                        }
+                    }
+                    (symbol, macho_import.as_ref().map(|m| &m.library))
+                } else {
+                    (&unknown, None)
+                };
+                if legacy {
+                    if c.args_layout.is_some() {
+                        self.code_error(&c.id, "legacy x86 ELF argument layout must remain absent");
+                    }
+                    continue;
+                }
+                let Some(layout) = &c.args_layout else {
+                    self.code_error(&c.id, "new code facts require an argument layout");
+                    continue;
+                };
+                let Some(db) = db else { continue };
+                let plan = db.argument_plan(abi, symbol, library);
+                if c.args.len() != plan.registers.len()
+                    || c.args
+                        .iter()
+                        .zip(plan.registers)
+                        .any(|(arg, reg)| arg.register() != *reg)
+                {
+                    self.code_error(
+                        &c.id,
+                        "argument prefix does not match archived ABI locations",
+                    );
+                }
+                match layout {
+                    ArgumentLayout::Complete if plan.layout != ArgumentLayout::Complete => {
+                        self.code_error(
+                            &c.id,
+                            "argument layout cannot be Complete for an unproved full prototype",
+                        );
+                    }
+                    ArgumentLayout::Partial { reason } => {
+                        if reason.as_bytes().iter().all(u8::is_ascii_whitespace) {
+                            self.code_error(
+                                &c.id,
+                                "partial argument layout needs a nonempty reason",
+                            );
+                        }
+                        if !has_gap {
+                            self.code_error(&c.id, "partial argument layout gap is missing");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pub(super) fn multiarch_register(
+        &mut self,
+        slice: &SliceId,
+        reg: Reg,
+        at: &(impl std::fmt::Display + ?Sized),
+    ) {
+        if self.s.request.code_analysis.is_none() {
+            if reg.arch() == Arch::Aarch64 {
+                self.code_error(at, "AArch64 register needs multiarch-v1");
+            }
+        } else if self
+            .index
+            .slices
+            .get(slice.as_str())
+            .is_some_and(|(_, _, s)| s.arch != reg.arch())
+        {
+            self.code_error(at, "register architecture differs from owning slice");
+        }
+    }
+
+    pub(super) fn multiarch_arg(
+        &mut self,
+        slice: &SliceId,
+        value: &ArgValue,
+        at: &(impl std::fmt::Display + ?Sized),
+    ) {
+        self.multiarch_register(slice, value.register(), at);
+        if self.s.request.code_analysis.is_none() {
+            return;
+        }
+        if let ArgValue::Param { reg, index } = value {
+            if self
+                .index
+                .slices
+                .get(slice.as_str())
+                .is_some_and(|(_, _, s)| *index >= if s.arch == Arch::Aarch64 { 8 } else { 6 })
+            {
+                self.code_error(at, "parameter index exceeds the register ABI");
+            }
+            if *reg == Reg::X18
+                && self
+                    .index
+                    .binaries
+                    .get(slice.as_str())
+                    .is_some_and(|b| matches!(b.container, ContainerFacts::MachO(_)))
+            {
+                self.code_error(at, "Darwin reserved x18 cannot hold a stable parameter");
+            }
+        }
+    }
+
+    pub(super) fn multiarch_param(
+        &mut self,
+        slice: &SliceId,
+        param: &BinaryParam,
+        at: &(impl std::fmt::Display + ?Sized),
+    ) {
+        if let BinaryParam::Reg(reg) = param {
+            self.multiarch_register(slice, *reg, at);
+            if self.s.request.code_analysis.is_some()
+                && *reg == Reg::X18
+                && self
+                    .index
+                    .binaries
+                    .get(slice.as_str())
+                    .is_some_and(|b| matches!(b.container, ContainerFacts::MachO(_)))
+            {
+                self.code_error(at, "Darwin reserved x18 cannot hold a stable parameter");
+            }
+        }
+    }
+}
+
+fn is_macho(via: ImportVia) -> bool {
+    matches!(
+        via,
+        ImportVia::MachOStub | ImportVia::MachOGot | ImportVia::MachOReloc
+    )
+}

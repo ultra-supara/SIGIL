@@ -27,6 +27,8 @@
 //!   not evaluate policy: it never decides an action, a treatment, or which checks are required.
 //!   It only refuses a session whose verdict, counts, or completeness contradict what it records.
 
+mod multiarch;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -931,7 +933,10 @@ impl<'a> Validator<'a> {
         self.binary_inputs();
         self.service_units();
         self.process_links();
-        self.code_coverage();
+        self.multiarch_code();
+        if s.request.code_analysis.is_none() {
+            self.code_coverage();
+        }
         self.identity_coverage();
         self.import_hints();
         self.signature_hints();
@@ -4040,6 +4045,7 @@ impl<'a> Validator<'a> {
     /// in code facts goes through here: call arguments, indirect targets, predicate-check atoms,
     /// and guard comparisons.
     fn arg(&mut self, slice: &SliceId, value: &ArgValue, at: &(impl fmt::Display + ?Sized)) {
+        self.multiarch_arg(slice, value, at);
         for why in c5(value) {
             self.code_error(at, why);
         }
@@ -4146,6 +4152,7 @@ impl<'a> Validator<'a> {
         for mapping in &facts.param_mappings {
             let at = format_args!("code[{slice}].param_mappings[{}]", mapping.function);
             self.function(slice, mapping.function.as_str(), &at);
+            self.multiarch_param(slice, &mapping.binary, &at);
             for e in &mapping.evidence {
                 self.evidence(e, &at);
             }

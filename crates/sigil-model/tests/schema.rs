@@ -48,6 +48,7 @@ fn every_example_validates_against_the_schema() {
 
 fn registered() -> Vec<(&'static str, schema_check::Probe)> {
     registry![
+        CodeAnalysis => "CodeAnalysis", ArgumentLayout => "ArgumentLayout", CodeSliceInventory => "CodeSliceInventory",
         ElfAbi => "ElfAbi", ProcessValueRead => "ProcessValueRead", DependencyContext => "DependencyContext", DependencySearch => "DependencySearch",
         RecordedPathProof => "RecordedPathProof", RecordedDirectory => "RecordedDirectory",
         Session => "Session", SchemaVersion => "SchemaVersion", ToolInfo => "ToolInfo",
@@ -119,6 +120,9 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
 /// `reference_matches`, `binaries`, an ELF's `returns`, and a Mach-O's `imports` only when
 /// non-empty, so sessions without them keep their bytes.
 const OPTIONAL_ON_READ: &[(&str, &str)] = &[
+    ("RunRequest", "code_analysis"),
+    ("CallSite", "args_layout"),
+    ("Artifact", "code_slice_inventory"),
     ("RunRequest", "active"),
     ("RunRequest", "code"),
     ("Session", "probes"),
@@ -916,13 +920,32 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample("Signal", Signal::String),
         sample("Signal", Signal::Needed),
         sample("Signal", Signal::GoFunction),
+        sample("CodeAnalysis", CodeAnalysis::MultiarchV1),
+        sample("ArgumentLayout", ArgumentLayout::Complete),
+        sample(
+            "ArgumentLayout",
+            ArgumentLayout::Partial {
+                reason: t("variadic positions not modeled"),
+            },
+        ),
+        sample("CodeSliceInventory", CodeSliceInventory::Complete),
+        sample(
+            "CodeSliceInventory",
+            CodeSliceInventory::Partial {
+                missing: vec!["code: slice inventory incomplete".into()],
+            },
+        ),
+        sample("BoundsSource", BoundsSource::MachOCompactUnwind),
+        sample("ImportVia", ImportVia::MachOStub),
+        sample("ImportVia", ImportVia::MachOGot),
+        sample("ImportVia", ImportVia::MachOReloc),
         sample("CallKind", CallKind::TailJump),
         sample("ImportVia", ImportVia::PltSec),
         sample("ImportVia", ImportVia::Got),
         sample("ImportVia", ImportVia::Reloc),
         sample(
             "Reg",
-            [
+            vec![
                 Reg::Rax,
                 Reg::Rbx,
                 Reg::Rcx,
@@ -939,6 +962,38 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 Reg::R13,
                 Reg::R14,
                 Reg::R15,
+                Reg::X0,
+                Reg::X1,
+                Reg::X2,
+                Reg::X3,
+                Reg::X4,
+                Reg::X5,
+                Reg::X6,
+                Reg::X7,
+                Reg::X8,
+                Reg::X9,
+                Reg::X10,
+                Reg::X11,
+                Reg::X12,
+                Reg::X13,
+                Reg::X14,
+                Reg::X15,
+                Reg::X16,
+                Reg::X17,
+                Reg::X18,
+                Reg::X19,
+                Reg::X20,
+                Reg::X21,
+                Reg::X22,
+                Reg::X23,
+                Reg::X24,
+                Reg::X25,
+                Reg::X26,
+                Reg::X27,
+                Reg::X28,
+                Reg::X29,
+                Reg::X30,
+                Reg::Sp,
             ],
         ),
         sample(
