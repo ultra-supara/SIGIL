@@ -1,0 +1,383 @@
+{
+  "date": "2026-11-02",
+  "baseline": "f1ea809b3a8f9e86b36092f5580b9777f206c4c1",
+  "status": "technical gate passed for exact subset; product integration deferred",
+  "sources": {
+    "yaxpeax-arm": {
+      "version": "0.5.0",
+      "archive_sha256": "79f8d9808ad0b7e434882c66e50704138e7c0bdf3408a9f3159c50603dc3168c",
+      "files": {
+        "src/armv8/a64.rs": "58ffca1c27c5c4f0f12c2afb1253e4a6f735891746c0d7fa63e997c7262ba0d9"
+      }
+    },
+    "yaxpeax-arch": {
+      "version": "0.3.3",
+      "archive_sha256": "fb869f86d5a365bf741d9df773f7a5347757b1c466b7383b74989324785ef36b",
+      "files": {
+        "src/reader.rs": "fcb39966386ae199c214a8f6cd505e6a1d51a1fdac849c0f137aee03d635e648",
+        "src/lib.rs": "29021a863e3484661f096724b8397145e79985e114e11a69219b30bba7204da5"
+      }
+    },
+    "disarm64": {
+      "version": "0.2.0",
+      "archive_sha256": "b40cb278f87c9a57ef6bc51a7b04d4b6097fea24ef50921e8de4a51f06304be0",
+      "files": {
+        "src/decoder_full.rs": "6115df768d82c33bbd3f53781292f95d6c9e0e0ac7fd2abaa77aac9523213644"
+      },
+      "decode_index": {
+        "literal_returns": 3774,
+        "min": 0,
+        "max": 3773,
+        "table_lengths": [
+          3774,
+          3774
+        ],
+        "acyclic": true
+      }
+    },
+    "lock_sha256": "2f89a254c7187466ba58ab20f550b7d4404c320702c25805d1d98e7a47527018"
+  },
+  "oracle": {
+    "gnu_relocation_rendering_differences": {
+      "count": 15,
+      "records": [
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x64",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x90",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0xb8",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\tcc <helper>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0xc0",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0xec",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o0.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o0.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o2.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o2.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o0.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o0.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o2.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o2.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        }
+      ]
+    },
+    "original_fixture_address_checks": {
+      "llvm": 625,
+      "gnu": 348,
+      "unsupported": 20
+    },
+    "fixture_rows": 641,
+    "unique_total_words": 178915,
+    "unique_eligible": 178912,
+    "rejected_fixture_words": [
+      "00000000",
+      "18000050",
+      "d503233f"
+    ],
+    "input_sha256": "981c8768f63b928c6ac39af449083b74dc125fc8fa87133e79dedb5d587224d1",
+    "llvm": {
+      "count": 178912,
+      "errors": 0,
+      "first": []
+    },
+    "gnu": {
+      "count": 178912,
+      "errors": 0,
+      "first": []
+    }
+  },
+  "unwind": {
+    "folded_entries": [
+      [
+        1216,
+        67108864
+      ]
+    ],
+    "folded_lookup_end": 1288,
+    "regular_and_compressed_equivalent": true,
+    "compressed_local_encoding": true,
+    "malformed_rejected": [
+      "version",
+      "common extent",
+      "index count",
+      "page kind",
+      "page count",
+      "entry offset",
+      "encoding index",
+      "delta escapes range",
+      "local count",
+      "zero encoding",
+      "truncate 0",
+      "truncate 27",
+      "truncate 63",
+      "truncate 67",
+      "truncate 71"
+    ],
+    "fde_exact_intervals": [
+      [
+        1312,
+        1348
+      ],
+      [
+        1348,
+        1384
+      ]
+    ],
+    "compact_object_text_offsets": [
+      [
+        0,
+        36
+      ],
+      [
+        36,
+        72
+      ]
+    ],
+    "compact_object_file_intervals": [
+      [
+        392,
+        428
+      ],
+      [
+        428,
+        464
+      ]
+    ],
+    "native_linked_exact_intervals": [],
+    "note": "regular page is a synthetic derivative; native compact linked remains a missing-exact-bounds gap"
+  },
+  "runs": {
+    "run-193": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 136,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    },
+    "run-199": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 121,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    },
+    "measure-193-yax": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 85,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    },
+    "measure-193-disarm": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 88,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    }
+  },
+  "checks": {
+    "native_1.93": true,
+    "native_1.99": true,
+    "wasm32_1.93_compile": true,
+    "wasm32_1.99_compile": true,
+    "clippy_1.93_warnings_denied": true,
+    "rustfmt_1.93": true,
+    "fixture_oracles": "10 originals accepted, 17 binary mutations rejected, publication/refresh guards passed",
+    "product_bans": "deferred to M3-B actual product graph; product dependencies unchanged"
+  },
+  "compiler_versions": {
+    "1.93.0": [
+      "rustc 1.93.0 (254b59607 2026-01-19)",
+      "binary: rustc",
+      "commit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c",
+      "commit-date: 2026-01-19",
+      "host: x86_64-unknown-linux-gnu",
+      "release: 1.93.0",
+      "LLVM version: 21.1.8"
+    ],
+    "1.99.0": [
+      "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "binary: rustc",
+      "commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
+      "commit-date: 2026-09-28",
+      "host: x86_64-unknown-linux-gnu",
+      "release: 1.99.0",
+      "LLVM version: 23.1.1"
+    ]
+  },
+  "tools": {
+    "clang-21": {
+      "sha256": "3a0f9481c3c29fce75adcb7f6c989e0db14b422c431659cf346bb9efdfcb1f04"
+    },
+    "llvm-objdump-21": {
+      "sha256": "eba9e4cfdc55997c8cd67825c47c2076820aa0ba1d8cfb3372c150ed3ee0b766"
+    },
+    "llvm-objcopy-21": {
+      "sha256": "50793a4a12b68f3d4adb0cc7eaeeed50a16f4a29ecbabae916c5b4e1ed48e8a6"
+    },
+    "aarch64-linux-gnu-objdump": {
+      "sha256": "f169f3bd85dd3c44f640cdb0980cae98ca0bd585e755e909bdc146e019c0fe33"
+    }
+  },
+  "llvm_source_sha256": {
+    "compact_unwind_encoding.h": "06f58e9d0058583b6da91ca2328fa663f80d089496a4979754ee7608fe9bd877",
+    "UnwindInfoSection.cpp": "6878f7e98aed118613370ceadb8cb73fd0021af60defb1cadc5a966f85ad6365"
+  },
+  "harness_sha256": {
+    "Cargo.lock": "2f89a254c7187466ba58ab20f550b7d4404c320702c25805d1d98e7a47527018",
+    "Cargo.toml": "6fd04efc0c318b89cf2f684a57d1ebcc9e62e45ca5e1b2717f1da85225fbfbb5",
+    "audit_sources.py": "c0f06843f941cae65b1e4239043a6c2e86fe1630c54414162e5181af8f499688",
+    "check_oracles.py": "0a10da7078f4c9f02c129398211ca9839c293963e136772205c5457f9e863523",
+    "check_unwind.py": "ccec0b243cb0ee80590bc5189f92f060faf06af7b9c142b6510b02da8da2fb15",
+    "src/main.rs": "b2d8e4d2b1e0dec683239f5660c22f9afcce29b17a627c798ca6bec9fb2ffe5a"
+  }
+}
