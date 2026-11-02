@@ -9,8 +9,8 @@ use sigil_model::{
     Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
     SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
     UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DEPENDENCIES, ARTIFACTS_DISCOVERY,
-    ARTIFACTS_IDENTITY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES,
-    INSTALL_ROOT, VALUES_CONFIGURED,
+    ARTIFACTS_IDENTITY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_DEPENDENCIES,
+    BINARY_SCAN_BYTES, INSTALL_ROOT, VALUES_CONFIGURED, VALUES_OBSERVED,
 };
 
 use crate::analyze::binary::CodeCoverageError;
@@ -370,6 +370,21 @@ fn assemble(
             ]);
         }
     }
+    // Custom policies may require a new check outside this entrypoint's active mode/input.
+    for check in &required_checks {
+        if check.as_str() == BINARY_DEPENDENCIES
+            || (mode == Mode::Static && check.as_str() == VALUES_OBSERVED)
+        {
+            coverage.push(Coverage {
+                check: check.clone(),
+                scope: Ref::Audit,
+                state: CoverageState::Skipped {
+                    by: SkipReason::ModeDisabled,
+                },
+                budget: None,
+            });
+        }
+    }
     // PR-4d-2: the observed executables and mappings, linked to every scanned instance.
     runtime_processes::link(&mut processes, &details, &mut instances);
     if let Some((discovery, container)) = dependency_discovery {
@@ -608,6 +623,22 @@ pub fn binary_session(
         deps_coverage::for_binary(&dependencies, &session).map_err(InspectError::Internal)?;
     session.coverage.extend(dependency_coverage);
     session.relations.extend(dependencies.relations);
+    // Binary inspection has no installation or observed-process inputs for these checks.
+    for check in &session.request.required_checks {
+        let by = match check.as_str() {
+            ARTIFACTS_DEPENDENCIES | VALUES_CONFIGURED => SkipReason::Flag {
+                flag: "--install-dir".to_string(),
+            },
+            VALUES_OBSERVED => SkipReason::ModeDisabled,
+            _ => continue,
+        };
+        session.coverage.push(Coverage {
+            check: check.clone(),
+            scope: Ref::Audit,
+            state: CoverageState::Skipped { by },
+            budget: None,
+        });
+    }
     evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
     session.canonicalize();
     session.validate().map_err(|errors| {

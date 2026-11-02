@@ -549,3 +549,179 @@ fn descendant_without_listener_has_independent_process_value_coverage_and_no_rol
         .all(|v| v.process_role.as_str().starts_with("observed:")));
     assert!(rows.iter().all(|v| v.applies_to.is_empty()));
 }
+
+fn assert_skipped_audit(s: &Session, check: &str, by: SkipReason) {
+    let rows: Vec<_> = s
+        .coverage
+        .iter()
+        .filter(|c| c.check.as_str() == check)
+        .collect();
+    assert_eq!(rows.len(), 1, "{check}: {rows:?}");
+    assert_eq!(rows[0].scope, Ref::Audit);
+    assert_eq!(rows[0].state, CoverageState::Skipped { by });
+    assert_eq!(rows[0].budget, None);
+}
+
+#[test]
+fn static_store_custom_values_check_is_skipped_without_process_values_or_budgets() {
+    let models = TempDir::new().unwrap();
+    let policy = Policy::load("schema = \"sigil-policy/1\"\nname = \"inactive-values\"\n[scope]\naudit = []\nextra_required = [\"values.observed\"]\n").unwrap();
+    let s = store_session(
+        &request(models.path(), None),
+        &ActiveInput::default(),
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    assert_skipped_audit(&s, VALUES_OBSERVED, SkipReason::ModeDisabled);
+    assert!(s.processes.is_empty());
+    assert!(s.values.is_empty());
+    assert!(!s.request.observe_env);
+    assert!(!s.request.budgets.keys().any(|key| key.starts_with("proc_")
+        || key == "process_values"
+        || key.starts_with("dependency_")));
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: vec![CheckId::new(VALUES_OBSERVED).unwrap()],
+            gaps: vec![],
+        }
+    );
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(policy::verify(&s, &policy), Ok(()));
+}
+
+#[test]
+fn nonbinary_custom_dependency_check_and_missing_install_checks_are_skipped_once() {
+    let models = TempDir::new().unwrap();
+    let policy = Policy::load("schema = \"sigil-policy/1\"\nname = \"inactive-inputs\"\n[scope]\naudit = []\nextra_required = [\"binary.dependencies\", \"artifacts.dependencies\", \"values.configured\"]\n").unwrap();
+    let s = store_session(
+        &request(models.path(), None),
+        &ActiveInput::default(),
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    assert_skipped_audit(&s, BINARY_DEPENDENCIES, SkipReason::ModeDisabled);
+    for check in [ARTIFACTS_DEPENDENCIES, VALUES_CONFIGURED] {
+        assert_skipped_audit(
+            &s,
+            check,
+            SkipReason::Flag {
+                flag: "--install-dir".into(),
+            },
+        );
+    }
+    assert!(!s
+        .request
+        .roots
+        .iter()
+        .any(|r| r.id.as_str() == INSTALL_ROOT || is_binary_root(&r.id)));
+    assert!(s.values.is_empty());
+    assert!(!s
+        .request
+        .budgets
+        .keys()
+        .any(|key| key.starts_with("dependency_") || key.starts_with("service_unit_")));
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: [
+                ARTIFACTS_DEPENDENCIES,
+                BINARY_DEPENDENCIES,
+                VALUES_CONFIGURED
+            ]
+            .into_iter()
+            .map(|check| CheckId::new(check).unwrap())
+            .collect(),
+            gaps: vec![],
+        }
+    );
+    assert_eq!(s.validate(), Ok(()));
+    assert_eq!(policy::verify(&s, &policy), Ok(()));
+}
+
+fn binary_for_custom_scope(scope: &str) -> Result<Session, sigil_engine::inspect::InspectError> {
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("input");
+    std::fs::write(&path, elf(2, false)).unwrap();
+    let policy = Policy::load(&format!("schema = \"sigil-policy/1\"\nname = \"inactive-binary-scope\"\n[scope]\nbinary_audit = [\"{scope}\"]\n")).unwrap();
+    binary_session(
+        &BinaryRequest {
+            paths: vec![path],
+            budgets: NamedBudgets::default(),
+            deps_budgets: DepsBudgets::default(),
+        },
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+}
+
+#[test]
+fn binary_custom_install_scope_skips_new_checks_without_install_or_value_inputs() {
+    let s = binary_for_custom_scope("runtime_artifacts").unwrap();
+    for check in [ARTIFACTS_DEPENDENCIES, VALUES_CONFIGURED] {
+        assert_skipped_audit(
+            &s,
+            check,
+            SkipReason::Flag {
+                flag: "--install-dir".into(),
+            },
+        );
+    }
+    assert!(s.request.roots.iter().all(|r| is_binary_root(&r.id)));
+    assert!(s.processes.is_empty());
+    assert!(s.values.is_empty());
+    assert!(!s.request.observe_env);
+    assert_eq!(s.request.budgets.get("dependency_contexts"), Some(&8192));
+    assert!(!s
+        .request
+        .budgets
+        .keys()
+        .any(|key| key.starts_with("install_")
+            || key.starts_with("service_unit_")
+            || key.starts_with("proc_")
+            || key == "process_values"));
+    assert!(!matches!(
+        entry(
+            &s,
+            BINARY_DEPENDENCIES,
+            &Ref::Instance(s.instances[0].id.clone())
+        )
+        .state,
+        CoverageState::Skipped { .. }
+    ));
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: [
+                ARTIFACTS_CONTAINER,
+                ARTIFACTS_DEPENDENCIES,
+                ARTIFACTS_DISCOVERY,
+                ARTIFACTS_IDENTITY,
+                ARTIFACTS_RELEASE,
+                VALUES_CONFIGURED
+            ]
+            .into_iter()
+            .map(|check| CheckId::new(check).unwrap())
+            .collect(),
+            gaps: vec![],
+        }
+    );
+    assert_eq!(s.validate(), Ok(()));
+}
+
+#[test]
+fn binary_custom_process_scope_keeps_only_the_preexisting_process_coverage_error() {
+    let err = binary_for_custom_scope("runtime_processes").unwrap_err();
+    let sigil_engine::inspect::InspectError::Invalid(errors) = err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(errors, ["coverage[processes.observed on audit]: processes.observed is required but has no entry for the audit"]);
+}
