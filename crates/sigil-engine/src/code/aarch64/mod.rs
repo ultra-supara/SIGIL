@@ -1,5 +1,6 @@
 //! Bounded AArch64 decoding; no architecture dispatch or evidence emission.
 pub(crate) mod decode;
+pub(crate) mod value;
 
 use super::{Run, Work, FUNCTION_INSTRUCTIONS};
 use decode::{A64Insn, DecodeGap, Flow};
