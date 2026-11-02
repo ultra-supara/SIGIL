@@ -3,6 +3,8 @@
 //! passes `Session::validate`. A policy that would change the analysis itself (accepted
 //! assumptions, required checks) is refused, and the session is left unchanged.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -91,8 +93,9 @@ fn scramble(s: &mut Session) {
 }
 
 #[test]
-fn re_evaluating_every_golden_example_reproduces_it() {
-    let mut seen = 0;
+fn legacy_goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
+    let mut reproduced = 0;
+    let mut refused = 0;
     for entry in fs::read_dir(examples_dir()).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_none_or(|e| e != "json") {
@@ -100,30 +103,81 @@ fn re_evaluating_every_golden_example_reproduces_it() {
         }
         let mut expected: Session =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        let mut s = expected.clone();
-        scramble(&mut s);
-        // Example 18 records the results of its denials (#51); every other example, none.
+        assert_valid(&expected);
         let body = if path.ends_with("18-capability-policy.json") {
             EXAMPLE_18_POLICY
         } else {
             ""
         };
+        let added: &[&str] = match path.file_name().unwrap().to_str().unwrap() {
+            "15-binary-inspect.json" | "16-binary-code.json" | "18-capability-policy.json" => {
+                &[BINARY_DEPENDENCIES]
+            }
+            "17-open-release.json" => &[
+                ARTIFACTS_CONTAINER,
+                ARTIFACTS_DEPENDENCIES,
+                ARTIFACTS_IDENTITY,
+                VALUES_CONFIGURED,
+            ],
+            "19-service-unit.json" => &[
+                ARTIFACTS_CONTAINER,
+                ARTIFACTS_DEPENDENCIES,
+                ARTIFACTS_IDENTITY,
+                ARTIFACTS_RELEASE,
+                VALUES_CONFIGURED,
+            ],
+            "20-observed-processes.json" => &[
+                ARTIFACTS_CONTAINER,
+                ARTIFACTS_DEPENDENCIES,
+                ARTIFACTS_IDENTITY,
+                ARTIFACTS_RELEASE,
+                VALUES_CONFIGURED,
+                VALUES_OBSERVED,
+            ],
+            _ => &[],
+        };
+        if !added.is_empty() {
+            let mut current = policy_for(&expected, body);
+            if !ScopeInput::of(&expected.request).binary {
+                current.audit = expected.request.audit.clone();
+                current.extra_required.clear();
+            }
+            let mut s = expected.clone();
+            let err = evaluate(&mut s, &current, expected.outcome.policy_time.clone()).unwrap_err();
+            let EvaluateError::RequiredChecksChanged { request, policy } = err else {
+                panic!("{err:?}");
+            };
+            assert_eq!(request, expected.request.required_checks);
+            let mut extra: Vec<_> = policy
+                .iter()
+                .filter(|c| !request.contains(c))
+                .map(CheckId::as_str)
+                .collect();
+            extra.sort_unstable();
+            assert_eq!(extra, added, "{}", path.display());
+            assert!(request.iter().all(|c| policy.contains(c)));
+            assert_eq!(
+                s, expected,
+                "refusal preserves legacy analysis and knowledge"
+            );
+            refused += 1;
+            continue;
+        }
+        let mut s = expected.clone();
+        scramble(&mut s);
         let warnings = run(&mut s, body);
         assert!(warnings.is_empty());
-        // Everything is reproduced, and the session records the policy that was applied.
         for k in &mut expected.knowledge {
             if k.kind == KnowledgeKind::Policy {
                 *k = policy_for(&s, body).knowledge();
             }
         }
-        // In canonical form, as SIGIL writes a session: evaluation appends its capability open
-        // questions after the analysis's, and a saved session sorts them (#51).
         s.canonicalize();
         expected.canonicalize();
         assert_eq!(s, expected, "{}", path.display());
-        seen += 1;
+        reproduced += 1;
     }
-    assert_eq!(seen, 20);
+    assert_eq!((reproduced, refused), (14, 6));
 }
 
 /// The policy example 18 was evaluated under: it denies `posix.network` and
@@ -469,7 +523,7 @@ fn a_change_in_required_checks_requires_reanalysis() {
 #[test]
 fn a_canonical_round_trip_keeps_a_session_evaluable_with_the_same_policy() {
     let policy = Policy::builtin_default().unwrap();
-    let mut s = example("01-complete-pass");
+    let mut s = analyzed("16-binary-code");
     let (audit, required) = policy.scope(&ScopeInput::of(&s.request));
     s.request.audit = audit;
     s.request.required_checks = required.clone();
@@ -745,24 +799,54 @@ fn table() -> KnowledgeRef {
         .clone()
 }
 
-/// Example `name`, analyzed with this build's capability table, as `binary inspect` records it.
+/// Freshly collect fixture bytes under the current catalog; archived sessions stay untouched.
 fn analyzed(name: &str) -> Session {
-    let mut s = example(name);
-    if !s
-        .knowledge
-        .iter()
-        .any(|k| k.kind == KnowledgeKind::SignatureDb && k.id == CAPABILITY_TABLE_ID)
-    {
-        s.knowledge.push(table());
-    }
-    s
+    use sigil_engine::collect::named::NamedBudgets;
+    use sigil_engine::inspect::{binary_session, BinaryRequest};
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let temporary = tempfile::TempDir::new().unwrap();
+    let (path, code) = match name {
+        "16-binary-code" => (base.join("code/suspicious_kernel-gcc-O2.o"), true),
+        "15-binary-inspect" => {
+            // Rename only the fixture's undefined connect symbol to dlopen. This preserves
+            // the valid ELF layout and gives the original no-code dynamic-loading case.
+            let mut bytes = fs::read(base.join("elf/libdata.so")).unwrap();
+            let offsets: Vec<_> = bytes
+                .windows(8)
+                .enumerate()
+                .filter_map(|(offset, bytes)| (bytes == b"connect\0").then_some(offset))
+                .collect();
+            assert!(!offsets.is_empty());
+            for offset in offsets {
+                bytes[offset..offset + 8].copy_from_slice(b"dlopen\0\0");
+            }
+            let path = temporary.path().join("loader.so");
+            fs::write(&path, bytes).unwrap();
+            (path, false)
+        }
+        _ => panic!("unknown current fixture {name}"),
+    };
+    let mut budgets = NamedBudgets::default();
+    budgets.binary.code = code.then(sigil_engine::code::CodeBudgets::default);
+    binary_session(
+        &BinaryRequest {
+            paths: vec![path],
+            budgets,
+            deps_budgets: Default::default(),
+        },
+        &Policy::builtin_default().unwrap(),
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap()
 }
 
 /// #51 spec §3: a slice that calls a denied capability's import directly is a violation, citing
 /// every such call site; a capability it does not import gives nothing.
 #[test]
 fn a_denied_capability_that_is_called_is_a_violation_citing_its_call_sites() {
-    // Example 16: suspicious_kernel-gcc-O2.o calls connect once (cs:0x4d).
+    // The code fixture calls connect once (cs:0x4d).
     let mut s = analyzed("16-binary-code");
     let slice = the_slice(&s);
     run(&mut s, DENY_NETWORK);
@@ -825,7 +909,7 @@ fn a_denied_capability_that_is_called_is_a_violation_citing_its_call_sites() {
 /// open question, whatever `binary.code` says, never "absent".
 #[test]
 fn a_denied_capability_imported_without_a_call_site_is_an_open_question() {
-    // Example 15: libggml-base.so imports dlopen and getenv; no code analysis.
+    // The collected library imports dlopen; code analysis was not requested.
     let mut s = analyzed("15-binary-inspect");
     let slice = the_slice(&s);
     run(&mut s, DENY_LOADING);
@@ -992,12 +1076,11 @@ fn a_session_not_analyzed_with_this_table_is_refused_under_a_capability_denial()
     assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
 }
 
-/// #105, #106's contract: a session saved before libc++'s names were added
-/// (`tests/fixtures/pre-105/`) records the old table. Under a capability denial it is refused
-/// with the re-inspection guidance and left unchanged: its hints are never re-read with this
-/// table's names. Without a denial it evaluates as before.
+/// An archived pre-105 session preserves its old table and scope: the current catalog refuses
+/// its scope unchanged. A current-scope control with the archived table digest independently
+/// verifies the capability-denial boundary and re-inspection guidance.
 #[test]
-fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial() {
+fn archived_table_sessions_keep_catalog_and_capability_refusals_distinct() {
     const PRE_105: &str = "432f71b2a3c5f25663e699d5447db24b27590a4dad5ed1186b0f30ac89b26944";
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-105/16-binary-code.json");
@@ -1014,7 +1097,7 @@ fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial()
             path.display()
         )
     });
-    let saved_outcome = saved.outcome.clone();
+
     let old = Sha256Hex::new(PRE_105).unwrap();
     let recorded: Vec<Sha256Hex> = saved
         .knowledge
@@ -1024,10 +1107,41 @@ fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial()
         .collect();
     assert_eq!(recorded, std::slice::from_ref(&old));
     assert_ne!(table().sha256, old, "#105 changed the table");
-    let time = saved.outcome.policy_time.clone();
+    // This archived binary scope predates dependency coverage: current policy refuses it
+    // before examining capability tables, with or without a capability denial.
+    for body in ["", DENY_NETWORK, DENY_CXX_WRITE] {
+        let mut legacy = saved.clone();
+        let err = evaluate(
+            &mut legacy,
+            &policy_for(&saved, body),
+            saved.outcome.policy_time.clone(),
+        )
+        .unwrap_err();
+        let EvaluateError::RequiredChecksChanged { request, policy } = err else {
+            panic!("{err:?}");
+        };
+        let extra: Vec<_> = policy
+            .iter()
+            .filter(|c| !request.contains(c))
+            .map(CheckId::as_str)
+            .collect();
+        assert_eq!(extra, [BINARY_DEPENDENCIES]);
+        assert_eq!(legacy, saved);
+    }
+    // Exercise the table boundary independently on a freshly assembled current-scope session.
+    // Giving it the archived digest is an intentional incompatible-table negative control.
+    let mut current = analyzed("16-binary-code");
+    current
+        .knowledge
+        .iter_mut()
+        .find(|k| k.kind == KnowledgeKind::SignatureDb)
+        .unwrap()
+        .sha256 = old.clone();
+    let current_outcome = current.outcome.clone();
+    let time = current.outcome.policy_time.clone();
     for deny in [DENY_NETWORK, DENY_CXX_WRITE] {
-        let mut s = saved.clone();
-        let err = evaluate(&mut s, &policy_for(&saved, deny), time.clone()).unwrap_err();
+        let mut s = current.clone();
+        let err = evaluate(&mut s, &policy_for(&current, deny), time.clone()).unwrap_err();
         assert_eq!(
             err,
             EvaluateError::CapabilityTable {
@@ -1041,15 +1155,15 @@ fn a_session_saved_with_the_table_before_libcxx_is_refused_only_under_a_denial()
                 .contains("analyze the files again with this build"),
             "{err}"
         );
-        assert_eq!(s, saved, "a refused evaluation changes nothing");
+        assert_eq!(s, current, "a refused evaluation changes nothing");
     }
     // Without a denial: as before.
-    let mut s = saved;
+    let mut s = current;
     run(&mut s, "");
     assert!(s.policy_violations.is_empty() && s.open_questions.is_empty());
     assert_eq!(s.outcome.verdict, Verdict::Pass);
     assert_eq!(s.outcome.completeness, Completeness::Complete);
-    assert_eq!(s.outcome, saved_outcome, "evaluated as before");
+    assert_eq!(s.outcome, current_outcome, "evaluated as before");
 }
 
 /// Plan review P2-1: the hints are the ones the table gives the import facts. `validate` cannot

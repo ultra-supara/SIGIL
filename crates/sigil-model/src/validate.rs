@@ -901,6 +901,7 @@ impl<'a> Validator<'a> {
                 self.reason(reason, &at);
             }
         }
+        self.deps_values_coverage();
         self.components();
         for release in &s.releases {
             let at = format_args!("releases[{}]", release.product);
@@ -1519,8 +1520,6 @@ impl<'a> Validator<'a> {
         self.index.new_check(check)
     }
 
-    // Shared with the follow-up coverage assembly validation.
-    #[allow(dead_code)]
     fn new_coverage(&mut self, check: &str, scope: &crate::Ref) -> Option<&'a crate::Coverage> {
         let entry = self.index.coverage_occurrence(check, scope);
         if let Some(coverage) = entry.and_then(|entry| entry.unique()) {
@@ -1546,6 +1545,320 @@ impl<'a> Validator<'a> {
             at: at.to_string(),
             why,
         });
+    }
+
+    fn dependency_has_unmodeled_stage(&self, instance: &crate::FileInstance) -> bool {
+        let crate::InstanceContent::Read { artifact } = &instance.content else {
+            return false;
+        };
+        let Some(artifact) = self.index.artifacts.get(artifact.as_str()).copied() else {
+            return true;
+        };
+        match artifact.format {
+            crate::Format::MachO | crate::Format::MachOFat => true,
+            crate::Format::Elf {
+                kind: crate::ElfType::Exec | crate::ElfType::Dyn,
+            } => {
+                if instance.stability != crate::Stability::NoChangeDetected {
+                    return true;
+                }
+                let Some(slice) = artifact
+                    .slices
+                    .first()
+                    .filter(|_| artifact.slices.len() == 1)
+                else {
+                    return true;
+                };
+                let Some(facts) = self.index.binaries.get(slice.id.as_str()).copied() else {
+                    return true;
+                };
+                let crate::ContainerFacts::Elf(elf) = &facts.container else {
+                    return true;
+                };
+                let Some(abi) = elf.abi else {
+                    return true;
+                };
+                !elf.needed.is_empty()
+                    || !facts.gaps.is_empty()
+                    || !abi.is_64
+                    || !matches!(
+                        (slice.arch, abi.machine),
+                        (crate::Arch::X86_64, 62) | (crate::Arch::Aarch64, 183)
+                    )
+                    || (slice.arch == crate::Arch::X86_64 && !abi.little_endian)
+            }
+            _ => false,
+        }
+    }
+
+    fn deps_values_coverage(&mut self) {
+        use crate::{
+            is_binary_inspection, is_binary_root, CoverageState, ProcessValueRead, Ref, TriValue,
+            ValueKey, ValueOrigin, ARTIFACTS_DEPENDENCIES, BINARY_CONTAINER, BINARY_DEPENDENCIES,
+            INSTALL_ROOT, RUNTIME_ROLE, SERVICE_UNIT_ROOT, VALUES_CONFIGURED, VALUES_OBSERVED,
+        };
+        let s = self.s;
+        let index = self.index;
+        let root = |name: &str| index.roots.get(name).copied();
+        if self.new_check(VALUES_CONFIGURED) {
+            let scope = root(SERVICE_UNIT_ROOT).map_or(Ref::Audit, |r| Ref::Root(r.id.clone()));
+            if let Some(c) = self.new_coverage(VALUES_CONFIGURED, &scope) {
+                let at = format_args!("coverage[values.configured]");
+                if root(SERVICE_UNIT_ROOT).is_some() {
+                    if !matches!(c.state, CoverageState::Partial { .. }) {
+                        self.dependency_error(
+                            &at,
+                            "supplied-unit values.configured must remain Partial",
+                        );
+                    }
+                    for value in &s.values {
+                        if matches!(value.origin, ValueOrigin::PredictedLaunch { .. })
+                            && !matches!(value.value, TriValue::Unknown { .. })
+                        {
+                            self.value_error(
+                                &format_args!("values[{}]", value.id),
+                                "supplied-unit effective predictions must remain Unknown",
+                            );
+                        }
+                    }
+                } else if root(INSTALL_ROOT).is_some() {
+                    if !matches!(c.state, CoverageState::OutOfScope { .. }) {
+                        self.dependency_error(
+                            &at,
+                            "values.configured without a supplied unit must be OutOfScope",
+                        );
+                    }
+                } else if !matches!(c.state, CoverageState::Skipped { .. }) {
+                    self.dependency_error(
+                        &at,
+                        "values.configured without an installation must be Skipped",
+                    );
+                }
+            }
+            for c in self.index.coverage_for_check(VALUES_CONFIGURED) {
+                if c.scope != scope {
+                    self.dependency_error(
+                        &format_args!("coverage[values.configured]"),
+                        "values.configured has an unexpected scope",
+                    );
+                }
+            }
+        }
+        if self.new_check(VALUES_OBSERVED) {
+            let audit = self.new_coverage(VALUES_OBSERVED, &Ref::Audit);
+            if s.request.mode == crate::Mode::Static {
+                if audit.is_some_and(|c| !matches!(c.state, CoverageState::Skipped { .. })) {
+                    self.dependency_error(
+                        &format_args!("coverage[values.observed]"),
+                        "static values.observed must be Skipped",
+                    );
+                }
+            }
+            for obs in &s.processes {
+                let scope = Ref::Process(obs.process.clone());
+                let Some(c) = self.new_coverage(VALUES_OBSERVED, &scope) else {
+                    continue;
+                };
+                let rows = self.index.observed_summary(&obs.process);
+                if let CoverageState::OutOfScope { .. } = c.state {
+                    let holds = self.index.listener_holds_process(&obs.process);
+                    if !holds
+                        || rows.is_some_and(|rows| rows.count != 0)
+                        || obs.roles.iter().any(|r| r.as_str() == RUNTIME_ROLE)
+                    {
+                        self.dependency_error(
+                            &format_args!("values.observed on {}", obs.process.pid),
+                            "values.observed cannot exclude a selected process",
+                        );
+                    }
+                }
+                if c.state == CoverageState::Complete {
+                    let one = |key: &ValueKey, read: ProcessValueRead, absent_allowed: bool| {
+                        let matching = self
+                            .index
+                            .observed_key_occurrence(&obs.process, key)
+                            .and_then(|entry| entry.unique());
+                        matches!(matching, Some(v) if matches!(&v.origin,
+                            ValueOrigin::ObservedProcess { read: Some(actual), .. } if *actual == read)
+                            && (matches!(v.value, TriValue::Known(_)) || (absent_allowed && matches!(v.value, TriValue::Absent))))
+                    };
+                    let mut complete = one(&ValueKey::Cwd, ProcessValueRead::Cwd, false)
+                        && one(&ValueKey::User, ProcessValueRead::EffectiveUid, false)
+                        && one(&ValueKey::Group, ProcessValueRead::EffectiveGid, false);
+                    if s.request.observe_env {
+                        for name in [
+                            "CUDA_VISIBLE_DEVICES",
+                            "DYLD_LIBRARY_PATH",
+                            "GGML_BACKEND_DIR",
+                            "GGML_BACKEND_PATH",
+                            "HIP_VISIBLE_DEVICES",
+                            "LD_LIBRARY_PATH",
+                            "OLLAMA_HOST",
+                            "OLLAMA_LIBRARY_PATH",
+                            "OLLAMA_MODELS",
+                        ] {
+                            complete &= one(
+                                &ValueKey::Env(crate::UntrustedText::new(name)),
+                                ProcessValueRead::InitialEnvironment,
+                                true,
+                            );
+                        }
+                    }
+                    complete &= !rows.is_some_and(|rows| rows.has_unknown);
+                    if !complete {
+                        self.value_error(
+                            &format_args!("values.observed on {}", obs.process.pid),
+                            "Complete values.observed has unknown or missing requested values",
+                        );
+                    }
+                }
+            }
+            for c in self.index.coverage_for_check(VALUES_OBSERVED) {
+                if !matches!(c.scope, Ref::Audit | Ref::Process(_)) {
+                    self.dependency_error(
+                        &format_args!("coverage[values.observed]"),
+                        "values.observed must be scoped to Audit or Process",
+                    );
+                }
+            }
+        }
+        if self.new_check(ARTIFACTS_DEPENDENCIES) {
+            let scope = root(INSTALL_ROOT).map_or(Ref::Audit, |r| Ref::Root(r.id.clone()));
+            if let Some(c) = self.new_coverage(ARTIFACTS_DEPENDENCIES, &scope) {
+                if root(INSTALL_ROOT).is_none() && !matches!(c.state, CoverageState::Skipped { .. })
+                {
+                    self.dependency_error(
+                        &format_args!("coverage[artifacts.dependencies]"),
+                        "dependencies without an installation must be Skipped",
+                    );
+                }
+                if c.state == CoverageState::Complete
+                    && s.instances.iter().any(|i| {
+                        i.root.as_str() == INSTALL_ROOT && self.dependency_has_unmodeled_stage(i)
+                    })
+                {
+                    self.dependency_error(
+                        &format_args!("coverage[artifacts.dependencies]"),
+                        "Complete dependencies omit unmodeled resolution stages",
+                    );
+                }
+                if c.state == CoverageState::Complete
+                    && s.coverage.iter().any(|d| {
+                        matches!(
+                            d.check.as_str(),
+                            crate::ARTIFACTS_DISCOVERY | crate::ARTIFACTS_CONTAINER
+                        ) && d.scope == scope
+                            && !d.state.can_close()
+                    })
+                {
+                    self.dependency_error(
+                        &format_args!("coverage[artifacts.dependencies]"),
+                        "Complete dependencies contradict incomplete discovery",
+                    );
+                }
+            }
+            for c in self.index.coverage_for_check(ARTIFACTS_DEPENDENCIES) {
+                if c.scope != scope {
+                    self.dependency_error(
+                        &format_args!("coverage[artifacts.dependencies]"),
+                        "artifacts.dependencies has an unexpected scope",
+                    );
+                }
+            }
+        }
+        if self.new_check(BINARY_DEPENDENCIES) {
+            if is_binary_inspection(&s.request) {
+                for instance in s.instances.iter().filter(|i| is_binary_root(&i.root)) {
+                    let scope = Ref::Instance(instance.id.clone());
+                    let Some(c) = self.new_coverage(BINARY_DEPENDENCIES, &scope) else {
+                        continue;
+                    };
+                    if c.state == CoverageState::Complete
+                        && self.dependency_has_unmodeled_stage(instance)
+                    {
+                        self.dependency_error(
+                            &format_args!("binary.dependencies on {}", instance.id),
+                            "Complete dependencies omit unmodeled resolution stages",
+                        );
+                    }
+                    let container = self
+                        .index
+                        .coverage_occurrence(BINARY_CONTAINER, &scope)
+                        .map(|entry| entry.first);
+                    if c.state == CoverageState::Complete
+                        && container.is_none_or(|d| !d.state.can_close())
+                    {
+                        self.dependency_error(
+                            &format_args!("binary.dependencies on {}", instance.id),
+                            "Complete dependencies contradict incomplete binary.container",
+                        );
+                    }
+                }
+                for c in self.index.coverage_for_check(BINARY_DEPENDENCIES) {
+                    if !matches!(&c.scope, Ref::Instance(id) if self.index.binary_inputs.contains_key(id.as_str()))
+                    {
+                        self.dependency_error(
+                            &format_args!("coverage[binary.dependencies]"),
+                            "binary.dependencies must be scoped to a binary input instance",
+                        );
+                    }
+                }
+            } else if self
+                .new_coverage(BINARY_DEPENDENCIES, &Ref::Audit)
+                .is_some_and(|c| !matches!(c.state, CoverageState::Skipped { .. }))
+            {
+                self.dependency_error(
+                    &format_args!("coverage[binary.dependencies]"),
+                    "binary.dependencies without binary inputs must be Skipped",
+                );
+            }
+        }
+        for relation in &s.relations {
+            if matches!(relation, crate::Relation::Candidate { context: None, .. })
+                && (self.new_check(ARTIFACTS_DEPENDENCIES) || self.new_check(BINARY_DEPENDENCIES))
+            {
+                self.dependency_error(
+                    &format_args!("relations[Candidate]"),
+                    "new dependency checks require Candidate context",
+                );
+            }
+            let crate::Relation::Candidate {
+                context: Some(context),
+                ..
+            } = relation
+            else {
+                continue;
+            };
+            let Some(requester) = self
+                .index
+                .instances
+                .get(context.requester.as_str())
+                .copied()
+            else {
+                continue;
+            };
+            let (check, scope) = if is_binary_root(&requester.root) {
+                (BINARY_DEPENDENCIES, Ref::Instance(requester.id.clone()))
+            } else {
+                (ARTIFACTS_DEPENDENCIES, Ref::Root(requester.root.clone()))
+            };
+            if self.new_check(check) {
+                if let Some(c) = self.new_coverage(check, &scope) {
+                    if matches!(
+                        c.state,
+                        CoverageState::OutOfScope { .. }
+                            | CoverageState::Skipped { .. }
+                            | CoverageState::NotPresent { .. }
+                            | CoverageState::Unsupported { .. }
+                    ) {
+                        self.dependency_error(
+                            &format_args!("dependency context for {}", requester.id),
+                            "contextual Candidate contradicts its dependency coverage",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn process_value(&mut self, value: &ProcessValue, at: &(impl fmt::Display + ?Sized)) {
@@ -5163,5 +5476,134 @@ mod dependency_index_tests {
         let small = context_path_query_charges(1_024);
         let large = context_path_query_charges(8_192);
         assert_eq!(large, small * 8);
+    }
+}
+
+#[cfg(test)]
+mod deps_values_coverage_query_tests {
+    use super::*;
+    use crate::*;
+
+    fn coverage_path_query_charges(n: usize) -> usize {
+        assert_eq!(n % 2, 0);
+        let mut s: Session = serde_json::from_str(include_str!(
+            "../../../schemas/examples/session-v1/20-observed-processes.json"
+        ))
+        .unwrap();
+        let template = s.processes[0].clone();
+        s.processes.clear();
+        s.values.clear();
+        s.coverage.clear();
+        s.relations.clear();
+        s.listeners.clear();
+        s.request.required_checks = vec![
+            CheckId::new(VALUES_OBSERVED).unwrap(),
+            CheckId::new(ARTIFACTS_DEPENDENCIES).unwrap(),
+        ];
+        s.request.mode = Mode::Observe;
+        s.request.observe_env = false;
+        let entry = |scope, state| Coverage {
+            check: CheckId::new(VALUES_OBSERVED).unwrap(),
+            scope,
+            state,
+            budget: None,
+        };
+        s.coverage.push(entry(Ref::Audit, CoverageState::Complete));
+        s.coverage.push(Coverage {
+            check: CheckId::new(ARTIFACTS_DEPENDENCIES).unwrap(),
+            scope: Ref::Root(RootId::new(INSTALL_ROOT).unwrap()),
+            state: CoverageState::Partial {
+                missing: vec!["unmodeled loader stages".into()],
+            },
+            budget: None,
+        });
+        let requester = InstanceId::new("inst:install/bin/ollama").unwrap();
+        let candidate = InstanceId::new("inst:install/lib/ollama/libggml-cpu-haswell.so").unwrap();
+        let from = s.artifacts[0].slices[0].id.clone();
+        for i in 0..n {
+            let mut obs = template.clone();
+            obs.process.pid = 300_000 + i as u32;
+            obs.roles.clear();
+            obs.mappings.clear();
+            let state = if i % 2 == 0 {
+                for (key, read, name) in [
+                    (ValueKey::Cwd, ProcessValueRead::Cwd, "cwd"),
+                    (ValueKey::User, ProcessValueRead::EffectiveUid, "user"),
+                    (ValueKey::Group, ProcessValueRead::EffectiveGid, "group"),
+                ] {
+                    s.values.push(ProcessValue {
+                        id: ValueId::new(format!("value:coverage-query-{i}-{name}")).unwrap(),
+                        process_role: ProcessRole::new(RUNTIME_ROLE).unwrap(),
+                        key,
+                        value: TriValue::Known(UntrustedText::new("/")),
+                        origin: ValueOrigin::ObservedProcess {
+                            process: obs.process.clone(),
+                            source: ObsSource::Proc,
+                            read: Some(read),
+                        },
+                        applies_to: vec![],
+                    });
+                }
+                CoverageState::Complete
+            } else {
+                let inode = 900_000 + i as u64;
+                s.listeners.push(Listener {
+                    id: ListenerId::new(format!("listener:tcp/127.0.0.1:11434#{inode}")).unwrap(),
+                    protocol: Protocol::Tcp,
+                    address: "127.0.0.1".into(),
+                    port: 11434,
+                    socket_inode: inode,
+                    owner: ListenerOwner::Process {
+                        process: obs.process.clone(),
+                    },
+                });
+                CoverageState::OutOfScope {
+                    why: "outside holder fixture".into(),
+                }
+            };
+            s.coverage
+                .push(entry(Ref::Process(obs.process.clone()), state));
+            s.processes.push(obs);
+            // Candidate coverage commitments run once per recorded contextual relation.
+            s.relations.push(Relation::Candidate {
+                from: from.clone(),
+                needed: UntrustedText::new("libggml-cpu-haswell.so"),
+                candidate: candidate.clone(),
+                via: SearchRule::DefaultDir,
+                context: Some(DependencyContext {
+                    search: DependencySearch::DefaultDir { index: 0 },
+                    requester: requester.clone(),
+                    search_dir: UntrustedText::new("/usr/local/lib/ollama"),
+                    process: None,
+                    values: vec![],
+                    loader_chain: vec![requester.clone()],
+                }),
+            });
+        }
+        let index = SessionIndex::new(&s);
+        let mut validator = Validator::new(&s, &index);
+        assert!(validator.errors.is_empty());
+        let before = index.dependency_work.lookup_steps.get();
+        // Invoke the actual production coverage guard once over every forged process row.
+        validator.deps_values_coverage();
+        assert!(validator.errors.is_empty(), "{:?}", validator.errors);
+        let charges = index.dependency_work.lookup_steps.get() - before;
+        // Four check activations + Audit and install coverage cost 12 fixed charges.
+        // Each Complete process costs 2(coverage)+1(summary)+3*2(keys)=9;
+        // each outside holder costs 2(coverage)+1(summary)+1(listener)=4.
+        // Each contextual relation costs 2(check activation)+2(coverage occurrence)=4.
+        assert_eq!(
+            charges,
+            12 + 21 * n / 2,
+            "indexed process/candidate coverage query lower bound and exact charge"
+        );
+        charges
+    }
+
+    #[test]
+    fn coverage_path_indexed_query_lower_bound() {
+        let small = coverage_path_query_charges(1_024);
+        let large = coverage_path_query_charges(8_192);
+        assert_eq!(large - 12, (small - 12) * 8);
     }
 }

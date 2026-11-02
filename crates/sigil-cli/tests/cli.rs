@@ -2036,7 +2036,15 @@ fn binary_inspect_writes_a_valid_session_and_a_line_per_input() {
     let r = binary(&[&so, &o]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let s = session_of(&r);
-    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: vec![
+                sigil_model::CheckId::new(sigil_model::BINARY_DEPENDENCIES).unwrap()
+            ],
+            gaps: vec![]
+        }
+    );
     assert!(r.stderr.contains("audit=binary"), "{}", r.stderr);
     let lines: Vec<&str> = r
         .stderr
@@ -2116,8 +2124,8 @@ fn two_hundred_inputs_fit_in_32_file_descriptors() {
         String::from_utf8_lossy(&out.stderr)
     );
     let s: Session = serde_json::from_slice(&out.stdout).unwrap();
-    // One binary.container and one binary.identity entry per input (PR-4c-2a).
-    assert_eq!(s.coverage.len(), 2 * 200);
+    // Container, identity, and dependency coverage for each input.
+    assert_eq!(s.coverage.len(), 3 * 200);
 }
 
 #[test]
@@ -3072,7 +3080,15 @@ fn an_nvidia_named_file_is_not_scanned_and_its_report_says_so() {
         )),
         "{line}"
     );
-    assert_eq!(session_of(&r).outcome.completeness, Completeness::Complete);
+    assert_eq!(
+        session_of(&r).outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: vec![
+                sigil_model::CheckId::new(sigil_model::BINARY_DEPENDENCIES).unwrap()
+            ],
+            gaps: vec![]
+        }
+    );
     let r = binary(&[&cudart, &"--format", &"md"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(r.stdout.contains(&esc_md(NOT_SCANNED)), "{}", r.stdout);
@@ -3170,7 +3186,7 @@ fn session_verify_checks_a_session_against_its_policy() {
     assert_eq!(
         r.stdout,
         format!(
-            "verified: {} is what the policy no-spawn ({}) gives at {time}: FAIL + COMPLETE\n",
+            "verified: {} is what the policy no-spawn ({}) gives at {time}: FAIL + INCOMPLETE\n",
             saved.display(),
             sha_of(&policy)
         )
@@ -3201,7 +3217,7 @@ fn session_verify_checks_a_session_against_its_policy() {
         r.stderr.contains(&format!(
             "{} is not what the policy no-spawn gives: policy violations the policy gives, and \
              the session lacks: policy:capabilities.deny.posix.process_spawn on sha256:{}#x86_64@0; \
-             the outcome is PASS + COMPLETE, and the policy gives FAIL + COMPLETE",
+             the outcome is PASS + INCOMPLETE, and the policy gives FAIL + INCOMPLETE",
             tampered.display(),
             sha_of(&spawn)
         )),

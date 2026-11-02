@@ -1255,4 +1255,80 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn c6_process_value_reads_require_the_right_operation_and_scope() {
+        let dir = hex("/proc/123");
+        let lines = [
+            (
+                10,
+                format!("readlinkat(5<{dir}>, \"{}\", 0x1, 4097) = 5", hex("cwd")),
+            ),
+            (
+                10,
+                format!(
+                    "openat(5<{dir}>, \"{}\", O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC) = 6",
+                    hex("status")
+                ),
+            ),
+        ];
+        let run = with(&lines);
+        assert!(check(&run, &policy(&["runtime", "observe"])).is_empty());
+        assert_eq!(
+            found(&check(&run, &policy(&["runtime"]))),
+            [
+                (Contract::C6ProcScope, "readlinkat".into()),
+                (Contract::C6ProcScope, "openat".into()),
+            ]
+        );
+        let lines = [
+            (
+                10,
+                format!(
+                    "openat(5<{dir}>, \"{}\", O_RDONLY|O_CLOEXEC) = 7",
+                    hex("cwd")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "openat2(5<{dir}>, \"{}\", {{flags=O_RDONLY, resolve=0}}, 24) = 7",
+                    hex("cwd")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "newfstatat(5<{dir}>, \"{}\", {{st_mode=S_IFDIR|0755}}, 0) = 0",
+                    hex("cwd")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "statx(5<{dir}>, \"{}\", 0, STATX_BASIC_STATS, 0x1) = 0",
+                    hex("cwd")
+                ),
+            ),
+        ];
+        let run = with(&lines);
+        for scopes in [
+            vec!["runtime", "observe"],
+            vec!["runtime", "observe", "observe_env"],
+        ] {
+            let v = check(&run, &policy(&scopes));
+            assert_eq!(
+                found(&v),
+                [
+                    (Contract::C6ProcScope, "openat".into()),
+                    (Contract::C6ProcScope, "openat2".into()),
+                    (Contract::C6ProcScope, "newfstatat".into()),
+                    (Contract::C6ProcScope, "statx".into()),
+                ]
+            );
+            assert!(
+                v.iter().all(|v| v.detail.contains("/proc/123/cwd")),
+                "{v:#?}"
+            );
+        }
+    }
 }

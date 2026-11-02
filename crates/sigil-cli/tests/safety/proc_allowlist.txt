@@ -27,3 +27,5 @@ observe  /proc/{pid}/ns/net  ops=readlink   # readlink only: the network namespa
 observe  /proc/{pid}/maps    ops=open   # the files a runtime process has mapped, read up to proc_maps_bytes (observe::proc; plan §4.6.2, PR-4d-2)
 observe  /proc/{pid}/ns/mnt  ops=readlink   # readlink only: the mount namespace a mapping's path is read in, SIGIL's own and a runtime process's (observe::proc; PR-4d-2)
 observe  /proc/sys/kernel/random/boot_id   # the boot the observed processes belong to, part of their identity (observe::host; plan §4.2)
+observe  /proc/{pid}/cwd     ops=readlink   # selected process cwd, readlink only inside exe/stat coherence window (observe::proc::values; PR-4d-3 process values)
+observe  /proc/{pid}/status  ops=open   # bounded effective uid/gid read of selected processes (observe::proc::values; PR-4d-3 process values)

@@ -578,6 +578,7 @@ fn files(entries: &[(&str, &[u8])]) -> (TempDir, Vec<PathBuf>) {
 fn inspect(paths: &[PathBuf]) -> Session {
     let s = binary_session(
         &BinaryRequest {
+            deps_budgets: Default::default(),
             paths: paths.to_vec(),
             budgets: NamedBudgets::default(),
         },

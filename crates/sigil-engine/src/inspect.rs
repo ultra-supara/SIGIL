@@ -8,21 +8,25 @@ use sigil_model::{
     ActiveFeature, ApiProbe, Artifact, CheckId, CodeFacts, Completeness, Coverage, CoverageState,
     Format, KnowledgeRef, Mode, ObservationMeta, Outcome, Ref, RootId, RunRequest, ScanRoot,
     SchemaVersion, Session, SkipReason, SliceId, Timestamp, ToolInfo, Unavailability,
-    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DISCOVERY, ARTIFACTS_IDENTITY,
-    ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
+    UntrustedText, Verdict, ARTIFACTS_CONTAINER, ARTIFACTS_DEPENDENCIES, ARTIFACTS_DISCOVERY,
+    ARTIFACTS_IDENTITY, ARTIFACTS_RELEASE, BINARY_BYTES, BINARY_CODE_BYTES, BINARY_SCAN_BYTES,
+    INSTALL_ROOT, VALUES_CONFIGURED,
 };
 
 use crate::analyze::binary::CodeCoverageError;
+use crate::analyze::deps::{DepsBudgets, DepsOptions};
 use crate::analyze::{
-    binary, container, exposure, hints, identity, model_store, release, runtime_api,
-    runtime_processes,
+    binary, container, deps, deps_coverage, exposure, hints, identity, model_store, release,
+    runtime_api, runtime_processes, values,
 };
 use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
 use crate::collect::install::{self, InstallBudgets};
 use crate::collect::named::{self, NamedBudgets};
 use crate::collect::ollama_store::{self, StoreFacts, INVENTORY};
-use crate::collect::service_unit::{self, SERVICE_UNIT_BYTES};
+use crate::collect::service_unit::{
+    self, MAX_UNIT_VALUES, SERVICE_UNIT_BYTES, SERVICE_UNIT_VALUES,
+};
 use crate::observe;
 use crate::observe::proc::{ProcBudgets, ProcFacts};
 use crate::policy::{evaluate, EvaluateError, Policy, ScopeInput};
@@ -40,6 +44,8 @@ pub struct StoreRequest {
     pub manifest_limit: u64,
     /// The installation to inspect (`--install-dir`), if any.
     pub install: Option<InstallRequest>,
+    /// Pure dependency-analysis limits, recorded only when an installation is supplied.
+    pub deps_budgets: DepsBudgets,
 }
 
 /// An installation to inspect: its files against the embedded reference set (PR-4a).
@@ -127,6 +133,8 @@ pub struct ObserveRequest {
     /// `/proc` outside tests.
     pub proc_root: PathBuf,
     pub proc_budgets: ProcBudgets,
+    /// Opt in to allowlisted initial-environment reads for selected processes.
+    pub observe_env: bool,
 }
 
 /// Inspects a model store in static mode and evaluates `policy` on the result.
@@ -159,14 +167,16 @@ pub fn observe_session(
     mut observation: ObservationMeta,
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
-    let proc = observe::proc::observe(
+    let proc = observe::proc::observe_values(
         &req.proc_root,
         &observation.started_at,
         &observation.boot_id,
         req.proc_budgets,
+        req.observe_env,
     );
     observation.net_ns = proc.own_net_ns;
-    let observed = Some((proc, req.proc_budgets));
+    observation.mnt_ns = proc.own_mnt_ns;
+    let observed = Some((proc, req.proc_budgets, req.observe_env));
     assemble(
         &req.store,
         observed,
@@ -181,7 +191,7 @@ pub fn observe_session(
 /// Assembles the session: observe mode when the running system was `observed`, else static.
 fn assemble(
     req: &StoreRequest,
-    observed: Option<(ProcFacts, ProcBudgets)>,
+    observed: Option<(ProcFacts, ProcBudgets, bool)>,
     active: &ActiveInput,
     policy: &Policy,
     tool: ToolInfo,
@@ -193,6 +203,7 @@ fn assemble(
     } else {
         Mode::Static
     };
+    let observe_env = observed.as_ref().is_some_and(|(_, _, enabled)| *enabled);
     let root = RootId::new(MODELS_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?;
     let mut fs = SafeFs::new(req.budgets);
     let facts = match fs.add_root(root.clone(), &req.models_dir) {
@@ -222,6 +233,9 @@ fn assemble(
     let mut knowledge = Vec::<KnowledgeRef>::new();
     let (mut closed, mut reference_matches) = (None, vec![]);
     let mut install_set = None;
+    let mut process_values = vec![];
+    let mut dependency_discovery = None;
+
     let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
         let set = reference::official().map_err(|e| InspectError::Reference(vec![e]))?;
@@ -237,6 +251,7 @@ fn assemble(
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
         let identity_coverage = container::identity(&facts).map_err(InspectError::BadId)?;
+        dependency_discovery = Some((facts.discovery.clone(), container.clone()));
         roots.push(ScanRoot {
             id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
             path: facts.root_path,
@@ -251,6 +266,13 @@ fn assemble(
         knowledge.push(set.knowledge());
         install_set = Some(set);
         budgets.extend(install_budgets(r.budgets));
+        budgets.extend(dependency_budgets(req.deps_budgets));
+        coverage.push(values::configured_coverage(unit).map_err(InspectError::Internal)?);
+        if let Some(unit) = unit {
+            process_values.extend(unit.values.iter().cloned());
+            budgets.insert(SERVICE_UNIT_VALUES.to_string(), MAX_UNIT_VALUES);
+        }
+
         // The unit: its root, its placement, its contents (merged as any content read twice),
         // and its read limit.
         if let Some(unit) = unit {
@@ -280,6 +302,8 @@ fn assemble(
                 ARTIFACTS_RELEASE,
                 ARTIFACTS_CONTAINER,
                 ARTIFACTS_IDENTITY,
+                ARTIFACTS_DEPENDENCIES,
+                VALUES_CONFIGURED,
             ]
             .contains(&check.as_str())
             {
@@ -298,12 +322,14 @@ fn assemble(
     }
     let (mut processes, mut listeners) = (vec![], vec![]);
     let mut details = vec![];
-    if let Some((proc, proc_budgets)) = observed {
+    if let Some((proc, proc_budgets, enabled)) = observed {
         let (exposure_findings, exposure_coverage) = exposure::analyze(&proc);
         findings.extend(exposure_findings);
         coverage.extend(exposure_coverage);
         // PR-4d-2: what was observed of the runtime and its descendants.
         coverage.extend(runtime_processes::coverage(&proc));
+        coverage.extend(values::observed_coverage(&proc));
+        process_values.extend(proc.values);
         details = proc.details;
         processes = proc.processes;
         listeners = proc.listeners;
@@ -321,9 +347,52 @@ fn assemble(
                 proc_budgets.max_maps_entries,
             ),
         ]);
+        budgets.extend([
+            (
+                "proc_status_bytes".to_string(),
+                proc_budgets.max_status_bytes,
+            ),
+            (
+                "process_values".to_string(),
+                proc_budgets.max_process_values,
+            ),
+        ]);
+        if enabled {
+            budgets.extend([
+                (
+                    "proc_environ_bytes".to_string(),
+                    proc_budgets.max_environ_bytes,
+                ),
+                (
+                    "proc_environ_total_bytes".to_string(),
+                    proc_budgets.max_environ_total_bytes,
+                ),
+            ]);
+        }
     }
     // PR-4d-2: the observed executables and mappings, linked to every scanned instance.
     runtime_processes::link(&mut processes, &details, &mut instances);
+    if let Some((discovery, container)) = dependency_discovery {
+        let dependencies = deps::analyze(
+            &roots,
+            &instances,
+            &artifacts,
+            &binaries,
+            &processes,
+            &process_values,
+            DepsOptions {
+                observe_env,
+                observer_mnt_ns: observation.mnt_ns,
+            },
+            req.deps_budgets,
+        );
+        coverage.push(
+            deps_coverage::for_install(&dependencies, &instances, &discovery, &container)
+                .map_err(InspectError::Internal)?,
+        );
+        relations.extend(dependencies.relations);
+    }
+
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
     let mut hints = hints::derive(&binaries).map_err(InspectError::Internal)?;
@@ -350,7 +419,7 @@ fn assemble(
             audit,
             required_checks,
             budgets,
-            observe_env: false,
+            observe_env,
             model_filter: req.model_filter.clone(),
             active: active.features.clone(),
             code: false,
@@ -362,7 +431,7 @@ fn assemble(
         processes,
         listeners,
         probes: active.probes.clone(),
-        values: vec![],
+        values: process_values,
         components,
         releases,
         reference_matches,
@@ -410,6 +479,8 @@ pub struct BinaryRequest {
     /// The files, as given: each is resolved, and a file named twice is one input.
     pub paths: Vec<PathBuf>,
     pub budgets: NamedBudgets,
+    /// Pure dependency-analysis limits for these inputs.
+    pub deps_budgets: DepsBudgets,
 }
 
 /// Inspects the files of `req` and evaluates `policy`'s binary scope on the result (spec §4.5).
@@ -443,6 +514,7 @@ pub fn binary_session(
         ("binary_imports".to_string(), req.budgets.binary.imports),
         (BINARY_SCAN_BYTES.to_string(), req.budgets.binary.scan_bytes),
     ]);
+    budgets.extend(dependency_budgets(req.deps_budgets));
     // With code (PR-5a): its byte budget. Its aggregate limits are constants, not recorded.
     if let Some(c) = code_request {
         budgets.insert(BINARY_CODE_BYTES.to_string(), c.bytes);
@@ -519,6 +591,23 @@ pub fn binary_session(
     })?;
     session.coverage.extend(code_coverage);
     session.code = code_facts(facts.code);
+    let dependencies = deps::analyze(
+        &session.request.roots,
+        &session.instances,
+        &session.artifacts,
+        &session.binaries,
+        &session.processes,
+        &session.values,
+        DepsOptions {
+            observe_env: false,
+            observer_mnt_ns: session.observation.mnt_ns,
+        },
+        req.deps_budgets,
+    );
+    let dependency_coverage =
+        deps_coverage::for_binary(&dependencies, &session).map_err(InspectError::Internal)?;
+    session.coverage.extend(dependency_coverage);
+    session.relations.extend(dependencies.relations);
     evaluate(&mut session, policy, policy_time).map_err(InspectError::Evaluate)?;
     session.canonicalize();
     session.validate().map_err(|errors| {
@@ -622,6 +711,15 @@ fn merge(known: &mut Artifact, other: Artifact) -> Result<(), String> {
         return Err(format!("artifact {}: read as two formats", known.id));
     }
     Ok(())
+}
+
+/// Dependency analysis limits for applicable installation or binary inputs.
+fn dependency_budgets(b: DepsBudgets) -> BTreeMap<String, u64> {
+    BTreeMap::from([
+        ("dependency_contexts".to_string(), b.contexts),
+        ("dependency_candidates".to_string(), b.candidates),
+        ("dependency_search_paths".to_string(), b.search_paths),
+    ])
 }
 
 /// The install scan's budgets, by the names `BudgetUse` reports with the `install_` prefix.

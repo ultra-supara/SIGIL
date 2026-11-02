@@ -42,6 +42,7 @@ fn session_with(paths: &[PathBuf], budgets: NamedBudgets) -> Result<Session, Ins
     let o = observation();
     binary_session(
         &BinaryRequest {
+            deps_budgets: Default::default(),
             paths: paths.to_vec(),
             budgets,
         },
@@ -66,7 +67,7 @@ fn state(s: &Session, inst: &str) -> CoverageState {
 }
 
 #[test]
-fn an_elf_and_a_relocatable_object_are_complete() {
+fn an_elf_and_a_relocatable_object_have_complete_containers_and_explicit_dependency_gaps() {
     let d = TempDir::new().unwrap();
     std::fs::write(d.path().join("libdata.so"), fixture("libdata.so")).unwrap();
     std::fs::write(d.path().join("net.o"), fixture("net.o")).unwrap();
@@ -89,7 +90,13 @@ fn an_elf_and_a_relocatable_object_are_complete() {
         CoverageState::Complete
     );
     assert_eq!(state(&s, "inst:binary-2/net.o"), CoverageState::Complete);
-    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: vec![CheckId::new(BINARY_DEPENDENCIES).unwrap()],
+            gaps: vec![],
+        }
+    );
     assert_eq!(s.outcome.verdict, Verdict::Pass);
     assert!(s.relations.iter().any(
         |r| matches!(r, Relation::Declares { needed, .. } if needed.as_str() == Some("libc.so.6"))
@@ -258,7 +265,13 @@ fn a_dropped_coverage_entry_would_close_the_check_but_validate_refuses_it() {
     s.coverage
         .retain(|c| c.scope != Ref::Instance(InstanceId::new("inst:binary-2/cut.so").unwrap()));
     let t = s.outcome.policy_time.clone();
-    assert_eq!(outcome(&s, t).completeness, Completeness::Complete);
+    assert_eq!(
+        outcome(&s, t).completeness,
+        Completeness::Incomplete {
+            missing_required: vec![CheckId::new(BINARY_DEPENDENCIES).unwrap()],
+            gaps: vec![],
+        }
+    );
     let errors = s.validate().unwrap_err();
     assert!(
         errors

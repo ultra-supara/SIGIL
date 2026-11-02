@@ -41,6 +41,7 @@ const NETWORK_FAILS: &str =
 
 fn inspect(name: &str, code: bool, deny: &str) -> Session {
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![fixture(name)],
         budgets: NamedBudgets {
             binary: BinaryBudgets {
@@ -105,12 +106,24 @@ fn a_call_of_execve_fails_and_a_call_of_connect_alone_passes() {
         }]
     );
     assert_eq!(s.outcome.verdict, Verdict::Fail);
-    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: vec![CheckId::new(BINARY_DEPENDENCIES).unwrap()],
+            gaps: vec![],
+        }
+    );
 
     let s = inspect("net-plt-gcc.so", true, SPAWN_FAILS);
     assert_eq!(results(&s), (vec![], vec![]));
     assert_eq!(s.outcome.verdict, Verdict::Pass);
-    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(
+        s.outcome.completeness,
+        Completeness::Incomplete {
+            missing_required: vec![CheckId::new(BINARY_DEPENDENCIES).unwrap()],
+            gaps: vec![],
+        }
+    );
 }
 
 /// Each denied capability is judged on its own: both of spawn.so's calls are violations (in the
@@ -185,7 +198,7 @@ fn an_import_without_a_direct_call_site_is_an_open_question() {
     assert!(matches!(
         &s.outcome.completeness,
         Completeness::Incomplete { missing_required, gaps }
-            if missing_required.is_empty() && gaps.len() == 1
+            if missing_required == &[CheckId::new(BINARY_DEPENDENCIES).unwrap()] && gaps.len() == 1
     ));
 
     // net-addr.so: connect's address is taken; binary.code Partial.
@@ -221,7 +234,10 @@ fn an_import_without_a_direct_call_site_is_an_open_question() {
     else {
         panic!("{:?}", s.outcome.completeness);
     };
-    assert!(missing_required.is_empty());
+    assert_eq!(
+        missing_required,
+        &[CheckId::new(BINARY_DEPENDENCIES).unwrap()]
+    );
     assert_eq!(gaps, std::slice::from_ref(&s.open_questions[0].id));
 }
 
@@ -230,6 +246,7 @@ fn an_import_without_a_direct_call_site_is_an_open_question() {
 #[test]
 fn each_slice_s_reason_is_its_own_input_s() {
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![fixture("net-data.so"), fixture("net-addr.so")],
         budgets: NamedBudgets {
             binary: BinaryBudgets {
@@ -304,6 +321,7 @@ fn an_installation_s_denied_imports_are_open_questions() {
     std::fs::copy(fixture("spawn.so"), tree.path().join("bin/ollama")).unwrap();
     let models = TempDir::new().unwrap();
     let req = StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: models.path().to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),
@@ -371,6 +389,7 @@ fn an_installation_s_denied_imports_are_open_questions() {
 fn a_session_from_before_a_table_change_is_refused_not_passed() {
     const FILE_WRITE_FAILS: &str = "[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"fail\"\nreason = \"read-only\"\n";
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/cxx-capabilities/cxx-capabilities")],
         budgets: NamedBudgets {
@@ -448,6 +467,7 @@ fn a_session_from_before_a_table_change_is_refused_not_passed() {
 #[test]
 fn hints_are_compared_with_their_counts_on_every_slice() {
     let req = BinaryRequest {
+        deps_budgets: Default::default(),
         paths: vec![fixture("spawn.so"), fixture("net-plt-gcc.so")],
         budgets: NamedBudgets {
             binary: BinaryBudgets {

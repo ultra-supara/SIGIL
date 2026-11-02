@@ -78,6 +78,7 @@ fn elf(e_type: u16) -> Vec<u8> {
 
 fn request(models: &Path, install: Option<&Path>) -> StoreRequest {
     StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: models.to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),
@@ -1077,4 +1078,53 @@ fn a_closed_claim_comes_before_an_open_one() {
         ReleaseBasis::SelfReportedCommit { .. }
     ));
     assert_eq!(open.candidates, ["vA", "vB"]);
+}
+
+#[test]
+fn real_install_parent_proofs_survive_assembly_and_contextual_validation() {
+    let tree = TempDir::new().unwrap();
+    std::fs::create_dir_all(tree.path().join("bin")).unwrap();
+    std::fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so"),
+    )
+    .unwrap();
+    for path in [
+        "bin/ollama",
+        "lib/ollama/libdata.so",
+        "lib/ollama/libm.so.6",
+    ] {
+        std::fs::write(tree.path().join(path), &bytes).unwrap();
+    }
+    let s = inspect_with_install(&tree);
+    assert_eq!(s.validate(), Ok(()));
+    let requester = s
+        .instances
+        .iter()
+        .find(|i| i.path.as_bytes().ends_with(b"/lib/ollama/libdata.so"))
+        .unwrap();
+    let target = s
+        .instances
+        .iter()
+        .find(|i| i.path.as_bytes().ends_with(b"/lib/ollama/libm.so.6"))
+        .unwrap();
+    assert!(requester.path_proof.is_some());
+    assert!(target.path_proof.is_some());
+    assert!(s
+        .instances
+        .iter()
+        .all(|i| !i.path.as_bytes().ends_with(b"/bin")
+            && !i.path.as_bytes().ends_with(b"/lib")
+            && !i.path.as_bytes().ends_with(b"/lib/ollama")));
+    assert!(s.relations.iter().any(|r| matches!(r,Relation::Candidate {
+        needed,candidate,via:SearchRule::Runpath,context:Some(context),..
+    } if needed.as_bytes()==b"libm.so.6" && candidate==&target.id && context.requester==requester.id)));
+    let mut stripped = s.clone();
+    for instance in &mut stripped.instances {
+        instance.path_proof = None;
+    }
+    assert!(
+        stripped.validate().is_err(),
+        "contextual candidate cannot survive removal of all parent evidence"
+    );
 }

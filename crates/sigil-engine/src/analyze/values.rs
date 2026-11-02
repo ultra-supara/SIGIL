@@ -154,3 +154,43 @@ pub fn observed_coverage(facts: &crate::observe::proc::ProcFacts) -> Vec<sigil_m
     }
     out
 }
+
+pub fn configured_coverage(
+    unit: Option<&crate::collect::service_unit::UnitFacts>,
+) -> Result<sigil_model::Coverage, String> {
+    use crate::collect::service_unit::{MAX_UNIT_VALUES, SERVICE_UNIT_VALUES};
+    use sigil_model::{
+        BudgetUse, CheckId, Coverage, CoverageState, Ref, RootId, SERVICE_UNIT_ROOT,
+        VALUES_CONFIGURED,
+    };
+    let (scope, state, budget) = match unit {
+        Some(unit) => {
+            let mut missing = unit.value_gaps.clone();
+            missing.push("drop-ins and effective unit selection unexamined".to_string());
+            missing.sort();
+            missing.dedup();
+            (
+                Ref::Root(RootId::new(SERVICE_UNIT_ROOT).map_err(|e| e.to_string())?),
+                CoverageState::Partial { missing },
+                Some(BudgetUse {
+                    budget: SERVICE_UNIT_VALUES.to_string(),
+                    used: unit.values.len() as u64,
+                    limit: MAX_UNIT_VALUES,
+                }),
+            )
+        }
+        None => (
+            Ref::Audit,
+            CoverageState::OutOfScope {
+                why: "no service unit was supplied".to_string(),
+            },
+            None,
+        ),
+    };
+    Ok(Coverage {
+        check: CheckId::new(VALUES_CONFIGURED).map_err(|e| e.to_string())?,
+        scope,
+        state,
+        budget,
+    })
+}

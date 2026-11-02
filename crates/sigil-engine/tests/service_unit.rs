@@ -103,6 +103,7 @@ fn inspect_with(
     budgets: InstallBudgets,
 ) -> Result<Session, InspectError> {
     let req = StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: models.to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),
@@ -186,12 +187,29 @@ fn the_session_is_the_install_dir_s_plus_the_unit() {
         .roots
         .retain(|r| r.id.as_str() != SERVICE_UNIT_ROOT);
     a.request.budgets.remove("service_unit_bytes");
+    a.request.budgets.remove("service_unit_values");
+    assert!(!a.values.is_empty());
+    a.values.clear();
+    let configured = a
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == VALUES_CONFIGURED)
+        .unwrap();
+    assert!(matches!(configured.state, CoverageState::Partial { .. }));
+    configured.scope = Ref::Audit;
+    configured.budget = None;
+    configured.state = CoverageState::OutOfScope {
+        why: "no service unit was supplied".into(),
+    };
     a.instances.retain(|i| i.root.as_str() != SERVICE_UNIT_ROOT);
     a.artifacts.retain(|x| x.id != unit_artifact);
     for i in &mut a.instances {
         i.discovered_by
             .retain(|d| !matches!(d, DiscoverySource::ServiceUnit { .. }));
     }
+    let time = a.outcome.policy_time.clone();
+    sigil_engine::policy::evaluate(&mut a, &Policy::builtin_default().unwrap(), time).unwrap();
+    a.canonicalize();
     assert_eq!(a, b);
 }
 

@@ -46,7 +46,8 @@ fn the_default_policy_requires_only_implemented_scopes() {
             "model_store.integrity",
             "model_store.license",
             "exposure.binds",
-            "processes.observed"
+            "processes.observed",
+            "values.observed"
         ]
     );
     assert_eq!(policy.open_questions.treatment, OqTreatment::CountAsGap);
@@ -111,6 +112,8 @@ fn the_plan_example_loads() {
             "artifacts.release",
             "artifacts.container",
             "artifacts.identity",
+            "artifacts.dependencies",
+            "values.configured",
             "loader.identify",
             "loader.search_paths",
         ]
@@ -561,7 +564,9 @@ fn the_install_adds_runtime_artifacts_and_its_four_checks() {
             "artifacts.discovery",
             "artifacts.release",
             "artifacts.container",
-            "artifacts.identity"
+            "artifacts.identity",
+            "artifacts.dependencies",
+            "values.configured"
         ]
     );
 }
@@ -587,19 +592,25 @@ fn a_binary_inspection_audits_binary_audit_only() {
     assert_eq!(ids(&policy.binary_audit), ["binary"]);
     let (audit, required) = policy.scope(&binary);
     assert_eq!(ids(&audit), ["binary"]);
-    assert_eq!(ids(&required), ["binary.container", "binary.identity"]);
+    assert_eq!(
+        ids(&required),
+        ["binary.container", "binary.identity", "binary.dependencies"]
+    );
     // An organization's extra checks are for `inspect ollama`.
     let text = "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\naudit = [\"model_store\"]\n\
                 binary_audit = [\"binary\"]\nextra_required = [\"loader.identify\"]\n";
     let (_, required) = Policy::load(text).unwrap().scope(&binary);
-    assert_eq!(ids(&required), ["binary.container", "binary.identity"]);
+    assert_eq!(
+        ids(&required),
+        ["binary.container", "binary.identity", "binary.dependencies"]
+    );
     // Review of Part B: a policy without binary_audit (any written before it existed) requires
     // the binary scope, so binary inspections fail closed; only an explicit [] requires nothing.
     let old = Policy::load("schema = \"sigil-policy/1\"\nname = \"old\"\n").unwrap();
     assert_eq!(ids(&old.binary_audit), ["binary"]);
     assert_eq!(
         ids(&old.scope(&binary).1),
-        ["binary.container", "binary.identity"]
+        ["binary.container", "binary.identity", "binary.dependencies"]
     );
     let none =
         Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\nbinary_audit = []\n")
@@ -632,7 +643,12 @@ fn binary_code_scope_is_added_only_with_code() {
     assert_eq!(ids(&audit), ["binary", "binary_code"]);
     assert_eq!(
         ids(&with),
-        ["binary.container", "binary.identity", "binary.code"]
+        [
+            "binary.container",
+            "binary.identity",
+            "binary.dependencies",
+            "binary.code"
+        ]
     );
     // Code is a binary inspection's: `inspect ollama` never adds the scope.
     let (audit, _) = p.scope(&ScopeInput {
@@ -651,7 +667,12 @@ fn binary_code_scope_is_added_only_with_code() {
     assert_eq!(ids(&audit), ["binary", "binary_code"]);
     assert_eq!(
         ids(&required),
-        ["binary.container", "binary.identity", "binary.code"]
+        [
+            "binary.container",
+            "binary.identity",
+            "binary.dependencies",
+            "binary.code"
+        ]
     );
 }
 

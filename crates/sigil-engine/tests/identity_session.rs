@@ -24,6 +24,7 @@ fn fixture(name: &str) -> PathBuf {
 fn session_with(paths: &[PathBuf], policy: &Policy) -> Session {
     let s = binary_session(
         &BinaryRequest {
+            deps_budgets: Default::default(),
             paths: paths.to_vec(),
             budgets: NamedBudgets::default(),
         },

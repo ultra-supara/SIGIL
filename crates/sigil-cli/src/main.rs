@@ -27,6 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use sha2::{Digest, Sha256};
+use sigil_engine::analyze::deps::{DepsBudgets, CANDIDATES, CONTEXTS, SEARCH_PATHS};
 use sigil_engine::code::CodeBudgets;
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
@@ -129,6 +130,7 @@ struct BinaryArgs {
     #[arg(long, value_name = "FILE")]
     policy: Option<PathBuf>,
     /// A read budget: binary_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, or
+    /// dependency_contexts, dependency_candidates, dependency_search_paths, or
     /// binary_code_bytes, which needs --code (e.g. binary_bytes=1073741824).
     #[arg(long = "budget", value_name = "KEY=VALUE")]
     budgets: Vec<String>,
@@ -163,6 +165,11 @@ struct OllamaArgs {
     /// static reads files only; observe also reads the allowed /proc entries.
     #[arg(long, value_enum, default_value = "static")]
     mode: ModeArg,
+    /// Read allowlisted initial environment values of selected runtime processes. Requires
+    /// --mode observe. Initial environment is not the process's current getenv() state.
+    #[arg(long)]
+    observe_env: bool,
+
     /// The model store [default: $OLLAMA_MODELS, else ~/.ollama/models].
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
@@ -386,6 +393,11 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         ModeArg::Static => Mode::Static,
         ModeArg::Observe => Mode::Observe,
     };
+    if args.observe_env && mode != Mode::Observe {
+        return Err(Failure::Usage(
+            "--observe-env requires --mode observe".to_string(),
+        ));
+    }
     let policy_time = policy_time(&args.policy_time, &started_at)?;
     let models_dir = args.models_dir.clone().unwrap_or_else(default_models_dir);
     let probing = args.active.contains(&ActiveArg::ApiProbe);
@@ -397,6 +409,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     let given = budgets(
         &args.budgets,
         mode,
+        args.observe_env,
         probing,
         args.install_dir.is_some() || args.service_unit.is_some(),
         args.service_unit.is_some(),
@@ -423,6 +436,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
     let policy = load_policy(args.policy.as_deref())?;
 
     let store = StoreRequest {
+        deps_budgets: given.deps,
         models_dir,
         model_filter: args.model.clone(),
         budgets: given.fs,
@@ -456,6 +470,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         Mode::Static => store_session(&store, &active, &policy, tool, observation, policy_time),
         Mode::Observe => observe_session(
             &ObserveRequest {
+                observe_env: args.observe_env,
                 store,
                 proc_root: proc_root.to_path_buf(),
                 proc_budgets: given.proc,
@@ -551,7 +566,7 @@ fn conclude(
 fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
     let started_at = now()?;
     let policy_time = policy_time(&args.policy_time, &started_at)?;
-    let budgets = binary_budgets(&args.budgets, args.code)?;
+    let (budgets, deps_budgets) = binary_budgets(&args.budgets, args.code)?;
     let target = match &args.out {
         Some(out) => Some(check_binary_out(out, &args.paths)?),
         None => None,
@@ -560,6 +575,7 @@ fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
     let observation = host::meta(Mode::Static, Path::new("/proc"), started_at);
     let session = binary_session(
         &BinaryRequest {
+            deps_budgets,
             paths: args.paths.clone(),
             budgets,
         },
@@ -597,8 +613,9 @@ fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
 /// The budgets of `binary inspect`, by the names the session records. With `code` (`--code`),
 /// the code budgets, whose `binary_code_bytes` is the only one `--budget` sets (PR-5a-2 spec
 /// §2): the aggregate limits keep their defaults, which the session does not record.
-fn binary_budgets(given: &[String], code: bool) -> Result<NamedBudgets, Failure> {
+fn binary_budgets(given: &[String], code: bool) -> Result<(NamedBudgets, DepsBudgets), Failure> {
     let mut b = NamedBudgets::default();
+    let mut deps = DepsBudgets::default();
     let mut code_budgets = code.then(CodeBudgets::default);
     for entry in given {
         let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
@@ -613,21 +630,18 @@ fn binary_budgets(given: &[String], code: bool) -> Result<NamedBudgets, Failure>
             "binary_parse_bytes" => b.binary.parse_bytes = value,
             "binary_imports" => b.binary.imports = value,
             BINARY_SCAN_BYTES => b.binary.scan_bytes = value,
+            CONTEXTS => deps.contexts = value,
+            CANDIDATES => deps.candidates = value,
+            SEARCH_PATHS => deps.search_paths = value,
             BINARY_CODE_BYTES => match code_budgets.as_mut() {
                 Some(c) => c.bytes = value,
                 None => return Err(usage("needs --code")),
             },
-            _ => {
-                return Err(usage(
-                    "unknown budget; known for binary inspect: binary_bytes, \
-                     binary_parse_bytes, binary_imports, binary_scan_bytes, and with --code \
-                     binary_code_bytes",
-                ))
-            }
+            _ => return Err(usage("unknown budget; known for binary inspect: binary_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, dependency_contexts, dependency_candidates, dependency_search_paths, and with --code binary_code_bytes")),
         }
     }
     b.binary.code = code_budgets;
-    Ok(b)
+    Ok((b, deps))
 }
 
 /// `--out` of `binary inspect` (spec §3, D4). It must not be an input: each input is a scan root
@@ -838,6 +852,7 @@ fn probe_maximum(key: &str) -> u64 {
 
 /// The budgets of one run.
 struct Budgets {
+    deps: DepsBudgets,
     fs: FsBudgets,
     manifest_limit: u64,
     proc: ProcBudgets,
@@ -850,6 +865,7 @@ struct Budgets {
 fn budgets(
     given: &[String],
     mode: Mode,
+    observe_env: bool,
     probing: bool,
     install: bool,
     unit: bool,
@@ -860,6 +876,7 @@ fn budgets(
     let mut probe_options = ProbeOptions::default();
     let mut install_budgets = InstallBudgets::default();
     let mut service_unit = DEFAULT_UNIT_BYTES;
+    let mut deps = DepsBudgets::default();
     for entry in given {
         let usage = |why: &str| Failure::Usage(format!("--budget {}: {why}", shown(entry)));
         let Some((key, value)) = entry.split_once('=') else {
@@ -876,15 +893,13 @@ fn budgets(
             "walk_depth" => fs_budgets.max_depth = small(value)?,
             "link_hops" => fs_budgets.max_link_hops = small(value)?,
             "manifest_bytes" => manifest_limit = value,
-            "processes_listed"
-            | "fds_per_process"
-            | "tcp_table_bytes"
-            | "proc_maps_bytes"
-            | "proc_maps_total_bytes"
-            | "proc_maps_entries"
-                if mode == Mode::Static =>
-            {
-                return Err(usage("this budget applies to --mode observe only"));
+            "processes_listed" | "fds_per_process" | "tcp_table_bytes" | "proc_maps_bytes"
+                | "proc_maps_total_bytes" | "proc_maps_entries" | "proc_status_bytes" | "process_values"
+                | "proc_environ_bytes" | "proc_environ_total_bytes" if mode == Mode::Static => {
+                    return Err(usage("this budget applies to --mode observe only"));
+                }
+            "proc_environ_bytes" | "proc_environ_total_bytes" if !observe_env => {
+                return Err(usage("this budget requires --observe-env"));
             }
             "processes_listed" => proc_budgets.max_processes = value,
             "fds_per_process" => proc_budgets.max_fds = value,
@@ -892,53 +907,35 @@ fn budgets(
             "proc_maps_bytes" => proc_budgets.max_maps_bytes = value,
             "proc_maps_total_bytes" => proc_budgets.max_maps_total_bytes = value,
             "proc_maps_entries" => proc_budgets.max_maps_entries = value,
+            "proc_status_bytes" => proc_budgets.max_status_bytes = value,
+            "process_values" => proc_budgets.max_process_values = value,
+            "proc_environ_bytes" => proc_budgets.max_environ_bytes = value,
+            "proc_environ_total_bytes" => proc_budgets.max_environ_total_bytes = value,
             "api_connect_ms" | "api_io_ms" | "api_response_bytes" if !probing => {
                 return Err(usage("this budget applies to --active api-probe only"));
             }
-            "api_connect_ms" | "api_io_ms" | "api_response_bytes" if value == 0 => {
-                return Err(usage("the value must be greater than 0"));
-            }
-            "api_connect_ms" | "api_io_ms" | "api_response_bytes" if value > probe_maximum(key) => {
-                return Err(usage(&format!(
-                    "the value must be at most {}",
-                    probe_maximum(key)
-                )));
-            }
+            "api_connect_ms" | "api_io_ms" | "api_response_bytes" if value == 0 => return Err(usage("the value must be greater than 0")),
+            "api_connect_ms" | "api_io_ms" | "api_response_bytes" if value > probe_maximum(key) => return Err(usage(&format!("the value must be at most {}", probe_maximum(key)))),
             "api_connect_ms" => probe_options.connect_timeout = Duration::from_millis(value),
             "api_io_ms" => probe_options.io_deadline = Duration::from_millis(value),
             "api_response_bytes" => probe_options.max_response = value,
-            "install_files_discovered" | "install_entries_listed" | "install_bytes" if !install => {
-                return Err(usage(
-                    "this budget applies to --install-dir or --service-unit only",
-                ));
+            "install_files_discovered" | "install_entries_listed" | "install_bytes" | CONTEXTS | CANDIDATES | SEARCH_PATHS if !install => {
+                return Err(usage("this budget applies to --install-dir or --service-unit only"));
             }
             "install_files_discovered" => install_budgets.files = value,
             "install_entries_listed" => install_budgets.entries = value,
             "install_bytes" => install_budgets.bytes = value,
-            "binary_parse_bytes" | "binary_imports" | BINARY_SCAN_BYTES if !install => {
-                return Err(usage(
-                    "this budget applies to --install-dir or --service-unit only",
-                ));
-            }
+            CONTEXTS => deps.contexts = value,
+            CANDIDATES => deps.candidates = value,
+            SEARCH_PATHS => deps.search_paths = value,
+            "binary_parse_bytes" | "binary_imports" | BINARY_SCAN_BYTES if !install => return Err(usage("this budget applies to --install-dir or --service-unit only")),
             "binary_parse_bytes" => install_budgets.binary.parse_bytes = value,
             "binary_imports" => install_budgets.binary.imports = value,
             BINARY_SCAN_BYTES => install_budgets.binary.scan_bytes = value,
-            SERVICE_UNIT_BYTES if !unit => {
-                return Err(usage("this budget applies to --service-unit only"));
-            }
+            SERVICE_UNIT_BYTES if !unit => return Err(usage("this budget applies to --service-unit only")),
             SERVICE_UNIT_BYTES => service_unit = value,
-            _ => {
-                return Err(usage(
-                    "unknown budget; known: files_discovered, entries_listed, directory_entries, \
-                     walk_depth, link_hops, manifest_bytes, in observe mode processes_listed, \
-                     fds_per_process, tcp_table_bytes, proc_maps_bytes, proc_maps_total_bytes, \
-                     proc_maps_entries, with --active api-probe \
-                     api_connect_ms, api_io_ms, api_response_bytes, with --install-dir or \
-                     --service-unit install_files_discovered, install_entries_listed, \
-                     install_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, and \
-                     with --service-unit service_unit_bytes",
-                ))
-            }
+            "service_unit_values" => return Err(usage("this budget is fixed at 16384; it has no CLI override")),
+            _ => return Err(usage("unknown budget; known: files_discovered, entries_listed, directory_entries, walk_depth, link_hops, manifest_bytes; observe: processes_listed, fds_per_process, tcp_table_bytes, proc_maps_bytes, proc_maps_total_bytes, proc_maps_entries, proc_status_bytes, process_values; with --observe-env: proc_environ_bytes, proc_environ_total_bytes; active api-probe: api_connect_ms, api_io_ms, api_response_bytes; install: install_files_discovered, install_entries_listed, install_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, dependency_contexts, dependency_candidates, dependency_search_paths; unit: service_unit_bytes")),
         }
     }
     Ok(Budgets {
@@ -948,6 +945,7 @@ fn budgets(
         probe: probe_options,
         install: install_budgets,
         service_unit,
+        deps,
     })
 }
 
@@ -1667,6 +1665,7 @@ mod tests {
         let at = sigil_model::Timestamp::new("2026-10-12T00:00:00Z").unwrap();
         let s = sigil_engine::inspect::binary_session(
             &sigil_engine::inspect::BinaryRequest {
+                deps_budgets: Default::default(),
                 paths: vec![p.join("input.so")],
                 budgets: Default::default(),
             },

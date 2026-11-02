@@ -516,8 +516,6 @@ impl<'a> SessionIndex<'a> {
         self.required_checks.contains(check) || self.coverage_by_check.contains_key(check)
     }
 
-    // Reserved for the follow-up coverage assembly validation.
-    #[allow(dead_code)]
     pub fn coverage_occurrence(
         &self,
         check: &str,
@@ -527,15 +525,11 @@ impl<'a> SessionIndex<'a> {
         self.coverage_occurrences.get(check)?.get(scope)
     }
 
-    // Reserved for the follow-up coverage assembly validation.
-    #[allow(dead_code)]
     pub fn observed_summary(&self, process: &ProcessRef) -> Option<&ObservedValues<'a>> {
         self.note_dependency_lookup(1);
         self.observed_values.get(process)
     }
 
-    // Reserved for the follow-up coverage assembly validation.
-    #[allow(dead_code)]
     pub fn observed_key_occurrence<'b>(
         &'b self,
         process: &ProcessRef,
@@ -548,15 +542,11 @@ impl<'a> SessionIndex<'a> {
             .get(&ObservedKey::of(key))
     }
 
-    // Reserved for the follow-up coverage assembly validation.
-    #[allow(dead_code)]
     pub fn listener_holds_process(&self, process: &ProcessRef) -> bool {
         self.note_dependency_lookup(1);
         self.listener_processes.contains(process)
     }
 
-    // Reserved for the follow-up coverage assembly validation.
-    #[allow(dead_code)]
     pub fn coverage_for_check(&self, check: &str) -> impl Iterator<Item = &'a Coverage> + '_ {
         self.coverage_by_check
             .get(check)

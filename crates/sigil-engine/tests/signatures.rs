@@ -20,9 +20,10 @@ use sigil_engine::inspect::{
 use sigil_engine::policy::Policy;
 use sigil_model::{
     binary_root, scan_over_gap, BinaryFacts, Completeness, CoverageState, FeatureHint,
-    FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY, BINARY_IDENTITY,
-    BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY, SCAN_ELF_ONLY, SCAN_GOPCLNTAB_HEADER,
-    SCAN_GOPCLNTAB_NOT_MAPPED, SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS,
+    FileInstance, InstanceContent, Loc, Ref, Session, Signal, ARTIFACTS_IDENTITY,
+    BINARY_DEPENDENCIES, BINARY_IDENTITY, BINARY_UNSUPPORTED, NAME_AND_HASH_ONLY_WHY,
+    SCAN_ELF_ONLY, SCAN_GOPCLNTAB_HEADER, SCAN_GOPCLNTAB_NOT_MAPPED, SCAN_NO_GOPCLNTAB,
+    SCAN_NO_SECTIONS,
 };
 use tempfile::TempDir;
 
@@ -147,6 +148,7 @@ fn files(entries: &[(&str, &[u8])]) -> (TempDir, Vec<PathBuf>) {
 fn inspect(paths: &[PathBuf], budgets: NamedBudgets) -> Session {
     let s = binary_session(
         &BinaryRequest {
+            deps_budgets: Default::default(),
             paths: paths.to_vec(),
             budgets,
         },
@@ -623,6 +625,7 @@ fn install_with(
 
 fn install_session(tree: &Path, models: &Path, budgets: InstallBudgets) -> Session {
     let req = StoreRequest {
+        deps_budgets: Default::default(),
         models_dir: models.to_path_buf(),
         model_filter: None,
         budgets: FsBudgets::default(),
@@ -883,14 +886,14 @@ fn each_input_has_its_identity_state() {
         .iter()
         .any(|c| c.as_str() == BINARY_IDENTITY));
     assert!(missing(&s).contains(&BINARY_IDENTITY.to_string()));
-    // A Mach-O whose container is complete is incomplete for its scan alone.
+    // Mach-O retains declared-only dependency coverage beside its scan gap.
     let (_d, paths) = files(&[("hello", include_bytes!("fixtures/macho/hello-universal"))]);
     let s = inspect(&paths, NamedBudgets::default());
-    assert_eq!(missing(&s), [BINARY_IDENTITY]);
+    assert_eq!(missing(&s), [BINARY_DEPENDENCIES, BINARY_IDENTITY]);
     // The NVIDIA library alone closes the check.
     let (_d, paths) = files(&[("libcudart.so.12", &rpc_library())]);
     let s = inspect(&paths, NamedBudgets::default());
-    assert_eq!(s.outcome.completeness, Completeness::Complete);
+    assert_eq!(missing(&s), [BINARY_DEPENDENCIES]);
 }
 
 #[test]

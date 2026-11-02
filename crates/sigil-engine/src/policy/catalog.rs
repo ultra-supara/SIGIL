@@ -112,7 +112,7 @@ pub const SCOPES: &[ScopeInfo] = &[
     // PR-4d-2: the executable and mappings of the runtime and its descendants (observe mode).
     ScopeInfo {
         id: "runtime_processes",
-        checks: &["processes.observed"],
+        checks: &["processes.observed", "values.observed"],
     },
     ScopeInfo {
         id: "runtime_artifacts",
@@ -122,6 +122,8 @@ pub const SCOPES: &[ScopeInfo] = &[
             "artifacts.container",
             // PR-4c-2a: every signature scan done within its budget.
             "artifacts.identity",
+            "artifacts.dependencies",
+            "values.configured",
         ],
     },
     ScopeInfo {
@@ -135,7 +137,7 @@ pub const SCOPES: &[ScopeInfo] = &[
     ScopeInfo {
         id: "binary",
         // PR-4c-2a: `binary.identity`, every signature scan done within its budget.
-        checks: &["binary.container", "binary.identity"],
+        checks: &["binary.container", "binary.identity", "binary.dependencies"],
     },
     // Code analysis (`binary inspect --code`, PR-5a): the direct call sites of the capability
     // imports.

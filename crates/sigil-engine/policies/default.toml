@@ -1,4 +1,7 @@
 # SIGIL's built-in policy (docs/policy.md).
+# PR-4d-3: runtime_artifacts also audits modeled dependency candidates and supplied-unit values;
+# runtime_processes audits requested process values; binary audits modeled dependency candidates.
+# These checks retain unexamined launch/loader stages as explicit coverage gaps.
 #
 # The audit scope holds only what the engine can collect today: the model store; in observe mode,
 # the runtime's network exposure and the executables and mappings of the runtime and its
