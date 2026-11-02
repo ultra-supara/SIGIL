@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 use super::Validator;
 use crate::code_abi::{self, CodeAbi};
 use crate::{
-    Arch, ArgValue, ArgumentLayout, BinaryParam, BoundsSource, CallTarget, ContainerFacts, Format,
-    ImportVia, KnowledgeKind, MachOImport, Ref, Reg, SliceId, UntrustedText, ARTIFACTS_CODE,
-    BINARY_CODE, INSTALL_ROOT,
+    Arch, ArgValue, ArgumentLayout, BinaryParam, BoundsSource, CallTarget, ContainerFacts,
+    CoverageState, Format, ImportVia, KnowledgeKind, MachOImport, Ref, Reg, SliceId, UntrustedText,
+    ARTIFACTS_CODE, BINARY_CODE, INSTALL_ROOT,
 };
 
 impl Validator<'_> {
@@ -14,6 +14,8 @@ impl Validator<'_> {
         let s = self.s;
         let marked = s.request.code_analysis.is_some();
         if !marked {
+            // Historical installation facts may name non-x86/ELF slices. Preserve the
+            // legacy validator's contract; only genuinely new evidence needs the marker.
             for a in &s.artifacts {
                 if a.code_slice_inventory.is_some() {
                     self.code_error(&a.id, "code_slice_inventory needs multiarch-v1");
@@ -27,16 +29,6 @@ impl Validator<'_> {
                 }
             }
             for f in &s.code {
-                if self
-                    .index
-                    .slices
-                    .get(f.slice.as_str())
-                    .is_some_and(|(_, a, slice)| {
-                        slice.arch != Arch::X86_64 || !matches!(a.format, Format::Elf { .. })
-                    })
-                {
-                    self.code_error(&f.slice, "nonlegacy code facts need multiarch-v1");
-                }
                 for function in &f.functions {
                     if function.bounds == BoundsSource::MachOCompactUnwind {
                         self.code_error(&f.slice, "compact unwind needs multiarch-v1");
@@ -111,6 +103,23 @@ impl Validator<'_> {
                 Some((&b.slice, e.imports.iter().map(|i| &i.name).collect()))
             })
             .collect();
+        // Per-call layout gaps belong to slice code coverage, never container observations.
+        // Task 4 separately checks the coverage entry inventory, duplicates and aggregation.
+        let mut code_gaps: std::collections::HashMap<&SliceId, BTreeSet<&str>> =
+            std::collections::HashMap::new();
+        for coverage in &s.coverage {
+            if !matches!(coverage.check.as_str(), BINARY_CODE | ARTIFACTS_CODE) {
+                continue;
+            }
+            if let (Ref::Slice(slice), CoverageState::Partial { missing }) =
+                (&coverage.scope, &coverage.state)
+            {
+                code_gaps
+                    .entry(slice)
+                    .or_default()
+                    .extend(missing.iter().map(String::as_str));
+            }
+        }
         for facts in &s.code {
             let Some((_, artifact, slice)) = self.index.slices.get(facts.slice.as_str()) else {
                 continue;
@@ -165,10 +174,6 @@ impl Validator<'_> {
             };
             let legacy =
                 matches!(artifact.format, Format::Elf { .. }) && slice.arch == Arch::X86_64;
-            let has_gap = binary
-                .gaps
-                .iter()
-                .any(|g| g.starts_with("code: argument layout partial:"));
             for c in &facts.call_sites {
                 let register_limit = if slice.arch == Arch::Aarch64 { 8 } else { 6 };
                 if c.args.len() > register_limit {
@@ -188,6 +193,13 @@ impl Validator<'_> {
                 } = &c.target
                 {
                     if macho {
+                        if !matches!(&binary.container, ContainerFacts::MachO(m) if macho_route_admits(*via, m.file_type))
+                        {
+                            self.code_error(
+                                &c.id,
+                                "Mach-O import route contradicts the parsed file type",
+                            );
+                        }
                         if !is_macho(*via)
                             || !macho_import.as_ref().is_some_and(|m| {
                                 m.name == *symbol
@@ -251,7 +263,11 @@ impl Validator<'_> {
                                 "partial argument layout needs a nonempty reason",
                             );
                         }
-                        if !has_gap {
+                        let gap = code_abi::argument_layout_gap(&c.id, reason);
+                        if !code_gaps
+                            .get(&facts.slice)
+                            .is_some_and(|gaps| gaps.contains(gap.as_str()))
+                        {
                             self.code_error(&c.id, "partial argument layout gap is missing");
                         }
                     }
@@ -339,4 +355,14 @@ fn is_macho(via: ImportVia) -> bool {
         via,
         ImportVia::MachOStub | ImportVia::MachOGot | ImportVia::MachOReloc
     )
+}
+
+/// Symbolic branch relocations are object evidence. Stub/GOT bindings belong only to
+/// the linked formats admitted by the design: MH_EXECUTE=2, MH_DYLIB=6, MH_BUNDLE=8.
+fn macho_route_admits(via: ImportVia, file_type: u32) -> bool {
+    match via {
+        ImportVia::MachOReloc => file_type == crate::MH_OBJECT,
+        ImportVia::MachOStub | ImportVia::MachOGot => matches!(file_type, 2 | 6 | 8),
+        _ => false,
+    }
 }

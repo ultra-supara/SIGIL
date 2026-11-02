@@ -3,6 +3,26 @@ use sigil_model::{code_abi, CodeAnalysis, Session};
 use sigil_wasm::render_session_markdown_inner;
 
 #[test]
+fn historical_install_architecture_and_format_remain_readable() {
+    let raw = include_str!("../../../schemas/examples/session-v1/10-target-verified.json");
+    for arch in ["x86_64", "aarch64"] {
+        for macho in [false, true] {
+            for omitted in [false, true] {
+                let mut value: serde_json::Value =
+                    serde_json::from_str(&raw.replace("x86_64", arch)).unwrap();
+                if macho {
+                    value["artifacts"][0]["format"] = serde_json::json!("MachO");
+                }
+                if omitted {
+                    value["request"].as_object_mut().unwrap().remove("code");
+                }
+                assert!(render_session_markdown_inner(&value.to_string()).is_ok());
+            }
+        }
+    }
+}
+
+#[test]
 fn marked_saved_sessions_are_gated_in_both_native_and_wasm_entrypoints() {
     let mut s: Session = serde_json::from_str(include_str!(
         "../../../schemas/examples/session-v1/16-binary-code.json"

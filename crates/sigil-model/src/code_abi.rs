@@ -2,7 +2,7 @@
 //! The v1 bytes are immutable; new knowledge requires a new version, retaining this table.
 //! Capability arities are deliberately not consulted. This module performs no I/O or analysis.
 use crate::{
-    ArgumentLayout, IdError, KnowledgeKind, KnowledgeRef, MachOLibrary, Reg, Sha256Hex,
+    ArgumentLayout, CallId, IdError, KnowledgeKind, KnowledgeRef, MachOLibrary, Reg, Sha256Hex,
     UntrustedText, LIBSYSTEM,
 };
 
@@ -98,7 +98,6 @@ impl SignatureDb {
             layout: reason.map_or(ArgumentLayout::Complete, |reason| ArgumentLayout::Partial {
                 reason: UntrustedText::new(reason),
             }),
-            gap: reason.map(|r| format!("code: argument layout partial: {r}")),
         }
     }
 }
@@ -107,8 +106,33 @@ impl SignatureDb {
 pub struct ArgumentPlan {
     pub registers: &'static [Reg],
     pub layout: ArgumentLayout,
-    /// The producer must retain this diagnostic when the full layout is not proved.
-    pub gap: Option<String>,
+}
+
+impl ArgumentPlan {
+    /// Diagnostic for this actual call, to retain in its slice's code coverage missing list.
+    pub fn coverage_gap(&self, call: &CallId) -> Option<String> {
+        match &self.layout {
+            ArgumentLayout::Complete => None,
+            ArgumentLayout::Partial { reason } => Some(argument_layout_gap(call, reason)),
+        }
+    }
+}
+
+/// Shared producer/verifier spelling for a partial call's code coverage gap.
+/// Printable ASCII is retained except that backslash is doubled; every other byte is
+/// written as `\xNN`. This is lossless, single-line, and never display-truncated, so
+/// different raw reasons cannot acquire the same diagnostic. Render as ordinary text,
+/// using the existing escaping API when producing Markdown/HTML.
+pub fn argument_layout_gap(call: &CallId, reason: &UntrustedText) -> String {
+    let mut gap = format!("code: argument layout incomplete at {call}: ");
+    for &byte in reason.as_bytes() {
+        match byte {
+            b'\\' => gap.push_str("\\\\"),
+            b' '..=b'~' => gap.push(char::from(byte)),
+            _ => gap.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    gap
 }
 
 const V1_SIGNATURES: &[Signature] = &[

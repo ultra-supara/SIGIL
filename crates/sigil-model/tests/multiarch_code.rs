@@ -144,7 +144,7 @@ fn macho(arch: Arch) -> Session {
     });
     s.code[0].call_sites[0].target = CallTarget::Import {
         symbol: witness.name.clone(),
-        via: ImportVia::MachOReloc,
+        via: ImportVia::MachOStub,
         macho_import: Some(witness),
     };
     s.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Complete);
@@ -428,28 +428,15 @@ fn argument_prefix_is_honest() {
                 reason: ValueUnknown::FromMemory,
             })
             .collect();
+        let gap = plan.coverage_gap(&call.id).unwrap();
         call.args_layout = Some(plan.layout);
-        s.binaries[0].gaps.push(plan.gap.unwrap());
-        for c in &mut s.coverage {
-            if matches!(c.check.as_str(), BINARY_CONTAINER | BINARY_CODE) {
-                c.state = CoverageState::Partial {
-                    missing: s.binaries[0].gaps.clone(),
-                };
-            }
-        }
-        s.outcome.completeness = Completeness::Incomplete {
-            missing_required: vec![
-                CheckId::new(BINARY_CODE).unwrap(),
-                CheckId::new(BINARY_CONTAINER).unwrap(),
-            ],
-            gaps: vec![],
-        };
+        code_gaps(&mut s, BINARY_CODE, vec![gap]);
         assert_contract(&s);
         let mut bad = s.clone();
         bad.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Complete);
         rejects(&bad, "argument layout");
         let mut bad = s.clone();
-        bad.binaries[0].gaps.clear();
+        bad.coverage.retain(|c| !matches!(c.scope, Ref::Slice(_)));
         rejects(&bad, "argument layout gap");
         let mut bad = s.clone();
         bad.code[0].call_sites[0].args.push(ArgValue::ConstInt {
@@ -702,12 +689,12 @@ fn predicates_guards_and_parameter_mappings_check_their_registers() {
 }
 
 #[test]
-fn nonlegacy_facts_cannot_hide_without_new_fields() {
+fn unmarked_binary_code_keeps_legacy_unsupported_validation() {
     let mut s = arm();
     s.request.code_analysis = None;
     s.artifacts[0].code_slice_inventory = None;
     s.code[0].call_sites.clear();
-    rejects(&s, "code facts need multiarch-v1");
+    rejects(&s, CODE_UNSUPPORTED);
 }
 
 #[test]
@@ -871,4 +858,382 @@ fn marked_legacy_calls_still_respect_the_register_abi_limit() {
     s.request.code_analysis = None;
     s.artifacts[0].code_slice_inventory = None;
     assert!(s.validate().is_ok());
+}
+
+#[test]
+fn review_legacy_install_formats_and_arches_keep_base_validation() {
+    use sha2::{Digest, Sha256};
+    let original = include_str!("../../../schemas/examples/session-v1/10-target-verified.json");
+    let mut rows = vec![];
+    for arch in ["x86_64", "aarch64"] {
+        for format in ["Elf", "MachO"] {
+            for omitted in [false, true] {
+                let mut value: Value =
+                    serde_json::from_str(&original.replace("x86_64", arch)).unwrap();
+                if format == "MachO" {
+                    value["artifacts"][0]["format"] = json!("MachO");
+                }
+                if omitted {
+                    value["request"].as_object_mut().unwrap().remove("code");
+                }
+                let s: Session = serde_json::from_value(value).unwrap();
+                assert!(!s.request.code && s.request.code_analysis.is_none());
+                assert!(
+                    s.validate().is_ok(),
+                    "{arch} {format} {omitted}: {:?}",
+                    errors(&s)
+                );
+                rows.push(format!(
+                    "{:x}  {arch}-{format}-{}",
+                    Sha256::digest(s.to_canonical_json().unwrap().as_bytes()),
+                    if omitted { "absent" } else { "false" }
+                ));
+                // Legacy architecture exemption is not permission to add M3 fields.
+                let mut forged = s;
+                forged.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Complete);
+                rejects(&forged, "needs multiarch-v1");
+            }
+        }
+    }
+    rows.sort();
+    assert_eq!(
+        rows.join("\n") + "\n",
+        include_str!("data/multiarch-legacy-install-sha256.txt")
+    );
+}
+
+fn code_gaps(s: &mut Session, check: &str, missing: Vec<String>) {
+    let mut parent = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == BINARY_CODE && !matches!(c.scope, Ref::Slice(_)))
+        .unwrap()
+        .clone();
+    parent.check = CheckId::new(check).unwrap();
+    parent.scope = Ref::Slice(s.code[0].slice.clone());
+    parent.state = CoverageState::Partial {
+        missing: missing.clone(),
+    };
+    s.coverage
+        .retain(|c| !(c.check.as_str() == check && matches!(c.scope, Ref::Slice(_))));
+    s.coverage.push(parent);
+    // Only code coverage is open. Container observations stay independently complete.
+    for c in &mut s.coverage {
+        if c.check.as_str() == BINARY_CODE && !matches!(c.scope, Ref::Slice(_)) {
+            c.state = CoverageState::Partial {
+                missing: missing.clone(),
+            };
+        }
+    }
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![CheckId::new(BINARY_CODE).unwrap()],
+        gaps: vec![],
+    };
+}
+
+fn partial_open() -> Session {
+    let mut s = arm();
+    s.hints.clear();
+    let name = UntrustedText::new("open");
+    let ContainerFacts::Elf(e) = &mut s.binaries[0].container else {
+        unreachable!()
+    };
+    e.imports[0].name = name.clone();
+    let CallTarget::Import { symbol, .. } = &mut s.code[0].call_sites[0].target else {
+        unreachable!()
+    };
+    *symbol = name;
+    s.code[0].call_sites[0].args.truncate(2);
+    s.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Partial {
+        reason: UntrustedText::new("variadic argument positions are not modeled"),
+    });
+    s
+}
+
+#[test]
+fn review_partial_layout_needs_its_exact_slice_code_gap() {
+    let gap =
+        "code: argument layout incomplete at cs:0x4d: variadic argument positions are not modeled";
+    for check in [BINARY_CODE, ARTIFACTS_CODE] {
+        let mut s = partial_open();
+        code_gaps(&mut s, check, vec![gap.into()]);
+        assert!(s.binaries[0].gaps.is_empty());
+        assert!(s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_CONTAINER)
+            .all(|c| c.state == CoverageState::Complete));
+        assert_contract(&s);
+        let wrong_gaps = [
+            "code: argument layout incomplete at cs:0x50: variadic argument positions are not modeled",
+            "code: argument layout incomplete at cs:0x4d: wrong reason",
+            "code: argument layout incomplete at ",
+            "code: argument layout partial:",
+        ];
+        for wrong in wrong_gaps {
+            let mut bad = s.clone();
+            code_gaps(&mut bad, check, vec![wrong.into()]);
+            rejects(&bad, "partial argument layout gap");
+        }
+        // A parent entry with the right text cannot replace the slice entry.
+        let mut bad = s.clone();
+        bad.coverage.retain(|c| !matches!(c.scope, Ref::Slice(_)));
+        rejects(&bad, "partial argument layout gap");
+        // An otherwise valid sibling has the same local call ID/reason and its own gap.
+        let original_hash = s.artifacts[0].id.as_str().strip_prefix("sha256:").unwrap();
+        let json = serde_json::to_string(&s)
+            .unwrap()
+            .replace(original_hash, &"bb".repeat(32))
+            .replace("binary-1", "binary-2");
+        let second: Session = serde_json::from_str(&json).unwrap();
+        s.request.roots.extend(second.request.roots);
+        s.artifacts.extend(second.artifacts);
+        s.binaries.extend(second.binaries);
+        s.instances.extend(second.instances);
+        s.code.extend(second.code);
+        s.coverage.extend(second.coverage);
+        s.relations.extend(second.relations);
+        assert_contract(&s);
+        s.coverage.retain(|c| {
+            !(c.check.as_str() == check && c.scope == Ref::Slice(s.code[0].slice.clone()))
+        });
+        let errors = errors(&s);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains(GATE)));
+        assert!(errors
+            .iter()
+            .any(|e| e == "cs:0x4d: partial argument layout gap is missing"));
+    }
+}
+
+#[test]
+fn review_two_partial_calls_need_separate_id_and_reason_gaps() {
+    let first =
+        "code: argument layout incomplete at cs:0x4d: variadic argument positions are not modeled";
+    let second = "code: argument layout incomplete at cs:0x50: second reason";
+    let mut s = partial_open();
+    let mut call = s.code[0].call_sites[0].clone();
+    call.id = CallId::new("cs:0x50").unwrap();
+    call.addr = 80;
+    call.args_layout = Some(ArgumentLayout::Partial {
+        reason: UntrustedText::new("second reason"),
+    });
+    s.code[0].call_sites.push(call);
+    code_gaps(&mut s, BINARY_CODE, vec![first.into(), second.into()]);
+    assert_contract(&s);
+    for only in [first, second] {
+        let mut bad = s.clone();
+        code_gaps(&mut bad, BINARY_CODE, vec![only.into()]);
+        let errors: Vec<_> = errors(&bad)
+            .into_iter()
+            .filter(|e| e.contains("partial argument layout gap"))
+            .collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with(if only == first {
+            "cs:0x50:"
+        } else {
+            "cs:0x4d:"
+        }));
+    }
+    let mut bad = s.clone();
+    code_gaps(
+        &mut bad,
+        BINARY_CODE,
+        vec![
+            first.replace("cs:0x4d", "cs:0x50"),
+            second.replace("cs:0x50", "cs:0x4d"),
+        ],
+    );
+    assert_eq!(
+        errors(&bad)
+            .iter()
+            .filter(|e| e.contains("partial argument layout gap"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn review_bare_container_gap_cannot_cover_partial_calls() {
+    let mut s = partial_open();
+    let mut call = s.code[0].call_sites[0].clone();
+    call.id = CallId::new("cs:0x50").unwrap();
+    call.addr = 80;
+    call.args_layout = Some(ArgumentLayout::Partial {
+        reason: UntrustedText::new("second reason"),
+    });
+    s.code[0].call_sites.push(call);
+    s.binaries[0]
+        .gaps
+        .push("code: argument layout partial:".into());
+    for c in &mut s.coverage {
+        if c.check.as_str() == BINARY_CONTAINER {
+            c.state = CoverageState::Partial {
+                missing: s.binaries[0].gaps.clone(),
+            };
+        }
+    }
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![CheckId::new(BINARY_CONTAINER).unwrap()],
+        gaps: vec![],
+    };
+    assert_eq!(
+        errors(&s)
+            .iter()
+            .filter(|e| e.contains("partial argument layout gap"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn review_macho_import_routes_agree_with_file_type() {
+    for arch in [Arch::Aarch64, Arch::X86_64] {
+        for file_type in [2, 6, 8] {
+            // MH_EXECUTE, MH_DYLIB, MH_BUNDLE.
+            for route in [
+                ImportVia::MachOStub,
+                ImportVia::MachOGot,
+                ImportVia::MachOReloc,
+            ] {
+                let mut s = macho(arch);
+                let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+                    unreachable!()
+                };
+                m.file_type = file_type;
+                let CallTarget::Import { via, .. } = &mut s.code[0].call_sites[0].target else {
+                    unreachable!()
+                };
+                *via = route;
+                if route == ImportVia::MachOReloc {
+                    rejects(&s, "Mach-O import route");
+                } else {
+                    assert_contract(&s);
+                }
+            }
+        }
+        let mut object = macho(arch);
+        let ContainerFacts::MachO(m) = &mut object.binaries[0].container else {
+            unreachable!()
+        };
+        m.file_type = MH_OBJECT;
+        m.load_dylibs.clear();
+        m.imports[0].library = MachOLibrary::Unbound;
+        object.relations.clear();
+        let CallTarget::Import {
+            via,
+            macho_import: Some(m),
+            ..
+        } = &mut object.code[0].call_sites[0].target
+        else {
+            unreachable!()
+        };
+        *via = ImportVia::MachOReloc;
+        m.library = MachOLibrary::Unbound;
+        object.code[0].call_sites[0].args.clear();
+        object.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Partial {
+            reason: UntrustedText::new("unknown or unsupported ABI prototype"),
+        });
+        code_gaps(
+            &mut object,
+            BINARY_CODE,
+            vec![
+                "code: argument layout incomplete at cs:0x4d: unknown or unsupported ABI prototype"
+                    .into(),
+            ],
+        );
+        assert_contract(&object);
+        for route in [ImportVia::MachOStub, ImportVia::MachOGot] {
+            let mut bad = object.clone();
+            let CallTarget::Import { via, .. } = &mut bad.code[0].call_sites[0].target else {
+                unreachable!()
+            };
+            *via = route;
+            rejects(&bad, "Mach-O import route");
+        }
+        for file_type in [0, 3, 4, 5, 7, 9, 10, 11, 12, u32::MAX] {
+            for route in [
+                ImportVia::MachOStub,
+                ImportVia::MachOGot,
+                ImportVia::MachOReloc,
+            ] {
+                let mut bad = macho(arch);
+                let ContainerFacts::MachO(m) = &mut bad.binaries[0].container else {
+                    unreachable!()
+                };
+                m.file_type = file_type;
+                let CallTarget::Import { via, .. } = &mut bad.code[0].call_sites[0].target else {
+                    unreachable!()
+                };
+                *via = route;
+                rejects(&bad, "Mach-O import route");
+            }
+        }
+        let mut linked = macho(arch);
+        linked.code[0].functions[0].bounds = BoundsSource::MachOCompactUnwind;
+        rejects(&linked, "compact unwind requires Mach-O object");
+    }
+}
+
+#[test]
+fn review_gap_reason_encoding_is_lossless_single_line_and_shared() {
+    let call = CallId::new("cs:0x4d").unwrap();
+    for (reason, encoded) in [
+        (UntrustedText::new("plain reason"), "plain reason"),
+        (UntrustedText::new("line\n\\x0a"), r"line\x0a\\x0a"),
+        (
+            UntrustedText::from_bytes(vec![0xff, 0, 0x1b]),
+            r"\xff\x00\x1b",
+        ),
+        (
+            UntrustedText::new("\u{202e}<script>|"),
+            r"\xe2\x80\xae<script>|",
+        ),
+    ] {
+        let expected = format!("code: argument layout incomplete at {call}: {encoded}");
+        let layout = ArgumentLayout::Partial {
+            reason: reason.clone(),
+        };
+        let plan = code_abi::ArgumentPlan {
+            registers: &[Reg::X0, Reg::X1],
+            layout: layout.clone(),
+        };
+        assert_eq!(plan.coverage_gap(&call).as_deref(), Some(expected.as_str()));
+        assert_eq!(code_abi::argument_layout_gap(&call, &reason), expected);
+        assert!(expected.bytes().all(|b| (b' '..=b'~').contains(&b)));
+        let mut s = partial_open();
+        s.code[0].call_sites[0].args_layout = Some(layout);
+        code_gaps(&mut s, BINARY_CODE, vec![expected.clone()]);
+        assert_contract(&s);
+        let rendered = sigil_model::render::coverage_state(&CoverageState::Partial {
+            missing: vec![expected],
+        })
+        .markdown();
+        assert!(!rendered.contains("<script>"));
+    }
+    // Neither the display-limit truncation nor visible escape text may merge two reasons.
+    let a = UntrustedText::new(format!("{}A", "a".repeat(600)));
+    let b = UntrustedText::new(format!("{}B", "a".repeat(600)));
+    assert_ne!(
+        code_abi::argument_layout_gap(&call, &a),
+        code_abi::argument_layout_gap(&call, &b)
+    );
+    assert_ne!(
+        code_abi::argument_layout_gap(&call, &UntrustedText::new("\n")),
+        code_abi::argument_layout_gap(&call, &UntrustedText::new(r"\x0a"))
+    );
+    let mut s = partial_open();
+    s.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Partial { reason: b });
+    code_gaps(
+        &mut s,
+        BINARY_CODE,
+        vec![code_abi::argument_layout_gap(&call, &a)],
+    );
+    rejects(&s, "partial argument layout gap");
+    let fixed = code_abi::V1.argument_plan(
+        Some(code_abi::CodeAbi::ElfAarch64),
+        &UntrustedText::new("connect"),
+        None,
+    );
+    assert!(fixed.coverage_gap(&call).is_none());
 }
