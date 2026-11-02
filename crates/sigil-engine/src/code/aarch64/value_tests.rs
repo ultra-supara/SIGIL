@@ -851,3 +851,54 @@ fn same_fd_failed_read_keeps_charge_and_rolls_back_function() {
     assert!(!run.stopped());
     assert!(run.clone_gaps().iter().any(|g| g.contains("read error")));
 }
+
+#[test]
+fn unapplied_transfer_clears_all_writes_without_reading_raw_memory() {
+    let f = file(&[0; 64]);
+    let mut reader = Reader::new(f.as_file(), 64, 64);
+    let mut run = Run::new(CodeBudgets::default());
+    let mappings = [mapping(0, 64)];
+    let image = Image::new(SliceWindow { base: 0, len: 64 }, &mappings, &mut run).unwrap();
+    // ADRP, ADD, scalar LDR, and pair LDP with post-index base writeback. The last case also
+    // checks the separate SP destination; original control instructions preserve call clobbers.
+    for (word, writes, sp_write) in [
+        (0x90000000u32, vec![0], false),
+        (0x91000000, vec![0], false),
+        (0xf9400020, vec![0], false),
+        (0xa8c10440, vec![0, 1, 2], false),
+        (0xa8c107e0, vec![0, 1], true),
+    ] {
+        let mut s = A64State::entry(CodeAbi::ElfAarch64).unwrap();
+        for r in &mut s.regs {
+            *r = c(8);
+        }
+        s.sp = c(8);
+        let ins = decode_a64(word, 0x1000).unwrap();
+        relocated_step(&mut s, 0x1000, &ins, &image, true, &mut reader, &mut run).unwrap();
+        for n in 0..31 {
+            if writes.contains(&n) {
+                assert!(matches!(s.regs[n], Value::Unknown(_)), "{word:x} x{n}");
+            } else {
+                assert_eq!(s.regs[n], c(8));
+            }
+        }
+        assert_eq!(matches!(s.sp, Value::Unknown(_)), sp_write);
+        assert_eq!(reader.used(), 0);
+    }
+    let mut s = A64State::entry(CodeAbi::ElfAarch64).unwrap();
+    s.regs[16] = c(16);
+    s.regs[19] = c(19);
+    relocated_step(
+        &mut s,
+        0x1000,
+        &decode_a64(0x94000000, 0x1000).unwrap(),
+        &image,
+        true,
+        &mut reader,
+        &mut run,
+    )
+    .unwrap();
+    assert_eq!(s.regs[0], Value::Return(0x1000));
+    assert_eq!(s.regs[16], Value::Unknown(Why::ClobberedByCall));
+    assert_eq!(s.regs[19], c(19));
+}

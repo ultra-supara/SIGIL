@@ -617,7 +617,21 @@ pub(crate) fn solve(
     reader: &mut Reader<'_>,
     run: &mut Run,
 ) -> Result<Values, Failure> {
-    let result = propagate(cfg, abi, image, reader, run);
+    solve_with_unapplied(cfg, abi, image, &|_| false, reader, run)
+}
+
+/// A format adapter can forbid raw relocation-written values without changing the validated
+/// instruction or CFG. Preserve control flow/call clobbers and invalidate every written
+/// destination (including pair destinations and writeback bases); do not read raw memory.
+pub(crate) fn solve_with_unapplied(
+    cfg: &Cfg,
+    abi: CodeAbi,
+    image: &Image<'_>,
+    unapplied: &dyn Fn(u64) -> bool,
+    reader: &mut Reader<'_>,
+    run: &mut Run,
+) -> Result<Values, Failure> {
+    let result = propagate_unapplied(cfg, abi, image, unapplied, reader, run);
     if let Err(why) = result {
         run.gap(format!(
             "code: AArch64 function at {:#x}: value analysis {why:?}",
@@ -664,10 +678,30 @@ fn input(
     Ok(s)
 }
 
-fn propagate(
+fn relocated_step(
+    state: &mut A64State,
+    pc: u64,
+    ins: &A64Insn,
+    image: &Image<'_>,
+    unapplied: bool,
+    reader: &mut Reader<'_>,
+    run: &mut Run,
+) -> Result<(), Failure> {
+    if !unapplied || matches!(ins.operation, Operation::Control) {
+        return step(state, pc, ins, image, reader, run);
+    }
+    charge(run, 1 + state.weight())?;
+    for reg in ins.effects.writes.iter().flatten() {
+        state.write(*reg, unknown());
+    }
+    Ok(())
+}
+
+fn propagate_unapplied(
     cfg: &Cfg,
     abi: CodeAbi,
     image: &Image<'_>,
+    unapplied: &dyn Fn(u64) -> bool,
     reader: &mut Reader<'_>,
     run: &mut Run,
 ) -> Result<Values, Failure> {
@@ -699,7 +733,7 @@ fn propagate(
         };
         let block = cfg.blocks.get(&at).ok_or(Failure::InvalidCfg)?;
         for (pc, ins) in cfg.block_insns(at, block) {
-            step(&mut s, pc, ins, image, reader, run)?;
+            relocated_step(&mut s, pc, ins, image, unapplied(pc), reader, run)?;
         }
         let equal = if let Some(old) = out.get(&at) {
             charge(run, s.weight() + old.weight())?;
@@ -722,7 +756,7 @@ fn propagate(
                 charge(run, s.weight())?;
                 calls.insert(pc, s.clone());
             }
-            step(&mut s, pc, ins, image, reader, run)?;
+            relocated_step(&mut s, pc, ins, image, unapplied(pc), reader, run)?;
         }
     }
     Ok(Values { calls })

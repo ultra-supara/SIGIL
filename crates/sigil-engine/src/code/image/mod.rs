@@ -3,6 +3,8 @@
 //! a relocatable object the relocations on code fields. The builders are [`linked`] (an
 //! executable or shared object) and [`relocatable`].
 
+#[allow(dead_code)] // Private foundation; production dispatch belongs to Task 10.
+pub(crate) mod aarch64;
 mod linked;
 mod relocatable;
 

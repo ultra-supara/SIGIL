@@ -26,6 +26,17 @@ use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
 use crate::code::{self, CodeOutcome};
 
+/// Private Task 9 adapter. The collector's opened fd remains in the artifact Reader; this
+/// bridge deliberately adds no production dispatch, marker, policy or evidence emission.
+#[allow(dead_code)]
+pub(crate) fn aarch64_image(
+    reader: &mut code::reader::Reader<'_>,
+    window: code::reader::SliceWindow,
+    run: &mut code::Run,
+) -> Option<code::image::aarch64::A64ElfImage> {
+    code::image::aarch64::build(reader, window, run)
+}
+
 /// Output limits (spec §4.9).
 pub const MAX_DYNAMIC: u64 = 65_536;
 pub const MAX_NEEDED: usize = 1_024;
