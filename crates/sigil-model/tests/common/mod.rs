@@ -2685,7 +2685,7 @@ pub fn dependencies_and_values() -> Session {
             candidate: backend.inst.clone(),
             via,
             context: Some(DependencyContext {
-                search: search,
+                search,
                 requester: requester.inst.clone(),
                 search_dir: t("/usr/local/lib/ollama"),
                 process,

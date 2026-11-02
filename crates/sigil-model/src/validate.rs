@@ -1646,13 +1646,13 @@ impl<'a> Validator<'a> {
         }
         if self.new_check(VALUES_OBSERVED) {
             let audit = self.new_coverage(VALUES_OBSERVED, &Ref::Audit);
-            if s.request.mode == crate::Mode::Static {
-                if audit.is_some_and(|c| !matches!(c.state, CoverageState::Skipped { .. })) {
-                    self.dependency_error(
-                        &format_args!("coverage[values.observed]"),
-                        "static values.observed must be Skipped",
-                    );
-                }
+            if s.request.mode == crate::Mode::Static
+                && audit.is_some_and(|c| !matches!(c.state, CoverageState::Skipped { .. }))
+            {
+                self.dependency_error(
+                    &format_args!("coverage[values.observed]"),
+                    "static values.observed must be Skipped",
+                );
             }
             for obs in &s.processes {
                 let scope = Ref::Process(obs.process.clone());
