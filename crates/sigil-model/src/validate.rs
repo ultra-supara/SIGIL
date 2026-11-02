@@ -538,8 +538,32 @@ impl ValidationError {
 }
 
 impl Session {
-    /// Checks the invariants described in the module documentation. Returns every violation.
+    /// Checks the invariants described in the module documentation. Invalid marked descriptor
+    /// shapes are rejected before indexing; otherwise returns every violation.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
+        if self.request.code_analysis.is_some() {
+            // Check every count before allocating slice indexes. The limit is per artifact,
+            // not per session, and does not reinterpret markerless saved sessions.
+            for artifact in &self.artifacts {
+                if artifact.slices.len() > crate::code_coverage::MAX_CODE_SLICES {
+                    return Err(vec![ValidationError::code(
+                        &artifact.id,
+                        "code inventory exceeds 64 recorded slices per artifact",
+                    )]);
+                }
+            }
+            // A repeated descriptor can amplify SessionIndex's fat-CPU membership work.
+            // This is already invalid, so reject its shape before constructing that index.
+            let mut slices = HashSet::new();
+            for slice in self.artifacts.iter().flat_map(|a| &a.slices) {
+                if !slices.insert(&slice.id) {
+                    return Err(vec![ValidationError::code(
+                        &slice.id,
+                        "duplicate recorded code slice",
+                    )]);
+                }
+            }
+        }
         let index = SessionIndex::new(self);
         let mut v = Validator::new(self, &index);
         v.run();

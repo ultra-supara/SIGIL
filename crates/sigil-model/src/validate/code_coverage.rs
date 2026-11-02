@@ -99,6 +99,27 @@ impl Validator<'_> {
         }
         let mut ambiguous = HashSet::new();
         for (position, a) in s.artifacts.iter().enumerate() {
+            if a.format == Format::MachOFat {
+                for slice in &a.slices {
+                    if let Some(BinaryFacts {
+                        container: ContainerFacts::MachO(m),
+                        ..
+                    }) = self.index.binaries.get(slice.id.as_str()).copied()
+                    {
+                        if m.fat_alignment.is_some_and(|exponent| {
+                            1u64.checked_shl(exponent)
+                                .is_none_or(|alignment| slice.offset % alignment != 0)
+                        }) {
+                            // The reader discards these descriptors before assigning IDs.
+                            // A partial summary cannot legitimize contradictory retained facts.
+                            self.code_error(
+                                &slice.id,
+                                "fat descriptor alignment requires exponent below 64 and aligned offset",
+                            );
+                        }
+                    }
+                }
+            }
             let relevant = contents.get(&a.id).copied() == Some(true);
             if relevant {
                 if a.code_slice_inventory.is_none() {

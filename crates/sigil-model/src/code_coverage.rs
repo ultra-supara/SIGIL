@@ -9,6 +9,8 @@ pub const CODE_SLICE_NOT_PARSED: &str = "code: slice not parsed";
 pub const CODE_INVENTORY_INCOMPLETE: &str = "code: slice inventory incomplete";
 pub const CODE_NO_SUPPORTED_SLICE: &str = "code: no supported slice";
 pub const CODE_SLICE_NOT_STARTED: &str = "code: artifact budget exhausted before slice";
+/// The shared reader's descriptor bound, applied independently to each marked artifact.
+pub const MAX_CODE_SLICES: usize = 64;
 
 pub(crate) fn valid_gaps(missing: &[String]) -> bool {
     !missing.is_empty()
@@ -25,6 +27,12 @@ pub fn aggregate_code_slices(
     children: &[&Coverage],
     limit: u64,
 ) -> Result<(CoverageState, Option<BudgetUse>), String> {
+    if artifact.slices.len() > MAX_CODE_SLICES {
+        return Err("code inventory exceeds 64 recorded slices per artifact".into());
+    }
+    if children.len() != artifact.slices.len() {
+        return Err("missing or extra code slice child".into());
+    }
     let partial_inventory = match &artifact.code_slice_inventory {
         Some(CodeSliceInventory::Complete) if !artifact.slices.is_empty() => false,
         Some(CodeSliceInventory::Complete) => return Err("complete inventory has no slices".into()),
@@ -41,9 +49,6 @@ pub fn aggregate_code_slices(
         if indexed.insert(id, *child).is_some() {
             return Err("duplicate code slice child".into());
         }
-    }
-    if indexed.len() != artifact.slices.len() {
-        return Err("missing or extra code slice child".into());
     }
     let mut slices: Vec<_> = artifact.slices.iter().collect();
     slices.sort_by_key(|s| (s.offset, s.arch.name(), &s.id));

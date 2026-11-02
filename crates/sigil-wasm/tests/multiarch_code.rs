@@ -89,3 +89,26 @@ fn coverage_inventory_matrix_renders_and_rejects_missing_children() {
         }
     }
 }
+
+#[test]
+fn marked_viewer_rejects_oversized_inventory_and_invalid_fat_alignment() {
+    let control = support::fat();
+    assert!(render_session_markdown_inner(&control.to_canonical_json().unwrap()).is_ok());
+    for exponent in [12, 64, 65, u32::MAX] {
+        let mut s = control.clone();
+        if let sigil_model::ContainerFacts::MachO(m) = &mut s.binaries[1].container {
+            m.fat_alignment = Some(exponent);
+        }
+        let error = render_session_markdown_inner(&serde_json::to_string(&s).unwrap()).unwrap_err();
+        assert!(error.contains("fat descriptor alignment"), "{error}");
+    }
+    let mut s = control;
+    let repeated = s.artifacts[0].slices[0].clone();
+    s.artifacts[0].slices.resize(65, repeated);
+    let error = render_session_markdown_inner(&serde_json::to_string(&s).unwrap()).unwrap_err();
+    assert!(error.contains("64 recorded slices"), "{error}");
+    assert!(
+        !error.contains("duplicate"),
+        "count must fail before indexing: {error}"
+    );
+}
