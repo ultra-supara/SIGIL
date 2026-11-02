@@ -32,10 +32,22 @@ pub fn minimize_env(name: &[u8], value: &[u8]) -> UntrustedText {
         .position(|b| matches!(b, b'?' | b'#'))
         .unwrap_or(value.len());
     let clean = &value[..end];
-    let authority_start = clean
-        .windows(3)
-        .position(|w| w == b"://")
-        .map_or(0, |i| i + 3);
+    // A scheme belongs at the start; a later :// may be ordinary path data.
+    let authority_start = if clean.starts_with(b"//") {
+        2
+    } else {
+        clean
+            .iter()
+            .position(|b| *b == b':')
+            .filter(|&end| {
+                clean.first().is_some_and(u8::is_ascii_alphabetic)
+                    && clean[..end]
+                        .iter()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'+' | b'-' | b'.'))
+                    && clean[end..].starts_with(b"://")
+            })
+            .map_or(0, |end| end + 3)
+    };
     let authority_end = clean[authority_start..]
         .iter()
         .position(|b| *b == b'/')

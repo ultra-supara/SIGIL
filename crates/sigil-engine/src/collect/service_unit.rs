@@ -1608,5 +1608,52 @@ mod tests {
             }
             assert!(configured(&values, &env("GGML_X_19999")).is_none());
         }
+
+        #[test]
+        fn quoted_pass_environment_retains_the_affected_wildcard_prediction() {
+            for text in [
+                b"[Service]\nPassEnvironment=\"GGML_EXTRA\" \"AWS_SECRET_ACCESS_KEY=CANARY_QUOTED\"\n".as_slice(),
+                b"[Service]\nPassEnvironment='GGML_EXTRA' 'AWS_SECRET_ACCESS_KEY=CANARY_QUOTED'\n",
+            ] {
+                let (values, gaps) = parse(text);
+                let value = values.iter().find(|v| v.key == env("GGML_EXTRA"))
+                    .expect("quoted PassEnvironment key must have a prediction");
+                let TriValue::Unknown { reason: sigil_model::UnknownReason::NotModeled { what } } = &value.value else {
+                    panic!("blocker prediction must remain Unknown");
+                };
+                assert!(matches!(value.origin, ValueOrigin::PredictedLaunch { .. }));
+                assert!(what.contains("Env(GGML_EXTRA): PassEnvironment at line 2"));
+                assert!(value.applies_to.is_empty());
+                assert_eq!(values.len(), 13);
+                assert!(gaps.iter().any(|g| g.contains("Env(GGML_EXTRA): PassEnvironment at line 2")));
+                assert!(!serde_json::to_string(&values).unwrap().contains("CANARY_QUOTED"));
+                assert!(!gaps.join("\n").contains("CANARY_QUOTED"));
+            }
+        }
+
+        #[test]
+        fn quoted_unset_environment_retains_the_affected_wildcard_prediction() {
+            for text in [
+                b"[Service]\nUnsetEnvironment=\"GGML_EXTRA=CANARY_VALUE\" \"AWS_SECRET_ACCESS_KEY=CANARY_SECRET\"\n".as_slice(),
+                b"[Service]\nUnsetEnvironment='GGML_EXTRA=CANARY_VALUE' 'AWS_SECRET_ACCESS_KEY=CANARY_SECRET'\n",
+            ] {
+                let (values, gaps) = parse(text);
+                let value = values.iter().find(|v| v.key == env("GGML_EXTRA"))
+                    .expect("quoted UnsetEnvironment key must have a prediction");
+                let TriValue::Unknown { reason: sigil_model::UnknownReason::NotModeled { what } } = &value.value else {
+                    panic!("blocker prediction must remain Unknown");
+                };
+                assert!(matches!(value.origin, ValueOrigin::PredictedLaunch { .. }));
+                assert!(what.contains("Env(GGML_EXTRA): UnsetEnvironment at line 2"));
+                assert!(value.applies_to.is_empty());
+                assert_eq!(values.len(), 13);
+                assert!(gaps.iter().any(|g| g.contains("Env(GGML_EXTRA): UnsetEnvironment at line 2")));
+                let json = serde_json::to_string(&values).unwrap();
+                for canary in ["CANARY_VALUE", "CANARY_SECRET"] {
+                    assert!(!json.contains(canary));
+                    assert!(!gaps.join("\n").contains(canary));
+                }
+            }
+        }
     }
 }

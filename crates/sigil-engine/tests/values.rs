@@ -116,3 +116,36 @@ fn only_ollama_host_has_url_credentials_query_and_fragment_minimized() {
         b"/a/\xff"
     );
 }
+
+#[test]
+fn scheme_less_host_userinfo_is_removed_before_a_scheme_like_path() {
+    let minimized = minimize_env(
+        b"OLLAMA_HOST",
+        b"user:CANARY_PASS@host:11434/path://segment/path@legitimate?CANARY_QUERY#CANARY_FRAGMENT",
+    );
+    assert_eq!(
+        minimized.as_bytes(),
+        b"host:11434/path://segment/path@legitimate"
+    );
+}
+
+#[test]
+fn network_path_host_userinfo_is_removed_without_changing_actual_path_at_signs() {
+    let minimized = minimize_env(
+        b"OLLAMA_HOST",
+        b"//user:CANARY_PASS@host:11434/path://segment/path@legitimate",
+    );
+    assert_eq!(
+        minimized.as_bytes(),
+        b"//host:11434/path://segment/path@legitimate"
+    );
+    for input in [
+        b"host:11434/path://segment/path@legitimate".as_slice(),
+        b"//host:11434/path://segment/path@legitimate",
+        b"https://host:11434/path://segment/path@legitimate",
+        b"/path://segment/path@legitimate",
+    ] {
+        assert_eq!(minimize_env(b"OLLAMA_HOST", input).as_bytes(), input);
+        assert_eq!(minimize_env(b"OLLAMA_MODELS", input).as_bytes(), input);
+    }
+}

@@ -285,6 +285,11 @@ pub(super) fn parse(
                 blockers.insert(blocker, number);
                 if matches!(blocker, "PassEnvironment" | "UnsetEnvironment") {
                     for token in tokens(value) {
+                        // tokens() retains whole-token quotes; they are syntax, not name bytes.
+                        let token = match token {
+                            [quote @ (b'\'' | b'"'), inner @ .., end] if quote == end => inner,
+                            _ => token,
+                        };
                         let name = token.split(|b| *b == b'=').next().unwrap_or_default();
                         if allowlisted_env(name) && !env_names.contains(name) {
                             if can_add(&configured, &env_names, 0, 1) {
