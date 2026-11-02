@@ -14,6 +14,9 @@ use crate::text::UntrustedText;
 /// The container analysis: what was read and what was not (scope `Root(install)`).
 pub const ARTIFACTS_CONTAINER: &str = "artifacts.container";
 
+/// Code analysis of the installation, scoped to the root and each binary content.
+pub const ARTIFACTS_CODE: &str = "artifacts.code";
+
 /// The signature scan of the install's binaries (PR-4c-2a; scope `Root(install)`): every scan
 /// the signature database asks for was done within its budget.
 pub const ARTIFACTS_IDENTITY: &str = "artifacts.identity";

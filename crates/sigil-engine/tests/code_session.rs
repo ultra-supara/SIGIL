@@ -93,6 +93,170 @@ fn an_install_session_has_the_import_hints() {
     assert!(s.validate().is_ok());
 }
 
+#[test]
+fn installation_code_matches_binary_inspection() {
+    let tree = TempDir::new().unwrap();
+    std::fs::create_dir_all(tree.path().join("bin")).unwrap();
+    std::fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
+    let file = tree.path().join("bin/ollama");
+    std::fs::copy(fixture("net-plt-gcc.so"), &file).unwrap();
+    let models = TempDir::new().unwrap();
+    let mut budgets = InstallBudgets::default();
+    budgets.binary.code = Some(CodeBudgets::default());
+    let req = StoreRequest {
+        deps_budgets: Default::default(),
+        models_dir: models.path().to_path_buf(),
+        model_filter: None,
+        budgets: FsBudgets::default(),
+        manifest_limit: DEFAULT_MANIFEST_LIMIT,
+        install: Some(InstallRequest {
+            source: InstallSource::Dir(tree.path().to_path_buf()),
+            budgets,
+        }),
+    };
+    let s = store_session(
+        &req,
+        &ActiveInput::default(),
+        &Policy::builtin_default().unwrap(),
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    let standalone = with_code(std::slice::from_ref(&file));
+    assert_eq!(s.code, standalone.code);
+    assert!(!s.code.is_empty());
+    assert!(s.request.code);
+    assert!(s
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == "artifacts.code"));
+    assert!(s.validate().is_ok());
+
+    let mut altered = s.clone();
+    altered
+        .coverage
+        .retain(|c| !(c.check.as_str() == "artifacts.code" && matches!(c.scope, Ref::Artifact(_))));
+    assert!(altered
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|e| e.to_string().contains("missing binary content coverage")));
+    let mut altered = s.clone();
+    altered
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == "artifacts.code" && matches!(c.scope, Ref::Root(_)))
+        .unwrap()
+        .state = CoverageState::OutOfScope {
+        why: "forged".into(),
+    };
+    assert!(altered.validate().unwrap_err().iter().any(|e| e
+        .to_string()
+        .contains("summary disagrees with discovery or binary content coverage")));
+    let mut altered = s.clone();
+    let budget = altered
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == "artifacts.code" && matches!(c.scope, Ref::Artifact(_)))
+        .unwrap()
+        .budget
+        .as_mut()
+        .unwrap();
+    budget.used = budget.limit + 1;
+    assert!(altered.validate().unwrap_err().iter().any(|e| e
+        .to_string()
+        .contains("analyzed content needs a valid binary_code_bytes budget")));
+
+    let policy_text = format!("{}\n[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"no network\"\n", include_str!("../policies/default.toml"));
+    let policy = Policy::load(&policy_text).unwrap();
+    let denied = store_session(
+        &req,
+        &ActiveInput::default(),
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    assert_eq!(denied.outcome.verdict, sigil_model::Verdict::Fail);
+    assert_eq!(denied.policy_violations.len(), 1);
+    assert!(sigil_engine::policy::verify(&denied, &policy).is_ok());
+
+    std::fs::copy(fixture("net-data.so"), &file).unwrap();
+    let no_call = store_session(
+        &req,
+        &ActiveInput::default(),
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    assert!(no_call.policy_violations.is_empty());
+    assert_eq!(no_call.open_questions.len(), 1);
+    assert!(sigil_engine::policy::verify(&no_call, &policy).is_ok());
+}
+
+#[test]
+fn unsupported_installation_code_is_required_by_default_but_can_be_opted_out() {
+    let tree = TempDir::new().unwrap();
+    std::fs::create_dir_all(tree.path().join("bin")).unwrap();
+    std::fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
+    let mut binary = std::fs::read(fixture("net-plt-gcc.so")).unwrap();
+    binary[18..20].copy_from_slice(&183u16.to_le_bytes());
+    std::fs::write(tree.path().join("bin/ollama"), binary).unwrap();
+    let models = TempDir::new().unwrap();
+    let mut budgets = InstallBudgets::default();
+    budgets.binary.code = Some(CodeBudgets::default());
+    let req = StoreRequest {
+        deps_budgets: Default::default(),
+        models_dir: models.path().to_path_buf(),
+        model_filter: None,
+        budgets: FsBudgets::default(),
+        manifest_limit: DEFAULT_MANIFEST_LIMIT,
+        install: Some(InstallRequest {
+            source: InstallSource::Dir(tree.path().to_path_buf()),
+            budgets,
+        }),
+    };
+    let inspect = |policy: &Policy| {
+        store_session(
+            &req,
+            &ActiveInput::default(),
+            policy,
+            common::tool(),
+            common::observation(),
+            common::policy_time(),
+        )
+        .unwrap()
+    };
+    let session = inspect(&Policy::builtin_default().unwrap());
+    assert!(session
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == "artifacts.code"
+            && matches!(c.state, CoverageState::Unsupported { .. })));
+    assert!(
+        matches!(&session.outcome.completeness, sigil_model::Completeness::Incomplete { missing_required, .. } if missing_required.iter().any(|c| c.as_str() == "artifacts.code"))
+    );
+    let policy = Policy::load(
+        "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\ninstall_code_audit = []\n",
+    )
+    .unwrap();
+    let opted_out = inspect(&policy);
+    assert!(!opted_out
+        .request
+        .required_checks
+        .iter()
+        .any(|c| c.as_str() == "artifacts.code"));
+    assert!(matches!(
+        opted_out.outcome.completeness,
+        sigil_model::Completeness::Complete
+    ));
+}
+
 /// A binary inspection of `paths` with the default code budgets.
 fn with_code(paths: &[PathBuf]) -> Session {
     session_of(paths, with_code_budgets())

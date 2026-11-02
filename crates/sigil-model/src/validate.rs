@@ -27,7 +27,7 @@
 //!   not evaluate policy: it never decides an action, a treatment, or which checks are required.
 //!   It only refuses a session whose verdict, counts, or completeness contradict what it records.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
@@ -3380,16 +3380,16 @@ impl<'a> Validator<'a> {
     /// inputs. C5 is checked on each value by [`Validator::arg`], C6 by
     /// [`Validator::import_hints`].
     ///
-    /// - C1: a binary inspection has code facts only with `request.code`, and `request.code` is
-    ///   only for a binary inspection, with a `binary_code_bytes` budget.
-    /// - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
+    /// - C1: a binary inspection has code facts only with `request.code`; code requests are for
+    ///   a binary or installation inspection, with a `binary_code_bytes` budget.
+    /// - C2: with `request.code`, each binary input has exactly one `binary.code` entry, scoped to its
     ///   instance; without it, there is none.
     /// - C3: each entry is in the state its input implies ([`expected_binary_code`]).
     /// - C4: a binary inspection's code facts are of slices whose input's `binary.code` is
     ///   `Complete` or `Partial`.
     ///
-    /// C1 and C4 are about a binary inspection: outside one, code facts are the M1 analyzer's
-    /// (plan §4.6.5), which the golden install examples carry, and spec §5 is additive.
+    /// Installation-specific code invariants are checked by `install_code_coverage`; older
+    /// installation examples can have code facts without a request.
     ///
     /// [`expected_binary_code`]: crate::binary_input::expected_binary_code
     fn code_coverage(&mut self) {
@@ -3402,8 +3402,16 @@ impl<'a> Validator<'a> {
         };
         let binary = is_binary_inspection(&s.request);
         // C1
-        if s.request.code && !binary {
-            self.code_error("request", "request.code is only for a binary inspection");
+        let install = s
+            .request
+            .roots
+            .iter()
+            .any(|r| r.id.as_str() == INSTALL_ROOT);
+        if s.request.code && !binary && !install {
+            self.code_error(
+                "request",
+                "request.code needs a binary or installation inspection",
+            );
         }
         if binary && !s.request.code && !s.code.is_empty() {
             self.code_error("code", "a binary inspection's code facts need request.code");
@@ -3429,6 +3437,7 @@ impl<'a> Validator<'a> {
                 ),
             }
         }
+        self.install_code_coverage(install && !binary);
         if !(binary && s.request.code) {
             return;
         }
@@ -3481,6 +3490,171 @@ impl<'a> Validator<'a> {
                 self.code_error(
                     &format!("code[{}]", facts.slice),
                     "a slice whose input was not analyzed",
+                );
+            }
+        }
+    }
+
+    /// Installation code coverage is scoped to the walk and each distinct binary content.
+    /// Old installation sessions did not have this check and may contain code facts without a
+    /// code request, so these invariants apply only to the new check and request.
+    fn install_code_coverage(&mut self, installation: bool) {
+        use crate::{ARTIFACTS_CODE, BINARY_CODE_BYTES, CODE_UNSUPPORTED};
+        let s = self.s;
+        let entries: Vec<_> = self.index.coverage_for_check(ARTIFACTS_CODE).collect();
+        if !installation || !s.request.code {
+            if !entries.is_empty() {
+                self.code_error(
+                    "coverage[artifacts.code]",
+                    "installation code coverage needs an installation code request",
+                );
+            }
+            return;
+        }
+        let limit = s.request.budgets.get(BINARY_CODE_BYTES).copied();
+        if limit.is_none() {
+            self.code_error("request", "request.code without a binary_code_bytes budget");
+        }
+        let mut contents = BTreeMap::<&ArtifactId, bool>::new();
+        for instance in s
+            .instances
+            .iter()
+            .filter(|i| i.root.as_str() == INSTALL_ROOT)
+        {
+            if let InstanceContent::Read { artifact } = &instance.content {
+                if self
+                    .index
+                    .artifacts
+                    .get(artifact.as_str())
+                    .is_some_and(|a| {
+                        matches!(
+                            a.format,
+                            Format::Elf { .. } | Format::MachO | Format::MachOFat
+                        )
+                    })
+                {
+                    let stable = contents.entry(artifact).or_default();
+                    *stable |= instance.stability == Stability::NoChangeDetected;
+                }
+            }
+        }
+        let mut by_artifact = BTreeMap::new();
+        let mut root = None;
+        for c in entries {
+            match &c.scope {
+                Ref::Root(id) if id.as_str() == INSTALL_ROOT && root.is_none() => root = Some(c),
+                Ref::Artifact(id) if contents.contains_key(id) && !by_artifact.contains_key(id) => {
+                    by_artifact.insert(id, c);
+                }
+                _ => self.code_error(
+                    "coverage[artifacts.code]",
+                    "unexpected or duplicate installation code scope",
+                ),
+            }
+        }
+        let Some(root) = root else {
+            self.code_error(
+                "coverage[artifacts.code]",
+                "missing installation root coverage",
+            );
+            return;
+        };
+        if root.budget.is_some() {
+            self.code_error(
+                "coverage[artifacts.code]",
+                "root summary must not have a budget",
+            );
+        }
+        let mut analyzed = HashSet::new();
+        for (id, stable) in &contents {
+            let Some(c) = by_artifact.get(id) else {
+                self.code_error(
+                    &format_args!("coverage[artifacts.code on {id}]"),
+                    "missing binary content coverage",
+                );
+                continue;
+            };
+            let Some(a) = self.index.artifacts.get(id.as_str()).copied() else {
+                continue;
+            };
+            let unsupported = !matches!(a.format, Format::Elf { .. })
+                || a.slices.iter().any(|slice| slice.arch != Arch::X86_64)
+                || a.slices.iter().any(|slice| {
+                    self.index.binaries.get(slice.id.as_str()).is_some_and(|facts| {
+                        matches!(&facts.container, ContainerFacts::Elf(elf) if elf.abi.is_some_and(|abi| !abi.is_64 || !abi.little_endian || abi.machine != 62))
+                    })
+                });
+            let parsed = !a.slices.is_empty()
+                && a.slices
+                    .iter()
+                    .all(|slice| self.index.binaries.contains_key(slice.id.as_str()));
+            let at = format_args!("coverage[artifacts.code on {id}]");
+            match &c.state {
+                CoverageState::Unsupported { what }
+                    if what == CODE_UNSUPPORTED && c.budget.is_none() => {}
+                CoverageState::Complete | CoverageState::Partial { .. } if !unsupported => {
+                    if c.budget.as_ref().is_none_or(|b| {
+                        b.budget != BINARY_CODE_BYTES || Some(b.limit) != limit || b.used > b.limit
+                    }) {
+                        self.code_error(
+                            &at,
+                            "analyzed content needs a valid binary_code_bytes budget",
+                        );
+                    }
+                    if matches!(c.state, CoverageState::Complete) && (!stable || !parsed) {
+                        self.code_error(&at, "complete code coverage needs stable parsed content");
+                    }
+                    if (!stable || !parsed)
+                        && (!matches!(&c.state, CoverageState::Partial { missing } if missing == &[crate::BINARY_NOT_PARSED.to_string()])
+                            || c.budget.as_ref().is_some_and(|b| b.used != 0))
+                    {
+                        self.code_error(&at, "unparsed or unstable content needs an unparsed gap with zero code bytes");
+                    }
+                    if *stable && parsed {
+                        analyzed.insert(*id);
+                    }
+                }
+                _ => self.code_error(&at, "invalid code coverage for this content"),
+            }
+        }
+        let discovery = self
+            .index
+            .coverage_for_check(ARTIFACTS_DISCOVERY)
+            .find(|c| matches!(&c.scope, Ref::Root(id) if id.as_str() == INSTALL_ROOT));
+        let expected = discovery.map(|discovery| match &discovery.state {
+            state @ (CoverageState::Unavailable { .. }
+            | CoverageState::BudgetExceeded { .. }
+            | CoverageState::Error { .. }) => state.clone(),
+            state => {
+                let mut missing = vec![];
+                if *state != CoverageState::Complete {
+                    missing.push("discovery incomplete".to_string());
+                }
+                if by_artifact.len() != contents.len()
+                    || by_artifact.values().any(|c| !c.state.can_close())
+                {
+                    missing.push(
+                        "one or more binary contents have incomplete code coverage".to_string(),
+                    );
+                }
+                if missing.is_empty() {
+                    CoverageState::Complete
+                } else {
+                    CoverageState::Partial { missing }
+                }
+            }
+        });
+        if expected.as_ref() != Some(&root.state) {
+            self.code_error(
+                "coverage[artifacts.code]",
+                "summary disagrees with discovery or binary content coverage",
+            );
+        }
+        for code in &s.code {
+            if !analyzed.contains(&code.slice.artifact()) {
+                self.code_error(
+                    &format_args!("code[{}]", code.slice),
+                    "installation slice has no analyzed content coverage",
                 );
             }
         }

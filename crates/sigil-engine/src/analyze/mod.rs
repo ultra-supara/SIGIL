@@ -9,6 +9,7 @@ pub mod deps_coverage;
 pub mod exposure;
 pub mod hints;
 pub mod identity;
+pub mod install_code;
 pub mod model_store;
 pub mod release;
 pub mod runtime_api;

@@ -181,6 +181,9 @@ struct OllamaArgs {
     /// --install-dir [default: not read].
     #[arg(long, value_name = "FILE", conflicts_with = "install_dir")]
     service_unit: Option<PathBuf>,
+    /// Analyze direct capability-import calls in the installation's x86-64 ELF files.
+    #[arg(long)]
+    code: bool,
     /// Inventory only the model with this display name (e.g. llama3.2:latest).
     #[arg(long, value_name = "NAME")]
     model: Option<String>,
@@ -398,6 +401,11 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             "--observe-env requires --mode observe".to_string(),
         ));
     }
+    if args.code && args.install_dir.is_none() && args.service_unit.is_none() {
+        return Err(Failure::Usage(
+            "--code requires --install-dir or --service-unit".to_string(),
+        ));
+    }
     let policy_time = policy_time(&args.policy_time, &started_at)?;
     let models_dir = args.models_dir.clone().unwrap_or_else(default_models_dir);
     let probing = args.active.contains(&ActiveArg::ApiProbe);
@@ -413,6 +421,7 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         probing,
         args.install_dir.is_some() || args.service_unit.is_some(),
         args.service_unit.is_some(),
+        args.code,
     )?;
     // PR-4d-1: the unit is read first. It names the installation, and `--out` is kept out of
     // that and the unit's directory by the `dev:ino` the reads saw as well as by path. The
@@ -869,12 +878,14 @@ fn budgets(
     probing: bool,
     install: bool,
     unit: bool,
+    code: bool,
 ) -> Result<Budgets, Failure> {
     let mut fs_budgets = FsBudgets::default();
     let mut manifest_limit = DEFAULT_MANIFEST_LIMIT;
     let mut proc_budgets = ProcBudgets::default();
     let mut probe_options = ProbeOptions::default();
     let mut install_budgets = InstallBudgets::default();
+    install_budgets.binary.code = code.then(CodeBudgets::default);
     let mut service_unit = DEFAULT_UNIT_BYTES;
     let mut deps = DepsBudgets::default();
     for entry in given {
@@ -932,10 +943,14 @@ fn budgets(
             "binary_parse_bytes" => install_budgets.binary.parse_bytes = value,
             "binary_imports" => install_budgets.binary.imports = value,
             BINARY_SCAN_BYTES => install_budgets.binary.scan_bytes = value,
+            BINARY_CODE_BYTES => match install_budgets.binary.code.as_mut() {
+                Some(b) => b.bytes = value,
+                None => return Err(usage("needs --code")),
+            },
             SERVICE_UNIT_BYTES if !unit => return Err(usage("this budget applies to --service-unit only")),
             SERVICE_UNIT_BYTES => service_unit = value,
             "service_unit_values" => return Err(usage("this budget is fixed at 16384; it has no CLI override")),
-            _ => return Err(usage("unknown budget; known: files_discovered, entries_listed, directory_entries, walk_depth, link_hops, manifest_bytes; observe: processes_listed, fds_per_process, tcp_table_bytes, proc_maps_bytes, proc_maps_total_bytes, proc_maps_entries, proc_status_bytes, process_values; with --observe-env: proc_environ_bytes, proc_environ_total_bytes; active api-probe: api_connect_ms, api_io_ms, api_response_bytes; install: install_files_discovered, install_entries_listed, install_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, dependency_contexts, dependency_candidates, dependency_search_paths; unit: service_unit_bytes")),
+            _ => return Err(usage("unknown budget; known: files_discovered, entries_listed, directory_entries, walk_depth, link_hops, manifest_bytes; observe: processes_listed, fds_per_process, tcp_table_bytes, proc_maps_bytes, proc_maps_total_bytes, proc_maps_entries, proc_status_bytes, process_values; with --observe-env: proc_environ_bytes, proc_environ_total_bytes; active api-probe: api_connect_ms, api_io_ms, api_response_bytes; install: install_files_discovered, install_entries_listed, install_bytes, binary_parse_bytes, binary_imports, binary_scan_bytes, dependency_contexts, dependency_candidates, dependency_search_paths; with --code: binary_code_bytes; unit: service_unit_bytes")),
         }
     }
     Ok(Budgets {

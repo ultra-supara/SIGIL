@@ -22,6 +22,7 @@ use super::fs::{
 };
 use crate::binary::scan::ScanOutcome;
 use crate::binary::{BinaryBudgets, ParsedArtifact};
+use crate::code::CodeOutcome;
 
 /// Budgets of the install scan, recorded with an `install_` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +69,8 @@ pub struct InstallFacts {
     pub bytes_read: u64,
     /// The container facts of each ELF or Mach-O slice, parsed once on the fd that hashed it.
     pub binaries: Vec<sigil_model::BinaryFacts>,
+    /// Code outcomes for slices parsed from stable reads when requested in `binary.code`.
+    pub code: Vec<(sigil_model::SliceId, CodeOutcome)>,
     /// The signature scan of each ELF slice, on the same fd (PR-4c-2a), sorted by slice.
     pub scans: Vec<(sigil_model::SliceId, ScanOutcome)>,
 }
@@ -77,6 +80,22 @@ const LIB: &str = "lib/ollama";
 
 /// Scans `dir`. An error only for an invalid built-in identifier.
 pub fn collect(dir: &Path, budgets: InstallBudgets) -> Result<InstallFacts, String> {
+    collect_with(
+        dir,
+        InstallBudgets {
+            binary: BinaryBudgets {
+                code: None,
+                ..budgets.binary
+            },
+            ..budgets
+        },
+        &|_| {},
+    )
+}
+
+/// Scans the installation with the optional code analysis in `budgets.binary.code`.
+/// Outcomes are returned to the caller for coverage and policy assembly.
+pub fn collect_with_code(dir: &Path, budgets: InstallBudgets) -> Result<InstallFacts, String> {
     collect_with(dir, budgets, &|_| {})
 }
 
@@ -114,11 +133,7 @@ fn collect_with(
         bin_gap: None,
         found: 0,
         during_read,
-        // An install scan never analyzes code, whatever a library caller passes (PR-5a).
-        binary: BinaryBudgets {
-            code: None,
-            ..budgets.binary
-        },
+        binary: budgets.binary,
         scanning,
         parsed: BTreeMap::new(),
     };
@@ -137,14 +152,14 @@ fn collect_with(
             c.state()
         }
     };
-    // No code was asked for (`binary.code` is forced to `None` above): no outcomes.
-    let (binaries, _, scans) = super::binread::binaries(c.parsed, &c.artifacts);
+    let (binaries, code, scans) = super::binread::binaries(c.parsed, &c.artifacts);
     Ok(InstallFacts {
         root_path,
         root_id,
         instances: c.instances,
         artifacts: c.artifacts,
         binaries,
+        code,
         scans,
         discovery: Coverage {
             check,
@@ -544,6 +559,49 @@ mod tests {
         assert!(f.binaries.is_empty(), "{:?}", f.binaries);
         let f = collect_with(d.path(), InstallBudgets::default(), &|_| {}).unwrap();
         assert_eq!(f.binaries.len(), 1);
+    }
+
+    #[test]
+    fn code_outcomes_match_named_reads_and_require_stability() {
+        use crate::code::CodeBudgets;
+        use crate::collect::named::{self, NamedBudgets};
+        use std::io::Write;
+
+        let d = tempfile::TempDir::new().unwrap();
+        let lib = d.path().join("lib/ollama");
+        std::fs::create_dir_all(&lib).unwrap();
+        let path = lib.join("libx.so");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/spawn.so");
+        std::fs::copy(fixture, &path).unwrap();
+        let mut budgets = InstallBudgets::default();
+        budgets.binary.code = Some(CodeBudgets::default());
+        let installed = super::collect_with_code(d.path(), budgets).unwrap();
+        let named = named::collect(
+            std::slice::from_ref(&path),
+            NamedBudgets {
+                binary: budgets.binary,
+                ..NamedBudgets::default()
+            },
+        )
+        .unwrap();
+        assert!(!installed.code.is_empty());
+        assert_eq!(installed.code, named.code);
+
+        let grow = |rel: &RelPath| {
+            if rel.display() == "lib/ollama/libx.so" {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap()
+                    .write_all(b"!")
+                    .unwrap();
+            }
+        };
+        let changed = collect_with(d.path(), budgets, &grow).unwrap();
+        assert!(changed.code.is_empty());
+        assert!(changed.binaries.is_empty());
+        assert!(super::collect(d.path(), budgets).unwrap().code.is_empty());
     }
     #[test]
     fn a_parent_swap_preserving_the_leaf_inode_cannot_mint_a_path_proof() {

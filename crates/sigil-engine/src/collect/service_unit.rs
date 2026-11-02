@@ -1263,6 +1263,7 @@ mod tests {
             bin_gap: bin_gap.map(str::to_string),
             bytes_read: 0,
             binaries: vec![],
+            code: vec![],
             scans: vec![],
         }
     }

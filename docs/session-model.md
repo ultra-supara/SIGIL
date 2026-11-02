@@ -226,13 +226,17 @@ observation, not a current getenv result.
   - P5: when `processes.observed` is required, there is an entry for the audit and one for every recorded process. A runtime's entry (role `ollama serve`) is never `OutOfScope`, whether the check is required or not. A session from before PR-4d-2 does not require the check and has no entry, so P5 holds of it;
   - P6: a process's `maps_read` agrees with its `mappings` and with its entry. `NotRead` has no mapping, and `Part` at least one. A `Complete` entry is about a process read `Whole`. An `Unavailable` or `OutOfScope` one is about a process `NotRead` whose executable is not linked: linking takes the identity, which was not read. An `OutOfScope` one is about a process that holds a recorded listener, the only process the engine records outside the runtime's tree.
 - **Code facts agree with the request and the inputs (PR-5a, [below](#code-analysis-pr-5a)):**
-  - C1: `request.code` is only for a binary inspection, with a `binary_code_bytes` budget. A
+  - C1: `request.code` is only for a binary or installation inspection, with a `binary_code_bytes` budget. A
     binary inspection has code facts only with `request.code`;
   - C2: with `request.code`, each input has exactly one `binary.code` entry, scoped to its
     instance. Without it, there is none;
   - C3: each entry is in the state its input implies (`expected_binary_code`, listed below);
   - C4: a binary inspection's code facts are about slices whose input's `binary.code` is
     `Complete` or `Partial`;
+  - An installation code request has one `artifacts.code` root summary and one entry per
+    distinct ELF or Mach-O content. Its summary reflects discovery and every content entry;
+    analyzed code facts require a stable placement and parsed slice. Older installation
+    sessions without the request remain readable.
   - C5: in every value, a `Load` reads 8, 16, 32, or 64 bits, a `Low` keeps 8, 16, or 32 bits of
     a value that is not a `Low`, and a `Set` has 2 to 4 members, none a `Set` or `Unknown`. The
     values are call arguments, `Indirect` call targets, predicate atoms, and guard comparisons,

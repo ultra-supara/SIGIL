@@ -160,6 +160,39 @@ fn static_inspection_of_an_install_reads_only_its_roots() {
     assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
 }
 
+#[test]
+fn installation_code_inspection_reads_only_its_roots() {
+    let case = "installation_code_inspection_reads_only_its_roots";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let models = fixtures::ollama_store(&fx.target);
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code/net-plt-gcc.so");
+    let install = fixtures::ollama_install(&fx.target, &source);
+    let args = os(&[
+        &"inspect",
+        &"ollama",
+        &"--models-dir",
+        &models,
+        &"--install-dir",
+        &install,
+        &"--code",
+    ]);
+    let r = run(case, &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    let session: sigil_model::Session = serde_json::from_str(&r.stdout).unwrap();
+    assert!(!session.code.is_empty());
+    assert!(session
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == "artifacts.code"));
+    assert_read_under(&r, &models);
+    assert_read_under(&r, &install.join("lib/ollama"));
+    assert_clean(&r, &policy(&fx, &[], &["runtime"]));
+}
+
 /// PR-4d-1: `--service-unit` reads the unit, and the installation its `ExecStart=` resolves to.
 /// The unit names `decoy/bin/ollama`, where `decoy/bin` is a symlink to the real installation's
 /// `bin`: the walk reads the real `lib/ollama`, never `decoy/lib/ollama`, which the unresolved
