@@ -1,0 +1,474 @@
+
+File: elf-gcc-plt.so
+Format: elf64-littleaarch64
+Arch: aarch64
+AddressSize: 64bit
+LoadName: libsigil-fixture.so
+ElfHeader {
+  Ident {
+    Magic: (7F 45 4C 46)
+    Class: 64-bit (0x2)
+    DataEncoding: LittleEndian (0x1)
+    FileVersion: 1
+    OS/ABI: SystemV (0x0)
+    ABIVersion: 0
+    Unused: (00 00 00 00 00 00 00)
+  }
+  Type: SharedObject (0x3)
+  Machine: EM_AARCH64 (0xB7)
+  Version: 1
+  Entry: 0x0
+  ProgramHeaderOffset: 0x40
+  SectionHeaderOffset: 0x102F8
+  Flags [ (0x0)
+  ]
+  HeaderSize: 64
+  ProgramHeaderEntrySize: 56
+  ProgramHeaderCount: 6
+  SectionHeaderEntrySize: 64
+  SectionHeaderCount: 15
+  StringTableSectionIndex: 14
+}
+Sections [
+  Section {
+    Index: 0
+    Name:  (0)
+    Type: SHT_NULL (0x0)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x0
+    Size: 0
+    Link: 0
+    Info: 0
+    AddressAlignment: 0
+    EntrySize: 0
+  }
+  Section {
+    Index: 1
+    Name: .gnu.hash (27)
+    Type: SHT_GNU_HASH (0x6FFFFFF6)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x190
+    Offset: 0x190
+    Size: 40
+    Link: 2
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 0
+  }
+  Section {
+    Index: 2
+    Name: .dynsym (37)
+    Type: SHT_DYNSYM (0xB)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x1B8
+    Offset: 0x1B8
+    Size: 96
+    Link: 3
+    Info: 1
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 3
+    Name: .dynstr (45)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x218
+    Offset: 0x218
+    Size: 38
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 4
+    Name: .rela.plt (53)
+    Type: SHT_RELA (0x4)
+    Flags [ (0x42)
+      SHF_ALLOC (0x2)
+      SHF_INFO_LINK (0x40)
+    ]
+    Address: 0x240
+    Offset: 0x240
+    Size: 24
+    Link: 2
+    Info: 11
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 5
+    Name: .plt (58)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x6)
+      SHF_ALLOC (0x2)
+      SHF_EXECINSTR (0x4)
+    ]
+    Address: 0x260
+    Offset: 0x260
+    Size: 48
+    Link: 0
+    Info: 0
+    AddressAlignment: 16
+    EntrySize: 0
+  }
+  Section {
+    Index: 6
+    Name: .text (63)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x6)
+      SHF_ALLOC (0x2)
+      SHF_EXECINSTR (0x4)
+    ]
+    Address: 0x2A0
+    Offset: 0x2A0
+    Size: 72
+    Link: 0
+    Info: 0
+    AddressAlignment: 32
+    EntrySize: 0
+  }
+  Section {
+    Index: 7
+    Name: .eh_frame_hdr (69)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x2E8
+    Offset: 0x2E8
+    Size: 28
+    Link: 0
+    Info: 0
+    AddressAlignment: 4
+    EntrySize: 0
+  }
+  Section {
+    Index: 8
+    Name: .eh_frame (83)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x308
+    Offset: 0x308
+    Size: 84
+    Link: 0
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 0
+  }
+  Section {
+    Index: 9
+    Name: .dynamic (93)
+    Type: SHT_DYNAMIC (0x6)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x1FEE0
+    Offset: 0xFEE0
+    Size: 256
+    Link: 3
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 16
+  }
+  Section {
+    Index: 10
+    Name: .got (102)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x1FFE0
+    Offset: 0xFFE0
+    Size: 8
+    Link: 0
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 8
+  }
+  Section {
+    Index: 11
+    Name: .got.plt (107)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x1FFE8
+    Offset: 0xFFE8
+    Size: 32
+    Link: 0
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 8
+  }
+  Section {
+    Index: 12
+    Name: .symtab (1)
+    Type: SHT_SYMTAB (0x2)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x10008
+    Size: 552
+    Link: 13
+    Info: 20
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 13
+    Name: .strtab (9)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x10230
+    Size: 82
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 14
+    Name: .shstrtab (17)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x10282
+    Size: 116
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+]
+Relocations [
+  Section (4) .rela.plt {
+    0x20000 R_AARCH64_JUMP_SLOT connect 0x0
+  }
+]
+Symbols [
+  Symbol {
+    Name:  (0)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Undefined (0x0)
+  }
+  Symbol {
+    Name: .gnu.hash (0)
+    Value: 0x190
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .gnu.hash (0x1)
+  }
+  Symbol {
+    Name: .dynsym (0)
+    Value: 0x1B8
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .dynsym (0x2)
+  }
+  Symbol {
+    Name: .dynstr (0)
+    Value: 0x218
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .dynstr (0x3)
+  }
+  Symbol {
+    Name: .rela.plt (0)
+    Value: 0x240
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .rela.plt (0x4)
+  }
+  Symbol {
+    Name: .plt (0)
+    Value: 0x260
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .plt (0x5)
+  }
+  Symbol {
+    Name: .text (0)
+    Value: 0x2A0
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .text (0x6)
+  }
+  Symbol {
+    Name: .eh_frame_hdr (0)
+    Value: 0x2E8
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .eh_frame_hdr (0x7)
+  }
+  Symbol {
+    Name: .eh_frame (0)
+    Value: 0x308
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .eh_frame (0x8)
+  }
+  Symbol {
+    Name: .dynamic (0)
+    Value: 0x1FEE0
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .dynamic (0x9)
+  }
+  Symbol {
+    Name: .got (0)
+    Value: 0x1FFE0
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .got (0xA)
+  }
+  Symbol {
+    Name: .got.plt (0)
+    Value: 0x1FFE8
+    Size: 0
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Other: 0
+    Section: .got.plt (0xB)
+  }
+  Symbol {
+    Name: calls.c (1)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: File (0x4)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: $x (9)
+    Value: 0x2A0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x6)
+  }
+  Symbol {
+    Name: $d (12)
+    Value: 0x31C
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .eh_frame (0x8)
+  }
+  Symbol {
+    Name:  (0)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: File (0x4)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: _DYNAMIC (15)
+    Value: 0x1FEE0
+    Size: 0
+    Binding: Local (0x0)
+    Type: Object (0x1)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: __GNU_EH_FRAME_HDR (24)
+    Value: 0x2E8
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .eh_frame_hdr (0x7)
+  }
+  Symbol {
+    Name: _GLOBAL_OFFSET_TABLE_ (43)
+    Value: 0x1FFE0
+    Size: 0
+    Binding: Local (0x0)
+    Type: Object (0x1)
+    Other: 0
+    Section: Absolute (0xFFF1)
+  }
+  Symbol {
+    Name: $x (9)
+    Value: 0x260
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .plt (0x5)
+  }
+  Symbol {
+    Name: connect (65)
+    Value: 0x0
+    Size: 0
+    Binding: Global (0x1)
+    Type: None (0x0)
+    Other: 0
+    Section: Undefined (0x0)
+  }
+  Symbol {
+    Name: zero (73)
+    Value: 0x2A0
+    Size: 36
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x6)
+  }
+  Symbol {
+    Name: one (78)
+    Value: 0x2C4
+    Size: 36
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x6)
+  }
+]

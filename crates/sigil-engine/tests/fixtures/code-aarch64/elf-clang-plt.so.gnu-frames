@@ -1,0 +1,64 @@
+Contents of the .eh_frame_hdr section:
+
+  Version:                 1
+  Pointer Encoding Format: 0x1b (sdata4, pcrel)
+  Count Encoding Format:   0x3 (udata4, absolute)
+  Table Encoding Format:   0x3b (sdata4, datarel)
+  Start of frame section:  0x1c (offset: 0x320)
+  Entries in search table: 0x2
+  0x1008c (offset: 0x1038c) -> 0x34 fde=[    14]
+  0x100b0 (offset: 0x103b0) -> 0x5c fde=[    3c]
+
+Contents of the .eh_frame section:
+
+
+00000000 0000000000000010 00000000 CIE
+  Version:               1
+  Augmentation:          "zR"
+  Code alignment factor: 1
+  Data alignment factor: -4
+  Return address column: 30
+  Augmentation data:     1b
+  DW_CFA_def_cfa: r31 (sp) ofs 0
+
+00000014 0000000000000024 00000018 FDE cie=00000000 pc=000000000001038c..00000000000103b0
+  DW_CFA_advance_loc: 4 to 0000000000010390
+  DW_CFA_def_cfa_offset: 16
+  DW_CFA_advance_loc: 4 to 0000000000010394
+  DW_CFA_def_cfa: r29 (x29) ofs 16
+  DW_CFA_offset: r30 (x30) at cfa-8
+  DW_CFA_offset: r29 (x29) at cfa-16
+  DW_CFA_advance_loc: 20 to 00000000000103a8
+  DW_CFA_def_cfa: r31 (sp) ofs 16
+  DW_CFA_advance_loc: 4 to 00000000000103ac
+  DW_CFA_def_cfa_offset: 0
+  DW_CFA_restore: r30 (x30)
+  DW_CFA_restore: r29 (x29)
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+
+0000003c 0000000000000028 00000040 FDE cie=00000000 pc=00000000000103b0..00000000000103d4
+  DW_CFA_advance_loc: 4 to 00000000000103b4
+  DW_CFA_def_cfa_offset: 16
+  DW_CFA_advance_loc: 4 to 00000000000103b8
+  DW_CFA_def_cfa: r29 (x29) ofs 16
+  DW_CFA_offset: r30 (x30) at cfa-8
+  DW_CFA_offset: r29 (x29) at cfa-16
+  DW_CFA_advance_loc: 20 to 00000000000103cc
+  DW_CFA_def_cfa: r31 (sp) ofs 16
+  DW_CFA_advance_loc: 4 to 00000000000103d0
+  DW_CFA_def_cfa_offset: 0
+  DW_CFA_restore: r30 (x30)
+  DW_CFA_restore: r29 (x29)
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+
+00000068 ZERO terminator
+
+

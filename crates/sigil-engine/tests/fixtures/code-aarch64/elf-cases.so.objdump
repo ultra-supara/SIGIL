@@ -1,0 +1,111 @@
+
+elf-cases.so:	file format elf64-littleaarch64
+
+Disassembly of section .text:
+
+00000000000105a4 <asm_zero>:
+   105a4: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   105a8: 910003fd     	mov	x29, sp
+   105ac: 2a1f03e0     	mov	w0, wzr
+   105b0: aa1f03e1     	mov	x1, xzr
+   105b4: 2a1f03e2     	mov	w2, wzr
+   105b8: 94000046     	bl	0x106d0 <connect@plt>
+   105bc: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   105c0: d65f03c0     	ret
+
+00000000000105c4 <copy>:
+   105c4: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   105c8: 910003fd     	mov	x29, sp
+   105cc: 2a1f03e3     	mov	w3, wzr
+   105d0: 2a0303e0     	mov	w0, w3
+   105d4: aa1f03e1     	mov	x1, xzr
+   105d8: 2a1f03e2     	mov	w2, wzr
+   105dc: 9400003d     	bl	0x106d0 <connect@plt>
+   105e0: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   105e4: d65f03c0     	ret
+
+00000000000105e8 <join_agree>:
+   105e8: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   105ec: 910003fd     	mov	x29, sp
+   105f0: b4000060     	cbz	x0, 0x105fc <join_agree+0x14>
+   105f4: 52800000     	mov	w0, #0x0                // =0
+   105f8: 14000002     	b	0x10600 <join_agree+0x18>
+   105fc: 2a1f03e0     	mov	w0, wzr
+   10600: aa1f03e1     	mov	x1, xzr
+   10604: 2a1f03e2     	mov	w2, wzr
+   10608: 94000032     	bl	0x106d0 <connect@plt>
+   1060c: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   10610: d65f03c0     	ret
+
+0000000000010614 <join_disagree>:
+   10614: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   10618: 910003fd     	mov	x29, sp
+   1061c: b4000060     	cbz	x0, 0x10628 <join_disagree+0x14>
+   10620: 52800020     	mov	w0, #0x1                // =1
+   10624: 14000002     	b	0x1062c <join_disagree+0x18>
+   10628: 2a1f03e0     	mov	w0, wzr
+   1062c: aa1f03e1     	mov	x1, xzr
+   10630: 2a1f03e2     	mov	w2, wzr
+   10634: 94000027     	bl	0x106d0 <connect@plt>
+   10638: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   1063c: d65f03c0     	ret
+
+0000000000010640 <caller_clobber>:
+   10640: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   10644: 910003fd     	mov	x29, sp
+   10648: 2a1f03e0     	mov	w0, wzr
+   1064c: aa1f03e1     	mov	x1, xzr
+   10650: 2a1f03e2     	mov	w2, wzr
+   10654: d2800210     	mov	x16, #0x10              // =16
+   10658: d2800231     	mov	x17, #0x11              // =17
+   1065c: 94000021     	bl	0x106e0 <helper@plt>
+   10660: 2a1003e0     	mov	w0, w16
+   10664: 9400001b     	bl	0x106d0 <connect@plt>
+   10668: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   1066c: d65f03c0     	ret
+
+0000000000010670 <helper>:
+   10670: 528000e0     	mov	w0, #0x7                // =7
+   10674: d65f03c0     	ret
+
+0000000000010678 <malformed_reserved>:
+   10678: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   1067c: 910003fd     	mov	x29, sp
+   10680: 2a1f03e0     	mov	w0, wzr
+   10684: aa1f03e1     	mov	x1, xzr
+   10688: 2a1f03e2     	mov	w2, wzr
+   1068c: 00000000     	udf	#0x0
+   10690: 94000010     	bl	0x106d0 <connect@plt>
+   10694: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   10698: d65f03c0     	ret
+
+000000000001069c <unsupported_indirect>:
+   1069c: d61f0100     	br	x8
+
+00000000000106a0 <unsupported_pac>:
+   106a0: d503233f     	paciasp
+   106a4: d65f03c0     	ret
+
+Disassembly of section .plt:
+
+00000000000106b0 <.plt>:
+   106b0: a9bf7bf0     	stp	x16, x30, [sp, #-0x10]!
+   106b4: 90000110     	adrp	x16, 0x30000 <connect+0x30000>
+   106b8: f943e211     	ldr	x17, [x16, #0x7c0]
+   106bc: 911f0210     	add	x16, x16, #0x7c0
+   106c0: d61f0220     	br	x17
+   106c4: d503201f     	nop
+   106c8: d503201f     	nop
+   106cc: d503201f     	nop
+
+00000000000106d0 <connect@plt>:
+   106d0: 90000110     	adrp	x16, 0x30000 <connect+0x30000>
+   106d4: f943e611     	ldr	x17, [x16, #0x7c8]
+   106d8: 911f2210     	add	x16, x16, #0x7c8
+   106dc: d61f0220     	br	x17
+
+00000000000106e0 <helper@plt>:
+   106e0: 90000110     	adrp	x16, 0x30000 <connect+0x30000>
+   106e4: f943ea11     	ldr	x17, [x16, #0x7d0]
+   106e8: 911f4210     	add	x16, x16, #0x7d0
+   106ec: d61f0220     	br	x17

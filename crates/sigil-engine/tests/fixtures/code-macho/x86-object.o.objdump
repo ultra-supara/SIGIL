@@ -1,0 +1,29 @@
+
+x86-object.o:	file format mach-o 64-bit x86-64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000000 <_zero>:
+       0: 55                           	pushq	%rbp
+       1: 48 89 e5                     	movq	%rsp, %rbp
+       4: 31 ff                        	xorl	%edi, %edi
+       6: 31 f6                        	xorl	%esi, %esi
+       8: 31 d2                        	xorl	%edx, %edx
+       a: e8 00 00 00 00               	callq	0xf <_zero+0xf>
+		000000000000000b:  X86_64_RELOC_BRANCH	_connect
+       f: ff c0                        	incl	%eax
+      11: 5d                           	popq	%rbp
+      12: c3                           	retq
+      13: 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	nopw	%cs:(%rax,%rax)
+
+0000000000000020 <_one>:
+      20: 55                           	pushq	%rbp
+      21: 48 89 e5                     	movq	%rsp, %rbp
+      24: bf 01 00 00 00               	movl	$0x1, %edi
+      29: 31 f6                        	xorl	%esi, %esi
+      2b: 31 d2                        	xorl	%edx, %edx
+      2d: e8 00 00 00 00               	callq	0x32 <_one+0x12>
+		000000000000002e:  X86_64_RELOC_BRANCH	_connect
+      32: ff c0                        	incl	%eax
+      34: 5d                           	popq	%rbp
+      35: c3                           	retq

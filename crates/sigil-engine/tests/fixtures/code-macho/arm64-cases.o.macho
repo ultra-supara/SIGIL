@@ -1,0 +1,135 @@
+arm64-cases.o:
+dyld information:
+segment section address pointer            type   addend dylib symbol/vm address
+Contents of __compact_unwind section:
+  Entry at offset 0x0:
+    start:                0x0 ltmp0
+    length:               0x20
+    compact encoding:     0x03000000
+  Entry at offset 0x20:
+    start:                0x20 _copy
+    length:               0x24
+    compact encoding:     0x03000000
+  Entry at offset 0x40:
+    start:                0x44 _join_agree
+    length:               0x2c
+    compact encoding:     0x03000000
+  Entry at offset 0x60:
+    start:                0x70 _join_disagree
+    length:               0x2c
+    compact encoding:     0x03000000
+  Entry at offset 0x80:
+    start:                0x9c _caller_clobber
+    length:               0x30
+    compact encoding:     0x03000000
+  Entry at offset 0xa0:
+    start:                0xcc _helper
+    length:               0x8
+    compact encoding:     0x03000000
+  Entry at offset 0xc0:
+    start:                0xd4 _malformed_reserved
+    length:               0x24
+    compact encoding:     0x03000000
+  Entry at offset 0xe0:
+    start:                0xf8 _unsupported_indirect
+    length:               0x4
+    compact encoding:     0x03000000
+  Entry at offset 0x100:
+    start:                0xfc _unsupported_pac
+    length:               0x8
+    compact encoding:     0x03000000
+Mach header
+      magic cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
+MH_MAGIC_64   ARM64        ALL  0x00      OBJECT     4        440 0x00000000
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 312
+  segname 
+   vmaddr 0x0000000000000000
+   vmsize 0x00000000000003b8
+  fileoff 472
+ filesize 952
+  maxprot rwx
+ initprot rwx
+   nsects 3
+    flags (none)
+Section
+  sectname __text
+   segname __TEXT
+      addr 0x0000000000000000
+      size 0x0000000000000104
+    offset 472
+     align 2^2 (4)
+    reloff 1424
+    nreloc 6
+      type S_REGULAR
+attributes PURE_INSTRUCTIONS SOME_INSTRUCTIONS
+ reserved1 0
+ reserved2 0
+Section
+  sectname __compact_unwind
+   segname __LD
+      addr 0x0000000000000108
+      size 0x0000000000000120
+    offset 736
+     align 2^3 (8)
+    reloff 1472
+    nreloc 9
+      type S_REGULAR
+attributes DEBUG
+ reserved1 0
+ reserved2 0
+Section
+  sectname __eh_frame
+   segname __TEXT
+      addr 0x0000000000000228
+      size 0x0000000000000190
+    offset 1024
+     align 2^3 (8)
+    reloff 1544
+    nreloc 18
+      type S_COALESCED
+attributes NO_TOC STRIP_STATIC_SYMS LIVE_SUPPORT
+ reserved1 0
+ reserved2 0
+Load command 1
+       cmd LC_BUILD_VERSION
+   cmdsize 24
+  platform macos
+       sdk n/a
+     minos 11.0
+    ntools 0
+Load command 2
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 1688
+   nsyms 13
+  stroff 1896
+ strsize 160
+Load command 3
+            cmd LC_DYSYMTAB
+        cmdsize 80
+      ilocalsym 0
+      nlocalsym 3
+     iextdefsym 3
+     nextdefsym 9
+      iundefsym 12
+      nundefsym 1
+         tocoff 0
+           ntoc 0
+      modtaboff 0
+        nmodtab 0
+   extrefsymoff 0
+    nextrefsyms 0
+ indirectsymoff 0
+  nindirectsyms 0
+      extreloff 0
+        nextrel 0
+      locreloff 0
+        nlocrel 0
+
+Bind table:
+segment  section            address    type       addend dylib            symbol
+
+Lazy bind table:
+segment  section            address     dylib            symbol

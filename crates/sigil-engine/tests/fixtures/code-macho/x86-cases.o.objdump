@@ -1,0 +1,101 @@
+
+x86-cases.o:	file format mach-o 64-bit x86-64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000000 <_asm_zero>:
+       0: 55                           	pushq	%rbp
+       1: 48 89 e5                     	movq	%rsp, %rbp
+       4: 31 ff                        	xorl	%edi, %edi
+       6: 31 f6                        	xorl	%esi, %esi
+       8: 31 d2                        	xorl	%edx, %edx
+       a: e8 00 00 00 00               	callq	0xf <_asm_zero+0xf>
+		000000000000000b:  X86_64_RELOC_BRANCH	_connect
+       f: 5d                           	popq	%rbp
+      10: c3                           	retq
+      11: 0f 1f 00                     	nopl	(%rax)
+
+0000000000000014 <_copy>:
+      14: 55                           	pushq	%rbp
+      15: 48 89 e5                     	movq	%rsp, %rbp
+      18: 31 c0                        	xorl	%eax, %eax
+      1a: 89 c7                        	movl	%eax, %edi
+      1c: 31 f6                        	xorl	%esi, %esi
+      1e: 31 d2                        	xorl	%edx, %edx
+      20: e8 00 00 00 00               	callq	0x25 <_copy+0x11>
+		0000000000000021:  X86_64_RELOC_BRANCH	_connect
+      25: 5d                           	popq	%rbp
+      26: c3                           	retq
+      27: 90                           	nop
+
+0000000000000028 <_join_agree>:
+      28: 55                           	pushq	%rbp
+      29: 48 89 e5                     	movq	%rsp, %rbp
+      2c: 85 ff                        	testl	%edi, %edi
+      2e: 74 07                        	je	0x37 <_join_agree+0xf>
+      30: bf 00 00 00 00               	movl	$0x0, %edi
+      35: eb 02                        	jmp	0x39 <_join_agree+0x11>
+      37: 31 ff                        	xorl	%edi, %edi
+      39: 31 f6                        	xorl	%esi, %esi
+      3b: 31 d2                        	xorl	%edx, %edx
+      3d: e8 00 00 00 00               	callq	0x42 <_join_agree+0x1a>
+		000000000000003e:  X86_64_RELOC_BRANCH	_connect
+      42: 5d                           	popq	%rbp
+      43: c3                           	retq
+
+0000000000000044 <_join_disagree>:
+      44: 55                           	pushq	%rbp
+      45: 48 89 e5                     	movq	%rsp, %rbp
+      48: 85 ff                        	testl	%edi, %edi
+      4a: 74 07                        	je	0x53 <_join_disagree+0xf>
+      4c: bf 01 00 00 00               	movl	$0x1, %edi
+      51: eb 02                        	jmp	0x55 <_join_disagree+0x11>
+      53: 31 ff                        	xorl	%edi, %edi
+      55: 31 f6                        	xorl	%esi, %esi
+      57: 31 d2                        	xorl	%edx, %edx
+      59: e8 00 00 00 00               	callq	0x5e <_join_disagree+0x1a>
+		000000000000005a:  X86_64_RELOC_BRANCH	_connect
+      5e: 5d                           	popq	%rbp
+      5f: c3                           	retq
+
+0000000000000060 <_caller_clobber>:
+      60: 55                           	pushq	%rbp
+      61: 48 89 e5                     	movq	%rsp, %rbp
+      64: 31 ff                        	xorl	%edi, %edi
+      66: 31 f6                        	xorl	%esi, %esi
+      68: 31 d2                        	xorl	%edx, %edx
+      6a: e8 00 00 00 00               	callq	0x6f <_caller_clobber+0xf>
+		000000000000006b:  X86_64_RELOC_BRANCH	_helper
+      6f: 44 89 df                     	movl	%r11d, %edi
+      72: e8 00 00 00 00               	callq	0x77 <_caller_clobber+0x17>
+		0000000000000073:  X86_64_RELOC_BRANCH	_connect
+      77: 5d                           	popq	%rbp
+      78: c3                           	retq
+      79: 0f 1f 00                     	nopl	(%rax)
+
+000000000000007c <_helper>:
+      7c: b8 07 00 00 00               	movl	$0x7, %eax
+      81: c3                           	retq
+      82: 66 90                        	nop
+
+0000000000000084 <_malformed_reserved>:
+      84: 55                           	pushq	%rbp
+      85: 48 89 e5                     	movq	%rsp, %rbp
+      88: 31 ff                        	xorl	%edi, %edi
+      8a: 31 f6                        	xorl	%esi, %esi
+      8c: 31 d2                        	xorl	%edx, %edx
+      8e: 0f 0b                        	ud2
+      90: e8 00 00 00 00               	callq	0x95 <_malformed_reserved+0x11>
+		0000000000000091:  X86_64_RELOC_BRANCH	_connect
+      95: 5d                           	popq	%rbp
+      96: c3                           	retq
+      97: 90                           	nop
+
+0000000000000098 <_unsupported_indirect>:
+      98: 41 ff e3                     	jmpq	*%r11
+      9b: 90                           	nop
+
+000000000000009c <_malformed_overlap>:
+      9c: 75 01                        	jne	0x9f <_malformed_overlap+0x3>
+      9e: b8 90 90 90 90               	movl	$0x90909090, %eax       ## imm = 0x90909090
+      a3: c3                           	retq

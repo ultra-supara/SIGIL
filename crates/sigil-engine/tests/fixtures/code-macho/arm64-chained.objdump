@@ -1,0 +1,33 @@
+
+arm64-chained:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000000000003d8 <_zero>:
+     3d8: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     3dc: 910003fd     	mov	x29, sp
+     3e0: 52800000     	mov	w0, #0x0                ; =0
+     3e4: d2800001     	mov	x1, #0x0                ; =0
+     3e8: 52800002     	mov	w2, #0x0                ; =0
+     3ec: 9400000d     	bl	0x420 <dyld_stub_binder+0x420>
+     3f0: 11000400     	add	w0, w0, #0x1
+     3f4: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     3f8: d65f03c0     	ret
+
+00000000000003fc <_one>:
+     3fc: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     400: 910003fd     	mov	x29, sp
+     404: 52800020     	mov	w0, #0x1                ; =1
+     408: d2800001     	mov	x1, #0x0                ; =0
+     40c: 52800002     	mov	w2, #0x0                ; =0
+     410: 94000004     	bl	0x420 <dyld_stub_binder+0x420>
+     414: 11000400     	add	w0, w0, #0x1
+     418: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     41c: d65f03c0     	ret
+
+Disassembly of section __TEXT,__stubs:
+
+0000000000000420 <__stubs>:
+     420: 90000030     	adrp	x16, 0x4000 <dyld_stub_binder+0x4000>
+     424: f9400210     	ldr	x16, [x16]
+     428: d61f0200     	br	x16

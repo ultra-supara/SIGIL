@@ -1,0 +1,118 @@
+
+File: x86-object.o
+Format: Mach-O 64-bit x86-64
+Arch: x86_64
+AddressSize: 64bit
+MachHeader {
+  Magic: Magic64 (0xFEEDFACF)
+  CpuType: X86-64 (0x1000007)
+  CpuSubType: CPU_SUBTYPE_X86_64_ALL (0x3)
+  FileType: Relocatable (0x1)
+  NumOfLoadCommands: 4
+  SizeOfLoadCommands: 440
+  Flags [ (0x2000)
+    MH_SUBSECTIONS_VIA_SYMBOLS (0x2000)
+  ]
+  Reserved: 0x0
+}
+Sections [
+  Section {
+    Index: 0
+    Name: __text (5F 5F 74 65 78 74 00 00 00 00 00 00 00 00 00 00)
+    Segment: __TEXT (5F 5F 54 45 58 54 00 00 00 00 00 00 00 00 00 00)
+    Address: 0x0
+    Size: 0x36
+    Offset: 472
+    Alignment: 4
+    RelocationOffset: 0x2B8
+    RelocationCount: 2
+    Type: Regular (0x0)
+    Attributes [ (0x800004)
+      PureInstructions (0x800000)
+      SomeInstructions (0x4)
+    ]
+    Reserved1: 0x0
+    Reserved2: 0x0
+    Reserved3: 0x0
+  }
+  Section {
+    Index: 1
+    Name: __compact_unwind (5F 5F 63 6F 6D 70 61 63 74 5F 75 6E 77 69 6E 64)
+    Segment: __LD (5F 5F 4C 44 00 00 00 00 00 00 00 00 00 00 00 00)
+    Address: 0x38
+    Size: 0x40
+    Offset: 528
+    Alignment: 3
+    RelocationOffset: 0x2C8
+    RelocationCount: 2
+    Type: Regular (0x0)
+    Attributes [ (0x20000)
+      Debug (0x20000)
+    ]
+    Reserved1: 0x0
+    Reserved2: 0x0
+    Reserved3: 0x0
+  }
+  Section {
+    Index: 2
+    Name: __eh_frame (5F 5F 65 68 5F 66 72 61 6D 65 00 00 00 00 00 00)
+    Segment: __TEXT (5F 5F 54 45 58 54 00 00 00 00 00 00 00 00 00 00)
+    Address: 0x78
+    Size: 0x68
+    Offset: 592
+    Alignment: 3
+    RelocationOffset: 0x0
+    RelocationCount: 0
+    Type: Coalesced (0xB)
+    Attributes [ (0x680000)
+      LiveSupport (0x80000)
+      NoTOC (0x400000)
+      StripStaticSyms (0x200000)
+    ]
+    Reserved1: 0x0
+    Reserved2: 0x0
+    Reserved3: 0x0
+  }
+]
+Relocations [
+  Section __text {
+    0x2E 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+    0xB 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+  }
+  Section __compact_unwind {
+    0x20 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0x0 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+  }
+]
+Symbols [
+  Symbol {
+    Name: _one (16)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x20
+  }
+  Symbol {
+    Name: _zero (10)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x0
+  }
+  Symbol {
+    Name: _connect (1)
+    Extern
+    Type: Undef (0x0)
+    Section:  (0x0)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x0
+  }
+]

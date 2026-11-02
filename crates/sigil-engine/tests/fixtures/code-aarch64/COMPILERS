@@ -1,0 +1,67 @@
+{
+  "clang": {
+    "path": "/usr/bin/clang-21",
+    "sha256": "3a0f9481c3c29fce75adcb7f6c989e0db14b422c431659cf346bb9efdfcb1f04",
+    "version": "Debian clang version 21.1.8 (7+b3)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-21/bin\n"
+  },
+  "llvm-objdump": {
+    "path": "/usr/bin/llvm-objdump-21",
+    "sha256": "eba9e4cfdc55997c8cd67825c47c2076820aa0ba1d8cfb3372c150ed3ee0b766",
+    "version": "Debian LLVM version 21.1.8\n  Optimized build.\n\n\n  Registered Targets:\n    aarch64     - AArch64 (little endian)\n    aarch64_32  - AArch64 (little endian ILP32)\n    aarch64_be  - AArch64 (big endian)\n    amdgcn      - AMD GCN GPUs\n    arm         - ARM\n    arm64       - ARM64 (little endian)\n    arm64_32    - ARM64 (little endian ILP32)\n    armeb       - ARM (big endian)\n    avr         - Atmel AVR Microcontroller\n    bpf         - BPF (host endian)\n    bpfeb       - BPF (big endian)\n    bpfel       - BPF (little endian)\n    hexagon     - Hexagon\n    lanai       - Lanai\n    loongarch32 - 32-bit LoongArch\n    loongarch64 - 64-bit LoongArch\n    m68k        - Motorola 68000 family\n    mips        - MIPS (32-bit big endian)\n    mips64      - MIPS (64-bit big endian)\n    mips64el    - MIPS (64-bit little endian)\n    mipsel      - MIPS (32-bit little endian)\n    msp430      - MSP430 [experimental]\n    nvptx       - NVIDIA PTX 32-bit\n    nvptx64     - NVIDIA PTX 64-bit\n    ppc32       - PowerPC 32\n    ppc32le     - PowerPC 32 LE\n    ppc64       - PowerPC 64\n    ppc64le     - PowerPC 64 LE\n    r600        - AMD GPUs HD2XXX-HD6XXX\n    riscv32     - 32-bit RISC-V\n    riscv64     - 64-bit RISC-V\n    sparc       - Sparc\n    sparcel     - Sparc LE\n    sparcv9     - Sparc V9\n    spirv       - SPIR-V Logical\n    spirv32     - SPIR-V 32-bit\n    spirv64     - SPIR-V 64-bit\n    systemz     - SystemZ\n    thumb       - Thumb\n    thumbeb     - Thumb (big endian)\n    ve          - VE\n    wasm32      - WebAssembly 32-bit\n    wasm64      - WebAssembly 64-bit\n    x86         - 32-bit X86: Pentium-Pro and above\n    x86-64      - 64-bit X86: EM64T and AMD64\n    xcore       - XCore\n    xtensa      - Xtensa 32\n"
+  },
+  "llvm-dwarfdump": {
+    "path": "/usr/bin/llvm-dwarfdump-21",
+    "sha256": "342ada2875bbe9da947b365620c0ddb4d5e7ecb4a03cf66d67d7cb38997c48f2",
+    "version": "Debian LLVM version 21.1.8\n  Optimized build.\n"
+  },
+  "llvm-readobj": {
+    "path": "/usr/bin/llvm-readobj-21",
+    "sha256": "4632d19d530a8d771fc8c969fca78936948ab046a7614b899d9c1d7a52b9e07c",
+    "version": "Debian LLVM version 21.1.8\n  Optimized build.\n"
+  },
+  "llvm-nm": {
+    "path": "/usr/bin/llvm-nm-21",
+    "sha256": "b36352cc53681daf65abe698bb3c319fe01d1d0dbaa7dbcf4fb2f6fea20167ad",
+    "version": "llvm-nm, compatible with GNU nm\nDebian LLVM version 21.1.8\n  Optimized build.\n"
+  },
+  "python": {
+    "path": "/usr/bin/python3.12",
+    "sha256": "618955e1fba269d4194e4ecd64f5ee231b7a2dc0152a01c5b8376236f87d1903",
+    "version": "Python 3.12.8\n"
+  },
+  "ld.lld": {
+    "path": "/usr/bin/ld.lld-21",
+    "sha256": "6d4782d096e907aed6d2b1f0708889f99729e51f2256d1a938801976342b7689",
+    "version": "Debian LLD 21.1.8 (compatible with GNU linkers)\n"
+  },
+  "gcc": {
+    "path": "<repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc",
+    "sha256": "b2d317bbbb5127dfd2fa3f449c8c2da5dbfff138c5034d0145a117a8806f51b2",
+    "version": "aarch64-linux-gcc (GCC) 15.3.0\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+  },
+  "cc1": {
+    "path": "<repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/libexec/gcc/aarch64-linux/15.3.0/cc1",
+    "sha256": "556f9e766902ccebe09b378a0f672f0b0a45edead4411be1419151e1c19f0b42",
+    "version": "GNU C23 (GCC) version 15.3.0 (aarch64-linux)\n\tcompiled by GNU C version 14.1.0, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.3.1, isl version isl-0.24-GMP\n\nGGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072\nCompiler executable checksum: 6dcf3b6ae336519739d9f05af2b49a35\n"
+  },
+  "as": {
+    "path": "<repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-as",
+    "sha256": "ff662e5fe96ae0bc9622b791a047d360331e786895685000be5029f57ad5f63c",
+    "version": "GNU assembler (GNU Binutils for Ubuntu) 2.46\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or later.\nThis program has absolutely no warranty.\nThis assembler was configured for a target of `aarch64-linux-gnu'.\n"
+  },
+  "ld": {
+    "path": "<repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-ld",
+    "sha256": "ef1f32f9d5f522ae9721fe0de846c10fa1ca04f859d491ab30541e9f925b9408",
+    "version": "GNU ld (GNU Binutils for Ubuntu) 2.46\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+  },
+  "objdump": {
+    "path": "<repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump",
+    "sha256": "f169f3bd85dd3c44f640cdb0980cae98ca0bd585e755e909bdc146e019c0fe33",
+    "version": "GNU objdump (GNU Binutils for Ubuntu) 2.46\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+  },
+  "readelf": {
+    "path": "<repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf",
+    "sha256": "b4bb1bf2d6b2d3a309a281a920f0203d68e512e610a4f075cf0ed23e8976b795",
+    "version": "GNU readelf (GNU Binutils for Ubuntu) 2.46\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+  }
+}

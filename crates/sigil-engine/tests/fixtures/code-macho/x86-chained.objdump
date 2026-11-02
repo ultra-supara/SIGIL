@@ -1,0 +1,32 @@
+
+x86-chained:	file format mach-o 64-bit x86-64
+
+Disassembly of section __TEXT,__text:
+
+00000000000003e0 <_zero>:
+     3e0: 55                           	pushq	%rbp
+     3e1: 48 89 e5                     	movq	%rsp, %rbp
+     3e4: 31 ff                        	xorl	%edi, %edi
+     3e6: 31 f6                        	xorl	%esi, %esi
+     3e8: 31 d2                        	xorl	%edx, %edx
+     3ea: e8 29 00 00 00               	callq	0x418 <dyld_stub_binder+0x418>
+     3ef: ff c0                        	incl	%eax
+     3f1: 5d                           	popq	%rbp
+     3f2: c3                           	retq
+     3f3: 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	nopw	%cs:(%rax,%rax)
+
+0000000000000400 <_one>:
+     400: 55                           	pushq	%rbp
+     401: 48 89 e5                     	movq	%rsp, %rbp
+     404: bf 01 00 00 00               	movl	$0x1, %edi
+     409: 31 f6                        	xorl	%esi, %esi
+     40b: 31 d2                        	xorl	%edx, %edx
+     40d: e8 06 00 00 00               	callq	0x418 <dyld_stub_binder+0x418>
+     412: ff c0                        	incl	%eax
+     414: 5d                           	popq	%rbp
+     415: c3                           	retq
+
+Disassembly of section __TEXT,__stubs:
+
+0000000000000418 <__stubs>:
+     418: ff 25 e2 1b 00 00            	jmpq	*0x1be2(%rip)           ## 0x2000 <dyld_stub_binder+0x2000>

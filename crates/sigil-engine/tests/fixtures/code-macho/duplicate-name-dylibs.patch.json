@@ -1,0 +1,11 @@
+{
+  "kind": "synthetic-equal-length-import-rename",
+  "source": "duplicate-name-dylibs.before",
+  "source_sha256": "5c09c764c1e4ea3b7889c602e56ddc73eab63c8c37138f98dcd3baa382388946",
+  "offsets": [
+    49203,
+    49446
+  ],
+  "old_hex": "5f636f6e6e65633200",
+  "new_hex": "5f636f6e6e65637400"
+}

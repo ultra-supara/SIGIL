@@ -1,0 +1,30 @@
+
+elf-gcc-got.so:	file format elf64-littleaarch64
+
+Disassembly of section .text:
+
+0000000000000280 <zero>:
+     280: f00000e3     	adrp	x3, 0x1f000 <connect+0x1f000>
+     284: f947f063     	ldr	x3, [x3, #0xfe0]
+     288: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     28c: 52800002     	mov	w2, #0x0                // =0
+     290: 910003fd     	mov	x29, sp
+     294: d2800001     	mov	x1, #0x0                // =0
+     298: 52800000     	mov	w0, #0x0                // =0
+     29c: d63f0060     	blr	x3
+     2a0: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     2a4: 11000400     	add	w0, w0, #0x1
+     2a8: d65f03c0     	ret
+
+00000000000002ac <one>:
+     2ac: f00000e3     	adrp	x3, 0x1f000 <connect+0x1f000>
+     2b0: f947f063     	ldr	x3, [x3, #0xfe0]
+     2b4: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     2b8: 52800002     	mov	w2, #0x0                // =0
+     2bc: 910003fd     	mov	x29, sp
+     2c0: d2800001     	mov	x1, #0x0                // =0
+     2c4: 52800020     	mov	w0, #0x1                // =1
+     2c8: d63f0060     	blr	x3
+     2cc: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     2d0: 11000400     	add	w0, w0, #0x1
+     2d4: d65f03c0     	ret

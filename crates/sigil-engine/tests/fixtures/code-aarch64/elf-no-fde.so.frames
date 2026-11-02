@@ -1,0 +1,7 @@
+elf-no-fde.so:	file format elf64-littleaarch64
+
+.debug_frame contents:
+
+
+.eh_frame contents:
+

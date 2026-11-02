@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+export LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH=0
+src=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$src/../../../../.." && pwd)
+helper="$src/../code-aarch64/fixture_tools.py"
+python3 "$helper" verify macho
+mkdir -p "$root/target/tmp/issue48"
+work=$(mktemp -d "$root/target/tmp/issue48/fixtures-macho.XXXXXX")
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+export TMPDIR="$work"
+python3 "$helper" build macho "$work" "${1:-$src}"

@@ -1,0 +1,4 @@
+                  U _connect
+00000000 00000000 T _zero
+00000020 00000000 T _one
+/usr/bin/llvm-nm-21: warning: sizes with --print-size for Mach-O files are always zero.

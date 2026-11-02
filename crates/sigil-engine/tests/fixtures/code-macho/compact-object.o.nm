@@ -1,0 +1,6 @@
+                                  U _connect
+0000000000000000 0000000000000000 T _zero
+0000000000000000 0000000000000000 t ltmp0
+0000000000000024 0000000000000000 T _one
+0000000000000048 0000000000000000 s ltmp1
+/usr/bin/llvm-nm-21: warning: sizes with --print-size for Mach-O files are always zero.

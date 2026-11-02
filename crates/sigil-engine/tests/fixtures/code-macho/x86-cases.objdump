@@ -1,0 +1,109 @@
+
+x86-cases:	file format mach-o 64-bit x86-64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000520 <_asm_zero>:
+     520: 55                           	pushq	%rbp
+     521: 48 89 e5                     	movq	%rsp, %rbp
+     524: 31 ff                        	xorl	%edi, %edi
+     526: 31 f6                        	xorl	%esi, %esi
+     528: 31 d2                        	xorl	%edx, %edx
+     52a: e8 95 00 00 00               	callq	0x5c4 <dyld_stub_binder+0x5c4>
+     52f: 5d                           	popq	%rbp
+     530: c3                           	retq
+     531: 0f 1f 00                     	nopl	(%rax)
+
+0000000000000534 <_copy>:
+     534: 55                           	pushq	%rbp
+     535: 48 89 e5                     	movq	%rsp, %rbp
+     538: 31 c0                        	xorl	%eax, %eax
+     53a: 89 c7                        	movl	%eax, %edi
+     53c: 31 f6                        	xorl	%esi, %esi
+     53e: 31 d2                        	xorl	%edx, %edx
+     540: e8 7f 00 00 00               	callq	0x5c4 <dyld_stub_binder+0x5c4>
+     545: 5d                           	popq	%rbp
+     546: c3                           	retq
+     547: 90                           	nop
+
+0000000000000548 <_join_agree>:
+     548: 55                           	pushq	%rbp
+     549: 48 89 e5                     	movq	%rsp, %rbp
+     54c: 85 ff                        	testl	%edi, %edi
+     54e: 74 07                        	je	0x557 <_join_agree+0xf>
+     550: bf 00 00 00 00               	movl	$0x0, %edi
+     555: eb 02                        	jmp	0x559 <_join_agree+0x11>
+     557: 31 ff                        	xorl	%edi, %edi
+     559: 31 f6                        	xorl	%esi, %esi
+     55b: 31 d2                        	xorl	%edx, %edx
+     55d: e8 62 00 00 00               	callq	0x5c4 <dyld_stub_binder+0x5c4>
+     562: 5d                           	popq	%rbp
+     563: c3                           	retq
+
+0000000000000564 <_join_disagree>:
+     564: 55                           	pushq	%rbp
+     565: 48 89 e5                     	movq	%rsp, %rbp
+     568: 85 ff                        	testl	%edi, %edi
+     56a: 74 07                        	je	0x573 <_join_disagree+0xf>
+     56c: bf 01 00 00 00               	movl	$0x1, %edi
+     571: eb 02                        	jmp	0x575 <_join_disagree+0x11>
+     573: 31 ff                        	xorl	%edi, %edi
+     575: 31 f6                        	xorl	%esi, %esi
+     577: 31 d2                        	xorl	%edx, %edx
+     579: e8 46 00 00 00               	callq	0x5c4 <dyld_stub_binder+0x5c4>
+     57e: 5d                           	popq	%rbp
+     57f: c3                           	retq
+
+0000000000000580 <_caller_clobber>:
+     580: 55                           	pushq	%rbp
+     581: 48 89 e5                     	movq	%rsp, %rbp
+     584: 31 ff                        	xorl	%edi, %edi
+     586: 31 f6                        	xorl	%esi, %esi
+     588: 31 d2                        	xorl	%edx, %edx
+     58a: e8 0d 00 00 00               	callq	0x59c <_helper>
+     58f: 44 89 df                     	movl	%r11d, %edi
+     592: e8 2d 00 00 00               	callq	0x5c4 <dyld_stub_binder+0x5c4>
+     597: 5d                           	popq	%rbp
+     598: c3                           	retq
+     599: 0f 1f 00                     	nopl	(%rax)
+
+000000000000059c <_helper>:
+     59c: b8 07 00 00 00               	movl	$0x7, %eax
+     5a1: c3                           	retq
+     5a2: 66 90                        	nop
+
+00000000000005a4 <_malformed_reserved>:
+     5a4: 55                           	pushq	%rbp
+     5a5: 48 89 e5                     	movq	%rsp, %rbp
+     5a8: 31 ff                        	xorl	%edi, %edi
+     5aa: 31 f6                        	xorl	%esi, %esi
+     5ac: 31 d2                        	xorl	%edx, %edx
+     5ae: 0f 0b                        	ud2
+     5b0: e8 0f 00 00 00               	callq	0x5c4 <dyld_stub_binder+0x5c4>
+     5b5: 5d                           	popq	%rbp
+     5b6: c3                           	retq
+     5b7: 90                           	nop
+
+00000000000005b8 <_unsupported_indirect>:
+     5b8: 41 ff e3                     	jmpq	*%r11
+     5bb: 90                           	nop
+
+00000000000005bc <_malformed_overlap>:
+     5bc: 75 01                        	jne	0x5bf <_malformed_overlap+0x3>
+     5be: b8 90 90 90 90               	movl	$0x90909090, %eax       ## imm = 0x90909090
+     5c3: c3                           	retq
+
+Disassembly of section __TEXT,__stubs:
+
+00000000000005c4 <__stubs>:
+     5c4: ff 25 36 2a 00 00            	jmpq	*0x2a36(%rip)           ## 0x3000 <dyld_stub_binder+0x3000>
+
+Disassembly of section __TEXT,__stub_helper:
+
+00000000000005cc <__stub_helper>:
+     5cc: 4c 8d 1d 35 2a 00 00         	leaq	0x2a35(%rip), %r11      ## 0x3008 <__dyld_private>
+     5d3: 41 53                        	pushq	%r11
+     5d5: ff 25 25 1a 00 00            	jmpq	*0x1a25(%rip)           ## 0x2000 <dyld_stub_binder+0x2000>
+     5db: 90                           	nop
+     5dc: 68 00 00 00 00               	pushq	$0x0
+     5e1: e9 e6 ff ff ff               	jmp	0x5cc <__stub_helper>

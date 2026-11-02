@@ -1,0 +1,5 @@
+
+Relocation section '.rela.plt' at offset 0x448 contains 2 entries:
+    Offset             Info             Type               Symbol's Value  Symbol's Name + Addend
+00000000000307c8  0000000100000402 R_AARCH64_JUMP_SLOT    0000000000000000 connect + 0
+00000000000307d0  0000000700000402 R_AARCH64_JUMP_SLOT    0000000000010670 helper + 0

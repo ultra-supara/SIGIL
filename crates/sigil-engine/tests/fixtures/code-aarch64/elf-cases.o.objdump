@@ -1,0 +1,94 @@
+
+elf-cases.o:	file format elf64-littleaarch64
+
+Disassembly of section .text:
+
+0000000000000000 <asm_zero>:
+       0: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+       4: 910003fd     	mov	x29, sp
+       8: 2a1f03e0     	mov	w0, wzr
+       c: aa1f03e1     	mov	x1, xzr
+      10: 2a1f03e2     	mov	w2, wzr
+      14: 94000000     	bl	0x14 <asm_zero+0x14>
+		0000000000000014:  R_AARCH64_CALL26	connect
+      18: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      1c: d65f03c0     	ret
+
+0000000000000020 <copy>:
+      20: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+      24: 910003fd     	mov	x29, sp
+      28: 2a1f03e3     	mov	w3, wzr
+      2c: 2a0303e0     	mov	w0, w3
+      30: aa1f03e1     	mov	x1, xzr
+      34: 2a1f03e2     	mov	w2, wzr
+      38: 94000000     	bl	0x38 <copy+0x18>
+		0000000000000038:  R_AARCH64_CALL26	connect
+      3c: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      40: d65f03c0     	ret
+
+0000000000000044 <join_agree>:
+      44: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+      48: 910003fd     	mov	x29, sp
+      4c: b4000060     	cbz	x0, 0x58 <join_agree+0x14>
+      50: 52800000     	mov	w0, #0x0                // =0
+      54: 14000002     	b	0x5c <join_agree+0x18>
+      58: 2a1f03e0     	mov	w0, wzr
+      5c: aa1f03e1     	mov	x1, xzr
+      60: 2a1f03e2     	mov	w2, wzr
+      64: 94000000     	bl	0x64 <join_agree+0x20>
+		0000000000000064:  R_AARCH64_CALL26	connect
+      68: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      6c: d65f03c0     	ret
+
+0000000000000070 <join_disagree>:
+      70: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+      74: 910003fd     	mov	x29, sp
+      78: b4000060     	cbz	x0, 0x84 <join_disagree+0x14>
+      7c: 52800020     	mov	w0, #0x1                // =1
+      80: 14000002     	b	0x88 <join_disagree+0x18>
+      84: 2a1f03e0     	mov	w0, wzr
+      88: aa1f03e1     	mov	x1, xzr
+      8c: 2a1f03e2     	mov	w2, wzr
+      90: 94000000     	bl	0x90 <join_disagree+0x20>
+		0000000000000090:  R_AARCH64_CALL26	connect
+      94: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      98: d65f03c0     	ret
+
+000000000000009c <caller_clobber>:
+      9c: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+      a0: 910003fd     	mov	x29, sp
+      a4: 2a1f03e0     	mov	w0, wzr
+      a8: aa1f03e1     	mov	x1, xzr
+      ac: 2a1f03e2     	mov	w2, wzr
+      b0: d2800210     	mov	x16, #0x10              // =16
+      b4: d2800231     	mov	x17, #0x11              // =17
+      b8: 94000000     	bl	0xb8 <caller_clobber+0x1c>
+		00000000000000b8:  R_AARCH64_CALL26	helper
+      bc: 2a1003e0     	mov	w0, w16
+      c0: 94000000     	bl	0xc0 <caller_clobber+0x24>
+		00000000000000c0:  R_AARCH64_CALL26	connect
+      c4: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      c8: d65f03c0     	ret
+
+00000000000000cc <helper>:
+      cc: 528000e0     	mov	w0, #0x7                // =7
+      d0: d65f03c0     	ret
+
+00000000000000d4 <malformed_reserved>:
+      d4: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+      d8: 910003fd     	mov	x29, sp
+      dc: 2a1f03e0     	mov	w0, wzr
+      e0: aa1f03e1     	mov	x1, xzr
+      e4: 2a1f03e2     	mov	w2, wzr
+      e8: 00000000     	udf	#0x0
+      ec: 94000000     	bl	0xec <malformed_reserved+0x18>
+		00000000000000ec:  R_AARCH64_CALL26	connect
+      f0: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      f4: d65f03c0     	ret
+
+00000000000000f8 <unsupported_indirect>:
+      f8: d61f0100     	br	x8
+
+00000000000000fc <unsupported_pac>:
+      fc: d503233f     	paciasp
+     100: d65f03c0     	ret
