@@ -205,6 +205,7 @@ pub fn instance(
         id: inst.clone(),
         root: id(root),
         path: t(path),
+        path_proof: None,
         link_chain: vec![],
         resolved: None,
         content: InstanceContent::Read {
@@ -1134,6 +1135,7 @@ pub fn add_observed_zen4_mapping(s: &mut Session) {
         },
     };
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process,
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&[ROLE]),
@@ -1594,6 +1596,7 @@ pub fn store_and_runtime() -> Session {
     let mut s = with_model();
     s.request.mode = Mode::Observe;
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: runtime_process(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&["ollama serve"]),
@@ -1725,6 +1728,7 @@ pub fn binary_inspect() -> Session {
         }],
     });
     let facts = ElfFacts {
+        abi: None,
         interp: None,
         soname: Some(t("libggml-base.so.0")),
         needed: vec![t("libm.so.6"), t("libc.so.6")],
@@ -1948,6 +1952,7 @@ pub fn binary_code() -> Session {
     s.binaries.push(BinaryFacts {
         slice: slice.clone(),
         container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
             interp: None,
             soname: None,
             needed: vec![],
@@ -2293,6 +2298,7 @@ pub fn observed_processes() -> Session {
     let libc = "/usr/lib/x86_64-linux-gnu/libc.so.6";
     let blob_path = format!("{MODELS_DIR}/blobs/sha256-{}", hex(0x2a));
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: serve.clone(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&["ollama serve"]),
@@ -2310,6 +2316,7 @@ pub fn observed_processes() -> Session {
         fd_table: Observability::Observed,
     });
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: runner.clone(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: vec![],

@@ -1153,6 +1153,7 @@ mod tests {
             id: InstanceId::new("inst:install/bin/ollama").unwrap(),
             root: RootId::new(INSTALL_ROOT).unwrap(),
             path: recorded(path),
+            path_proof: None,
             link_chain: vec![],
             resolved: None,
             content: InstanceContent::NotRead {

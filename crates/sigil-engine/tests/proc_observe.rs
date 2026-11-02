@@ -66,6 +66,7 @@ fn the_runtime_and_its_listeners_are_recorded() {
     assert_eq!(
         f.processes,
         [ProcessObs {
+            mnt_ns: None,
             process: process_ref(4242, 4000),
             at: at(),
             roles: vec![ProcessRole::new("ollama serve").unwrap()],

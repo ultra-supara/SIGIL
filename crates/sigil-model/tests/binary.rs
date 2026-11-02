@@ -15,6 +15,7 @@ fn t(s: &str) -> UntrustedText {
 
 pub fn elf_facts() -> ElfFacts {
     ElfFacts {
+        abi: None,
         interp: None,
         soname: Some(t("libggml.so.0")),
         needed: vec![t("libggml-base.so.0"), t("libstdc++.so.6"), t("libc.so.6")],

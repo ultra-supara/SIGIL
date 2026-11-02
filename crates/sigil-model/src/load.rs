@@ -17,6 +17,28 @@ use crate::evidence::{
 use crate::id::{InstanceId, PremiseId, ProcessRole, ValueId};
 use crate::text::UntrustedText;
 
+pub fn allowlisted_env_name(name: &[u8]) -> bool {
+    let valid = name
+        .first()
+        .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+        && name.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
+    valid
+        && (name.starts_with(b"GGML_")
+            || matches!(
+                name,
+                b"LD_LIBRARY_PATH"
+                    | b"DYLD_LIBRARY_PATH"
+                    | b"OLLAMA_HOST"
+                    | b"OLLAMA_MODELS"
+                    | b"OLLAMA_LIBRARY_PATH"
+                    | b"CUDA_VISIBLE_DEVICES"
+                    | b"HIP_VISIBLE_DEVICES"
+            ))
+}
+
+pub const VALUES_CONFIGURED: &str = "values.configured";
+pub const VALUES_OBSERVED: &str = "values.observed";
+
 /// What is known about one file for one loader in one process role. `(instance, context)` is
 /// unique in a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +159,16 @@ pub enum TriValue {
     Unknown { reason: UnknownReason },
 }
 
+/// Which process entry supplied a value. InitialEnvironment is the initial `/proc/<pid>/environ`
+/// snapshot, and does not establish a current getenv() condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessValueRead {
+    Cwd,
+    EffectiveUid,
+    EffectiveGid,
+    InitialEnvironment,
+}
+
 /// Where a value came from (plan §4.4.10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,7 +187,10 @@ pub enum ValueOrigin {
     ObservedProcess {
         process: ProcessRef,
         source: ObsSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        read: Option<ProcessValueRead>,
     },
+
     /// Rebuilt by the parent when spawning the child (topology profile).
     ChildDerived {
         parent: ProcessRole,

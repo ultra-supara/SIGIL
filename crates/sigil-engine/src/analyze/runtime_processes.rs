@@ -158,6 +158,7 @@ mod tests {
             id: InstanceId::new(id).unwrap(),
             root: RootId::new("install").unwrap(),
             path: UntrustedText::new(id),
+            path_proof: None,
             link_chain: vec![],
             resolved: None,
             content: InstanceContent::NotRead {
@@ -181,6 +182,7 @@ mod tests {
     fn obs(pid: u32, inos: &[u64]) -> ProcessObs {
         let at = Timestamp::new("2026-11-01T00:00:00Z").unwrap();
         ProcessObs {
+            mnt_ns: None,
             process: process(pid),
             at: at.clone(),
             roles: vec![],

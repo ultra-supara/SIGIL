@@ -758,6 +758,7 @@ fn observation(
         _ => (vec![], None),
     };
     ProcessObs {
+        mnt_ns: None,
         process: ProcessRef {
             pid,
             start_ticks,

@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::ProcessRef;
 use crate::code::{CallRef, FnRef};
 use crate::evidence::{Basis, Loc, ProfileRuleRef, Support, UnknownReason};
 use crate::id::{
@@ -19,6 +20,46 @@ use crate::id::{
     SliceId, ValueId,
 };
 use crate::text::UntrustedText;
+
+pub const ARTIFACTS_DEPENDENCIES: &str = "artifacts.dependencies";
+pub const BINARY_DEPENDENCIES: &str = "binary.dependencies";
+
+/// The exact recorded setting component used by a contextual Candidate.
+/// Entry/component numbers are zero based and checked against indexed source bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum DependencySearch {
+    DirectPath,
+    DefaultDir {
+        index: u8,
+    },
+    Runpath {
+        entry: u64,
+        component: u64,
+    },
+    Rpath {
+        owner: InstanceId,
+        entry: u64,
+        component: u64,
+    },
+    LdLibraryPath {
+        value: ValueId,
+        component: u64,
+    },
+}
+
+/// Evidence qualifying one dependency possibility. Chain order is root-to-requester evidence;
+/// values are a set of input IDs and are canonicalized independently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyContext {
+    pub search: DependencySearch,
+    pub requester: InstanceId,
+    pub search_dir: UntrustedText,
+    pub process: Option<ProcessRef>,
+    pub values: Vec<ValueId>,
+    pub loader_chain: Vec<InstanceId>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +77,8 @@ pub enum Relation {
         needed: UntrustedText,
         candidate: InstanceId,
         via: SearchRule,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<DependencyContext>,
     },
     /// `definer` defines the symbol imported at `site`. Which definition a process uses is a
     /// [`BindingPremise`].
@@ -84,6 +127,8 @@ pub enum SearchRule {
     LdLibraryPath,
     Runpath,
     DefaultDir,
+    /// A DT_NEEDED name containing a slash; directory search is bypassed.
+    DirectPath,
 }
 
 /// The directory a search path resolves to in a role.

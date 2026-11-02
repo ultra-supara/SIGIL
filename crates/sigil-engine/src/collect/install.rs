@@ -336,6 +336,7 @@ impl Collector<'_> {
             id: instance_id(&self.root, &entry.rel)?,
             root: self.root.clone(),
             path: self.path(&entry.rel),
+            path_proof: None,
             link_chain,
             resolved,
             content,

@@ -195,6 +195,7 @@ pub(crate) struct Elf<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> {
 
 fn empty() -> ElfFacts {
     ElfFacts {
+        abi: None,
         interp: None,
         soname: None,
         needed: vec![],

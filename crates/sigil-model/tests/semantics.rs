@@ -312,6 +312,7 @@ fn a_mapping_must_belong_to_its_process() {
         },
     };
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: p(1),
         at: ts("2026-10-07T07:00:01Z"),
         roles: vec![],
@@ -1490,6 +1491,7 @@ fn only_sha256_with_64_lowercase_hex_digits_is_a_digest() {
 fn with_listener() -> Session {
     let mut s = base(&[]);
     s.processes.push(ProcessObs {
+        mnt_ns: None,
         process: runtime_process(),
         at: ts("2026-10-07T07:00:01Z"),
         roles: ids(&["ollama serve"]),

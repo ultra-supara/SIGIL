@@ -479,6 +479,7 @@ impl Placement {
             id: self.id,
             root: self.root,
             path: self.path,
+            path_proof: None,
             link_chain: self.link_chain,
             resolved: self.resolved,
             content,

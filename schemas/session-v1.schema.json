@@ -640,7 +640,8 @@
         "content": {"$ref": "#/$defs/InstanceContent"},
         "stat": {"$ref": "#/$defs/StatInfo"},
         "stability": {"$ref": "#/$defs/Stability"},
-        "discovered_by": {"type": "array", "items": {"$ref": "#/$defs/DiscoverySource"}}
+        "discovered_by": {"type": "array", "items": {"$ref": "#/$defs/DiscoverySource"}},
+        "path_proof": {"anyOf": [{"$ref": "#/$defs/RecordedPathProof"}, {"type": "null"}]}
       }
     },
     "InstanceContent": {
@@ -795,7 +796,8 @@
         "exports": {"type": "integer", "minimum": 0},
         "imports": {"type": "array", "items": {"$ref": "#/$defs/ElfImport"}},
         "data": {"type": "array", "items": {"$ref": "#/$defs/DataSymbol"}},
-        "returns": {"type": "array", "items": {"$ref": "#/$defs/FunctionReturn"}}
+        "returns": {"type": "array", "items": {"$ref": "#/$defs/FunctionReturn"}},
+        "abi": {"anyOf": [{"$ref": "#/$defs/ElfAbi"}, {"type": "null"}]}
       }
     },
     "ElfImport": {
@@ -967,7 +969,8 @@
         "name": {"anyOf": [{"$ref": "#/$defs/UntrustedText"}, {"type": "null"}]},
         "argv": {"anyOf": [{"type": "array", "items": {"$ref": "#/$defs/UntrustedText"}}, {"type": "null"}]},
         "net_ns": {"$ref": "#/$defs/NsInode"},
-        "fd_table": {"$ref": "#/$defs/Observability"}
+        "fd_table": {"$ref": "#/$defs/Observability"},
+        "mnt_ns": {"anyOf": [{"$ref": "#/$defs/NsInode"}, {"type": "null"}]}
       }
     },
     "MapsRead": {
@@ -2679,7 +2682,8 @@
                 "from": {"$ref": "#/$defs/SliceId"},
                 "needed": {"$ref": "#/$defs/UntrustedText"},
                 "candidate": {"$ref": "#/$defs/InstanceId"},
-                "via": {"$ref": "#/$defs/SearchRule"}
+                "via": {"$ref": "#/$defs/SearchRule"},
+                "context": {"anyOf": [{"$ref": "#/$defs/DependencyContext"}, {"type": "null"}]}
               }
             }
           }
@@ -2760,7 +2764,7 @@
       ]
     },
     "DeclKind": {"type": "string", "enum": ["ElfNeeded", "MachOLoadDylib"]},
-    "SearchRule": {"type": "string", "enum": ["Rpath", "LdLibraryPath", "Runpath", "DefaultDir"]},
+    "SearchRule": {"type": "string", "enum": ["Rpath", "LdLibraryPath", "Runpath", "DefaultDir", "DirectPath"]},
     "SearchDir": {
       "oneOf": [
         {
@@ -3050,7 +3054,8 @@
               "required": ["process", "source"],
               "properties": {
                 "process": {"$ref": "#/$defs/ProcessRef"},
-                "source": {"$ref": "#/$defs/ObsSource"}
+                "source": {"$ref": "#/$defs/ObsSource"},
+                "read": {"anyOf": [{"$ref": "#/$defs/ProcessValueRead"}, {"type": "null"}]}
               }
             }
           }
@@ -3788,6 +3793,258 @@
           }
         }
       ]
+    },
+    "ElfAbi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "is_64",
+        "little_endian",
+        "machine"
+      ],
+      "properties": {
+        "is_64": {
+          "type": "boolean"
+        },
+        "little_endian": {
+          "type": "boolean"
+        },
+        "machine": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "ProcessValueRead": {
+      "type": "string",
+      "enum": [
+        "Cwd",
+        "EffectiveUid",
+        "EffectiveGid",
+        "InitialEnvironment"
+      ]
+    },
+    "DependencySearch": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "DirectPath"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "DefaultDir"
+          ],
+          "properties": {
+            "DefaultDir": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "index"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Runpath"
+          ],
+          "properties": {
+            "Runpath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "entry",
+                "component"
+              ],
+              "properties": {
+                "entry": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "component": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Rpath"
+          ],
+          "properties": {
+            "Rpath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "owner",
+                "entry",
+                "component"
+              ],
+              "properties": {
+                "owner": {
+                  "$ref": "#/$defs/InstanceId"
+                },
+                "entry": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "component": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "LdLibraryPath"
+          ],
+          "properties": {
+            "LdLibraryPath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "component"
+              ],
+              "properties": {
+                "value": {
+                  "$ref": "#/$defs/ValueId"
+                },
+                "component": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DependencyContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requester",
+        "search_dir",
+        "process",
+        "values",
+        "loader_chain",
+        "search"
+      ],
+      "properties": {
+        "requester": {
+          "$ref": "#/$defs/InstanceId"
+        },
+        "search_dir": {
+          "$ref": "#/$defs/UntrustedText"
+        },
+        "process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProcessRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValueId"
+          }
+        },
+        "loader_chain": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InstanceId"
+          }
+        },
+        "search": {
+          "$ref": "#/$defs/DependencySearch"
+        }
+      }
+    },
+    "RecordedDirectory": {
+      "description": "An observed normal directory component in a recorded parent proof. The model validates that name is a single nonempty byte component excluding dot, dot-dot, slash, and NUL.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "dev",
+        "ino"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/UntrustedText"
+        },
+        "dev": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "ino": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "RecordedPathProof": {
+      "description": "The observed directory scan-root identity and root-exclusive ordered parents through a file's parent; at most 40 normal components. This is recorded evidence, not an inference from the path spelling.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_dev",
+        "root_ino",
+        "parents"
+      ],
+      "properties": {
+        "root_dev": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "root_ino": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "parents": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/RecordedDirectory"
+          }
+        }
+      }
     }
   }
 }

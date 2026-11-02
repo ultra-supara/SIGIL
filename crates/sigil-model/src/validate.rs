@@ -33,10 +33,13 @@ use std::net::{IpAddr, SocketAddr};
 
 use crate::access::PrincipalClaim;
 use crate::artifact::{
-    FileInstance, InstanceContent, MapsRead, ProcessExe, ProcessObs, ProcessRef, Stability,
+    Arch, Artifact, ElfType, FileInstance, Format, InstanceContent, MapsRead, NsInode, ProcessExe,
+    ProcessObs, ProcessRef, Slice, Stability,
 };
+use crate::binary::{ContainerFacts, ElfAbi};
 use crate::code::{ArgValue, CallTarget, CheckResult, CheckUnknown, CodeFacts};
 use crate::coverage::{AbsenceBasis, CoverageState};
+use crate::evidence::ObsSource;
 use crate::evidence::{
     Basis, ConfigRef, EvidenceRef, Loc, Observability, ProfileRuleRef, Ref, Support, Tri,
     UnknownReason,
@@ -54,7 +57,7 @@ use crate::identity::{
     is_commit, ComponentClaim, IdentityAssertion, IdentityStatus, ReleaseBasis, ReportedCommit,
 };
 use crate::index::{OrderedMap, SessionIndex, SessionLookup};
-use crate::load::ValueOrigin;
+use crate::load::{ProcessValue, ProcessValueRead, TriValue, ValueKey, ValueOrigin};
 use crate::model::{digest_hex, BlobLookup};
 use crate::probe::{is_loopback, ActiveFeature, ProbeResult, RUNTIME_API_VERSION};
 use crate::reference::{
@@ -62,15 +65,19 @@ use crate::reference::{
     SERVICE_UNIT_ROOT,
 };
 use crate::relation::{
-    BindingState, ObligationState, Relation, RuleSupport, RuleSupportRef, SearchDir,
+    BindingState, DependencyContext, ObligationState, Relation, RuleSupport, RuleSupportRef,
+    SearchDir, SearchRule,
 };
-use crate::session::{KnowledgeKind, Session};
+use crate::session::{KnowledgeKind, Mode, Session};
 
 /// A specific reason a session is invalid. `at` names where, by list and ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     /// Two entries of one domain share an ID.
-    DuplicateId { kind: &'static str, id: String },
+    DuplicateId {
+        kind: &'static str,
+        id: String,
+    },
     /// A reference to something the session does not contain.
     Dangling {
         kind: &'static str,
@@ -78,30 +85,54 @@ pub enum ValidationError {
         at: String,
     },
     /// A list that must not be empty is empty.
-    Empty { what: &'static str, at: String },
+    Empty {
+        what: &'static str,
+        at: String,
+    },
     /// A slice ID disagrees with its artifact, architecture, or offset.
-    SliceMismatch { slice: SliceId },
+    SliceMismatch {
+        slice: SliceId,
+    },
     /// `resolved` must be present exactly when `link_chain` is not empty.
-    LinkChainInconsistent { instance: InstanceId },
+    LinkChainInconsistent {
+        instance: InstanceId,
+    },
     /// A model layer's lookup disagrees with its digest: a malformed digest must be
     /// `NotLookedUp`, a well-formed one must not be, and a found blob must be the instance at
     /// `blobs/sha256-<hex>` in the manifest's root.
-    LayerBlobInconsistent { model: ModelId, digest: String },
+    LayerBlobInconsistent {
+        model: ModelId,
+        digest: String,
+    },
     /// A model's license is not what was read from its license layer's blob.
-    LicenseInconsistent { model: ModelId },
+    LicenseInconsistent {
+        model: ModelId,
+    },
     /// A listener's address is not an IP address.
-    ListenerAddressInvalid { listener: ListenerId },
+    ListenerAddressInvalid {
+        listener: ListenerId,
+    },
     /// A requested active target is not the canonical text of a specified IP address with a
     /// non-zero port.
-    ActiveTargetInvalid { target: String },
+    ActiveTargetInvalid {
+        target: String,
+    },
     /// A requested non-loopback target without `allow_remote`.
-    RemoteNotAllowed { target: String },
+    RemoteNotAllowed {
+        target: String,
+    },
     /// A probe's address is not a valid target, or its ID is not `probe:api/<address>:<port>`.
-    ProbeTargetInvalid { probe: ProbeId },
+    ProbeTargetInvalid {
+        probe: ProbeId,
+    },
     /// A probe that no requested feature asked for.
-    ProbeNotRequested { probe: ProbeId },
+    ProbeNotRequested {
+        probe: ProbeId,
+    },
     /// A requested probe with no record.
-    ProbeMissing { probe: ProbeId },
+    ProbeMissing {
+        probe: ProbeId,
+    },
     /// Coverage of `runtime_api.version` on a probe closes the check, but the probe's outcome
     /// does not support that: `Complete` needs a 200 answer with a version, `NotPresent` a
     /// refused connection, and a requested probe is never out of scope.
@@ -112,15 +143,26 @@ pub enum ValidationError {
     },
     /// An absence resting on a refused connection whose evidence names no probe, or a probe that
     /// was not refused.
-    RefusalNotObserved { check: CheckId },
+    RefusalNotObserved {
+        check: CheckId,
+    },
     /// `runtime_api.version` coverage on something other than a probe: it is about one probe.
-    ScopeNotAProbe { check: CheckId },
+    ScopeNotAProbe {
+        check: CheckId,
+    },
     /// A probe without its `runtime_api.version` coverage.
-    ProbeUncovered { probe: ProbeId },
+    ProbeUncovered {
+        probe: ProbeId,
+    },
     /// An absence on a refused connection for a check other than `runtime_api.version`.
-    RefusalForAnotherCheck { check: CheckId },
+    RefusalForAnotherCheck {
+        check: CheckId,
+    },
     /// A mapping recorded under a process it does not belong to.
-    MappingOfAnotherProcess { pid: u32, at: String },
+    MappingOfAnotherProcess {
+        pid: u32,
+        at: String,
+    },
     /// An identity status that its assertions do not support (PR-4c-1 spec §5).
     StatusUnsupported {
         subject: SliceId,
@@ -157,44 +199,71 @@ pub enum ValidationError {
     },
     /// A rule named twice that disagrees: `ReferenceVerified.rule` and its record's rule, or a
     /// relation's rule and the rule of its modeled basis.
-    RuleMismatch { at: String },
+    RuleMismatch {
+        at: String,
+    },
     /// A coverage state that is about one slice (`ProfileMismatch`) with a scope that is not a
     /// slice.
-    ScopeNotASlice { check: CheckId },
+    ScopeNotASlice {
+        check: CheckId,
+    },
     /// A mapping listed in load facts that is about another file.
-    MappingOfAnotherFile { instance: InstanceId },
+    MappingOfAnotherFile {
+        instance: InstanceId,
+    },
     /// Load facts that list mappings but say mappings were not observable.
-    MappedButNotObservable { instance: InstanceId },
+    MappedButNotObservable {
+        instance: InstanceId,
+    },
     /// An unverified premise of the `FeatureMatch` (or the fact) a claim or condition rests on,
     /// missing from its unresolved premises.
-    PremiseDropped { at: String, premise: PremiseId },
+    PremiseDropped {
+        at: String,
+        premise: PremiseId,
+    },
     /// `would_evaluate` claims more than `candidate` (plan §4.4.4).
     WouldEvaluateStrongerThanCandidate {
         instance: InstanceId,
         role: ProcessRole,
     },
     /// `Met`/`NotMet` with evidence that settles neither.
-    InsufficientEvidence { at: String, condition: CondId },
+    InsufficientEvidence {
+        at: String,
+        condition: CondId,
+    },
     /// `Met` with evidence that settles `NotMet`, or the reverse.
-    ContradictedByEvidence { at: String, condition: CondId },
+    ContradictedByEvidence {
+        at: String,
+        condition: CondId,
+    },
     /// `Met`/`NotMet` with unresolved premises (it is `Unknown` until they are resolved).
-    DecidedWithUnresolved { at: String, condition: CondId },
+    DecidedWithUnresolved {
+        at: String,
+        condition: CondId,
+    },
     /// An `Unknown` whose reason contradicts its evidence or premises.
-    UnknownReasonInconsistent { at: String, condition: CondId },
+    UnknownReasonInconsistent {
+        at: String,
+        condition: CondId,
+    },
     /// A finding with a condition that is not `Met` or still has unresolved premises.
     FindingNotEstablished {
         finding: FindingId,
         condition: CondId,
     },
     /// An open question with every condition established (it would be a finding).
-    OpenQuestionSettled { question: OpenQuestionId },
+    OpenQuestionSettled {
+        question: OpenQuestionId,
+    },
     /// An open question with a refuted condition (the rule simply does not apply).
     OpenQuestionRefuted {
         question: OpenQuestionId,
         condition: CondId,
     },
     /// An `Ignore` decision or treatment without a reason.
-    IgnoreWithoutReason { at: String },
+    IgnoreWithoutReason {
+        at: String,
+    },
     /// The verdict is not the maximum action of the recorded decisions.
     VerdictInconsistent {
         recorded: Verdict,
@@ -207,15 +276,25 @@ pub enum ValidationError {
         expected: u32,
     },
     /// A required check is not closed but the outcome does not say so.
-    RequiredCheckNotClosed { check: CheckId },
+    RequiredCheckNotClosed {
+        check: CheckId,
+    },
     /// `missing_required` lists a check that is not required.
-    NotRequired { check: CheckId },
+    NotRequired {
+        check: CheckId,
+    },
     /// `missing_required` lists a check whose coverage is complete or out of scope.
-    ListedCheckClosed { check: CheckId },
+    ListedCheckClosed {
+        check: CheckId,
+    },
     /// An open question treated as a gap that the outcome does not list.
-    GapNotListed { question: OpenQuestionId },
+    GapNotListed {
+        question: OpenQuestionId,
+    },
     /// `gaps` lists an open question that is missing or not treated as a gap.
-    GapNotCountAsGap { question: OpenQuestionId },
+    GapNotCountAsGap {
+        question: OpenQuestionId,
+    },
     /// `Incomplete` with nothing missing.
     IncompleteWithoutReason,
     /// A reference-match row disagrees with its placement, its reference, or discovery
@@ -234,10 +313,14 @@ pub enum ValidationError {
     },
     /// A release claim by reference matches whose files are not exactly the placements, or that
     /// was made while discovery was not complete (V10).
-    ReleaseBasisIncomplete { product: ComponentKey },
+    ReleaseBasisIncomplete {
+        product: ComponentKey,
+    },
     /// `artifacts.release` coverage that disagrees with the claim, discovery, and absent members
     /// (V11).
-    ReleaseCoverage { complete: bool },
+    ReleaseCoverage {
+        complete: bool,
+    },
     /// A release claim V12 rejects (PR-4c-2c): two claims for one product, a candidate listed
     /// twice, or an open claim (`SelfReportedCommit`) that is not made for an install with a
     /// reference set in `knowledge`, is beside a claim by reference matches, or does not rest on
@@ -249,23 +332,49 @@ pub enum ValidationError {
     },
     /// A `BinaryFacts` record, a `Declares` relation, or `artifacts.identity` disagrees with the
     /// session (B1–B8, B11, B12; S2, PR-4c-2a).
-    Binary { slice: String, why: String },
+    Binary {
+        slice: String,
+        why: String,
+    },
     /// A binary inspection's input, its root, its `binary.container`, or its `binary.identity`
     /// disagrees with the session (B9, B10; PR-4b-2a; S1, PR-4c-2a).
-    BinaryInput { at: String, why: String },
+    BinaryInput {
+        at: String,
+        why: String,
+    },
     /// Code facts, `binary.code`, or a hint disagree with the session (C1–C6; PR-5a; S3,
     /// PR-4c-2a).
-    Code { at: String, why: String },
+    Code {
+        at: String,
+        why: String,
+    },
     /// A capability violation or open question disagrees with the session's hints and code facts
     /// (P1, P2; #51), or a session with one does not record the one capability table its binaries
     /// were analyzed with (`at` is `knowledge`).
-    Capability { at: String, why: String },
+    Capability {
+        at: String,
+        why: String,
+    },
     /// A service unit's root, its instance, or a `ServiceUnit` source disagrees with the session
     /// (PR-4d-1).
-    ServiceUnit { at: String, why: String },
+    ServiceUnit {
+        at: String,
+        why: String,
+    },
     /// An observed process's executable, a mapping, `maps_read`, or `processes.observed`
     /// disagrees with the session (P1–P6; PR-4d-2).
-    Process { at: String, why: String },
+    Process {
+        at: String,
+        why: String,
+    },
+    ProcessValue {
+        at: String,
+        why: &'static str,
+    },
+    DependencyContext {
+        at: String,
+        why: &'static str,
+    },
 }
 
 impl fmt::Display for ValidationError {
@@ -403,6 +512,8 @@ impl fmt::Display for ValidationError {
             Capability { at, why } => write!(f, "{at}: {why}"),
             ServiceUnit { at, why } => write!(f, "{at}: {why}"),
             Process { at, why } => write!(f, "{at}: {why}"),
+            ProcessValue { at, why } | DependencyContext { at, why } => write!(f, "{at}: {why}"),
+
             ReleaseCoverage { complete } => write!(
                 f,
                 "{ARTIFACTS_RELEASE} is {}, which disagrees with the claim, discovery, and absent members",
@@ -543,7 +654,6 @@ struct Validator<'a> {
     assumptions: IdSet<'a>,
     profiles: HashSet<String>,
     refsets: HashSet<&'a str>,
-    processes: Vec<&'a ProcessRef>,
     code: HashMap<&'a str, CodeIndex<'a>>,
 }
 
@@ -649,7 +759,6 @@ impl<'a> Validator<'a> {
             .filter(|k| k.kind == KnowledgeKind::ReferenceManifest)
             .map(|k| k.id.as_str())
             .collect();
-        let processes = s.processes.iter().map(|p| &p.process).collect();
         let mut code = HashMap::with_capacity(s.code.len());
         for facts in &s.code {
             let index = CodeIndex {
@@ -678,7 +787,6 @@ impl<'a> Validator<'a> {
             assumptions,
             profiles,
             refsets,
-            processes,
             code,
         }
     }
@@ -788,6 +896,7 @@ impl<'a> Validator<'a> {
         for value in &s.values {
             let at = format_args!("values[{}]", value.id);
             self.origin(&value.origin, &at);
+            self.process_value(value, &at);
             if let crate::load::TriValue::Unknown { reason } = &value.value {
                 self.reason(reason, &at);
             }
@@ -833,9 +942,7 @@ impl<'a> Validator<'a> {
         for facts in &s.code {
             self.code_facts(facts);
         }
-        for relation in &s.relations {
-            self.relation(relation);
-        }
+        self.dependency_relations();
         for record in &s.rule_support {
             self.rule_support(record);
         }
@@ -963,7 +1070,7 @@ impl<'a> Validator<'a> {
     }
 
     fn process(&mut self, process: &ProcessRef, at: &(impl fmt::Display + ?Sized)) {
-        if !self.processes.contains(&process) {
+        if self.index.process_observation(process).is_none() {
             self.dangling("process", &process.pid.to_string(), at);
         }
     }
@@ -1085,6 +1192,16 @@ impl<'a> Validator<'a> {
                 self.errors.push(ValidationError::LinkChainInconsistent {
                     instance: instance.id.clone(),
                 });
+            }
+            if let Some(proof) = &instance.path_proof {
+                let valid = self
+                    .index
+                    .roots
+                    .get(instance.root.as_str())
+                    .is_some_and(|root| crate::dependency_path::valid_proof(root, instance, proof));
+                if !valid {
+                    self.dependency_error(&at, "invalid recorded parent proof");
+                }
             }
             for source in &instance.discovered_by {
                 match source {
@@ -1358,6 +1475,21 @@ impl<'a> Validator<'a> {
                 if let Some(instance) = &mapping.instance {
                     self.instance(instance, &at);
                 }
+                if let (Some(crate::NsInode::Inode(process_ns)), Some(collector_ns)) =
+                    (&obs.mnt_ns, s.observation.mnt_ns)
+                {
+                    let decided = match mapping.same_mount_ns {
+                        Tri::Yes { .. } => Some(true),
+                        Tri::No { .. } => Some(false),
+                        Tri::Unknown { .. } => None,
+                    };
+                    if decided.is_some_and(|same| same != (*process_ns == collector_ns)) {
+                        self.process_error(
+                            &at,
+                            "mapping namespace claim contradicts process.mnt_ns",
+                        );
+                    }
+                }
                 self.tri(&mapping.same_mount_ns, &at);
             }
         }
@@ -1383,6 +1515,541 @@ impl<'a> Validator<'a> {
 
     /// The status rule (PR-4c-1 spec §5) and I1. `Signature` is not identity evidence: no rule
     /// counts it.
+    fn new_check(&self, check: &str) -> bool {
+        self.index.new_check(check)
+    }
+
+    // Shared with the follow-up coverage assembly validation.
+    #[allow(dead_code)]
+    fn new_coverage(&mut self, check: &str, scope: &crate::Ref) -> Option<&'a crate::Coverage> {
+        let entry = self.index.coverage_occurrence(check, scope);
+        if let Some(coverage) = entry.and_then(|entry| entry.unique()) {
+            Some(coverage)
+        } else {
+            self.dependency_error(
+                &format_args!("{check} on {scope:?}"),
+                "new check requires exactly one coverage entry for its scope",
+            );
+            None
+        }
+    }
+
+    fn value_error(&mut self, at: &(impl fmt::Display + ?Sized), why: &'static str) {
+        self.errors.push(ValidationError::ProcessValue {
+            at: at.to_string(),
+            why,
+        });
+    }
+
+    fn dependency_error(&mut self, at: &(impl fmt::Display + ?Sized), why: &'static str) {
+        self.errors.push(ValidationError::DependencyContext {
+            at: at.to_string(),
+            why,
+        });
+    }
+
+    fn process_value(&mut self, value: &ProcessValue, at: &(impl fmt::Display + ?Sized)) {
+        let guarded = self.new_check(crate::VALUES_OBSERVED);
+        let ValueOrigin::ObservedProcess { source, read, .. } = &value.origin else {
+            return;
+        };
+        let Some(read) = read else {
+            if guarded {
+                self.value_error(at, "values.observed requires explicit read provenance");
+            }
+            return; // a session without the new check preserves the old source contract
+        };
+        if self.s.request.mode != Mode::Observe {
+            self.value_error(at, "process read requires observe mode");
+        }
+        if *source != ObsSource::Proc {
+            self.value_error(at, "process read requires Proc source");
+        }
+        if *read == ProcessValueRead::InitialEnvironment && !self.s.request.observe_env {
+            self.value_error(at, "initial environment requires observe_env");
+        }
+        let ValueOrigin::ObservedProcess { process, .. } = &value.origin else {
+            return;
+        };
+        if self.index.process_observation(process).is_some() {
+            let known = self.index.process_has_role(process, &value.process_role);
+            let label = value
+                .process_role
+                .as_str()
+                .strip_prefix("observed:")
+                .is_some_and(|hex| {
+                    hex.len() == 64
+                        && hex
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+                });
+            if !known && !label {
+                self.value_error(
+                    at,
+                    "observed value role is neither this process's role nor an observation label",
+                );
+            }
+        }
+        if let ValueKey::Env(name) = &value.key {
+            if !crate::allowlisted_env_name(name.as_bytes()) {
+                self.value_error(at, "initial environment key is not allowlisted");
+            }
+        }
+        if !matches!(
+            (read, &value.key),
+            (ProcessValueRead::Cwd, ValueKey::Cwd)
+                | (ProcessValueRead::EffectiveUid, ValueKey::User)
+                | (ProcessValueRead::EffectiveGid, ValueKey::Group)
+                | (ProcessValueRead::InitialEnvironment, ValueKey::Env(_))
+        ) {
+            self.value_error(at, "process read does not match value key");
+        }
+    }
+
+    fn dependency_placement(
+        &mut self,
+        id: &InstanceId,
+        at: &(impl fmt::Display + ?Sized),
+    ) -> Option<(&'a Artifact, &'a Slice, ElfAbi)> {
+        self.instance(id, at);
+        let instance = self.index.instances.get(id.as_str()).copied()?;
+        let InstanceContent::Read { artifact } = &instance.content else {
+            self.dependency_error(at, "dependency needs a stable read ELF placement");
+            return None;
+        };
+        let Some(artifact) = self.index.artifacts.get(artifact.as_str()).copied() else {
+            return None;
+        };
+        if instance.stability != Stability::NoChangeDetected
+            || instance.stat.mode & 0o170_000 != 0o100_000
+            || !matches!(
+                artifact.format,
+                Format::Elf {
+                    kind: ElfType::Exec | ElfType::Dyn
+                }
+            )
+        {
+            self.dependency_error(at, "dependency needs a stable read ELF placement");
+            return None;
+        }
+        if artifact.slices.len() != 1 {
+            self.dependency_error(at, "dependency needs exactly one ELF slice");
+            return None;
+        }
+        let slice = &artifact.slices[0];
+        let abi = self
+            .index
+            .binaries
+            .get(slice.id.as_str())
+            .and_then(|facts| match &facts.container {
+                ContainerFacts::Elf(elf) => elf.abi,
+                _ => None,
+            });
+        let Some(abi) = abi else {
+            self.dependency_error(at, "dependency needs a supported matching ELF ABI");
+            return None;
+        };
+        let supported = matches!(
+            (slice.arch, abi.machine),
+            (Arch::X86_64, 62) | (Arch::Aarch64, 183)
+        );
+        if !supported || !abi.is_64 || (slice.arch == Arch::X86_64 && !abi.little_endian) {
+            self.dependency_error(at, "dependency needs a supported matching ELF ABI");
+            return None;
+        }
+        Some((artifact, slice, abi))
+    }
+
+    fn dependency_elf(
+        &self,
+        id: &InstanceId,
+    ) -> Option<(&'a crate::FileInstance, &'a crate::ElfFacts, &'a SliceId)> {
+        let file = self.index.instances.get(id.as_str()).copied()?;
+        let InstanceContent::Read { artifact } = &file.content else {
+            return None;
+        };
+        let artifact = self.index.artifacts.get(artifact.as_str()).copied()?;
+        let [slice] = artifact.slices.as_slice() else {
+            return None;
+        };
+        let facts = self.index.binaries.get(slice.id.as_str()).copied()?;
+        let ContainerFacts::Elf(elf) = &facts.container else {
+            return None;
+        };
+        Some((file, elf, &slice.id))
+    }
+
+    fn dependency_search_rule(
+        &self,
+        needed: &crate::UntrustedText,
+        via: SearchRule,
+        context: &DependencyContext,
+        cwd: Option<(&crate::ValueId, &[u8])>,
+    ) -> Result<(), &'static str> {
+        use crate::dependency_path::{expand, parent};
+        use crate::{DependencySearch, ProcessValueRead, TriValue, ValueKey, ValueOrigin};
+        let (requester, elf, slice) = self
+            .dependency_elf(&context.requester)
+            .ok_or("search witness requester ELF facts unavailable")?;
+        let mut required = vec![];
+        let (raw, owner, direct) = match (&context.search, via) {
+            (DependencySearch::DirectPath, SearchRule::DirectPath) => {
+                if !needed.as_bytes().contains(&b'/') {
+                    return Err("DirectPath must match a dependency containing a slash");
+                }
+                (needed.as_bytes(), requester, true)
+            }
+            (DependencySearch::DefaultDir { index }, SearchRule::DefaultDir) => {
+                let raw = crate::dependency_search::DEFAULT_DIRS
+                    .get(usize::from(*index))
+                    .ok_or("default-directory witness is out of range")?;
+                (*raw, requester, false)
+            }
+            (DependencySearch::Runpath { entry, component }, SearchRule::Runpath) => (
+                self.index
+                    .search_parts
+                    .elf(slice, true, *entry, *component)?,
+                requester,
+                false,
+            ),
+            (
+                DependencySearch::Rpath {
+                    owner,
+                    entry,
+                    component,
+                },
+                SearchRule::Rpath,
+            ) => {
+                if !elf.runpath.is_empty() {
+                    return Err("requester RUNPATH suppresses RPATH search");
+                }
+                if !context.loader_chain.contains(owner) {
+                    return Err("RPATH owner is outside loader_chain");
+                }
+                let (file, owner_elf, owner_slice) = self
+                    .dependency_elf(owner)
+                    .ok_or("RPATH owner ELF facts unavailable")?;
+                if !owner_elf.runpath.is_empty() {
+                    return Err("owner RUNPATH suppresses its RPATH");
+                }
+                (
+                    self.index
+                        .search_parts
+                        .elf(owner_slice, false, *entry, *component)?,
+                    file,
+                    false,
+                )
+            }
+            (DependencySearch::LdLibraryPath { value, component }, SearchRule::LdLibraryPath) => {
+                if !context.values.contains(value) {
+                    return Err("LD_LIBRARY_PATH witness is not a contextual input");
+                }
+                let v = self
+                    .index
+                    .process_values
+                    .get(value.as_str())
+                    .copied()
+                    .ok_or("LD_LIBRARY_PATH witness value is missing")?;
+                if !self.s.request.observe_env
+                    || self.s.request.mode != Mode::Observe
+                    || !matches!(&v.key, ValueKey::Env(name) if name.as_bytes() == b"LD_LIBRARY_PATH")
+                    || !matches!(&v.value, TriValue::Known(_))
+                    || !matches!(&v.origin, ValueOrigin::ObservedProcess {
+                        process, source: ObsSource::Proc, read: Some(ProcessValueRead::InitialEnvironment),
+                    } if context.process.as_ref() == Some(process))
+                {
+                    return Err("LD_LIBRARY_PATH witness requires a Known qualified same-process initial value");
+                }
+                let first = context
+                    .loader_chain
+                    .first()
+                    .ok_or("loader_chain must end at requester")?;
+                let (owner, _, _) = self
+                    .dependency_elf(first)
+                    .ok_or("environment ORIGIN owner is unavailable")?;
+                required.push(value.clone());
+                (
+                    self.index.search_parts.environment(value, *component)?,
+                    owner,
+                    false,
+                )
+            }
+            _ => return Err("search witness does not match via"),
+        };
+        let expanded = expand(raw, &parent(owner.path.as_bytes()))?;
+        let (absolute, uses_cwd) =
+            crate::dependency_search::absolute(&expanded, cwd.map(|(_, path)| path))?;
+        if uses_cwd {
+            let (id, _) = cwd.ok_or("dependency cwd: qualified same-process cwd required")?;
+            required.push(id.clone());
+        }
+        let directory = if direct { parent(&absolute) } else { absolute };
+        if directory != context.search_dir.as_bytes() {
+            return Err("search rule does not derive the recorded directory");
+        }
+        if context.values.len() != required.len()
+            || required.iter().any(|id| !context.values.contains(id))
+        {
+            return Err("context values do not exactly match search witness inputs");
+        }
+        Ok(())
+    }
+
+    fn dependency_relations(&mut self) {
+        let s = self.s;
+        let mut locally_valid = vec![false; s.relations.len()];
+        for (i, relation) in s.relations.iter().enumerate() {
+            let before = self.errors.len();
+            self.relation(relation);
+            locally_valid[i] = self.errors.len() == before
+                && matches!(
+                    relation,
+                    crate::Relation::Candidate {
+                        context: Some(_),
+                        ..
+                    }
+                );
+        }
+        for i in crate::dependency_search::ungrounded(&s.relations, &locally_valid) {
+            self.dependency_error(&format_args!("relations[{i}]"),
+                "loader_chain has no locally valid Candidate for its exact process and ordered prefix");
+        }
+    }
+
+    fn dependency_context(
+        &mut self,
+        from: &SliceId,
+        needed: &crate::UntrustedText,
+        candidate: &InstanceId,
+        via: SearchRule,
+        context: &DependencyContext,
+        at: &(impl fmt::Display + ?Sized),
+    ) {
+        let requester = self.dependency_placement(&context.requester, at);
+        if requester.is_some_and(|(_, slice, _)| slice.id != *from) {
+            self.dependency_error(at, "requester does not own from slice");
+        }
+        let target = self.dependency_placement(candidate, at);
+        if let Some((artifact, _, _)) = target {
+            if artifact.format != (Format::Elf { kind: ElfType::Dyn }) {
+                self.dependency_error(at, "candidate must be ET_DYN");
+            }
+        }
+        if let (Some((_, a, abi_a)), Some((_, b, abi_b))) = (requester, target) {
+            if a.arch != b.arch || abi_a != abi_b {
+                self.dependency_error(at, "dependency needs a supported matching ELF ABI");
+            }
+        }
+        let declares = self.index.has_elf_declaration(from.as_str(), needed);
+        if !declares {
+            self.dependency_error(at, "candidate has no matching ELF declaration");
+        }
+        if !self.index.search_parts.needed(from, needed) {
+            self.dependency_error(at, "candidate name is not in requester DT_NEEDED");
+        }
+        if needed.as_bytes().contains(&b'/') != (via == SearchRule::DirectPath) {
+            self.dependency_error(at, "DirectPath must match a dependency containing a slash");
+        }
+        if !context.search_dir.as_bytes().starts_with(b"/")
+            || context.search_dir.as_bytes().contains(&0)
+        {
+            self.dependency_error(at, "dependency search_dir must be an absolute path");
+        }
+        if context.loader_chain.last() != Some(&context.requester) {
+            self.dependency_error(at, "loader_chain must end at requester");
+        }
+        let mut seen = HashSet::new();
+        for owner in &context.loader_chain {
+            if !seen.insert(owner) {
+                self.dependency_error(at, "loader_chain repeats an instance");
+            }
+            let ancestor = self.dependency_placement(owner, at);
+            if let (Some((_, a, aa)), Some((_, b, ab))) = (requester, ancestor) {
+                if a.arch != b.arch || aa != ab {
+                    self.dependency_error(at, "loader_chain needs a supported matching ELF ABI");
+                }
+            }
+        }
+        if let Some(process) = &context.process {
+            self.process(process, at);
+            if self.s.request.mode != Mode::Observe {
+                self.dependency_error(at, "process dependency context requires observe mode");
+            }
+            if let Some(obs) = self.index.process_observations.get(process).copied() {
+                if !matches!(&obs.exe, crate::ProcessExe::Instance { instance }
+                    if context.loader_chain.first() == Some(instance))
+                {
+                    self.dependency_error(at, "process seed is not the recorded executable");
+                }
+                if !matches!(&obs.mnt_ns, Some(NsInode::Inode(n)) if Some(*n) == self.s.observation.mnt_ns)
+                {
+                    self.dependency_error(
+                        at,
+                        "process seed requires the collector mount namespace",
+                    );
+                }
+            }
+        }
+        if context.process.is_none() && !context.values.is_empty() {
+            self.dependency_error(at, "dependency values require a process");
+        }
+        let mut values = HashSet::new();
+        let mut has_library_path = false;
+        let mut cwd = None;
+        let mut cwd_id = None;
+        let mut cwd_count = 0usize;
+        for id in &context.values {
+            self.value(id.as_str(), at);
+            if !values.insert(id) {
+                self.dependency_error(at, "dependency input repeats a value");
+            }
+            let Some(value) = self.index.process_value(id.as_str()) else {
+                continue;
+            };
+            let ValueOrigin::ObservedProcess {
+                process,
+                read,
+                source,
+            } = &value.origin
+            else {
+                self.dependency_error(
+                    at,
+                    "dependency input is not an observed value of this process",
+                );
+                continue;
+            };
+            let same_process_read =
+                context.process.as_ref() == Some(process) && *source == ObsSource::Proc;
+            if !same_process_read {
+                self.dependency_error(
+                    at,
+                    "dependency input is not an observed value of this process",
+                );
+            }
+            let unique = self
+                .index
+                .observed_values
+                .get(process)
+                .and_then(|rows| rows.keys.get(&crate::index::ObservedKey::of(&value.key)))
+                .and_then(|entry| entry.unique())
+                .is_some_and(|only| only.id == *id);
+            if !unique {
+                self.dependency_error(at, "dependency input key is not unique for this process");
+            }
+            if matches!(value.value, TriValue::Unknown { .. }) {
+                self.dependency_error(at, "dependency input is unknown");
+            }
+            match (&value.key, read) {
+                (ValueKey::Env(name), Some(ProcessValueRead::InitialEnvironment))
+                    if name.as_bytes() == b"LD_LIBRARY_PATH" =>
+                {
+                    if matches!(value.value, TriValue::Known(_)) {
+                        has_library_path = true;
+                    }
+                }
+                (ValueKey::Cwd, Some(ProcessValueRead::Cwd)) => {
+                    cwd_count += 1;
+                    let namespace = self
+                        .index
+                        .process_observation(process)
+                        .and_then(|p| p.mnt_ns.as_ref());
+                    let same = matches!(namespace, Some(NsInode::Inode(n)) if Some(*n) == self.s.observation.mnt_ns);
+                    if !same {
+                        self.dependency_error(at, "cwd requires the collector mount namespace");
+                    }
+                    match &value.value {
+                        TriValue::Known(path)
+                            if path.as_bytes().starts_with(b"/")
+                                && !path.as_bytes().ends_with(b" (deleted)")
+                                && !path.as_bytes().contains(&0) =>
+                        {
+                            if same_process_read && same && self.s.request.mode == Mode::Observe {
+                                cwd = Some(path.as_bytes());
+                                cwd_id = Some(id);
+                            }
+                        }
+                        _ => self.dependency_error(
+                            at,
+                            "dependency cwd must be known absolute and not deleted",
+                        ),
+                    }
+                }
+                _ => self.dependency_error(at, "input read is not a dependency input"),
+            }
+        }
+        if via == SearchRule::LdLibraryPath && !has_library_path {
+            self.dependency_error(
+                at,
+                "LdLibraryPath requires a Known initial LD_LIBRARY_PATH input",
+            );
+        }
+        // A relative DirectPath can use exactly one qualified Cwd input of this full process.
+        // Multiple rows cannot silently choose the first/last cwd; duplicate IDs also retain
+        // the existing repeated-input error above. Absolute DirectPath needs no Cwd input.
+        if cwd_count != 1 {
+            cwd = None;
+            cwd_id = None;
+        }
+        let lookup_path = if via == SearchRule::DirectPath {
+            let Some(owner) = self
+                .index
+                .instances
+                .get(context.requester.as_str())
+                .copied()
+            else {
+                return;
+            };
+            match crate::dependency_path::direct_lookup_path(
+                needed.as_bytes(),
+                owner.path.as_bytes(),
+                cwd,
+            ) {
+                Ok(path) => {
+                    if crate::dependency_path::parent(&path) != context.search_dir.as_bytes() {
+                        self.dependency_error(
+                            at,
+                            "DirectPath search_dir does not match the expanded dependency parent",
+                        );
+                    }
+                    path
+                }
+                Err(why) => {
+                    self.dependency_error(at, why);
+                    return;
+                }
+            }
+        } else {
+            // Slash qualification is on the original DT_NEEDED bytes. A slash-free token
+            // cannot turn into a DirectPath merely because its expansion contains a slash.
+            if needed.as_bytes().contains(&b'$') && !needed.as_bytes().contains(&b'/') {
+                self.dependency_error(at, "slash-free dependency token is not modeled");
+                return;
+            }
+            match crate::dependency_path::checked_join(
+                context.search_dir.as_bytes(),
+                needed.as_bytes(),
+            ) {
+                Ok(path) => path,
+                Err(gap) => {
+                    self.dependency_error(at, gap.message());
+                    return;
+                }
+            }
+        };
+        match self.index.dependency_paths.reaches(&lookup_path, candidate) {
+            Ok(true) => {}
+            Ok(false) => self.dependency_error(
+                at,
+                "dependency lookup does not reach the recorded candidate",
+            ),
+            Err(gap) => self.dependency_error(at, gap.message()),
+        }
+        let qualified_cwd = cwd_id.zip(cwd);
+        if let Err(why) = self.dependency_search_rule(needed, via, context, qualified_cwd) {
+            self.dependency_error(at, why);
+        }
+    }
+
     fn components(&mut self) {
         let s = self.s;
         let index = RowIndex::new(s);
@@ -2999,11 +3666,18 @@ impl<'a> Validator<'a> {
                 self.slice(from, &format!("relations[Declares from {from}]"))
             }
             Relation::Candidate {
-                from, candidate, ..
+                from,
+                needed,
+                candidate,
+                via,
+                context,
             } => {
                 let at = format_args!("relations[Candidate {candidate} for {from}]");
                 self.slice(from, &at);
                 self.instance(candidate, &at);
+                if let Some(context) = context {
+                    self.dependency_context(from, needed, candidate, *via, context, &at);
+                }
             }
             Relation::SymbolCandidate { site, definer, .. } => {
                 let at = format_args!("relations[SymbolCandidate {}]", site.call);
@@ -4104,4 +4778,392 @@ fn row_disagrees(result: &MemberResult, i: &FileInstance) -> Option<&'static str
         }
         MemberResult::Absent { .. } => "Absent has no instance",
     })
+}
+
+#[cfg(test)]
+mod dependency_index_tests {
+    use super::*;
+    use crate::*;
+
+    fn fixture() -> Session {
+        serde_json::from_str(include_str!(
+            "../../../schemas/examples/session-v1/20-observed-processes.json"
+        ))
+        .unwrap()
+    }
+
+    fn coverage(check: &str, scope: Ref, state: CoverageState) -> Coverage {
+        Coverage {
+            check: CheckId::new(check).unwrap(),
+            scope,
+            state,
+            budget: None,
+        }
+    }
+
+    fn observed(process: &ProcessRef, id: &str, key: ValueKey) -> ProcessValue {
+        ProcessValue {
+            id: ValueId::new(id).unwrap(),
+            process_role: ProcessRole::new(RUNTIME_ROLE).unwrap(),
+            key,
+            value: TriValue::Known(UntrustedText::new("/")),
+            origin: ValueOrigin::ObservedProcess {
+                process: process.clone(),
+                source: ObsSource::Proc,
+                read: Some(ProcessValueRead::Cwd),
+            },
+            applies_to: vec![],
+        }
+    }
+
+    #[test]
+    fn first_records_and_full_process_identity_are_retained() {
+        let mut s = fixture();
+        s.values.clear();
+        let process = s.processes[0].process.clone();
+        let mut duplicate = s.processes[0].clone();
+        duplicate.roles = vec![ProcessRole::new("duplicate-only role").unwrap()];
+        s.processes.push(duplicate);
+        s.values
+            .push(observed(&process, "value:first", ValueKey::Cwd));
+        let mut duplicate = s.values[0].clone();
+        duplicate.value = TriValue::Unknown {
+            reason: UnknownReason::InsufficientEvidence,
+        };
+        s.values.push(duplicate);
+        let index = SessionIndex::new(&s);
+        assert!(std::ptr::eq(
+            index.process_observation(&process).unwrap(),
+            &s.processes[0]
+        ));
+        assert!(
+            !index.process_has_role(&process, &ProcessRole::new("duplicate-only role").unwrap())
+        );
+        assert!(std::ptr::eq(
+            index.process_value("value:first").unwrap(),
+            &s.values[0]
+        ));
+        let summary = index.observed_values.get(&process).unwrap();
+        assert_eq!(summary.count, 2);
+        assert!(summary.has_unknown);
+        assert_eq!(
+            summary
+                .keys
+                .get(&crate::index::ObservedKey::Cwd)
+                .unwrap()
+                .count,
+            2
+        );
+        assert!(summary
+            .keys
+            .get(&crate::index::ObservedKey::Cwd)
+            .unwrap()
+            .unique()
+            .is_none());
+        for altered in [
+            ProcessRef {
+                start_ticks: process.start_ticks + 1,
+                ..process.clone()
+            },
+            ProcessRef {
+                boot_id: "different-boot".into(),
+                ..process.clone()
+            },
+        ] {
+            assert!(index.process_observation(&altered).is_none());
+            assert!(!index.observed_values.contains_key(&altered));
+        }
+    }
+
+    #[test]
+    fn coverage_occurrences_preserve_duplicate_diagnostics_and_first_prerequisite() {
+        let mut s = fixture();
+        let scope = Ref::Process(s.processes[0].process.clone());
+        s.coverage = vec![
+            coverage(VALUES_OBSERVED, scope.clone(), CoverageState::Complete),
+            coverage(VALUES_OBSERVED, Ref::Audit, CoverageState::Complete),
+            coverage(
+                VALUES_OBSERVED,
+                scope.clone(),
+                CoverageState::Partial {
+                    missing: vec!["duplicate".into()],
+                },
+            ),
+        ];
+        let index = SessionIndex::new(&s);
+        let occurrence = index.coverage_occurrence(VALUES_OBSERVED, &scope).unwrap();
+        assert_eq!(occurrence.count, 2);
+        assert!(std::ptr::eq(occurrence.first, &s.coverage[0]));
+        assert!(occurrence.unique().is_none());
+        assert!(index
+            .coverage_occurrence(VALUES_OBSERVED, &Ref::Audit)
+            .unwrap()
+            .unique()
+            .is_some());
+        assert!(index
+            .coverage_occurrence(VALUES_CONFIGURED, &scope)
+            .is_none());
+        let ordered: Vec<_> = index.coverage_for_check(VALUES_OBSERVED).collect();
+        assert!(ordered
+            .iter()
+            .zip(&s.coverage)
+            .all(|(a, b)| std::ptr::eq(*a, b)));
+        let mut validator = Validator::new(&s, &index);
+        assert!(validator.errors.iter().any(|e| matches!(
+            e,
+            ValidationError::DuplicateId {
+                kind: "coverage",
+                ..
+            }
+        )));
+        let before = validator.errors.len();
+        assert!(validator.new_coverage(VALUES_OBSERVED, &scope).is_none());
+        assert!(validator.new_coverage(VALUES_CONFIGURED, &scope).is_none());
+        assert_eq!(validator.errors.len(), before + 2);
+        assert!(validator.errors[before..].iter().all(|e| e
+            .to_string()
+            .contains("requires exactly one coverage entry")));
+    }
+
+    #[test]
+    fn required_or_present_check_activation_is_exact() {
+        let mut s = fixture();
+        s.coverage.clear();
+        s.request.required_checks.clear();
+        s.request
+            .required_checks
+            .push(CheckId::new(VALUES_OBSERVED).unwrap());
+        s.coverage.push(coverage(
+            BINARY_DEPENDENCIES,
+            Ref::Audit,
+            CoverageState::Complete,
+        ));
+        let index = SessionIndex::new(&s);
+        assert!(index.new_check(VALUES_OBSERVED));
+        assert!(index.new_check(BINARY_DEPENDENCIES));
+        assert!(!index.new_check(VALUES_CONFIGURED));
+        assert!(!index.new_check(ARTIFACTS_DEPENDENCIES));
+    }
+
+    fn counted_queries(n: usize) -> (usize, usize) {
+        let mut s = fixture();
+        let template = s.processes[0].clone();
+        let from = s.artifacts[0].slices[0].id.clone();
+        s.processes.clear();
+        s.values.clear();
+        s.coverage.clear();
+        s.relations.clear();
+        s.listeners.clear();
+        s.request.required_checks.clear();
+        // These are forged in-memory saved-session tables, intentionally independent of the
+        // producer's process_values/dependency_* budgets. Queries target the final row.
+        for i in 0..n {
+            let mut obs = template.clone();
+            obs.process.pid = 100_000 + i as u32;
+            let value = observed(&obs.process, &format!("value:scaled-{i}"), ValueKey::Cwd);
+            s.coverage.push(coverage(
+                VALUES_OBSERVED,
+                Ref::Process(obs.process.clone()),
+                CoverageState::Complete,
+            ));
+            s.relations.push(Relation::Declares {
+                from: from.clone(),
+                needed: UntrustedText::new(format!("library-{i}.so")),
+                kind: DeclKind::ElfNeeded,
+            });
+            s.values.push(value);
+            s.processes.push(obs);
+        }
+        let index = SessionIndex::new(&s);
+        // The additional indexing pass visits each source record once. Existing index passes
+        // are unchanged. Each wrapper below applies a fixed nominal query charge; this
+        // isolated test verifies getter accounting/semantics, not total CPU work.
+        assert_eq!(index.dependency_work.build_rows, 4 * n);
+        let mut validator = Validator::new(&s, &index);
+        let process = &s.processes[n - 1].process;
+        let scope = Ref::Process(process.clone());
+        let needed = UntrustedText::new(format!("library-{}.so", n - 1));
+        let value_id = format!("value:scaled-{}", n - 1);
+        let before = index.dependency_work.lookup_steps.get();
+        for _ in 0..n {
+            assert!(index.process_observation(process).is_some());
+            assert!(index.process_value(&value_id).is_some());
+            assert!(index.has_elf_declaration(from.as_str(), &needed));
+            assert!(validator.new_check(VALUES_OBSERVED));
+            assert!(validator.new_coverage(VALUES_OBSERVED, &scope).is_some());
+            assert!(validator.new_coverage(VALUES_CONFIGURED, &scope).is_none());
+        }
+        let steps = index.dependency_work.lookup_steps.get() - before;
+        assert_eq!(steps, 10 * n);
+        (index.dependency_work.build_rows, steps)
+    }
+
+    #[test]
+    fn adversarial_tables_scale_with_index_input_and_query_count() {
+        let small = counted_queries(1_024);
+        let large = counted_queries(8_192);
+        assert_eq!(large, (small.0 * 8, small.1 * 8));
+    }
+
+    fn context_path_query_charges(n: usize) -> usize {
+        let mut s = fixture();
+        let requester = InstanceId::new("inst:install/bin/ollama").unwrap();
+        let candidate = InstanceId::new("inst:install/lib/ollama/libggml-cpu-haswell.so").unwrap();
+        let needed = UntrustedText::new("libggml-cpu-haswell.so");
+        let owner_artifact = match &s
+            .instances
+            .iter()
+            .find(|i| i.id == requester)
+            .unwrap()
+            .content
+        {
+            InstanceContent::Read { artifact } => artifact.clone(),
+            _ => unreachable!(),
+        };
+        let target_artifact = match &s
+            .instances
+            .iter()
+            .find(|i| i.id == candidate)
+            .unwrap()
+            .content
+        {
+            InstanceContent::Read { artifact } => artifact.clone(),
+            _ => unreachable!(),
+        };
+        let from = s
+            .artifacts
+            .iter()
+            .find(|a| a.id == owner_artifact)
+            .unwrap()
+            .slices[0]
+            .id
+            .clone();
+        let target_slice = s
+            .artifacts
+            .iter()
+            .find(|a| a.id == target_artifact)
+            .unwrap()
+            .slices[0]
+            .id
+            .clone();
+        let facts = |slice: &SliceId, needed: Vec<&str>| -> BinaryFacts {
+            serde_json::from_value(serde_json::json!({
+                "slice": slice, "container": {"Elf": {
+                    "abi": {"is_64": true, "little_endian": true, "machine": 62},
+                    "interp": null, "soname": null, "needed": needed,
+                    "rpath": [], "runpath": [], "build_id": null, "comment": [],
+                    "stripped": false, "exports": 0, "imports": [], "data": []
+                }}, "go": null, "gaps": []
+            }))
+            .unwrap()
+        };
+        s.binaries = vec![
+            facts(&from, vec!["libggml-cpu-haswell.so"]),
+            facts(&target_slice, vec![]),
+        ];
+        if let ContainerFacts::Elf(elf) = &mut s.binaries[0].container {
+            elf.runpath = vec![UntrustedText::new("usr/local/lib/ollama")];
+        }
+        let target = s.instances.iter_mut().find(|i| i.id == candidate).unwrap();
+        target.path_proof = Some(RecordedPathProof {
+            root_dev: 2049,
+            root_ino: 49,
+            parents: vec![
+                RecordedDirectory {
+                    name: UntrustedText::new("lib"),
+                    dev: 2049,
+                    ino: 50,
+                },
+                RecordedDirectory {
+                    name: UntrustedText::new("ollama"),
+                    dev: 2049,
+                    ino: 51,
+                },
+            ],
+        });
+        let template = s.processes[0].clone();
+        s.processes.clear();
+        s.values.clear();
+        s.coverage.clear();
+        s.relations.clear();
+        s.listeners.clear();
+        s.request.required_checks.clear();
+        s.request.mode = Mode::Observe;
+        s.request.observe_env = false;
+        s.observation.mnt_ns = Some(1234);
+        for i in 0..n {
+            let mut obs = template.clone();
+            obs.process.pid = 200_000 + i as u32;
+            obs.mnt_ns = Some(NsInode::Inode(1234));
+            obs.mappings.clear();
+            obs.roles = vec![ProcessRole::new(RUNTIME_ROLE).unwrap()];
+            s.values.push(observed(
+                &obs.process,
+                &format!("value:context-query-{i}"),
+                ValueKey::Cwd,
+            ));
+            s.coverage.push(coverage(
+                VALUES_OBSERVED,
+                Ref::Process(obs.process.clone()),
+                CoverageState::Complete,
+            ));
+            s.relations.push(Relation::Declares {
+                from: from.clone(),
+                needed: if i + 1 == n {
+                    needed.clone()
+                } else {
+                    UntrustedText::new(format!("unused-{i}.so"))
+                },
+                kind: DeclKind::ElfNeeded,
+            });
+            s.processes.push(obs);
+        }
+        let index = SessionIndex::new(&s);
+        let mut validator = Validator::new(&s, &index);
+        assert!(validator.errors.is_empty());
+        let value = &s.values[n - 1];
+        let ValueOrigin::ObservedProcess { process, .. } = &value.origin else {
+            unreachable!()
+        };
+        let context = DependencyContext {
+            search: crate::DependencySearch::Runpath {
+                entry: 0,
+                component: 0,
+            },
+            requester: requester.clone(),
+            search_dir: UntrustedText::new("/usr/local/lib/ollama"),
+            process: Some(process.clone()),
+            values: vec![value.id.clone()],
+            loader_chain: vec![requester],
+        };
+        let before = index.dependency_work.lookup_steps.get();
+        for _ in 0..n {
+            validator.process_value(value, &"indexed context workload");
+            validator.dependency_context(
+                &from,
+                &needed,
+                &candidate,
+                SearchRule::Runpath,
+                &context,
+                &"indexed context workload",
+            );
+        }
+        assert!(validator.errors.is_empty(), "{:?}", validator.errors);
+        let charges = index.dependency_work.lookup_steps.get() - before;
+        // Fixed query charges: provenance 2(check)+1(observation)+1(role), context
+        // 2(declaration)+1(process reference)+1(value ID)+1(cwd observation) = 9.
+        assert_eq!(
+            charges,
+            9 * n,
+            "indexed context query lower bound and exact charge"
+        );
+        charges
+    }
+
+    #[test]
+    fn context_path_indexed_query_lower_bound() {
+        let small = context_path_query_charges(1_024);
+        let large = context_path_query_charges(8_192);
+        assert_eq!(large, small * 8);
+    }
 }

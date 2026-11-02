@@ -48,6 +48,8 @@ fn every_example_validates_against_the_schema() {
 
 fn registered() -> Vec<(&'static str, schema_check::Probe)> {
     registry![
+        ElfAbi => "ElfAbi", ProcessValueRead => "ProcessValueRead", DependencyContext => "DependencyContext", DependencySearch => "DependencySearch",
+        RecordedPathProof => "RecordedPathProof", RecordedDirectory => "RecordedDirectory",
         Session => "Session", SchemaVersion => "SchemaVersion", ToolInfo => "ToolInfo",
         KnowledgeRef => "KnowledgeRef", KnowledgeKind => "KnowledgeKind", RunRequest => "RunRequest",
         Mode => "Mode", ScanRoot => "ScanRoot", ObservationMeta => "ObservationMeta",
@@ -125,6 +127,9 @@ const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("ElfFacts", "returns"),
     ("MachOFacts", "imports"),
     ("ProcessObs", "maps_read"),
+    ("ElfFacts", "abi"),
+    ("ProcessObs", "mnt_ns"),
+    ("FileInstance", "path_proof"),
 ];
 
 /// Definitions that are strings (IDs, timestamps, text) or have no Rust type of their own.
@@ -277,6 +282,102 @@ fn gallery() -> Vec<(&'static str, Value)> {
         check: id("loader.identify"),
     };
     vec![
+        sample(
+            "ElfAbi",
+            ElfAbi {
+                is_64: true,
+                little_endian: true,
+                machine: 62,
+            },
+        ),
+        sample(
+            "ProcessValueRead",
+            [
+                ProcessValueRead::Cwd,
+                ProcessValueRead::EffectiveUid,
+                ProcessValueRead::EffectiveGid,
+                ProcessValueRead::InitialEnvironment,
+            ],
+        ),
+        sample(
+            "DependencySearch",
+            [
+                DependencySearch::DirectPath,
+                DependencySearch::DefaultDir { index: 0 },
+                DependencySearch::Runpath {
+                    entry: 0,
+                    component: 0,
+                },
+                DependencySearch::Rpath {
+                    owner: id("inst:install/bin/ollama"),
+                    entry: 0,
+                    component: 0,
+                },
+                DependencySearch::LdLibraryPath {
+                    value: id("value:environment"),
+                    component: 0,
+                },
+            ],
+        ),
+        sample(
+            "DependencyContext",
+            DependencyContext {
+                search: DependencySearch::LdLibraryPath {
+                    value: id("value:environment"),
+                    component: 0,
+                },
+                requester: id("inst:install/bin/ollama"),
+                search_dir: t("/usr/local/lib/ollama"),
+                process: Some(process.clone()),
+                values: vec![id("value:environment")],
+                loader_chain: vec![id("inst:install/bin/ollama")],
+            },
+        ),
+        sample(
+            "RecordedDirectory",
+            RecordedDirectory {
+                name: t("bin"),
+                dev: 2049,
+                ino: 52,
+            },
+        ),
+        sample(
+            "RecordedPathProof",
+            RecordedPathProof {
+                root_dev: 2049,
+                root_ino: 49,
+                parents: vec![RecordedDirectory {
+                    name: t("bin"),
+                    dev: 2049,
+                    ino: 52,
+                }],
+            },
+        ),
+        sample("FileInstance", {
+            let mut file = observed_processes()
+                .instances
+                .into_iter()
+                .find(|file| file.id.as_str() == "inst:install/bin/ollama")
+                .unwrap();
+            file.path_proof = Some(RecordedPathProof {
+                root_dev: 2049,
+                root_ino: 49,
+                parents: vec![RecordedDirectory {
+                    name: t("bin"),
+                    dev: 2049,
+                    ino: 52,
+                }],
+            });
+            file
+        }),
+        sample(
+            "ValueOrigin",
+            ValueOrigin::ObservedProcess {
+                process: process.clone(),
+                source: ObsSource::Proc,
+                read: Some(ProcessValueRead::InitialEnvironment),
+            },
+        ),
         sample("Format", Format::MachO),
         sample("Format", Format::MachOFat),
         sample("Format", Format::Other),
@@ -394,6 +495,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
             BinaryFacts {
                 slice: id(&format!("sha256:{}#x86_64@0", "a".repeat(64))),
                 container: ContainerFacts::Elf(ElfFacts {
+                    abi: None,
                     interp: Some(t("/lib64/ld-linux-x86-64.so.2")),
                     soname: None,
                     needed: vec![t("libc.so.6")],
@@ -973,6 +1075,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample(
             "Relation",
             Relation::Candidate {
+                context: None,
                 from: slice.clone(),
                 needed: t("libggml-base.so"),
                 candidate: id("inst:lib/ollama/libggml-base.so"),
@@ -985,6 +1088,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 SearchRule::Rpath,
                 SearchRule::LdLibraryPath,
                 SearchRule::DefaultDir,
+                SearchRule::DirectPath,
             ],
         ),
         sample(
@@ -1086,6 +1190,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
             "ValueOrigin",
             [
                 ValueOrigin::ObservedProcess {
+                    read: None,
                     process: process.clone(),
                     source: ObsSource::Proc,
                 },

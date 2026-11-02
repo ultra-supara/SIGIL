@@ -6,7 +6,7 @@
 //!
 //! Lists whose order **is** evidence are never sorted: call arguments (register order), the
 //! locations of an obligation, conditions of a rule, atoms of a predicate (profile order), guard
-//! branches, link chains and ancestor chains, unresolved premises, and evidence lists.
+//! branches, link chains, dependency loader chains and ancestor chains, unresolved premises, and evidence lists.
 //! An open release claim's commits are a set (each is listed once), so they are sorted
 //! ([`ReleaseClaim::canonicalize`]).
 
@@ -99,6 +99,16 @@ impl Session {
             sort_json(&mut facts.param_mappings);
         }
         sort_json(&mut self.code);
+        for relation in &mut self.relations {
+            if let crate::relation::Relation::Candidate {
+                context: Some(context),
+                ..
+            } = relation
+            {
+                context.values.sort();
+                // loader_chain deliberately keeps root-to-requester order.
+            }
+        }
         sort_json(&mut self.relations);
         sort_json(&mut self.rule_support);
         sort_json(&mut self.bindings);
