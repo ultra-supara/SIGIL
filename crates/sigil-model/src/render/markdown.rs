@@ -1134,6 +1134,26 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
             capabilities.dedup();
             let mut capabilities = if capabilities.is_empty() {
                 "-".to_string()
+            } else if s.request.code {
+                let coverage = artifact.and_then(|a| s.coverage.iter().find(|c| {
+                    c.check.as_str() == crate::ARTIFACTS_CODE && c.scope == Ref::Artifact(a.id.clone())
+                }));
+                let facts = s.code.iter().find(|facts| facts.slice == b.slice);
+                capabilities.iter().map(|feature| {
+                    let imports: std::collections::BTreeSet<_> = import_hints(s, &b.slice)
+                        .filter(|hint| hint.feature.as_str() == *feature)
+                        .map(|hint| &hint.value).collect();
+                    let count = facts.into_iter().flat_map(|f| &f.call_sites).filter(|call| {
+                        matches!(&call.target, crate::CallTarget::Import { symbol, .. } if imports.contains(symbol))
+                    }).count();
+                    let calls = if count == 1 { "call" } else { "calls" };
+                    let status = match coverage.map(|c| &c.state) {
+                        Some(CoverageState::Complete) => format!("{count} direct {calls}"),
+                        Some(CoverageState::Partial { .. }) => format!("{count} direct {calls}; partial"),
+                        _ => "not analyzed".to_string(),
+                    };
+                    format!("{feature} ({status})")
+                }).collect::<Vec<_>>().join(", ")
             } else {
                 capabilities.join(", ")
             };

@@ -16,8 +16,8 @@ use sigil_model::{
 use crate::analyze::binary::CodeCoverageError;
 use crate::analyze::deps::{DepsBudgets, DepsOptions};
 use crate::analyze::{
-    binary, container, deps, deps_coverage, exposure, hints, identity, model_store, release,
-    runtime_api, runtime_processes, values,
+    binary, container, deps, deps_coverage, exposure, hints, identity, install_code, model_store,
+    release, runtime_api, runtime_processes, values,
 };
 use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
@@ -204,6 +204,7 @@ fn assemble(
         Mode::Static
     };
     let observe_env = observed.as_ref().is_some_and(|(_, _, enabled)| *enabled);
+    let code_request = req.install.as_ref().and_then(|r| r.budgets.binary.code);
     let root = RootId::new(MODELS_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?;
     let mut fs = SafeFs::new(req.budgets);
     let facts = match fs.add_root(root.clone(), &req.models_dir) {
@@ -220,7 +221,7 @@ fn assemble(
         active: !active.features.is_empty(),
         install: req.install.is_some(),
         binary: false,
-        code: false,
+        code: code_request.is_some(),
     });
     let mut coverage = facts.coverage;
     coverage.extend(analysis_coverage);
@@ -235,6 +236,7 @@ fn assemble(
     let mut install_set = None;
     let mut process_values = vec![];
     let mut dependency_discovery = None;
+    let mut code_outcomes = vec![];
 
     let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
@@ -244,13 +246,23 @@ fn assemble(
             InstallSource::Dir(dir) => (dir.clone(), None),
             InstallSource::ServiceUnit(unit) => (unit.prefix.clone(), Some(unit.as_ref())),
         };
-        let mut facts = install::collect(&dir, r.budgets).map_err(InspectError::BadId)?;
+        let mut facts = if code_request.is_some() {
+            install::collect_with_code(&dir, r.budgets)
+        } else {
+            install::collect(&dir, r.budgets)
+        }
+        .map_err(InspectError::BadId)?;
         if let Some(unit) = unit {
             service_unit::attach(unit, &mut facts).map_err(InspectError::Input)?;
         }
         let result = release::analyze(&facts, set).map_err(InspectError::BadId)?;
         let (container, declares) = container::analyze(&facts).map_err(InspectError::BadId)?;
         let identity_coverage = container::identity(&facts).map_err(InspectError::BadId)?;
+        if let Some(code) = code_request {
+            coverage
+                .extend(install_code::coverage(&facts, code.bytes).map_err(InspectError::BadId)?);
+            budgets.insert(BINARY_CODE_BYTES.to_string(), code.bytes);
+        }
         dependency_discovery = Some((facts.discovery.clone(), container.clone()));
         roots.push(ScanRoot {
             id: RootId::new(INSTALL_ROOT).map_err(|e| InspectError::BadId(e.to_string()))?,
@@ -292,6 +304,7 @@ fn assemble(
         relations.extend(declares);
         binaries = facts.binaries;
         scans = facts.scans;
+        code_outcomes = facts.code;
         reference_matches = result.rows;
         closed = result.claim;
     } else {
@@ -437,7 +450,7 @@ fn assemble(
             observe_env,
             model_filter: req.model_filter.clone(),
             active: active.features.clone(),
-            code: false,
+            code: code_request.is_some(),
         },
         observation,
         artifacts,
@@ -452,7 +465,7 @@ fn assemble(
         reference_matches,
         binaries,
         hints,
-        code: vec![],
+        code: code_facts(code_outcomes),
         relations,
         rule_support: vec![],
         bindings: vec![],

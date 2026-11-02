@@ -771,16 +771,19 @@ fn c6_the_greater_lookup_of_two_imports_of_one_name_decides() {
 }
 
 #[test]
-fn c1_request_code_is_only_for_a_binary_inspection() {
+fn c1_request_code_needs_a_binary_or_installation_inspection() {
     for s in [common::complete_pass(), common::store_and_runtime()] {
         let mut s = s;
         assert!(!is_binary_inspection(&s.request));
         assert_eq!(code_errors(&s), Vec::<String>::new());
         s.request.code = true;
+        let expected = if s.request.roots.iter().any(|r| r.id.as_str() == "install") {
+            "missing installation root coverage"
+        } else {
+            "request.code needs a binary or installation inspection"
+        };
         assert!(
-            code_errors(&s)
-                .iter()
-                .any(|e| e.contains("request.code is only for a binary inspection")),
+            code_errors(&s).iter().any(|e| e.contains(expected)),
             "{:?}",
             code_errors(&s)
         );

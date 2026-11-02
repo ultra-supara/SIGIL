@@ -41,6 +41,9 @@ pub const BINARY_SCOPE: &str = "binary";
 /// `binary_code_audit` requires (PR-5a).
 pub const BINARY_CODE_SCOPE: &str = "binary_code";
 
+/// Default scope for an installation inspection with code analysis.
+pub const INSTALL_CODE_SCOPE: &str = "installation_code";
+
 const DEFAULT_POLICY: &str = include_str!("../../policies/default.toml");
 
 /// What decides the audit scope: the mode, whether an active feature was requested, whether an
@@ -54,8 +57,7 @@ pub struct ScopeInput {
     /// A binary inspection (`binary-<n>` roots): only `binary_audit` applies (PR-4b-2a), and
     /// `binary_code_audit` with `code`.
     pub binary: bool,
-    /// Code is analyzed (`request.code`; PR-5a): a binary inspection adds `binary_code_audit`.
-    /// It has no effect on an `inspect ollama` run.
+    /// Code is analyzed (`request.code`): add the applicable code audit scopes.
     pub code: bool,
 }
 
@@ -97,6 +99,9 @@ pub struct Policy {
     /// Scopes a binary inspection with code adds (`binary inspect --code`, PR-5a);
     /// `["binary_code"]` when the policy file omits the list.
     pub binary_code_audit: Vec<AuditScope>,
+    /// Scopes added to an installation inspection with code; omission defaults to
+    /// `installation_code`, while an explicit empty list opts out.
+    pub install_code_audit: Vec<AuditScope>,
     /// Checks required beyond those of the scopes.
     pub extra_required: Vec<CheckId>,
     pub open_questions: OqPolicy,
@@ -356,6 +361,10 @@ impl Policy {
             Some(list) => scopes(list)?,
             None => scopes(&[BINARY_CODE_SCOPE.to_string()])?,
         };
+        let install_code_audit = match &raw.scope.install_code_audit {
+            Some(list) => scopes(list)?,
+            None => scopes(&[INSTALL_CODE_SCOPE.to_string()])?,
+        };
         let extra_required = raw
             .scope
             .extra_required
@@ -532,6 +541,7 @@ impl Policy {
             install_audit,
             binary_audit,
             binary_code_audit,
+            install_code_audit,
             extra_required,
             open_questions,
             accept,
@@ -579,12 +589,18 @@ impl Policy {
         } else {
             &[]
         };
+        let install_code = if input.install && input.code {
+            self.install_code_audit.as_slice()
+        } else {
+            &[]
+        };
         requirements(
             self.audit
                 .iter()
                 .chain(observe)
                 .chain(active)
-                .chain(install),
+                .chain(install)
+                .chain(install_code),
             &self.extra_required,
         )
     }

@@ -714,6 +714,33 @@ fn a_policy_without_binary_code_audit_requires_binary_code() {
 }
 
 #[test]
+fn installation_code_scope_defaults_to_required_and_can_be_opted_out() {
+    let base = ScopeInput {
+        mode: Mode::Static,
+        active: false,
+        install: true,
+        binary: false,
+        code: false,
+    };
+    let policy = Policy::builtin_default().unwrap();
+    let (_, without) = policy.scope(&base);
+    let (audit, with) = policy.scope(&ScopeInput { code: true, ..base });
+    assert!(!without.iter().any(|c| c.as_str() == "artifacts.code"));
+    assert!(with.iter().any(|c| c.as_str() == "artifacts.code"));
+    assert!(audit.iter().any(|a| a.as_str() == "installation_code"));
+    let policy = Policy::load(
+        "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\ninstall_code_audit = []\n",
+    )
+    .unwrap();
+    let (_, required) = policy.scope(&ScopeInput { code: true, ..base });
+    assert!(!required.iter().any(|c| c.as_str() == "artifacts.code"));
+    assert!(matches!(
+        Policy::load("schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\ninstall_code_audit = [\"nope\"]\n"),
+        Err(PolicyError::UnknownScope(s)) if s == "nope"
+    ));
+}
+
+#[test]
 fn scope_input_of_finds_binary_roots() {
     let mut request = sigil_model::RunRequest {
         mode: Mode::Static,

@@ -15,6 +15,14 @@ separate questions:
 
 Dependency candidates and configured/observed values are described in [Dependency candidates and process values](dependencies-and-values.md).
 
+With `--code`, the same read also analyzes direct calls to capability imports in x86-64 ELF64
+little-endian files. Each distinct binary content has an `artifacts.code` coverage entry; the
+root summary reflects discovery and all content entries. Unsupported architecture or format,
+budget exhaustion, or incomplete discovery leaves this required check open. The
+`binary_code_bytes` limit defaults to 256 MiB per content. Recorded calls support capability
+policy decisions; absence of a direct call does not rule out indirect calls. See
+[code analysis](binary-inspect.md#capabilities-and-code---code) and [policy](policy.md).
+
 ## What is read
 
 | Item | Read | Not read |

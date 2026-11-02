@@ -36,7 +36,7 @@ use sigil_model::{
     InstanceId, KnowledgeKind, Loc, OpenQuestion, OpenQuestionDecision, OpenQuestionId,
     OqTreatment, Outcome, PolicyDecision, PolicyRuleRef, PolicyViolation, Ref, RuleId, Session,
     Severity, Sha256Hex, Signal, SliceId, Timestamp, UnknownReason, UntrustedText, Verdict,
-    BINARY_CODE, CAPABILITY_CONDITION_PREFIX, CAPABILITY_RULE, CAPABILITY_TABLE_ID,
+    ARTIFACTS_CODE, BINARY_CODE, CAPABILITY_CONDITION_PREFIX, CAPABILITY_RULE, CAPABILITY_TABLE_ID,
 };
 
 use super::{CapabilityDeny, Policy, ScopeInput};
@@ -358,6 +358,11 @@ fn capabilities(
                     state: CondState::Unknown {
                         reason: unknown_call(
                             states.get(&slice.artifact()).map_or(&[], Vec::as_slice),
+                            if sigil_model::is_binary_inspection(&session.request) {
+                                BINARY_CODE
+                            } else {
+                                ARTIFACTS_CODE
+                            },
                         )
                         .map_err(id_error)?,
                         evidence: None,
@@ -495,10 +500,15 @@ fn code_states(session: &Session) -> BTreeMap<&ArtifactId, Vec<&CoverageState>> 
     for c in session
         .coverage
         .iter()
-        .filter(|c| c.check.as_str() == BINARY_CODE)
+        .filter(|c| c.check.as_str() == BINARY_CODE || c.check.as_str() == ARTIFACTS_CODE)
     {
         if let Ref::Instance(i) = &c.scope {
             if let Some(artifact) = artifact_of.get(i) {
+                states.entry(artifact).or_default().push(&c.state);
+            }
+        }
+        if c.check.as_str() == ARTIFACTS_CODE {
+            if let Ref::Artifact(artifact) = &c.scope {
                 states.entry(artifact).or_default().push(&c.state);
             }
         }
@@ -509,7 +519,10 @@ fn code_states(session: &Session) -> BTreeMap<&ArtifactId, Vec<&CoverageState>> 
 /// Why a call of a slice's import is not known (#51 spec §3), by the `binary.code` states of the
 /// slice's inputs: none (no code analysis), one that is not `Complete`, or every one `Complete`
 /// (a call that is not direct is not followed).
-fn unknown_call(states: &[&CoverageState]) -> Result<UnknownReason, sigil_model::IdError> {
+fn unknown_call(
+    states: &[&CoverageState],
+    check: &str,
+) -> Result<UnknownReason, sigil_model::IdError> {
     Ok(if states.is_empty() {
         UnknownReason::NotModeled {
             what: "calls in code that was not analyzed".into(),
@@ -520,7 +533,7 @@ fn unknown_call(states: &[&CoverageState]) -> Result<UnknownReason, sigil_model:
         }
     } else {
         UnknownReason::CheckIncomplete {
-            check: CheckId::new(BINARY_CODE)?,
+            check: CheckId::new(check)?,
         }
     })
 }

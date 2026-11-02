@@ -140,7 +140,7 @@ fn the_executable_and_the_mappings_are_linked_by_dev_ino() {
     .join("\n");
     serve(&fake, "/opt/ollama/bin/ollama", &maps);
     let models = TempDir::new().unwrap();
-    let s = session(&fake, models.path(), Some(prefix));
+    let s = session(&fake, models.path(), Some(prefix.clone()));
     let p = &s.processes[0];
     assert_eq!(
         p.exe,
@@ -162,19 +162,33 @@ fn the_executable_and_the_mappings_are_linked_by_dev_ino() {
             }
         ]
     );
-    let linked: Vec<Option<&str>> = p
+    let linked: std::collections::BTreeMap<&[u8], Option<&str>> = p
         .mappings
         .iter()
-        .map(|m| m.instance.as_ref().map(|i| i.as_str()))
+        .map(|m| {
+            (
+                m.path_text.as_bytes(),
+                m.instance.as_ref().map(|i| i.as_str()),
+            )
+        })
         .collect();
+    use std::os::unix::ffi::OsStrExt;
+    assert_eq!(p.mappings.len(), 3);
+    assert_eq!(linked.len(), 3);
     assert_eq!(
-        linked,
-        [
-            Some("inst:install/bin/ollama"),
-            Some("inst:install/lib/ollama/libggml-cpu.so"),
-            None
-        ]
+        linked.get(prefix.join("bin/ollama").as_os_str().as_bytes()),
+        Some(&Some("inst:install/bin/ollama"))
     );
+    assert_eq!(
+        linked.get(
+            prefix
+                .join("lib/ollama/libggml-cpu.so")
+                .as_os_str()
+                .as_bytes()
+        ),
+        Some(&Some("inst:install/lib/ollama/libggml-cpu.so"))
+    );
+    assert_eq!(linked.get(libc.as_os_str().as_bytes()), Some(&None));
     assert_eq!(p.maps_read, MapsRead::Whole);
     assert_eq!(observed(&s, &Ref::Audit), Some(CoverageState::Complete));
     assert_eq!(

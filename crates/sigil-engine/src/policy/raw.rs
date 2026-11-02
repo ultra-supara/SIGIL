@@ -48,6 +48,9 @@ pub(super) struct RawScope {
     /// requires its check. Only an explicit `[]` requires nothing.
     #[serde(default)]
     pub binary_code_audit: Option<Vec<String>>,
+    /// Omitted requires installation code coverage when code analysis is requested.
+    #[serde(default)]
+    pub install_code_audit: Option<Vec<String>>,
     #[serde(default)]
     pub extra_required: Vec<String>,
 }

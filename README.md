@@ -125,7 +125,7 @@ Component identification also reads supported `ggml_version()` and `ggml_commit(
 Current analysis boundaries:
 
 - **Code analysis is x86-64 ELF only**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
-- **`--code` is available on `binary inspect`.** Installation inspection collects container facts, identities, and hints; it does not yet analyze call sites. Inspect an installation's individual files with `binary inspect --code` when needed.
+- **`--code` analyzes x86-64 ELF on both `binary inspect` and `inspect ollama --install-dir` or `--service-unit`.** The installation scan reports coverage for each binary content and a summary for the walk.
 - **Mach-O support covers containers and imports**, including per-architecture slices in universal files. Identity scans and code analysis remain unsupported, so these required checks leave the default result incomplete.
 - **Capability mappings cover specific names.** POSIX, libstdc++, and libc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
 
@@ -228,7 +228,7 @@ Changes to the model or browser bindings also require rebuilding `site/viewer/pk
 
 ## What's next
 
-The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned.
+The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
 
 The legacy `lift` and `assess` commands and their IR/emulator were removed. See [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md) for the transition and the [roadmap](docs/sigil-overview.md#roadmap) for milestones.
 

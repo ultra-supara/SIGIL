@@ -24,6 +24,7 @@ active_audit   = ["runtime_api"]   # added when an active feature is requested (
 install_audit  = ["runtime_artifacts"]  # added when an installation is inspected (--install-dir)
 binary_audit   = ["binary"]        # audited in a binary inspection (binary inspect)
 binary_code_audit = ["binary_code"]  # added after binary_audit when code is analyzed
+# install_code_audit = ["installation_code"]  # omission has this default
 extra_required = []                # checks required beyond those of the scopes (inspect ollama)
 
 [open_questions]
@@ -67,8 +68,8 @@ denied capability directly is a policy violation that cites each such call site
 (`policy:capabilities.deny.posix.process_spawn`). A slice that imports the capability but has no
 direct call site of it is an open question (rule `binary.capability_call`), whatever code
 analysis says: a call through a function pointer or from data is not followed, so the absence of
-a direct call is not proof that there is none. Without code analysis (`binary inspect` without
-`--code`, and an installation, whose code is not analyzed yet), every such import is an open
+a direct call is not proof that there is none. Without code analysis (an inspection without
+`--code`), every such import is an open
 question. The capabilities a policy can deny are the keys of the capability-import table
 (`sigil rules` lists them); allowing one is not listing it.
 
@@ -164,6 +165,14 @@ so requesting it gives an honest `INCOMPLETE`.
 | `backend_loader` | `artifacts.discovery`, `loader.identify`, `loader.search_paths` | PR-4 to PR-7 |
 | `binary` | `binary.container`, `binary.identity`, `binary.dependencies` | PR-4b-2a, PR-4b-2b, PR-4c-2a, and PR-4d-3 (`sigil binary inspect`; [binary-inspect.md](binary-inspect.md)) |
 | `binary_code` | `binary.code` | PR-5a (a binary inspection with code analysis) |
+| `installation_code` | `artifacts.code` | Installation inspection with `--code` |
+
+An installation requested with `--code` adds `install_code_audit`. When the key is omitted,
+it defaults to `["installation_code"]`; an explicit `install_code_audit = []` opts out.
+`artifacts.code` has one root summary and one entry for each distinct recognized binary
+content. The root cannot be complete when discovery is incomplete. Each ELF code analysis
+has its own `binary_code_bytes` budget; unsupported formats or incomplete analysis do not
+close the default check. The same capability policy judges the recorded installation call sites.
 
 **Rules** (kind, default severity):
 
@@ -256,7 +265,7 @@ Evaluation changes only what the policy owns.
     and reason;
   - a slice with none gives an open question: id `capability:<feature>@<slice>`, rule
     `binary.capability_call`, one unknown condition `calls:<feature>`, evidence the imports, and
-    the `[open_questions]` treatment. The condition says why: `binary.code` did not close, the code
+    the `[open_questions]` treatment. The condition says why: `binary.code` or `artifacts.code` did not close, the code
     was not analyzed, or the code's every direct call was found and these are not among them;
   - a slice that does not import the capability gives nothing.
 
@@ -342,6 +351,7 @@ A typo never silently weakens a policy.
   requested (`--active api-probe`), plus `runtime_artifacts` when an installation is inspected
   (`--install-dir`);
 - in a binary inspection, audits `binary`, plus `binary_code` when code is analyzed;
+- in an installation inspection with code analysis, also audits `installation_code`;
 - counts open questions as gaps;
 - accepts no assumption;
 - has no overrides;

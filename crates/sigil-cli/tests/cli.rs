@@ -108,6 +108,53 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     path
 }
 
+#[test]
+fn installation_code_flag_records_calls_and_uses_the_requested_budget() {
+    let models = store(true);
+    let install = TempDir::new().unwrap();
+    fs::create_dir_all(install.path().join("bin")).unwrap();
+    fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code/net-plt-gcc.so");
+    fs::copy(fixture, install.path().join("bin/ollama")).unwrap();
+    let run = inspect(
+        models.path(),
+        &[&"--install-dir", &install.path(), &"--code"],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let session = session_of(&run);
+    assert!(session.request.code);
+    assert!(!session.code.is_empty());
+    let markdown = render_session(&session);
+    assert!(markdown.contains("direct call"), "{markdown}");
+    let limited = inspect(
+        models.path(),
+        &[
+            &"--install-dir",
+            &install.path(),
+            &"--code",
+            &"--budget",
+            &"binary_code_bytes=0",
+        ],
+    );
+    assert_eq!(limited.code, 0, "{}", limited.stderr);
+    assert_eq!(session_of(&limited).request.budgets["binary_code_bytes"], 0);
+    assert_eq!(inspect(models.path(), &[&"--code"]).code, 2);
+    assert_eq!(
+        inspect(
+            models.path(),
+            &[
+                &"--install-dir",
+                &install.path(),
+                &"--budget",
+                &"binary_code_bytes=1"
+            ]
+        )
+        .code,
+        2
+    );
+}
+
 // --- inspect ollama ---------------------------------------------------------------------------
 
 #[test]
@@ -1865,6 +1912,14 @@ fn service_unit_inspects_the_installation_its_exec_start_names() {
     assert!(found_by.contains("ollama\\.service"), "{found_by}");
     assert!(found_by.contains("ExecStart\\="), "{found_by}");
     assert!(found_by.contains("\\(line 2\\)"), "{found_by}");
+    let with_code = inspect(models.path(), &[&"--service-unit", &unit, &"--code"]);
+    assert_eq!(with_code.code, 0, "{}", with_code.stderr);
+    let session = session_of(&with_code);
+    assert!(session.request.code);
+    assert!(session
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == "artifacts.code"));
 }
 
 #[test]
