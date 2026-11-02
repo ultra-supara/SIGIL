@@ -110,6 +110,7 @@ pub struct ArgumentPlan {
 
 impl ArgumentPlan {
     /// Diagnostic for this actual call, to retain in its slice's code coverage missing list.
+    /// Requires the canonical address-derived ID described by [`argument_layout_gap`].
     pub fn coverage_gap(&self, call: &CallId) -> Option<String> {
         match &self.layout {
             ArgumentLayout::Complete => None,
@@ -119,10 +120,14 @@ impl ArgumentPlan {
 }
 
 /// Shared producer/verifier spelling for a partial call's code coverage gap.
+/// `call` must equal `format!("cs:{:#x}", call_site.addr)`, as required for marked facts.
+/// The legacy `CallId` constructor alone does not enforce this precondition; the marked
+/// validator checks it before using this helper. Canonical IDs keep the ID/reason boundary
+/// unambiguous, even when the reason contains `: `.
 /// Printable ASCII is retained except that backslash is doubled; every other byte is
 /// written as `\xNN`. This is lossless, single-line, and never display-truncated, so
-/// different raw reasons cannot acquire the same diagnostic. Render as ordinary text,
-/// using the existing escaping API when producing Markdown/HTML.
+/// different raw reasons for a canonical ID cannot acquire the same diagnostic.
+/// Render as ordinary text, using the existing escaping API when producing Markdown/HTML.
 pub fn argument_layout_gap(call: &CallId, reason: &UntrustedText) -> String {
     let mut gap = format!("code: argument layout incomplete at {call}: ");
     for &byte in reason.as_bytes() {

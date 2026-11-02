@@ -338,6 +338,8 @@ fn exact_macho_witness_and_bounds_are_scoped() {
         rejects(&s, "function bounds");
         let mut s = good.clone();
         s.code[0].call_sites[0].addr = s.code[0].functions[0].end;
+        s.code[0].call_sites[0].id =
+            CallId::new(format!("cs:{:#x}", s.code[0].call_sites[0].addr)).unwrap();
         rejects(&s, "outside caller");
         let mut s = good.clone();
         s.code[0].call_sites[0].caller = FnId::new("fn:0xffff").unwrap();
@@ -1236,4 +1238,89 @@ fn review_gap_reason_encoding_is_lossless_single_line_and_shared() {
         None,
     );
     assert!(fixed.coverage_gap(&call).is_none());
+}
+
+#[test]
+fn review_call_id_reason_boundary_cannot_merge_two_calls() {
+    let mut s = partial_open();
+    s.code[0].call_sites[0].args_layout = Some(ArgumentLayout::Partial {
+        reason: UntrustedText::new("second: reason"),
+    });
+    let mut second = s.code[0].call_sites[0].clone();
+    second.id = CallId::new("cs:0x4d: second").unwrap();
+    second.addr = 80;
+    second.args_layout = Some(ArgumentLayout::Partial {
+        reason: UntrustedText::new("reason"),
+    });
+    s.code[0].call_sites.push(second);
+    let first_gap = "code: argument layout incomplete at cs:0x4d: second: reason";
+    code_gaps(&mut s, BINARY_CODE, vec![first_gap.into()]);
+    // The permissive legacy ID constructor allows the delimiter, but marked facts cannot.
+    let invalid = errors(&s);
+    assert_eq!(invalid.len(), 2, "{invalid:?}");
+    assert!(invalid
+        .iter()
+        .any(|e| e.contains("call ID must match its canonical address")));
+    assert!(invalid.iter().any(|e| e.contains(GATE)));
+
+    s.code[0].call_sites[1].id = CallId::new("cs:0x50").unwrap();
+    rejects(&s, "cs:0x50: partial argument layout gap is missing");
+    let second_gap =
+        code_abi::argument_layout_gap(&s.code[0].call_sites[1].id, &UntrustedText::new("reason"));
+    assert_ne!(first_gap, second_gap);
+    code_gaps(&mut s, BINARY_CODE, vec![first_gap.into(), second_gap]);
+    assert_contract(&s);
+}
+
+#[test]
+fn review_marked_call_ids_are_exact_address_spellings() {
+    for good in [marked(), arm(), macho(Arch::Aarch64), macho(Arch::X86_64)] {
+        assert_contract(&good);
+        for id in [
+            "cs:0x4d: second",
+            "cs:0x4D",
+            "cs:0X4d",
+            "cs:0x04d",
+            "cs:77",
+            "cs:0x50",
+            "cs:historical label",
+        ] {
+            let mut bad = good.clone();
+            bad.code[0].call_sites[0].id = CallId::new(id).unwrap();
+            rejects(&bad, "call ID must match its canonical address");
+        }
+        let mut bad = good;
+        bad.code[0].call_sites[0].addr = 80;
+        rejects(&bad, "call ID must match its canonical address");
+    }
+}
+
+#[test]
+fn review_unmarked_historical_call_ids_keep_legacy_validation() {
+    for raw in [
+        include_str!("../../../schemas/examples/session-v1/10-target-verified.json"),
+        include_str!("../../../schemas/examples/session-v1/16-binary-code.json"),
+    ] {
+        let original: Session = serde_json::from_str(raw).unwrap();
+        let original_id = &original.code[0].call_sites[0].id;
+        for id in [
+            "cs:0x4d: second",
+            "cs:0x4D",
+            "cs:0X4d",
+            "cs:0x04d",
+            "cs:77",
+            "cs:0x50",
+            "cs:historical label",
+        ] {
+            // Change all references consistently, including old hint/evidence references.
+            let json = serde_json::to_string(&original)
+                .unwrap()
+                .replace(original_id.as_str(), id);
+            let s: Session = serde_json::from_str(&json).unwrap();
+            assert!(s.request.code_analysis.is_none());
+            assert!(s.validate().is_ok(), "{id}: {:?}", errors(&s));
+            assert_eq!(s.code[0].call_sites[0].id.as_str(), id);
+            assert!(s.to_canonical_json().is_ok());
+        }
+    }
 }

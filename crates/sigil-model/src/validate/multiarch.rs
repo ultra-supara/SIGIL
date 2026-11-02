@@ -104,7 +104,9 @@ impl Validator<'_> {
             })
             .collect();
         // Per-call layout gaps belong to slice code coverage, never container observations.
-        // Task 4 separately checks the coverage entry inventory, duplicates and aggregation.
+        // Before removing the gate, Task 4 must check coverage applicability and require gaps
+        // independently for each applicable check: another check's Partial cannot justify a
+        // Complete child. Coverage inventory, duplicates and aggregation also belong there.
         let mut code_gaps: std::collections::HashMap<&SliceId, BTreeSet<&str>> =
             std::collections::HashMap::new();
         for coverage in &s.coverage {
@@ -175,6 +177,11 @@ impl Validator<'_> {
             let legacy =
                 matches!(artifact.format, Format::Elf { .. }) && slice.arch == Arch::X86_64;
             for c in &facts.call_sites {
+                if c.id.as_str() != format!("cs:{:#x}", c.addr) {
+                    self.code_error(&c.id, "call ID must match its canonical address");
+                    // Do not use an arbitrary legacy ID as the boundary of a per-call gap.
+                    continue;
+                }
                 let register_limit = if slice.arch == Arch::Aarch64 { 8 } else { 6 };
                 if c.args.len() > register_limit {
                     self.code_error(&c.id, "call exceeds the argument-register ABI limit");

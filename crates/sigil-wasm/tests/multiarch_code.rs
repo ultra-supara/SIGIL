@@ -47,3 +47,17 @@ fn marked_saved_sessions_are_gated_in_both_native_and_wasm_entrypoints() {
             .contains("code-abi-signatures")
     );
 }
+
+#[test]
+fn canonical_call_ids_are_required_only_in_marked_viewer_sessions() {
+    let raw = include_str!("../../../schemas/examples/session-v1/16-binary-code.json");
+    for id in ["cs:0x4d: second", "cs:0x4D", "cs:0x04d", "cs:0x50"] {
+        let mut s: Session = serde_json::from_str(&raw.replace("cs:0x4d", id)).unwrap();
+        assert!(render_session_markdown_inner(&serde_json::to_string(&s).unwrap()).is_ok());
+        s.request.code_analysis = Some(CodeAnalysis::MultiarchV1);
+        s.knowledge.push(code_abi::V1.knowledge().unwrap());
+        let error = render_session_markdown_inner(&serde_json::to_string(&s).unwrap()).unwrap_err();
+        assert!(error.contains("call ID must match its canonical address"));
+        assert!(error.contains("multiarch coverage validation is not enabled"));
+    }
+}
