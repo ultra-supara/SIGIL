@@ -27,6 +27,13 @@ is checked against a same-file symbol and either a linked FDE or an explicit
 are retained for research but do not establish object addresses: unresolved
 Mach-O FDE relocation pairs can make dwarfdump print section-biased PCs. Object
 oracle addresses instead use the explicit object compact entries and relocations.
+Each 32-byte compact entry must have exactly one unsigned, non-PC-relative,
+8-byte local-section start relocation at that entry's start field, targeting
+`__text`. Missing, duplicate, misplaced, external or other-section relocations
+are rejected. The raw pointer/length must match the independent dump, resolve to
+the same text function symbol and remain wholly within executable file-backed
+text, without overlapping another entry. This fixture checker deliberately
+admits only the emitted local-section form and zero-based object text.
 
 Linked C is compiled with `-fasynchronous-unwind-tables`,
 `-femit-dwarf-unwind=always` and `FORCE_DWARF`. The harmless
@@ -80,7 +87,7 @@ generator verifies these paths independently before producing oracle rows. This
 case is synthetic and is not represented as a normal compiler/linker result.
 
 Run `crates/sigil-engine/tests/fixtures/code-macho/build.sh OUTPUT_DIRECTORY`.
-Without the argument it publishes into this directory. The shared helper checks
+The destination argument is required and must not already exist. The shared helper checks
 the complete versions/executable hashes in `COMPILERS` before any build or output
 creation. It uses a trapped `mktemp` directory under ignored `target/tmp/issue48`,
 fixed environment, reproducible ld64 flags, no UUID or ad-hoc signature, zero
@@ -89,7 +96,13 @@ free of temporary paths. Only the command transcript substitutes `<repo>` for
 the temporary source worktree and `<build>` for the mktemp directory. Sources
 use prefix maps; no timestamp or path field in a raw dump is edited.
 
-All oracle/shape/hash checks precede publication. `SHA256SUMS` covers every
+All oracle/shape/hash checks precede publication. The entire output is staged on
+the destination filesystem and renamed into place; a failed copy leaves the
+destination absent, and an existing user directory is never merged or deleted.
+Use the sequential double-build and explicit `refresh` maintenance procedure in
+`../code-aarch64/README.md` to update checked-in generated assets while preserving
+sources and unrelated user files. Its caught-error rollback and non-atomic
+kill/power-loss limit are documented there. `SHA256SUMS` covers every
 generated binary, full dump, inventory, patch record, binding/oracle table and
 command transcript. The pinned LLVM tools and Python are required; build scripts
 never update pins automatically. Both clean builds, recursive diff and checksum

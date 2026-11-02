@@ -42,7 +42,12 @@ The complete, unedited `.objdump`, `.readobj`, `.frames`, `.nm`, `.gnu-objdump`,
 `.gnu-frames` and `.gnu-relocs` files establish emitted instructions, symbol and
 section addresses, relocations and exact ranges. LLVM and GNU FDE range maps must
 agree before publication. Object call relocations must coincide with the precise
-call instruction. No dump is truncated or hand-edited. Duplicated file names in
+call instruction. Every linked ELF call is joined through its actual PLT stub or
+unmodified ADRP/LDR register origin to a unique `connect` relocation with zero
+addend, inside the corresponding file-backed GOT section. A PLT symbol annotation
+or an unrelated relocation elsewhere in the image is insufficient. The GOT
+provenance checker accepts only the emitted linear operand subset and rejects
+unmodeled operations. No dump is truncated or hand-edited. Duplicated file names in
 independent tool headings refer to the same input within that build directory.
 
 Run from anywhere:
@@ -51,7 +56,8 @@ Run from anywhere:
 crates/sigil-engine/tests/fixtures/code-aarch64/build.sh OUTPUT_DIRECTORY
 ```
 
-With no argument the destination is this fixture directory. `build.sh` uses `set
+An explicit destination is required and it must not exist. Existing output,
+source and user directories are never merged or deleted by a build. `build.sh` uses `set
 -eu`, `mktemp` under the repository's ignored `target/tmp/issue48`, trap cleanup,
 `LC_ALL=C`, `TZ=UTC`, `SOURCE_DATE_EPOCH=0`, fixed SONAMEs and no build ID. No target
 libc is used (`-nostdlib`). GCC's bundled binutils are deliberately bypassed with
@@ -71,7 +77,8 @@ are not committed and are required to reproduce this corpus.
 `fixture_tools.py` is fixture generation/verification code only. It clears compiler
 search-path overrides, refuses Python optimization that would disable assertions,
 builds and gathers raw dumps first, checks the oracle, computes/rechecks every
-checksum, then publishes generated files. The raw dumps require no normalization:
+checksum, then stages the entire output on the destination filesystem and renames
+the complete directory into place. A failed copy exposes no destination. The raw dumps require no normalization:
 tools receive relative fixture names. In the generated `build.log` command
 transcript, the temporary source worktree path is written as `<repo>` and the
 `mktemp` path as `<build>`; these are the only path substitutions. The binaries use
@@ -82,3 +89,50 @@ Sources, build scripts, documentation and compiler pins are versioned with Git.
 Acceptance uses two fresh output directories, `diff -r`, and `sha256sum -c
 SHA256SUMS` in each; the checked-in files were copied only from that reproduced
 corpus. No missing tool or skipped fixture counts as a pass.
+
+Run `python3 crates/sigil-engine/tests/fixtures/code-aarch64/check_oracles.py` for
+the focused regression checks. It accepts ten original ELF/Mach-O inputs, mutates
+actual binary instruction/relocation fields in seventeen ways, regenerates full
+pinned dumps and requires rejection. It includes the independent review's wrong
+BLR register and non-text compact relocation, plus wrong slots, clobbers, branch
+targets, symbol/addend, relocation forms/positions and invalid compact extents.
+Publication and refresh fault injection also verify that user files survive and
+a failed copy/promotion does not leave mixed output after the error is handled.
+
+To refresh checked-in generated assets, run this sequence from the repository
+root. Every build is sequential and every output starts absent:
+
+```sh
+set -eu
+mkdir -p target/tmp/issue48
+out=$(mktemp -d target/tmp/issue48/refresh.XXXXXX)
+helper=crates/sigil-engine/tests/fixtures/code-aarch64/fixture_tools.py
+for family in elf macho; do
+  if test "$family" = elf; then
+    src=crates/sigil-engine/tests/fixtures/code-aarch64
+  else
+    src=crates/sigil-engine/tests/fixtures/code-macho
+  fi
+  "$src/build.sh" "$out/$family-a"
+  "$src/build.sh" "$out/$family-b"
+  diff -r "$out/$family-a" "$out/$family-b"
+  (cd "$out/$family-a" && sha256sum -c SHA256SUMS)
+  python3 "$helper" refresh "$family" "$out/$family-a"
+done
+python3 crates/sigil-engine/tests/fixtures/code-aarch64/check_oracles.py
+git diff --check
+git diff --stat
+```
+
+The explicit `refresh` command rechecks tool pins and both old/new manifests,
+refuses locally modified generated files or a changed generated-file inventory,
+stages old/new bytes, and restores the old generated files on a caught promotion
+failure or interrupt. It touches only files in the two matching manifests;
+sources and unrelated user files are preserved. Inventory changes require a
+separate reviewed reconciliation, never an automatic deletion of unknown files.
+Run refresh without concurrent writers. Unlike fresh build publication, this
+maintenance operation is not an atomic directory exchange: a kill/power loss
+during promotion can leave mixed generated files. Original bytes remain in
+`.sigil-refresh-*/old` alongside the fixture directory for recovery; a failure of
+rollback reports that retained backup path. Inspect and review the Git diff
+before committing refreshed files.

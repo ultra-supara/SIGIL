@@ -14,6 +14,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
@@ -42,6 +43,55 @@ FAMILY = {"elf": COMMON + ["ld.lld", "gcc", "cc1", "as", "ld", "objdump", "reade
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def checked_manifest(directory):
+    checks = {}
+    for line in (directory / "SHA256SUMS").read_text().splitlines():
+        checksum, name = line.split("  ", 1)
+        assert Path(name).name == name and name not in checks and name != "SHA256SUMS"
+        assert (directory / name).is_file() and not (directory / name).is_symlink()
+        assert sha(directory / name) == checksum, f"changed generated file: {directory / name}"
+        checks[name] = checksum
+    assert checks
+    return checks
+
+
+def refresh_generated(built, dest):
+    """Explicit maintenance of an unchanged inventory, with failure rollback.
+
+    Unrelated source/user files are never copied, removed or replaced. Inventory
+    changes need separate review; a modified generated file is never overwritten.
+    """
+    new, old = checked_manifest(built), checked_manifest(dest)
+    assert new.keys() == old.keys(), "generated inventory changed; reconcile explicitly before refresh"
+    names = sorted(new) + ["SHA256SUMS"]
+    staging = Path(tempfile.mkdtemp(prefix=".sigil-refresh-", dir=dest.parent))
+    clean, promotion = True, False
+    try:
+        (staging / "old").mkdir()
+        (staging / "new").mkdir()
+        for name in names:
+            shutil.copyfile(dest / name, staging / "old" / name)
+            shutil.copyfile(built / name, staging / "new" / name)
+        assert checked_manifest(staging / "old") == old
+        assert checked_manifest(staging / "new") == new
+        promotion = True
+        for name in names:
+            os.replace(staging / "new" / name, dest / name)
+    except BaseException:
+        if promotion:
+            try:
+                for name in names:
+                    os.replace(staging / "old" / name, dest / name)
+            except BaseException as error:
+                clean = False
+                raise RuntimeError(f"refresh rollback failed; original files retained in {staging / 'old'}") from error
+        raise
+    finally:
+        if clean:
+            shutil.rmtree(staging)
+    print(f"refreshed {len(new)} generated files; unrelated files preserved in {dest}")
 
 
 def run(args, cwd=None):
@@ -116,6 +166,7 @@ class Build:
             d["gnu"] = self.dump(name, ".gnu-objdump", "objdump", "-dr")
             d["gnu_frames"] = self.dump(name, ".gnu-frames", "readelf", "--debug-dump=frames")
             d["gnu_relocs"] = self.dump(name, ".gnu-relocs", "readelf", "-rW")
+        d["image"] = (self.work / name).read_bytes()
         return d
 
     def row(self, fixture, arch, function, start="-", end="-", call="-", symbol="-",
@@ -126,6 +177,8 @@ class Build:
                           symbol, library, *args, coverage])
 
     def finish(self, dest):
+        if dest.exists() or dest.is_symlink():
+            raise FileExistsError(f"publication requires an absent destination: {dest}")
         header = "fixture slice function start end call symbol library arg0 arg1 arg2 coverage".split()
         (self.work / "oracle.tsv").write_text("\t".join(header) + "\n" + "".join(
             "\t".join(row) + "\n" for row in sorted(self.rows)))
@@ -141,10 +194,17 @@ class Build:
         (self.work / "SHA256SUMS").write_text("".join(f"{h}  {n}\n" for n, h in checks.items()))
         for name, checksum in checks.items():
             assert sha(self.work / name) == checksum
-        # Publication begins only after all shape/oracle checks and hashes pass.
-        dest.mkdir(parents=True, exist_ok=True)
-        for name in self.files + ["SHA256SUMS"]:
-            shutil.copyfile(self.work / name, dest / name)
+        # Stage on the destination filesystem. A copy failure never exposes a
+        # mixed output; an existing directory is never merged or deleted.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".sigil-publish-", dir=dest.parent) as staging:
+            stage = Path(staging) / "output"
+            stage.mkdir()
+            for name in self.files + ["SHA256SUMS"]:
+                shutil.copyfile(self.work / name, stage / name)
+            for name, checksum in checks.items():
+                assert sha(stage / name) == checksum
+            os.rename(stage, dest)
         print(f"{self.family}: published {len(self.files)} checked files, {len(self.rows)} oracle rows to {dest}")
 
 
@@ -153,19 +213,69 @@ def symbols(d):
             if (m := re.match(r"^([0-9a-fA-F]+)\s+(?:([0-9a-fA-F]+)\s+)?([Tt])\s+(\S+)$", line))}
 
 
+def section(d, label):
+    entries = re.findall(r"  Section \{(.*?)\n  \}", d["readobj"], re.S)
+    entry, = [s for s in entries if re.search(r"\n    Name: " + re.escape(label) + r"(?: |\n)", s)]
+    result = {"raw": entry}
+    for key in ("Address", "Size", "Offset"):
+        m = re.search(r"\n    " + key + r": (0x[0-9A-Fa-f]+|[0-9]+)", entry)
+        result[key] = int(m[1], 0)
+    assert result["Offset"] + result["Size"] <= len(d["image"]), "section exceeds file bytes"
+    return result
+
+
 def text_offset(d, macho):
-    label = "__text" if macho else ".text"
-    sections = re.findall(r"  Section \{(.*?)\n  \}", d["readobj"], re.S)
-    entry, = [s for s in sections if re.search(r"\n    Name: " + re.escape(label) + r"(?: |\n)", s)]
-    m = re.search(r"\n    Offset: (0x[0-9A-Fa-f]+|[0-9]+)", entry)
-    return int(m[1], 0)
+    return section(d, "__text" if macho else ".text")["Offset"]
+
+
+def compact_object_ranges(d):
+    """Validate the local-section start relocation of each emitted object entry."""
+    text = section(d, "__text")
+    compact = section(d, "__compact_unwind")
+    assert "Segment: __TEXT" in text["raw"] and "PureInstructions" in text["raw"], "compact target is not executable text"
+    assert "Type: Regular (0x0)" in text["raw"] and "Type: Regular (0x0)" in compact["raw"]
+    assert text["Address"] == 0, "fixture oracle requires zero-based object text"
+    assert "Segment: __LD" in compact["raw"]
+    entries = re.findall(r"Entry at offset 0x([0-9a-f]+):\n\s+start:\s+0x([0-9a-f]+)[^\n]*\n\s+length:\s+0x([0-9a-f]+)", d["bind"])
+    assert entries and compact["Size"] == len(entries) * 32, "invalid compact entry table"
+    block, = re.findall(r"\n  Section __compact_unwind \{(.*?)\n  \}", d["readobj"], re.S)
+    relocations = re.findall(r"^\s+(0x[0-9A-Fa-f]+) (\d+) (\d+) (\d+) (\S+) (\d+) (\S+)$", block, re.M)
+    assert len(relocations) == len(entries), "missing compact start relocation"
+    by_offset = {}
+    kind = "ARM64_RELOC_UNSIGNED" if "Arch: aarch64" in d["readobj"] else "X86_64_RELOC_UNSIGNED"
+    for offset, pcrel, width, external, rtype, scattered, target in relocations:
+        offset = int(offset, 16)
+        assert offset not in by_offset, "duplicate compact start relocation"
+        assert (pcrel, width, external, rtype, scattered, target) == (
+            "0", "3", "0", kind, "0", "__text"), "invalid compact start relocation form/target"
+        by_offset[offset] = target
+    result = {}
+    text_symbols = {}
+    for block in re.findall(r"  Symbol \{(.*?)\n  \}", d["readobj"], re.S):
+        if "Type: Section" in block and re.search(r"\n    Section: __text \(0x1\)", block):
+            name = re.search(r"\n    Name: (\S+)", block)[1]
+            text_symbols[name] = int(re.search(r"\n    Value: (0x[0-9A-Fa-f]+)", block)[1], 16)
+    assert text_symbols == symbols(d), "compact function symbol section/value mismatch"
+    function_starts = set(text_symbols.values())
+    for index, (offset, raw_start, length) in enumerate(entries):
+        offset, start, length = int(offset, 16), int(raw_start, 16), int(length, 16)
+        assert offset == index * 32 and offset in by_offset, "misplaced compact start relocation"
+        actual = struct.unpack_from("<QI", d["image"], compact["Offset"] + offset)
+        assert actual == (start, length), "compact dump/bytes disagree"
+        assert start in function_starts, "compact start does not match a text function symbol"
+        assert length > 0 and start + length <= text["Size"], "compact interval exceeds executable text"
+        if kind == "ARM64_RELOC_UNSIGNED":
+            assert start % 4 == 0 and length % 4 == 0, "unaligned compact code interval"
+        assert start not in result, "duplicate compact function start"
+        result[start] = start + length
+    ordered = sorted(result.items())
+    assert all(end <= ordered[i + 1][0] for i, (_, end) in enumerate(ordered[:-1])), "overlapping compact intervals"
+    return result
 
 
 def ranges(d, object_macho=False):
     if object_macho:
-        entries = re.findall(r"start:\s+0x([0-9a-f]+)[^\n]*\n\s+length:\s+0x([0-9a-f]+)", d["bind"])
-        assert entries, "missing explicit object compact unwind entries"
-        return {int(a, 16): int(a, 16) + int(n, 16) for a, n in entries}
+        return compact_object_ranges(d)
     result = {int(a, 16): int(b, 16) for a, b in re.findall(
         r" FDE .* pc=([0-9a-fA-F]+)\.\.\.([0-9a-fA-F]+)", d["frames"])}
     if "gnu_frames" in d:
@@ -183,6 +293,89 @@ def insns(d):
         if m:
             result.append((int(m[1], 16), m[2], m[3]))
     return result
+
+
+def elf_slot(d, slot, kind):
+    matches = []
+    for line in d["gnu_relocs"].splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and re.fullmatch(r"[0-9a-fA-F]+", fields[0]) and fields[2].startswith("R_AARCH64_"):
+            if int(fields[0], 16) == slot:
+                matches.append(fields)
+    assert len(matches) == 1, "ELF call slot lacks a unique relocation"
+    fields = matches[0]
+    assert len(fields) == 7 and fields[2:] == [kind, "0000000000000000", "connect", "+", "0"], "ELF call slot relocation is not connect with zero addend"
+    got = section(d, ".got.plt" if kind == "R_AARCH64_JUMP_SLOT" else ".got")
+    assert "SHF_ALLOC" in got["raw"] and "SHF_WRITE" in got["raw"]
+    assert "Type: SHT_PROGBITS" in got["raw"], "ELF GOT section is not file-backed data"
+    assert slot % 8 == 0 and got["Address"] <= slot and slot + 8 <= got["Address"] + got["Size"], "ELF call slot is outside its file-backed GOT section"
+
+
+def elf_linked_call(d, body, call):
+    """Prove each named ELF call's route using independent decoded operands."""
+    pc, op, target = call
+    instructions = {addr: (opcode, args) for addr, opcode, args in insns(d)}
+    if op == "bl":
+        dest = re.match(r"0x([0-9a-f]+)", target)
+        assert dest, "ELF PLT call has no decoded branch target"
+        dest = int(dest[1], 16)
+        plt = section(d, ".plt")
+        assert "SHF_EXECINSTR" in plt["raw"] and dest % 4 == 0
+        assert "Type: SHT_PROGBITS" in plt["raw"], "ELF PLT section is not file-backed code"
+        assert plt["Address"] <= dest and dest + 16 <= plt["Address"] + plt["Size"], "ELF PLT call target is outside the PLT"
+        stub = [instructions.get(dest + i * 4) for i in range(4)]
+        assert all(stub) and [s[0] for s in stub] == ["adrp", "ldr", "add", "br"], "ELF PLT stub instruction sequence mismatch"
+        page = re.match(r"(x\d+), (0x[0-9a-f]+)", stub[0][1])
+        load = re.match(r"(x\d+), \[(x\d+)(?:, #(0x[0-9a-f]+))?\](?:\s|$)", stub[1][1])
+        add = re.match(r"(x\d+), (x\d+), #(0x[0-9a-f]+)(?:\s|$)", stub[2][1])
+        assert page and load and add, "ELF PLT stub operand mismatch"
+        low = int(load[3], 16) if load[3] else 0
+        assert page[1] == load[2] == add[1] == add[2] and stub[3][1] == load[1] and page[1] != load[1], "ELF PLT stub register flow mismatch"
+        assert int(add[3], 16) == low, "ELF PLT ADD/LDR slot disagreement"
+        elf_slot(d, int(page[2], 16) + low, "R_AARCH64_JUMP_SLOT")
+        return
+    assert op == "blr" and re.fullmatch(r"x\d+", target), "ELF GOT call is not a register BLR"
+    origins = {}
+    for address, opcode, args in body:
+        if address == pc:
+            break
+        if opcode == "adrp":
+            page = re.match(r"(x\d+), (0x[0-9a-f]+)", args)
+            assert page, "ELF GOT ADRP operand mismatch"
+            origins[page[1]] = ("address", int(page[2], 16))
+        elif opcode == "ldr":
+            load = re.match(r"(x\d+), \[(x\d+)(?:, #(0x[0-9a-f]+))?\](?:\s|$)", args)
+            assert load, "ELF GOT LDR operand mismatch"
+            base = origins.get(load[2])
+            origins.pop(load[1], None)
+            if base and base[0] == "address":
+                origins[load[1]] = ("slot", base[1] + (int(load[3], 16) if load[3] else 0))
+        elif opcode == "mov":
+            move = re.match(r"([xw]\d+), (\S+)", args)
+            assert move, "ELF GOT MOV operand mismatch"
+            dest = "x" + move[1][1:]
+            source = origins.get(move[2]) if move[1].startswith("x") else None
+            origins.pop(dest, None)
+            if source:
+                origins[dest] = source
+        elif opcode in ("add", "sub"):
+            arithmetic = re.match(r"([xw]\d+), (x\d+), #(0x[0-9a-f]+)(?:\s|$)", args)
+            assert arithmetic, "ELF GOT arithmetic operand mismatch"
+            base = origins.get(arithmetic[2])
+            dest = "x" + arithmetic[1][1:]
+            origins.pop(dest, None)
+            if arithmetic[1].startswith("x") and base and base[0] == "address":
+                delta = int(arithmetic[3], 16) * (1 if opcode == "add" else -1)
+                origins[dest] = ("address", base[1] + delta)
+        elif opcode == "stp":
+            assert "[sp" in args, "ELF GOT provenance does not support non-SP store writeback"
+        elif opcode == "nop":
+            pass
+        else:
+            raise AssertionError(f"ELF GOT unsupported provenance instruction: {opcode} {args}")
+    origin = origins.get(target)
+    assert origin and origin[0] == "slot", "ELF GOT BLR register lacks an unmodified slot-load origin"
+    elf_slot(d, origin[1], "R_AARCH64_GLOB_DAT")
 
 
 VALUES = {"zero": ("0", "0", "0"), "one": ("1", "0", "0"),
@@ -277,6 +470,8 @@ def oracle(b, name, arch, d, macho=False, obj=False, bounds=True):
             continue
         assert len(calls) == (2 if function == "caller_clobber" else 1), (name, function, calls)
         pc, op, target = calls[-1]
+        if not macho and not obj:
+            elf_linked_call(d, body, calls[-1])
         # Verify the expected source setup is actually present in the dump.
         if function in ("zero", "one", "from_foo") and arch == "arm64":
             ops = "\n".join(arg for _, _, arg in body[:body.index(calls[-1])])
@@ -475,9 +670,15 @@ def main():
     elif action == "build":
         verify(family)
         work, dest = map(lambda p: Path(p).resolve(), args)
+        if dest.exists() or dest.is_symlink():
+            raise FileExistsError(f"publication requires an absent destination: {dest}")
         b = Build(family, work)
         (build_elf if family == "elf" else build_macho)(b)
         b.finish(dest)
+    elif action == "refresh":
+        verify(family)
+        built, = map(lambda p: Path(p).resolve(), args)
+        refresh_generated(built, HERE if family == "elf" else MACH)
     else:
         raise ValueError(action)
 
