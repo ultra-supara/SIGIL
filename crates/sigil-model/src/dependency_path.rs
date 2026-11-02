@@ -381,6 +381,30 @@ impl<'a> PathIndex<'a> {
         }
         Err(PathGap::OutsideRoots)
     }
+    /// Anchor an absolute link target and retain its final directory obligation before
+    /// any named-file terminal fast path can return. Initial prepaid credit never applies.
+    fn anchored_link_target(
+        &self,
+        target: &[u8],
+        tail_count: usize,
+        tail_bytes: usize,
+        charge: &mut impl FnMut() -> bool,
+    ) -> Result<(Vec<Vec<u8>>, VecDeque<Vec<u8>>, bool), PathGap> {
+        let (current, mut pending, terminal) =
+            self.anchored(target, tail_count, tail_bytes, 0, charge)?;
+        if target.ends_with(b"/") {
+            path_bounds(
+                target,
+                tail_count.saturating_add(1),
+                tail_bytes.saturating_add(2),
+            )?;
+            if !charge() {
+                return Err(PathGap::Budget);
+            }
+            pending.push_back(b".".to_vec());
+        }
+        Ok((current, pending, terminal))
+    }
     fn terminal(&self, path: &[u8]) -> Result<Option<&Node<'a>>, PathGap> {
         let node = self.nodes.get(path);
         if let Some(n) = node {
@@ -435,7 +459,8 @@ impl<'a> PathIndex<'a> {
                 if !link.target.as_bytes().starts_with(b"/") {
                     return Err(PathGap::OutsideRoots);
                 }
-                let (c, q, terminal) = self.anchored(link.target.as_bytes(), 0, 0, 0, charge)?;
+                let (c, q, terminal) =
+                    self.anchored_link_target(link.target.as_bytes(), 0, 0, charge)?;
                 if terminal {
                     return Err(PathGap::OutsideRoots);
                 }
@@ -475,15 +500,14 @@ impl<'a> PathIndex<'a> {
                 let target = link.target.as_bytes();
                 if target.starts_with(b"/") {
                     // One bounds/charge/allocation pass; no initial credit crosses a link.
-                    let (c, mut q, terminal) = self.anchored(
+                    let (c, mut q, terminal) = self.anchored_link_target(
                         target,
                         pending.len(),
                         pending.iter().map(|p| p.len() + 1).sum(),
-                        0,
                         charge,
                     )?;
                     if terminal {
-                        if !pending.is_empty() {
+                        if !pending.is_empty() || !q.is_empty() {
                             return Err(PathGap::DirectoryRequired);
                         }
                         let end = self.terminal(&absolute(&c))?;
@@ -491,21 +515,6 @@ impl<'a> PathIndex<'a> {
                             return Err(PathGap::OutsideRoots);
                         }
                         return Ok(end);
-                    }
-                    if target.ends_with(b"/") {
-                        path_bounds(
-                            target,
-                            pending.len().saturating_add(1),
-                            pending
-                                .iter()
-                                .map(|p| p.len() + 1)
-                                .sum::<usize>()
-                                .saturating_add(2),
-                        )?;
-                        if !charge() {
-                            return Err(PathGap::Budget);
-                        }
-                        q.push_back(b".".to_vec());
                     }
                     q.append(&mut pending);
                     current = c;
@@ -838,6 +847,144 @@ mod tests {
             );
         }
     }
+    fn named_anchor(mut file: FileInstance, root_id: &str, path: &str) -> (ScanRoot, FileInstance) {
+        file.id = InstanceId::new(format!("inst:{root_id}/anchor")).unwrap();
+        file.root = RootId::new(root_id).unwrap();
+        file.path = path.into();
+        file.path_proof = None;
+        if let Some(link) = file.link_chain.first_mut() {
+            link.path = path.into();
+        }
+        (
+            ScanRoot {
+                id: file.root.clone(),
+                path: path.into(),
+            },
+            file,
+        )
+    }
+
+    fn trailing_target_case(
+        named_source: bool,
+        named_target: bool,
+        trailing: bool,
+    ) -> (Vec<ScanRoot>, Vec<FileInstance>, &'static [u8], usize) {
+        let mut roots = vec![root()];
+        let mut target = file("/scan/libx.so", &[]);
+        let target_path = if named_target {
+            "/exact"
+        } else {
+            "/scan/libx.so"
+        };
+        if named_target {
+            let (anchor, file) = named_anchor(target, "exact", target_path);
+            roots.push(anchor);
+            target = file;
+        }
+        let target_text = format!("{target_path}{}", if trailing { "/" } else { "" });
+        let mut alias = link("/scan/alias", &target_text, &[]);
+        let lookup: &[u8] = if named_source {
+            let (anchor, file) = named_anchor(alias, "named-link", "/link");
+            roots.push(anchor);
+            alias = file;
+            b"/link"
+        } else {
+            b"/scan/alias"
+        };
+        // Initial spelling and absolute target anchor components are separately charged.
+        let total = if named_source { 1 } else { 2 }
+            + if named_target { 1 } else { 2 }
+            + usize::from(trailing);
+        (roots, vec![target, alias], lookup, total)
+    }
+
+    fn rejects_trailing_regular_target(named_source: bool, named_target: bool) {
+        let (roots, files, path, _) = trailing_target_case(named_source, named_target, true);
+        let idx = PathIndex::new(&roots, &files);
+        assert_eq!(
+            (
+                idx.lookup(path).map(|_| ()),
+                idx.reaches(path, &files[0].id)
+            ),
+            (
+                Err(PathGap::DirectoryRequired),
+                Err(PathGap::DirectoryRequired)
+            )
+        );
+    }
+
+    #[test]
+    fn named_link_root_preserves_a_targets_trailing_directory_requirement() {
+        rejects_trailing_regular_target(true, false);
+    }
+
+    #[test]
+    fn absolute_named_file_target_preserves_a_trailing_directory_requirement() {
+        rejects_trailing_regular_target(false, true);
+    }
+
+    #[test]
+    fn named_link_root_charges_the_trailing_directory_marker() {
+        let (roots, files, path, total) = trailing_target_case(true, false, true);
+        let idx = PathIndex::new(&roots, &files);
+        assert_eq!(total, 4);
+        assert_eq!(metered(&idx, path, 0, total - 1), (Err(PathGap::Budget), 3));
+        assert_eq!(
+            metered(&idx, path, 0, total),
+            (Err(PathGap::DirectoryRequired), 4)
+        );
+    }
+
+    #[test]
+    fn absolute_named_file_target_charges_the_trailing_directory_marker() {
+        let (roots, files, path, total) = trailing_target_case(false, true, true);
+        let idx = PathIndex::new(&roots, &files);
+        assert_eq!(total, 4);
+        assert_eq!(metered(&idx, path, 0, total - 1), (Err(PathGap::Budget), 3));
+        assert_eq!(
+            metered(&idx, path, 0, total),
+            (Err(PathGap::DirectoryRequired), 4)
+        );
+    }
+
+    #[test]
+    fn absolute_link_targets_without_a_trailing_slash_reach_normal_and_named_files() {
+        for (named_source, named_target) in [(true, false), (false, true), (false, false)] {
+            let (roots, files, path, total) =
+                trailing_target_case(named_source, named_target, false);
+            let idx = PathIndex::new(&roots, &files);
+            assert_eq!(idx.lookup(path).unwrap()[0].id, files[0].id);
+            assert!(idx.reaches(path, &files[0].id).unwrap());
+            assert_eq!(
+                metered(&idx, path, 0, total - 1),
+                (Err(PathGap::Budget), total - 1)
+            );
+            assert_eq!(
+                metered(&idx, path, 0, total),
+                (Ok(vec![files[0].id.clone()]), total)
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_absolute_link_targets_require_a_directory_and_charge_its_marker() {
+        rejects_trailing_regular_target(false, false);
+        let (roots, mut files, path, total) = trailing_target_case(false, false, true);
+        files[0].stat.mode = 0o040755;
+        files[0].content = InstanceContent::NotRead {
+            why: NotReadReason::Directory,
+        };
+        let idx = PathIndex::new(&roots, &files);
+        assert_eq!(idx.lookup(path).unwrap()[0].id, files[0].id);
+        assert!(idx.reaches(path, &files[0].id).unwrap());
+        assert_eq!(total, 5);
+        assert_eq!(metered(&idx, path, 0, total - 1), (Err(PathGap::Budget), 4));
+        assert_eq!(
+            metered(&idx, path, 0, total),
+            (Ok(vec![files[0].id.clone()]), 5)
+        );
+    }
+
     #[test]
     fn unused_initial_credit_cannot_pay_for_link_target_components() {
         let files = [
