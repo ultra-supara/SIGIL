@@ -14,12 +14,14 @@ export CARGO_TARGET_DIR="$PWD/target/tmp/issue48/task2/build-193"
 cargo +1.93.0 run --manifest-path docs/adr/ADR-017-gate/Cargo.toml --locked
 cargo +1.93.0 check --manifest-path docs/adr/ADR-017-gate/Cargo.toml --locked --target wasm32-unknown-unknown
 python3 docs/adr/ADR-017-gate/audit_sources.py
+python3 docs/adr/ADR-017-gate/check_oracle_regressions.py "$CARGO_TARGET_DIR/debug/sigil-adr017-decoder-gate"
 python3 docs/adr/ADR-017-gate/check_oracles.py "$CARGO_TARGET_DIR/debug/sigil-adr017-decoder-gate"
 python3 docs/adr/ADR-017-gate/check_unwind.py
 python3 crates/sigil-engine/tests/fixtures/code-aarch64/check_oracles.py
 export CARGO_TARGET_DIR="$PWD/target/tmp/issue48/task2/build-199"
 cargo +1.99.0 run --manifest-path docs/adr/ADR-017-gate/Cargo.toml --locked
 cargo +1.99.0 check --manifest-path docs/adr/ADR-017-gate/Cargo.toml --locked --target wasm32-unknown-unknown
+python3 docs/adr/ADR-017-gate/check_oracles.py "$CARGO_TARGET_DIR/debug/sigil-adr017-decoder-gate"
 cargo +1.93.0 fmt --manifest-path docs/adr/ADR-017-gate/Cargo.toml -- --check
 ```
 
@@ -37,10 +39,15 @@ The corpus contains 1,000,000 xorshift64 words from seed `0x48c0ffee` (13,7,17),
 100,000 structured mutations, and 3,289 explicit mask/immediate/register boundary
 cases. The same deterministic corpus reaches both candidate adapters. It is
 sampling evidence plus a manual source path audit, not a proof of the full ISA.
-`check_oracles.py` also reads every arm64 instruction row in the Task 1 dumps,
-reassembles the union of those words and the eligible hostile words into a data
-only ELF object, then parses LLVM 21.1.8 and GNU 2.46 disassembly independently.
-It compares widths, ZR/SP roles, raw classes, memory modes, immediates, shifts,
+`check_oracles.py` classifies every Task 1 dump by its actual image format and
+CPU header. It includes all 731 AArch64 rows from 21 thin fixtures, including
+both duplicate-name-dylibs versions. The arm64 slices of both universal files
+are explicitly deduplicated only after their fat table, manifest, SHA-256 and
+actual bytes agree with the selected arm64-chained thin fixture. An unmatched
+arm64 fat slice or an unknown fixture format fails the gate. The checker reassembles the union of those words and the eligible
+hostile words into a data only ELF object, then parses LLVM 21.1.8 and GNU 2.46 disassembly independently.
+It compares widths, ZR/SP roles, raw classes, memory modes, immediates, shifts
+(including ORR RegShift style and amount),
 signed displacements and destinations at the oracle instruction PCs. GNU's
 explicit MOVN/Z/K forms check their raw class/immediate/shift; LLVM retains some
 MOV aliases despite `no-aliases`, so its effective constant is checked too.
@@ -60,3 +67,14 @@ source downloads, dumps, logs and build outputs remain in
 lockfile also pin the full comparison graph. Future M3-B integration must resolve
 and check the product lockfile independently; this lockfile does not preapprove
 an arbitrary future resolution.
+
+The permanent `check_oracle_regressions.py` test uses actual typed operands for
+`2a0103e0` and fresh independent LLVM/GNU disassembly. It accepts LSL0 and rejects
+LSR0, LSL1 and LSR1 separately for each candidate/tool pair. It also injects the
+same altered shift into both candidates through the complete checker (using one
+hostile word plus all fixtures), accepts the correct control and rejects each
+mutation. This guards against candidate agreement concealing an oracle
+projection defect. The initial review's complete seeded-corpus LSR1 mutation was
+reproduced as a false pass before the fix and a failure after it; compact before/
+after results are retained in `results.json`. These are comparator regressions,
+not demonstrated defects in either current Rust decoder adapter.
