@@ -2359,3 +2359,45 @@ pub fn observed_processes() -> Session {
     }
     s
 }
+
+/// Synthetic observed normal-directory evidence for the new dependency fixtures only.
+/// Keep old example builders byte-for-byte compatible by enriching the returned session.
+pub fn with_install_path_proofs(mut s: Session) -> Session {
+    let root = s
+        .request
+        .roots
+        .iter()
+        .find(|root| root.id.as_str() == INSTALL_ROOT)
+        .unwrap();
+    assert_eq!(root.path.as_bytes(), b"/usr/local");
+    for file in s
+        .instances
+        .iter_mut()
+        .filter(|file| file.root.as_str() == INSTALL_ROOT)
+    {
+        assert!(file.link_chain.is_empty());
+        assert_eq!(file.resolved, None);
+        assert_eq!(file.stability, Stability::NoChangeDetected);
+        let parents: &[(&str, u64)] = match file.path.as_bytes() {
+            b"/usr/local/bin/ollama" => &[("bin", 52)],
+            b"/usr/local/lib/ollama/llama-server"
+            | b"/usr/local/lib/ollama/libggml-cpu-haswell.so" => &[("lib", 50), ("ollama", 51)],
+            path => panic!("add explicit synthetic directory evidence for {path:?}"),
+        };
+        let proof = RecordedPathProof {
+            root_dev: 2049,
+            root_ino: 49,
+            parents: parents
+                .iter()
+                .map(|(name, ino)| RecordedDirectory {
+                    name: t(name),
+                    dev: 2049,
+                    ino: *ino,
+                })
+                .collect(),
+        };
+        assert!(dependency_path::valid_proof(root, file, &proof));
+        file.path_proof = Some(proof);
+    }
+    s
+}

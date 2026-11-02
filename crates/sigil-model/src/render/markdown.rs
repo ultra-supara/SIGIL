@@ -42,6 +42,8 @@ pub fn render_session(s: &Session) -> String {
     binary_inspection(&mut out, s);
     models(&mut out, s);
     runtime_artifacts(&mut out, s);
+    super::deps_values::dependencies(&mut out, s);
+    super::deps_values::values(&mut out, s);
     md::listeners(&mut out, &s.listeners);
     processes(&mut out, s);
     md::probes(&mut out, &s.probes);
