@@ -14,6 +14,9 @@ use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 
 use crate::binary::elf::{Dynamic, Elf, Sections};
 
+// Private staged implementation; producer integration belongs to Task 10.
+#[allow(dead_code)]
+pub(crate) mod aarch64;
 pub mod data;
 pub(crate) mod decode;
 pub(crate) mod fde;
