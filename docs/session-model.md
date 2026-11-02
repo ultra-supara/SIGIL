@@ -1016,6 +1016,11 @@ Some are always written; empty lists and optional `None` additions may be omitte
 | `ValueOrigin.ObservedProcess.read` (`values[].origin.ObservedProcess.read`) | PR-4d-3 | `None` (legacy source detail) |
 | `Relation.Candidate.context` (`relations[].Candidate.context`) | PR-4d-3 | `None` (legacy candidate) |
 | `FileInstance.path_proof` (`instances[].path_proof`) | PR-4d-3 | `None` (no recorded parent proof) |
+| `request.code_analysis` | #48 M3-A | `None` (legacy code-evidence contract) |
+| `artifacts[].code_slice_inventory` | #48 M3-A | `None` (no typed slice inventory) |
+| `binaries[].container.MachO.little_endian` | #48 M3-A | `None` (byte order not recorded) |
+| `code[].call_sites[].args_layout` | #48 M3-A | `None` (legacy argument layout) |
+| `code[].call_sites[].target.Import.macho_import` | #48 M3-A | `None` (no Mach-O call witness) |
 
 The schema leaves these backward-compatible additions out of `required`. New definitions
 have their own required fields: `DependencyContext.search` is mandatory in both the schema
@@ -1034,6 +1039,43 @@ The schema is **backward compatible, not forward compatible.**
   is separate: the expanded check catalog and changed built-in policy digest can make current
   verification refuse an old decision ([policy](policy.md#the-default-policy)).
 - A change that a newer reader must not ignore needs `sigil-session/2`.
+
+### Multiarchitecture evidence reader (M3-A)
+
+M3-A adds the optional `request.code_analysis: "multiarch-v1"` marker to
+`sigil-session/1`, together with strict schema and validation for slice inventories,
+per-slice code coverage, AArch64 registers, argument layouts and Mach-O import
+witnesses. The marker requires `request.code: true` and a binary or installation
+root. New evidence fields and variants require the marker; omitting it retains the
+legacy validation and serialization contract. Optional additions are omitted when
+absent, preserving old canonical sessions and their hashes.
+
+Marked sessions must pin exactly one archived `SignatureDb` knowledge entry with
+ID `code-abi-signatures` and a matching version and SHA-256. The immutable v1 table
+describes a conservative prefix of ABI argument locations. A complete layout proves
+locations, not known values; variadic or unknown prototypes retain a partial layout
+and a recorded per-call gap. Capability-table arity does not prove an ABI layout.
+
+Typed inventory distinguishes a complete slice list from omitted descriptors.
+Each retained relevant slice has its own applicable `binary.code` or
+`artifacts.code` coverage entry, including an unparsed slice. Parent coverage
+accounts for every child and incomplete inventory, with one summed code-byte budget
+per artifact. A healthy slice cannot make an unsupported or missing sibling complete.
+Marked Mach-O coverage also requires an explicit little-endian observation for a
+supported parsed slice; an absent byte-order field does not establish little endian.
+
+Current inspection writers omit the marker and these optional fields. M3-A enables
+no new analyzer or decoder: direct-call analysis remains limited to the existing
+x86-64 ELF path. Marked Mach-O call facts and recorded capability decisions remain
+rejected pending library-aware and slice-aware policy validation, and capability-denial
+evaluation of a marked session is refused before changing it. Coverage-only synthetic
+marked sessions exercise the reader contract without claiming product analysis support.
+
+Older strict readers can reject the marker, new fields or enum variants. This reader
+continues to accept supported legacy sessions without adding evidence to them. The
+committed browser viewer uses the same model validator as the native reader. M3-A
+does not close [#48](https://github.com/ultra-supara/SIGIL/issues/48) or claim AArch64
+or Mach-O direct-call support; later analyzer and policy milestones remain required.
 
 ## Not in the model yet
 
