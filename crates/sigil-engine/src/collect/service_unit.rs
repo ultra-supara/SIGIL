@@ -16,15 +16,19 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use sigil_model::{
-    Artifact, ConfigRef, CoverageState, DiscoverySource, FileInstance, NotReadReason, RootId,
-    ScanRoot, Stability, Unavailability, UntrustedText, INSTALL_ROOT, SERVICE_UNIT_ROOT,
+    Artifact, ConfigRef, CoverageState, DiscoverySource, FileInstance, NotReadReason, ProcessValue,
+    RootId, ScanRoot, Stability, Unavailability, UntrustedText, INSTALL_ROOT, SERVICE_UNIT_ROOT,
 };
 
 use super::fs::{recorded, FsBudgets, ReadOutcome, ReadSpec, RelPath, RootError, SafeFs};
 use super::install::InstallFacts;
 
+mod values;
+
 /// `service_unit_bytes`'s default: systemd's line limit (1 MiB).
 pub const DEFAULT_UNIT_BYTES: u64 = 1 << 20;
+pub const MAX_UNIT_VALUES: u64 = 16_384;
+pub const SERVICE_UNIT_VALUES: &str = "service_unit_values";
 /// The unit's read limit, as `request.budgets` records it.
 pub const SERVICE_UNIT_BYTES: &str = "service_unit_bytes";
 
@@ -55,6 +59,10 @@ pub struct UnitFacts {
     pub prefix_id: (u64, u64),
     /// The resolved executable's `dev:ino`, taken right after it was resolved.
     pub exe_id: (u64, u64),
+    /// Minimized final supplied-file settings plus explicitly Unknown launch predictions.
+    pub values: Vec<ProcessValue>,
+    /// Named limitations of supplied-file value interpretation, without source line contents.
+    pub value_gaps: Vec<String>,
 }
 
 /// Reads the unit at `path`, at most `limit` bytes, and resolves the executable its
@@ -215,6 +223,8 @@ fn collect_with(
         key: UntrustedText::new("ExecStart"),
         line,
     };
+    let (values, value_gaps) =
+        values::parse(&read.prefix, &instance.id).map_err(|why| fail(&why))?;
     Ok(UnitFacts {
         given: path.to_path_buf(),
         limit,
@@ -231,6 +241,8 @@ fn collect_with(
         prefix,
         prefix_id,
         exe_id: (st.dev(), st.ino()),
+        values,
+        value_gaps,
     })
 }
 
@@ -365,6 +377,108 @@ pub const REDIRECTS: &[&str] = &[
     "ExtensionDirectories",
 ];
 
+#[derive(Debug, Clone, Copy)]
+struct ServiceLine<'a> {
+    key: &'a [u8],
+    value: &'a [u8],
+    number: u32,
+}
+
+struct ServiceLines<'a> {
+    remaining: &'a [u8],
+    number: u32,
+    in_service: bool,
+    finished: bool,
+}
+
+fn service_lines(text: &[u8]) -> Result<ServiceLines<'_>, String> {
+    if text.contains(&0) {
+        return Err("a NUL byte".to_string());
+    }
+    let Ok(utf8) = std::str::from_utf8(text) else {
+        return Err("the unit is not UTF-8".to_string());
+    };
+    if utf8
+        .chars()
+        .any(|c| matches!(c as u32, 0xFDD0..=0xFDEF) || (c as u32) & 0xFFFE == 0xFFFE)
+    {
+        return Err("the unit is not UTF-8 clean (a noncharacter)".to_string());
+    }
+    if text.windows(3).any(|w| w == [0xEF, 0xBB, 0xBF]) {
+        return Err("a byte-order mark".to_string());
+    }
+    Ok(ServiceLines {
+        remaining: text,
+        number: 0,
+        in_service: false,
+        finished: false,
+    })
+}
+
+impl<'a> Iterator for ServiceLines<'a> {
+    type Item = Result<ServiceLine<'a>, String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.finished {
+            self.number += 1;
+            let number = self.number;
+            let raw = match self.remaining.iter().position(|b| *b == b'\n') {
+                Some(end) => {
+                    let raw = &self.remaining[..end];
+                    self.remaining = &self.remaining[end + 1..];
+                    raw
+                }
+                None => {
+                    self.finished = true;
+                    self.remaining
+                }
+            };
+            if raw[..raw.len().saturating_sub(1)].contains(&b'\r') {
+                return Some(Err(format!(
+                    "line {number}: a carriage return inside a line"
+                )));
+            }
+            let line = trim(raw);
+            if skipped(line) {
+                continue;
+            }
+            if line.last() == Some(&b'\\') {
+                return Some(Err(format!(
+                    "line {number}: a continuation (`\\` at the end of a line) is not modeled"
+                )));
+            }
+            if line[0] == b'[' {
+                if line.last() != Some(&b']') {
+                    return Some(Err(format!("line {number}: a section header without `]`")));
+                }
+                let name = &line[1..line.len() - 1];
+                if name
+                    .iter()
+                    .any(|&b| matches!(b, b'"' | b'\'' | b'\\' | 0..=0x1f | 0x7f))
+                {
+                    return Some(Err(format!("line {number}: an invalid section name")));
+                }
+                self.in_service = name == b"Service";
+                continue;
+            }
+            if !self.in_service {
+                continue;
+            }
+            let Some(eq) = line.iter().position(|&b| b == b'=') else {
+                return Some(Err(format!(
+                    "line {number}: an entry without `=` in [Service]"
+                )));
+            };
+            return Some(Ok(ServiceLine {
+                key: trim(&line[..eq]),
+                value: trim(&line[eq + 1..]),
+                number,
+            }));
+        }
+        None
+    }
+}
+
 /// The executable of the one `ExecStart=` of `[Service]`, and the line its assignment starts on
 /// (from 1). `Err` says why the unit is outside the modeled subset of systemd.syntax(7) and
 /// systemd.service(5) "COMMAND LINES" (systemd 261):
@@ -393,60 +507,10 @@ pub const REDIRECTS: &[&str] = &[
 /// SIGIL does not check that systemd would load the unit: another fatal setting (e.g. a relative
 /// `WorkingDirectory=`) makes systemd run nothing while this returns the path.
 pub fn exec_start(text: &[u8]) -> Result<(Vec<u8>, u32), String> {
-    if text.contains(&0) {
-        return Err("a NUL byte".to_string());
-    }
-    let Ok(utf8) = std::str::from_utf8(text) else {
-        return Err("the unit is not UTF-8".to_string());
-    };
-    if utf8
-        .chars()
-        .any(|c| matches!(c as u32, 0xFDD0..=0xFDEF) || (c as u32) & 0xFFFE == 0xFFFE)
-    {
-        return Err("the unit is not UTF-8 clean (a noncharacter)".to_string());
-    }
-    if text.windows(3).any(|w| w == [0xEF, 0xBB, 0xBF]) {
-        return Err("a byte-order mark".to_string());
-    }
-    let mut in_service = false;
     let mut assigned: Vec<(Vec<u8>, u32)> = vec![];
-    // The line of the last assignment of each `REDIRECTS` setting still set, indexed like it.
     let mut redirects = [None::<u32>; REDIRECTS.len()];
-    for (raw, number) in text.split(|&b| b == b'\n').zip(1u32..) {
-        if raw[..raw.len().saturating_sub(1)].contains(&b'\r') {
-            return Err(format!("line {number}: a carriage return inside a line"));
-        }
-        let line = trim(raw);
-        if skipped(line) {
-            continue;
-        }
-        if line.last() == Some(&b'\\') {
-            return Err(format!(
-                "line {number}: a continuation (`\\` at the end of a line) is not modeled"
-            ));
-        }
-        if line[0] == b'[' {
-            if line.last() != Some(&b']') {
-                return Err(format!("line {number}: a section header without `]`"));
-            }
-            let name = &line[1..line.len() - 1];
-            if name
-                .iter()
-                .any(|&b| matches!(b, b'"' | b'\'' | b'\\' | 0..=0x1f | 0x7f))
-            {
-                return Err(format!("line {number}: an invalid section name"));
-            }
-            in_service = name == b"Service";
-            continue;
-        }
-        if !in_service {
-            continue;
-        }
-        let Some(eq) = line.iter().position(|&b| b == b'=') else {
-            return Err(format!("line {number}: an entry without `=` in [Service]"));
-        };
-        let key = trim(&line[..eq]);
-        let value = trim(&line[eq + 1..]);
+    for line in service_lines(text)? {
+        let ServiceLine { key, value, number } = line?;
         if let Some(i) = REDIRECTS.iter().position(|k| k.as_bytes() == key) {
             redirects[i] = if value.is_empty() { None } else { Some(number) };
             continue;
@@ -1297,5 +1361,252 @@ mod tests {
             ..walked(&f.exe, f.exe_id)
         }];
         refused(walk(prefix, root, Complete, None, elsewhere));
+    }
+
+    mod process_values {
+        use super::*;
+        use sigil_model::{ProcessValue, TriValue, ValueKey, ValueOrigin};
+
+        fn parse(text: &[u8]) -> (Vec<ProcessValue>, Vec<String>) {
+            let file = sigil_model::InstanceId::new("inst:service-unit/unit.service").unwrap();
+            values::parse(text, &file).unwrap()
+        }
+
+        fn configured<'a>(values: &'a [ProcessValue], key: &ValueKey) -> Option<&'a ProcessValue> {
+            values
+                .iter()
+                .find(|v| v.key == *key && matches!(v.origin, ValueOrigin::Configured { .. }))
+        }
+
+        fn env(name: &str) -> ValueKey {
+            ValueKey::Env(UntrustedText::new(name))
+        }
+
+        fn known(value: &ProcessValue) -> &[u8] {
+            match &value.value {
+                TriValue::Known(s) => s.as_bytes(),
+                other => panic!("expected Known, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn quoted_assignments_keep_spaces_empty_values_and_real_line_provenance() {
+            let (values, _) = parse(b"[Unit]\nUser=ignored\n[Service]\nUser=ollama\nGroup=1001\nWorkingDirectory=/srv/models\nEnvironment=\"GGML_BACKEND_PATH=/opt/lib x\" OLLAMA_MODELS='/srv/model space' LD_LIBRARY_PATH=\n");
+            for (key, expected, line) in [
+                (ValueKey::User, b"ollama".as_slice(), 4),
+                (ValueKey::Group, b"1001".as_slice(), 5),
+                (ValueKey::Cwd, b"/srv/models".as_slice(), 6),
+                (env("GGML_BACKEND_PATH"), b"/opt/lib x".as_slice(), 7),
+                (env("OLLAMA_MODELS"), b"/srv/model space".as_slice(), 7),
+                (env("LD_LIBRARY_PATH"), b"".as_slice(), 7),
+            ] {
+                let value = configured(&values, &key).unwrap();
+                assert_eq!(known(value), expected);
+                let ValueOrigin::Configured { file, directive } = &value.origin else {
+                    unreachable!()
+                };
+                assert_eq!(file.file.as_str(), "inst:service-unit/unit.service");
+                assert_eq!(file.line, line);
+                assert_eq!(file.key, *directive);
+                assert!(value.applies_to.is_empty());
+                assert_eq!(value.process_role.as_str(), sigil_model::RUNTIME_ROLE);
+            }
+        }
+
+        #[test]
+        fn environment_reset_and_last_assignment_win_without_reusing_old_line_ids() {
+            let (values, _) = parse(b"[Service]\nEnvironment=GGML_X=old LD_LIBRARY_PATH=/old\nEnvironment=\nEnvironment=GGML_X=first\nEnvironment=GGML_X=last\nUser=alice\nUser=bob\nGroup=\n");
+            assert_eq!(known(configured(&values, &env("GGML_X")).unwrap()), b"last");
+            assert!(configured(&values, &env("LD_LIBRARY_PATH")).is_none());
+            assert_eq!(known(configured(&values, &ValueKey::User).unwrap()), b"bob");
+            assert!(matches!(
+                configured(&values, &ValueKey::Group).unwrap().value,
+                TriValue::Absent
+            ));
+            let ValueOrigin::Configured { file, .. } =
+                &configured(&values, &env("GGML_X")).unwrap().origin
+            else {
+                unreachable!()
+            };
+            assert_eq!(file.line, 5);
+            let (before, _) = parse(b"[Service]\nEnvironment=GGML_X=last\n");
+            assert_ne!(
+                configured(&values, &env("GGML_X")).unwrap().id,
+                configured(&before, &env("GGML_X")).unwrap().id
+            );
+        }
+
+        #[test]
+        fn no_effective_prediction_is_known_or_absent_even_with_complete_local_settings() {
+            for text in [b"[Service]\n".as_slice(), b"[Service]\nUser=0\nGroup=0\nWorkingDirectory=/\nEnvironment=LD_LIBRARY_PATH=/lib\n"] {
+                let (values, gaps) = parse(text);
+                let predicted: Vec<_> = values.iter().filter(|v| matches!(v.origin, ValueOrigin::PredictedLaunch { .. })).collect();
+                assert_eq!(predicted.len(), 3 + crate::analyze::values::QUERIED_ENV.len());
+                for value in predicted {
+                    let TriValue::Unknown { reason: sigil_model::UnknownReason::NotModeled { what } } = &value.value else { panic!("effective prediction was decided") };
+                    assert!(what.contains("drop-ins"));
+                    assert!(what.contains("effective unit selection"));
+                    assert!(value.applies_to.is_empty());
+                    let ValueOrigin::PredictedLaunch { from, .. } = &value.origin else { unreachable!() };
+                    assert!(from.iter().all(|id| values.iter().any(|v| v.id == *id && v.key == value.key && matches!(v.origin, ValueOrigin::Configured { .. }))));
+                }
+                assert!(gaps.iter().any(|s| s.contains("drop-ins")));
+            }
+        }
+
+        #[test]
+        fn unrelated_and_malformed_secrets_are_not_retained_in_values_or_diagnostics() {
+            let (values, gaps) = parse(b"[Service]\nEnvironment=PATH=CANARY_PATH AWS_SECRET_ACCESS_KEY=CANARY_AWS LD_PRELOAD=CANARY_PRELOAD\nEnvironment=LD_LIBRARY_PATH=bad\\xCANARY_ESCAPE GGML_X=%CANARY_SPEC GGML_BROKEN\nEnvironment=\"GGML_UNCLOSED=CANARY_QUOTE\nEnvironment=OLLAMA_HOST=https://user:CANARY_PASS@host:443/path?token=CANARY_QUERY#CANARY_FRAGMENT\nEnvironmentFile=/secret/CANARY_FILE\n");
+            let json = serde_json::to_string(&values).unwrap();
+            let diagnostics = gaps.join("\n");
+            for canary in [
+                "CANARY_PATH",
+                "CANARY_AWS",
+                "CANARY_PRELOAD",
+                "CANARY_ESCAPE",
+                "CANARY_SPEC",
+                "CANARY_QUOTE",
+                "CANARY_PASS",
+                "CANARY_QUERY",
+                "CANARY_FRAGMENT",
+                "CANARY_FILE",
+            ] {
+                assert!(!json.contains(canary), "value leaked {canary}");
+                assert!(!diagnostics.contains(canary), "diagnostic leaked {canary}");
+            }
+            assert_eq!(
+                known(configured(&values, &env("OLLAMA_HOST")).unwrap()),
+                b"https://host:443/path"
+            );
+            for name in ["LD_LIBRARY_PATH", "GGML_X", "GGML_BROKEN", "GGML_UNCLOSED"] {
+                assert!(
+                    matches!(
+                        configured(&values, &env(name)).unwrap().value,
+                        TriValue::Unknown { .. }
+                    ),
+                    "{name}"
+                );
+            }
+            assert!(gaps
+                .iter()
+                .any(|g| g.contains("unsupported Environment syntax")));
+        }
+
+        #[test]
+        fn blockers_name_affected_keys_without_reading_external_sources() {
+            let (values, gaps) = parse(b"[Service]\nEnvironmentFile=/definitely-missing/private\nPassEnvironment=GGML_EXTRA\nUnsetEnvironment=LD_LIBRARY_PATH\nDynamicUser=yes\nPAMName=private-pam\nWorkingDirectory=~\nUser=%i\n");
+            let summary = gaps.join("\n");
+            for directive in [
+                "EnvironmentFile",
+                "PassEnvironment",
+                "UnsetEnvironment",
+                "DynamicUser",
+                "PAMName",
+            ] {
+                assert!(summary.contains(directive), "{summary}");
+            }
+            for key in ["LD_LIBRARY_PATH", "GGML_EXTRA", "User", "Group"] {
+                assert!(summary.contains(key), "{summary}");
+            }
+            assert!(!summary.contains("definitely-missing"));
+            assert!(!summary.contains("private-pam"));
+            assert!(values
+                .iter()
+                .all(|v| !matches!(v.origin, ValueOrigin::PredictedLaunch { .. })
+                    || matches!(v.value, TriValue::Unknown { .. })));
+            assert!(matches!(
+                configured(&values, &ValueKey::Cwd).unwrap().value,
+                TriValue::Unknown { .. }
+            ));
+            assert!(matches!(
+                configured(&values, &ValueKey::User).unwrap().value,
+                TriValue::Unknown { .. }
+            ));
+        }
+
+        #[test]
+        fn values_share_section_line_and_error_rules_with_exec_start() {
+            let valid = b"# comment\\\n[Unit]\nEnvironment=GGML_X=ignored\n[Service]\r\nExecStart=/a/bin/ollama\r\nEnvironment=GGML_X=kept\r\n";
+            assert_eq!(exec_start(valid).unwrap().1, 5);
+            let (values, _) = parse(valid);
+            assert_eq!(known(configured(&values, &env("GGML_X")).unwrap()), b"kept");
+            for invalid in [
+                b"[Service]\nExecStart=/a/bin/ollama\nEnvironment=GGML_X=x\\\n".as_slice(),
+                b"[Service]\nExecStart=/a/bin/ollama\nmalformed\n",
+                b"[Service\nExecStart=/a/bin/ollama\n",
+                b"[Service]\nExecStart=/a/bin/ollama\nEnvironment=GGML_X=\0bad\n",
+            ] {
+                let file = sigil_model::InstanceId::new("inst:service-unit/unit.service").unwrap();
+                assert_eq!(
+                    values::parse(invalid, &file).unwrap_err(),
+                    exec_start(invalid).unwrap_err()
+                );
+            }
+        }
+
+        #[test]
+        fn unit_collection_attaches_values_from_the_bytes_it_hashed() {
+            let (_d, p) = tree();
+            let u = p.join("values.service");
+            let text = format!("[Service]\nExecStart={} serve\nUser=ollama\nEnvironment=OLLAMA_MODELS=/models PATH=SECRET_NOT_RETAINED\n", p.join("inst/bin/ollama").display());
+            std::fs::write(&u, text.as_bytes()).unwrap();
+            let facts = collect(&u, DEFAULT_UNIT_BYTES).unwrap();
+            assert_eq!(
+                known(configured(&facts.values, &env("OLLAMA_MODELS")).unwrap()),
+                b"/models"
+            );
+            for value in &facts.values {
+                if let ValueOrigin::Configured { file, .. } = &value.origin {
+                    assert_eq!(file.file, facts.instance.id);
+                }
+            }
+            assert!(!serde_json::to_string(&facts.values)
+                .unwrap()
+                .contains("SECRET_NOT_RETAINED"));
+            // The parser consumes supplied bytes even when the source pathname now says another thing.
+            std::fs::write(&u, b"[Service]\nEnvironment=OLLAMA_MODELS=/other\n").unwrap();
+            let (again, _) = values::parse(text.as_bytes(), &facts.instance.id).unwrap();
+            assert_eq!(again, facts.values);
+        }
+        #[test]
+        fn anonymous_malformed_assignments_leave_a_gap_without_source_text() {
+            let (values, gaps) = parse(b"[Service]\nEnvironment=not-an-assignment-CANARY_ANON\n");
+            assert!(gaps
+                .iter()
+                .any(|g| g.contains("affected allowlisted keys unknown")));
+            assert!(!gaps.join("\n").contains("CANARY_ANON"));
+            assert!(!serde_json::to_string(&values)
+                .unwrap()
+                .contains("CANARY_ANON"));
+        }
+
+        #[test]
+        fn unit_value_limit_reserves_all_base_predictions_and_charges_wildcards() {
+            let mut text = String::from("[Service]\nEnvironment=GGML_SAFE=first\n");
+            for i in 0..20_000 {
+                text.push_str(&format!("Environment=GGML_X_{i}=x\n"));
+            }
+            text.push_str("Environment=GGML_SAFE=last\n");
+            let (values, gaps) = parse(text.as_bytes());
+            assert!(values.len() as u64 <= MAX_UNIT_VALUES);
+            assert_eq!(values.len() as u64, MAX_UNIT_VALUES);
+            assert_eq!(
+                known(configured(&values, &env("GGML_SAFE")).unwrap()),
+                b"last"
+            );
+            assert_eq!(
+                gaps.iter()
+                    .filter(|g| g.as_str() == "service_unit_values 16384 exceeded")
+                    .count(),
+                1
+            );
+            for name in crate::analyze::values::QUERIED_ENV {
+                let key = ValueKey::Env(UntrustedText::from_bytes(*name));
+                assert!(values.iter().any(
+                    |v| v.key == key && matches!(v.origin, ValueOrigin::PredictedLaunch { .. })
+                ));
+            }
+            assert!(configured(&values, &env("GGML_X_19999")).is_none());
+        }
     }
 }

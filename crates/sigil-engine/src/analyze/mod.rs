@@ -11,6 +11,7 @@ pub mod model_store;
 pub mod release;
 pub mod runtime_api;
 pub mod runtime_processes;
+pub mod values;
 
 use sigil_model::{
     Action, CondEvidence, CondId, CondState, Condition, EvidenceRef, Finding, FindingId,
