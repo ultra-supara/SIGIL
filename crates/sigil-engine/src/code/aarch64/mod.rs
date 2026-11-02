@@ -44,6 +44,13 @@ pub(crate) struct Proofs<'a> {
     pub executable: &'a dyn Fn(u64, u64) -> bool,
     pub excluded: &'a dyn Fn(u64, u64) -> bool,
     pub noreturn: &'a dyn Fn(u64, &A64Insn) -> bool,
+    /// Already reserved against this artifact's shared `Run` with
+    /// `run.charge(Work::References, ...)`, before candidate collection/proof work and before
+    /// passing this list. Deduplicate candidates within each artifact slice and assign each
+    /// candidate to exactly one applicable function; never submit it repeatedly to CFGs.
+    /// Reservations and their aggregate cap persist across all functions and artifact slices,
+    /// including failed functions. On reservation refusal, preserve the Run's gap/stop state
+    /// and do not pass unreserved candidates. The CFG must not charge these reservations again.
     pub candidates: &'a [u64],
 }
 
@@ -90,6 +97,13 @@ impl Failure {
 /// The caller must also discard this CFG if later relocation/value/recording proofs fail.
 /// This stage uses encoded branch destinations. Object relocation resolution and proved
 /// import-tail exits must be integrated before enabling a producer (Tasks 9–10).
+///
+/// The caller must satisfy the shared reservation, deduplication and single-function ownership
+/// contract on [`Proofs::candidates`]. The list-length check below is only a defensive local
+/// bound: it neither reserves references nor enforces their aggregate artifact budget.
+/// Tasks 9–10 integration tests must exercise multiple functions, duplicate/repeated candidates,
+/// multiple artifact slices and the exact reference-budget boundary, including refusal gaps,
+/// stopped work and preservation of earlier independently proved facts.
 pub(crate) fn decode_cfg(
     bytes: &[u8],
     entry: u64,
