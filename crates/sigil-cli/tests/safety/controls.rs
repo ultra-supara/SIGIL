@@ -206,11 +206,32 @@ fn read_proc_environ() {
     }
 }
 
+// Read without the metadata probe performed by std::fs::read: this control isolates
+// the open operation that the explicit initial-environment scope permits.
+#[test]
+#[ignore = "negative control body; run by its driver"]
+fn open_read_proc_environ() {
+    if armed().is_some() {
+        use std::io::Read;
+        let mut file = std::fs::File::open("/proc/self/environ").unwrap();
+        let mut byte = [0u8; 1];
+        let _ = file.read(&mut byte).unwrap();
+    }
+}
+
 #[test]
 #[ignore = "negative control body; run by its driver"]
 fn open_proc_exe() {
     if armed().is_some() {
         let _ = std::fs::File::open("/proc/self/exe");
+    }
+}
+
+#[test]
+#[ignore = "negative control body; run by its driver"]
+fn open_proc_cwd() {
+    if armed().is_some() {
+        let _ = std::fs::File::open("/proc/self/cwd");
     }
 }
 
@@ -555,5 +576,69 @@ fn control_io_uring_is_detected() {
         "io_uring_setup",
         plain_target,
         &[(Contract::Harness, &["io_uring_setup"])],
+    );
+}
+
+#[test]
+fn control_open_proc_cwd_is_detected_under_both_observe_scopes() {
+    let Some((run, policy)) =
+        run_control_traced("open_proc_cwd", "open_proc_cwd_observe", plain_target)
+    else {
+        return;
+    };
+    for scopes in [
+        vec!["runtime", "observe"],
+        vec!["runtime", "observe", "observe_env"],
+    ] {
+        let p = Policy {
+            proc_scopes: scopes,
+            ..policy.clone()
+        };
+        let v = check(&run, &p);
+        assert!(
+            v.iter().any(|x| x.contract == Contract::C6ProcScope
+                && ["openat", "open"].contains(&x.syscall.as_str())
+                && x.detail.contains("/proc/self/cwd by open")),
+            "cwd open was not flagged under {:?}:\n{}",
+            p.proc_scopes,
+            report(&run, &v)
+        );
+        assert!(
+            !v.iter().any(|x| x.contract == Contract::C5ReadOnly),
+            "read-only cwd open must be caught by C-6:\n{}",
+            report(&run, &v)
+        );
+    }
+}
+#[test]
+fn control_read_proc_environ_requires_the_explicit_opt_in_scope() {
+    let Some((run, policy)) = run_control_traced(
+        "open_read_proc_environ",
+        "read_proc_environ_scope",
+        plain_target,
+    ) else {
+        return;
+    };
+    let p = Policy {
+        proc_scopes: vec!["runtime", "observe"],
+        ..policy.clone()
+    };
+    let denied = check(&run, &p);
+    assert!(
+        denied.iter().any(|x| x.contract == Contract::C6ProcScope
+            && ["openat", "open"].contains(&x.syscall.as_str())
+            && x.detail.contains("/proc/self/environ by open")),
+        "ordinary observe accepted environ:\n{}",
+        report(&run, &denied)
+    );
+    let p = Policy {
+        proc_scopes: vec!["runtime", "observe", "observe_env"],
+        ..policy
+    };
+    let allowed = check(&run, &p);
+    assert!(
+        allowed.is_empty(),
+        "same event was not accepted with opt-in:\n{}",
+        report(&run, &allowed)
     );
 }

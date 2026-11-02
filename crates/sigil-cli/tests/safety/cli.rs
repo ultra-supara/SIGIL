@@ -811,6 +811,309 @@ fn observe_mode_reads_the_runtime_s_executable_and_mappings_only_through_the_all
     );
 }
 
+fn requested_path(e: &Event) -> Option<PathBuf> {
+    let (dirfd, index) = match e.name.as_str() {
+        "open" | "stat" | "lstat" | "readlink" | "access" => (None, 0),
+        "openat" | "openat2" | "newfstatat" | "statx" | "readlinkat" | "faccessat"
+        | "faccessat2" => (Some(0), 1),
+        _ => return None,
+    };
+    let path = e.args.get(index).and_then(|a| crate::trace::str_arg(a))?;
+    if path.is_absolute() {
+        return Some(path);
+    }
+    let base = e.args.get(dirfd?).and_then(|a| fd_path(a))?;
+    Some(base.join(path))
+}
+fn at_proc_entry<'a>(r: &'a TracedRun, pid: u32, entry: &str, calls: &[&str]) -> Vec<&'a Event> {
+    let dir = PathBuf::from(format!("/proc/{pid}"));
+    r.events
+        .iter()
+        .filter(|e| {
+            calls.contains(&e.name.as_str())
+                && e.args.first().and_then(|a| fd_path(a)).as_deref() == Some(dir.as_path())
+                && e.args
+                    .get(1)
+                    .and_then(|a| crate::trace::str_arg(a))
+                    .as_deref()
+                    == Some(Path::new(entry))
+                && !e.ret.starts_with('-')
+        })
+        .collect()
+}
+fn assert_no_cwd_target_access(r: &TracedRun, cwd: &Path) {
+    let cwd = std::fs::canonicalize(cwd).unwrap();
+    for e in &r.events {
+        if ![
+            "open",
+            "openat",
+            "openat2",
+            "stat",
+            "lstat",
+            "statx",
+            "newfstatat",
+            "access",
+            "faccessat",
+            "faccessat2",
+            "fstat",
+            "fstat64",
+        ]
+        .contains(&e.name.as_str())
+        {
+            continue;
+        }
+        let requested = requested_path(e);
+        let fd_target = if e.name.starts_with("fstat") {
+            e.args.first().and_then(|a| fd_path(a))
+        } else {
+            fd_path(&e.ret)
+        };
+        assert!(
+            requested.as_deref() != Some(cwd.as_path())
+                && fd_target.as_deref() != Some(cwd.as_path()),
+            "case {} opened or statted the cwd target: {}",
+            r.case,
+            e.raw
+        );
+    }
+}
+
+#[test]
+fn observe_values_read_cwd_status_and_only_opted_in_initial_environment() {
+    use sigil_model::{
+        NsInode, ObsSource, ProcessRole, ProcessValue, ProcessValueRead, Session, TriValue,
+        UntrustedText, ValueKey, ValueOrigin,
+    };
+    let case = "observe_values_read_cwd_status_and_only_opted_in_initial_environment";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let build = fx.tmp.path().join("build-values");
+    let runtime_cwd = fx.tmp.path().join("runtime-cwd");
+    std::fs::create_dir_all(&build).unwrap();
+    std::fs::create_dir_all(&runtime_cwd).unwrap();
+    let Some(exe) = fixtures::require(case, fixtures::fake_runtime(&build)) else {
+        return;
+    };
+    // External harness spawn, before strace. The same parent and child remain alive below.
+    let mut runtime = KillOnDrop(std::process::Command::new(&exe).arg("serve")
+        .env_clear()
+        .env("GGML_BACKEND_PATH", "/sigil/safety/backends")
+        .env("LD_LIBRARY_PATH", "/sigil/safety/libs")
+        .env("OLLAMA_HOST", "https://user:CANARY_SAFETY_PASSWORD@localhost:11434/v1?token=CANARY_SAFETY_QUERY#CANARY_SAFETY_FRAGMENT")
+        .env("SIGIL_SAFETY_SECRET", "CANARY_SAFETY_SECRET")
+        .env("PATH", "CANARY_SAFETY_PATH")
+        .current_dir(&runtime_cwd)
+        .stdout(std::process::Stdio::piped()).spawn().unwrap());
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(runtime.0.stdout.as_mut().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    let child: u32 = line
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("fake runtime reported no child pid ({e}): {line:?}"));
+    let parent = runtime.0.id();
+    let models = fixtures::ollama_store(&fx.target);
+    let cwd_text = UntrustedText::from_bytes({
+        use std::os::unix::ffi::OsStrExt;
+        std::fs::canonicalize(&runtime_cwd)
+            .unwrap()
+            .as_os_str()
+            .as_bytes()
+            .to_vec()
+    });
+    let euid = rustix::process::geteuid().as_raw().to_string();
+    let egid = rustix::process::getegid().as_raw().to_string();
+    for opt_in in [false, true] {
+        let suffix = if opt_in { "env" } else { "ordinary" };
+        let session_path = fx.out.join(format!("observe-values-{suffix}.json"));
+        let mut args = os(&[
+            &"inspect",
+            &"ollama",
+            &"--mode",
+            &"observe",
+            &"--models-dir",
+            &models,
+            &"--out",
+            &session_path,
+        ]);
+        if opt_in {
+            args.push("--observe-env".into());
+        }
+        let r = run(
+            &format!("inspect-observe-values-{suffix}"),
+            &fx,
+            &refs(&args),
+        );
+        assert!(r.status.unwrap().success(), "{}", r.stderr);
+        assert_read_under(&r, &models);
+        let scopes: &[&'static str] = if opt_in {
+            &["runtime", "observe", "observe_env"]
+        } else {
+            &["runtime", "observe"]
+        };
+        assert_clean(&r, &policy(&fx, &[&session_path], scopes));
+        assert_no_cwd_target_access(&r, &runtime_cwd);
+        for pid in [parent, child] {
+            assert_eq!(
+                at_proc_entry(&r, pid, "cwd", &["readlinkat"]).len(),
+                1,
+                "{}: no single cwd read for {pid}",
+                r.case
+            );
+            assert_eq!(
+                at_proc_entry(&r, pid, "status", &["openat"]).len(),
+                1,
+                "{}: no single status read for {pid}",
+                r.case
+            );
+            assert_eq!(
+                at_proc_entry(&r, pid, "environ", &["openat"]).len(),
+                usize::from(opt_in),
+                "{}: environ opt-in broken for {pid}",
+                r.case
+            );
+            for name in ["cwd", "exe"] {
+                assert!(
+                    at_proc_entry(&r, pid, name, &["openat", "openat2"]).is_empty(),
+                    "{}: opened /proc/{pid}/{name}",
+                    r.case
+                );
+            }
+        }
+        if !opt_in {
+            assert!(
+                !r.events.iter().any(|e| {
+                    ["open", "openat", "openat2"].contains(&e.name.as_str())
+                        && requested_path(e).is_some_and(|p| {
+                            p.starts_with("/proc") && p.file_name() == Some(OsStr::new("environ"))
+                        })
+                }),
+                "ordinary observe opened an environment"
+            );
+        } else {
+            let denied = check(&r, &policy(&fx, &[&session_path], &["runtime", "observe"]));
+            for pid in [parent, child] {
+                let path = format!("/proc/{pid}/environ");
+                assert!(
+                    denied.iter().any(|v| v.contract == Contract::C6ProcScope
+                        && v.detail.contains(&path)
+                        && v.detail.contains("by open")),
+                    "{path} not flagged without opt-in:\n{}",
+                    report(&r, &denied)
+                );
+            }
+            assert!(
+                denied.iter().all(|v| v.contract == Contract::C6ProcScope),
+                "unexpected contract failure:\n{}",
+                report(&r, &denied)
+            );
+        }
+        let static_v = check(&r, &policy(&fx, &[&session_path], &["runtime"]));
+        for pid in [parent, child] {
+            for name in ["cwd", "status"] {
+                let path = format!("/proc/{pid}/{name}");
+                assert!(
+                    static_v
+                        .iter()
+                        .any(|v| v.contract == Contract::C6ProcScope && v.detail.contains(&path)),
+                    "{path} not flagged under static scope:\n{}",
+                    report(&r, &static_v)
+                );
+            }
+        }
+        let json = std::fs::read_to_string(&session_path).unwrap();
+        for canary in [
+            "CANARY_SAFETY_SECRET",
+            "CANARY_SAFETY_PATH",
+            "CANARY_SAFETY_PASSWORD",
+            "CANARY_SAFETY_QUERY",
+            "CANARY_SAFETY_FRAGMENT",
+            "SIGIL_SAFETY_SECRET",
+        ] {
+            assert!(!json.contains(canary), "session contains {canary}");
+            assert!(!r.stdout.contains(canary), "stdout contains {canary}");
+            assert!(!r.stderr.contains(canary), "stderr contains {canary}");
+        }
+        let s: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(json, s.to_canonical_json().unwrap());
+        assert_eq!(s.request.observe_env, opt_in);
+        assert!(s.observation.mnt_ns.is_some());
+        let mut ids = vec![];
+        for pid in [parent, child] {
+            let p = s.processes.iter().find(|p| p.process.pid == pid).unwrap();
+            assert_eq!(p.mnt_ns, s.observation.mnt_ns.map(NsInode::Inode));
+            if pid == child {
+                assert!(p.roles.is_empty());
+            } else {
+                assert_eq!(
+                    p.roles,
+                    [ProcessRole::new(sigil_model::RUNTIME_ROLE).unwrap()]
+                );
+            }
+            let value = |key: ValueKey| -> &ProcessValue {
+                s.values
+                    .iter()
+                    .find(|v| {
+                        v.key == key
+                            && matches!(&v.origin,
+                    ValueOrigin::ObservedProcess { process, .. } if process == &p.process)
+                    })
+                    .unwrap_or_else(|| panic!("no {key:?} for {pid}"))
+            };
+            for (key, expected, read) in [
+                (ValueKey::Cwd, cwd_text.clone(), ProcessValueRead::Cwd),
+                (
+                    ValueKey::User,
+                    UntrustedText::new(&euid),
+                    ProcessValueRead::EffectiveUid,
+                ),
+                (
+                    ValueKey::Group,
+                    UntrustedText::new(&egid),
+                    ProcessValueRead::EffectiveGid,
+                ),
+            ] {
+                let v = value(key);
+                assert_eq!(v.value, TriValue::Known(expected));
+                assert!(v.applies_to.is_empty());
+                assert!(matches!(&v.origin, ValueOrigin::ObservedProcess {
+                    process, source: ObsSource::Proc, read: Some(actual),
+                } if process == &p.process && actual == &read));
+            }
+            if opt_in {
+                for (name, expected) in [
+                    ("GGML_BACKEND_PATH", "/sigil/safety/backends"),
+                    ("LD_LIBRARY_PATH", "/sigil/safety/libs"),
+                    ("OLLAMA_HOST", "https://localhost:11434/v1"),
+                ] {
+                    let v = value(ValueKey::Env(UntrustedText::new(name)));
+                    assert_eq!(v.value, TriValue::Known(UntrustedText::new(expected)));
+                    assert!(matches!(&v.origin, ValueOrigin::ObservedProcess {
+                        process, source: ObsSource::Proc,
+                        read: Some(ProcessValueRead::InitialEnvironment),
+                    } if process == &p.process));
+                    if name == "LD_LIBRARY_PATH" {
+                        ids.push(v.id.clone());
+                    }
+                }
+            } else {
+                assert!(!s.values.iter().any(|v| matches!((&v.key, &v.origin),
+                    (ValueKey::Env(_), ValueOrigin::ObservedProcess { process, .. })
+                        if process == &p.process)));
+            }
+        }
+        if opt_in {
+            assert_ne!(ids[0], ids[1], "different processes share a value identity");
+        }
+    }
+    drop(runtime);
+}
+
 #[test]
 fn session_render_writes_only_its_out() {
     if !require_tracer("session_render_writes_only_its_out") {

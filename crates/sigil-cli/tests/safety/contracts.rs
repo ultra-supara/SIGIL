@@ -59,7 +59,8 @@ pub struct Policy {
     /// (`.<name>.sigil-<pid>-<k>.tmp`) that the run itself creates: the only write-capable opens
     /// and mutations allowed (and `mkdir` of their ancestors).
     pub allowed_writes: Vec<PathBuf>,
-    /// `/proc` allowlist scopes for this run: always `runtime`, plus `observe` for observe-like paths.
+    /// `/proc` allowlist scopes: always `runtime`, plus `observe` for observe mode,
+    /// and `observe_env` additionally only for explicit `--observe-env`.
     pub proc_scopes: Vec<&'static str>,
     /// Working directory of the traced process at start.
     pub cwd: PathBuf,
@@ -1244,7 +1245,10 @@ mod tests {
         let entries = proc_allowlist();
         assert!(!entries.is_empty());
         for e in &entries {
-            assert!(["runtime", "observe"].contains(&e.scope.as_str()), "{e:?}");
+            assert!(
+                ["runtime", "observe", "observe_env"].contains(&e.scope.as_str()),
+                "{e:?}"
+            );
             assert!(e.pattern.starts_with("/proc"), "{e:?}");
             assert!(e.reason.len() >= 10, "entry needs a reason: {e:?}");
             for op in e.ops.iter().flatten() {
@@ -1328,6 +1332,104 @@ mod tests {
             assert!(
                 v.iter().all(|v| v.detail.contains("/proc/123/cwd")),
                 "{v:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn c6_initial_environment_requires_a_separate_opt_in_scope() {
+        let dir = hex("/proc/123");
+        let run = with(&[
+            (
+                10,
+                format!(
+                    "openat(5<{dir}>, \"{}\", O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC) = 6",
+                    hex("environ")
+                ),
+            ),
+            (
+                10,
+                format!(
+                    "openat(AT_FDCWD<{}>, \"{}\", O_RDONLY|O_CLOEXEC) = 7",
+                    hex("/fx"),
+                    hex("/proc/self/environ")
+                ),
+            ),
+        ]);
+        for scopes in [vec!["runtime"], vec!["runtime", "observe"]] {
+            let v = check(&run, &policy(&scopes));
+            assert_eq!(
+                found(&v),
+                [
+                    (Contract::C6ProcScope, "openat".into()),
+                    (Contract::C6ProcScope, "openat".into()),
+                ]
+            );
+            assert!(v.iter().all(|v| v.detail.contains("environ")));
+        }
+        // Same parsed events, only the policy changes.
+        assert!(check(&run, &policy(&["runtime", "observe", "observe_env"])).is_empty());
+    }
+    #[test]
+    fn c6_opt_in_does_not_allow_environ_stat_or_process_memory() {
+        let run = with(&[
+            (
+                10,
+                format!(
+                    "newfstatat(AT_FDCWD<{}>, \"{}\", {{st_mode=S_IFREG|0400}}, 0) = 0",
+                    hex("/fx"),
+                    hex("/proc/self/environ")
+                ),
+            ),
+            (
+                10,
+                "process_vm_readv(10, [{iov_base=0x1, iov_len=8}], 1, [{iov_base=0x2, iov_len=8}], 1, 0) = 8".into(),
+            ),
+        ]);
+        assert_eq!(
+            found(&check(
+                &run,
+                &policy(&["runtime", "observe", "observe_env"])
+            )),
+            [
+                (Contract::C6ProcScope, "newfstatat".into()),
+                (Contract::C6ProcScope, "process_vm_readv".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn c6_process_value_allowlist_entries_are_minimal() {
+        let list = proc_allowlist();
+        for (name, scope, operation) in [
+            ("cwd", "observe", "readlink"),
+            ("status", "observe", "open"),
+            ("environ", "observe_env", "open"),
+        ] {
+            let suffix = format!("/{name}");
+            let matches: Vec<_> = list
+                .iter()
+                .filter(|e| e.pattern.ends_with(&suffix))
+                .collect();
+            assert_eq!(matches.len(), 1, "exactly one permission for {name}");
+            let e = matches[0];
+            assert_eq!(e.scope, scope);
+            assert_eq!(e.pattern, format!("/proc/{{pid}}/{name}"));
+            assert_eq!(e.ops.as_deref(), Some(&[operation.to_string()][..]));
+        }
+    }
+
+    #[test]
+    fn c1_clone3_cannot_take_thread_permission_from_output_fields() {
+        for input in ["{flags=CLONE_VM}", "{parent_tid=0x1}", "???"] {
+            let run = with(&[(
+                10,
+                format!("clone3({input} => {{flags=CLONE_THREAD}}, 88) = 11"),
+            )]);
+            assert_eq!(
+                found(&check(&run, &policy(&["runtime"]))),
+                [(Contract::C1NoExec, "clone3".into())],
+                "{input}"
             );
         }
     }
