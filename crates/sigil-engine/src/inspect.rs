@@ -15,6 +15,7 @@ use sigil_model::{
 use crate::analyze::binary::CodeCoverageError;
 use crate::analyze::{
     binary, container, exposure, hints, identity, model_store, release, runtime_api,
+    runtime_processes,
 };
 use crate::code::CodeOutcome;
 use crate::collect::fs::{recorded, FsBudgets, RootError, SafeFs};
@@ -296,18 +297,33 @@ fn assemble(
         }
     }
     let (mut processes, mut listeners) = (vec![], vec![]);
+    let mut details = vec![];
     if let Some((proc, proc_budgets)) = observed {
         let (exposure_findings, exposure_coverage) = exposure::analyze(&proc);
         findings.extend(exposure_findings);
         coverage.extend(exposure_coverage);
+        // PR-4d-2: what was observed of the runtime and its descendants.
+        coverage.extend(runtime_processes::coverage(&proc));
+        details = proc.details;
         processes = proc.processes;
         listeners = proc.listeners;
         budgets.extend([
             ("processes_listed".to_string(), proc_budgets.max_processes),
             ("fds_per_process".to_string(), proc_budgets.max_fds),
             ("tcp_table_bytes".to_string(), proc_budgets.max_table_bytes),
+            ("proc_maps_bytes".to_string(), proc_budgets.max_maps_bytes),
+            (
+                "proc_maps_total_bytes".to_string(),
+                proc_budgets.max_maps_total_bytes,
+            ),
+            (
+                "proc_maps_entries".to_string(),
+                proc_budgets.max_maps_entries,
+            ),
         ]);
     }
+    // PR-4d-2: the observed executables and mappings, linked to every scanned instance.
+    runtime_processes::link(&mut processes, &details, &mut instances);
     coverage.extend(runtime_api::analyze(&active.probes));
     budgets.extend(active.budgets.clone());
     let mut hints = hints::derive(&binaries).map_err(InspectError::Internal)?;

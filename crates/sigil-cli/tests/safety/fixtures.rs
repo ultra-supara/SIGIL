@@ -130,3 +130,41 @@ pub fn require<T>(test: &str, r: Result<T, String>) -> Option<T> {
         }
     }
 }
+
+/// A fake `ollama serve` (PR-4d-2), built as `<dir>/ollama`: given `serve`, it forks a child that
+/// renames itself `runner` (so it is a descendant, not a second runtime), and both sleep. The
+/// child prints its PID once it is renamed and bound to die with its parent; the parent closes its
+/// stdout, so a child that dies first ends the reader's line with EOF instead of a hang. The parent
+/// dies with the thread that started it, should the test binary be killed before it kills it.
+pub fn fake_runtime(dir: &Path) -> Result<PathBuf, String> {
+    let src = dir.join("ollama.c");
+    fs::write(
+        &src,
+        r#"#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/prctl.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 2 || strcmp(argv[1], "serve") != 0) return 2;
+    prctl(PR_SET_PDEATHSIG, SIGKILL);
+    pid_t parent = getpid();
+    pid_t child = fork();
+    if (child < 0) return 1;
+    if (child == 0) {
+        prctl(PR_SET_NAME, "runner");
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
+        /* The parent died before PDEATHSIG was set: die now, as it would have made us. */
+        if (getppid() != parent) _exit(1);
+        printf("%d\n", (int)getpid());
+        fflush(stdout);
+        for (;;) pause();
+    }
+    close(STDOUT_FILENO);
+    for (;;) pause();
+}
+"#,
+    )
+    .map_err(|e| e.to_string())?;
+    compile(&[], &src, &dir.join("ollama"))
+}

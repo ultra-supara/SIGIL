@@ -21,14 +21,18 @@ All reads are under the proc root (`/proc`), and every entry is on the C-6 allow
 | the proc root | The PIDs (PID 1 hidden means `hidepid`) | `getdents64`, bounded (32,768) |
 | `<pid>/comm` | The process name: selects `ollama` candidates and fronting processes | read |
 | `<pid>/fd`, `<pid>/fd/<n>` | Which sockets a process holds (`socket:[inode]`) | `getdents64` and `readlinkat`, bounded (65,536 per process) |
-| `<pid>/cmdline` | `argv` of an `ollama` process (only those): the runtime role rests on it, and the same read is recorded as its `argv` | read, once |
-| `<pid>/exe` | Confirms the runtime's executable | `readlinkat` |
-| `<pid>/stat` | The start time, part of a process's identity | read |
+| `<pid>/cmdline` | `argv` of an `ollama` process (only those): the runtime role rests on it, and the same read is recorded as its `argv`. The runtime's is read again after its `maps`, only to compare with that read | read, 64 KiB at most; once, and the runtime's twice |
+| `<pid>/exe` | Confirms the runtime's executable; the identity (`dev:ino`) of the file a runtime process runs. Read before and after `maps`, and the runtime's identity at listing too, to see an exec | `readlinkat`, and `stat` through it |
+| `<pid>/stat` | The start time, part of a process's identity; the parent, of every listed process. Read again for a runtime process, first and last, and once more when `exe` gives `ENOENT` or `ESRCH`: the start time, whether it is a zombie, and `startstack` and `arg_start`, which an exec moves (the runtime's are kept from the listing too) | read |
+| `<pid>/maps` | The files a runtime process has mapped ([runtime artifacts](runtime-artifacts.md#linked-to-the-running-processes-observe-mode-pr-4d-2)) | read, bounded (`proc_maps_bytes`, `proc_maps_total_bytes`, and `proc_maps_entries` mappings) |
 | `<pid>/ns/net` | The process's network namespace | `readlinkat` |
+| `<pid>/ns/mnt`, `self/ns/mnt` | Whether a mapping's path is read in SIGIL's own mount namespace | `readlinkat` |
 | `sys/kernel/random/boot_id` | The boot, part of each process's identity (observe mode only). Recorded only in UUID form; otherwise empty, and the runtime's binds stay open | read |
 
-Magic links (`exe`, `fd/<n>`, `ns/net`) are read with `readlinkat` and are never followed or
-opened.
+Magic links (`exe`, `fd/<n>`, `ns/net`, `ns/mnt`) are read with `readlinkat`. Only `exe` is also
+followed, by `stat`, for the executable's `dev:ino`; nothing a link leads to is opened. The
+allowlist names the operations each entry allows, so an `open` of `/proc/<pid>/exe` is a C-6
+violation.
 
 ## The runtime
 

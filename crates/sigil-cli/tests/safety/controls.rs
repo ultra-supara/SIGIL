@@ -208,6 +208,14 @@ fn read_proc_environ() {
 
 #[test]
 #[ignore = "negative control body; run by its driver"]
+fn open_proc_exe() {
+    if armed().is_some() {
+        let _ = std::fs::File::open("/proc/self/exe");
+    }
+}
+
+#[test]
+#[ignore = "negative control body; run by its driver"]
 fn openat2_proc() {
     if armed().is_some() {
         openat2(Path::new("/proc/self/status"), 0);
@@ -500,6 +508,26 @@ fn control_read_proc_environ_is_detected() {
         "read_proc_environ",
         plain_target,
         &[(Contract::C6ProcScope, &["openat", "open"])],
+    );
+}
+
+/// External plan review, P2: `/proc/<pid>/exe` is allowed in observe mode for `readlink` and
+/// `stat` only. Opening it reaches the executable, and is a C-6 violation even under that scope.
+#[test]
+fn control_open_proc_exe_is_detected_under_the_observe_scope() {
+    let Some((run, mut policy)) =
+        run_control_traced("open_proc_exe", "open_proc_exe", plain_target)
+    else {
+        return;
+    };
+    policy.proc_scopes = vec!["runtime", "observe"];
+    let v = check(&run, &policy);
+    assert!(
+        v.iter().any(|x| x.contract == Contract::C6ProcScope
+            && ["openat", "open"].contains(&x.syscall.as_str())
+            && x.detail.contains("/proc/self/exe")),
+        "opening /proc/self/exe was not flagged under the observe scope:\n{}",
+        report(&run, &v)
     );
 }
 

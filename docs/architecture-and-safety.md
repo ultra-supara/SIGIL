@@ -20,7 +20,7 @@ sigil-wasm ───────────────────────
 
 ## Data flow
 
-1. **Collect and observe.** The engine reads the model store through `SafeFs`; in observe mode it also reads the allowlisted `/proc` entries; with `--active api-probe` the CLI asks `sigil-probe` for one API response.
+1. **Collect and observe.** The engine reads the model store through `SafeFs`; in observe mode it also reads the allowlisted `/proc` entries (including `maps` and `ns/mnt`, and `stat` through `exe`, of the runtime's processes); with `--active api-probe` the CLI asks `sigil-probe` for one API response.
 2. **Facts.** Each observation becomes a fact with its evidence. What could not be read becomes a coverage gap, not a fact.
 3. **Analysis.** Rules turn facts into findings, and record coverage for each check.
 4. **Policy.** The policy decides each finding (`fail`, `warn`, or `ignore`, which needs a reason) and which checks are required ([policy](policy.md)).
@@ -31,7 +31,7 @@ sigil-wasm ───────────────────────
 ## Modes
 
 - **static** (default): files only.
-- **observe**: also the allowlisted `/proc` entries.
+- **observe**: also the allowlisted `/proc` entries: the sockets and fd tables, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (the file is never opened), with `/proc/<pid>/stat` of every process.
 - **active**: explicitly requested features that contact something; today only the API probe.
 
 The contracts of each mode, and how each is checked: [ADR-002](adr/ADR-002-execution-modes.md).

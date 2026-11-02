@@ -199,6 +199,12 @@ pub struct ProcessRef {
     pub boot_id: String,
 }
 
+/// The coverage check of the observed runtime processes' executables and mappings (PR-4d-2).
+pub const PROCESSES_OBSERVED: &str = "processes.observed";
+
+/// The role of the runtime's server process.
+pub const RUNTIME_ROLE: &str = "ollama serve";
+
 /// What was observed about a running process (observe mode). Its environment, cwd, and user are
 /// [`crate::ProcessValue`]s with an `ObservedProcess` origin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +217,11 @@ pub struct ProcessObs {
     pub exe: ProcessExe,
     /// Mappings observed in this process at `at`.
     pub mappings: Vec<MappingObs>,
+    /// How much of its `maps` was read, so how much `mappings` stands for (PR-4d-2). Optional on
+    /// read: a session from before it never read `maps`, so a missing field reads as `NotRead`.
+    /// Always written.
+    #[serde(default)]
+    pub maps_read: MapsRead,
     /// Its name (`comm`), as the process set it; `None` when it could not be read.
     pub name: Option<UntrustedText>,
     /// Its arguments (`cmdline`), as the process set them; `None` when not read. Read only for
@@ -220,6 +231,23 @@ pub struct ProcessObs {
     pub net_ns: NsInode,
     /// Whether its file descriptors could be listed (needed to attribute sockets to it).
     pub fd_table: Observability,
+}
+
+/// How much of a process's `maps` was read (PR-4d-2), so how much `mappings` stands for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MapsRead {
+    /// `maps` was read to its end. A read that an exec or an exit SIGIL detects cut short is
+    /// never kept; what it cannot detect is in the engine's doc (`observe::proc`).
+    Whole,
+    /// Read in part (a budget cut it short, or lines were not understood): `mappings` is what
+    /// was read, at least one.
+    Part,
+    /// Not read, a read in part that kept no mapping, or what was read was dropped (an exec
+    /// during the reads was seen, or could not be ruled out): `mappings` is empty.
+    /// Also a process whose `maps` SIGIL does not read (a listener's holder outside the
+    /// runtime's tree). What a session from before `maps_read` reads as.
+    #[default]
+    NotRead,
 }
 
 /// A namespace's inode, or why it could not be read.

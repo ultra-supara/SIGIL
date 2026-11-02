@@ -1,5 +1,6 @@
 //! A fake proc root for observe-mode tests: process directories with `comm`, `cmdline`, `stat`,
-//! `exe`, `ns/net`, and `fd/<n>` links, and the `net/tcp{,6}` tables, as the kernel shows them.
+//! `maps`, `exe`, `ns/{net,mnt}`, and `fd/<n>` links, and the `net/tcp{,6}` tables, as the kernel
+//! shows them.
 
 use std::fs;
 use std::net::IpAddr;
@@ -10,6 +11,8 @@ use tempfile::TempDir;
 
 /// SIGIL's own network namespace in the fixtures.
 pub const OWN_NET_NS: u64 = 4026531840;
+/// SIGIL's own mount namespace in the fixtures.
+pub const OWN_MNT_NS: u64 = 4026531841;
 pub const BOOT_ID: &str = "00000000-0000-4000-8000-000000000000";
 
 pub struct FakeProc {
@@ -29,6 +32,11 @@ pub struct Proc<'a> {
     pub net_ns: u64,
     pub sockets: &'a [u64],
     pub start_ticks: u64,
+    /// Its parent (`stat` field 4).
+    pub ppid: u32,
+    /// The text of its `maps`.
+    pub maps: &'a str,
+    pub mnt_ns: u64,
 }
 
 impl Default for Proc<'_> {
@@ -41,6 +49,9 @@ impl Default for Proc<'_> {
             net_ns: OWN_NET_NS,
             sockets: &[],
             start_ticks: 500,
+            ppid: 1,
+            maps: "",
+            mnt_ns: OWN_MNT_NS,
         }
     }
 }
@@ -72,11 +83,17 @@ impl FakeProc {
             fake.path().join("self/ns/net"),
         )
         .unwrap();
+        symlink(
+            format!("mnt:[{OWN_MNT_NS}]"),
+            fake.path().join("self/ns/mnt"),
+        )
+        .unwrap();
         fake.process(&Proc {
             pid: 1,
             comm: "systemd",
             argv: &["/sbin/init"],
             exe: Some("/usr/lib/systemd/systemd"),
+            ppid: 0,
             ..Proc::default()
         });
         fake.write_tables();
@@ -91,6 +108,24 @@ impl FakeProc {
         self.path().join(pid.to_string())
     }
 
+    /// Where the fixture keeps the file at the absolute `path`: `<root>/fs<path>`. An `exe`
+    /// link points there, so `stat` through it is the fixture's file, never the host's.
+    pub fn fs(&self, path: &str) -> PathBuf {
+        self.path().join("fs").join(path.trim_start_matches('/'))
+    }
+
+    /// Makes `name` in a process's directory unreadable. Returns `false` when the process can
+    /// still read it (it runs as root).
+    pub fn deny(&self, pid: u32, name: &str) -> bool {
+        let path = self.pid_dir(pid).join(name);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&path).is_ok() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            return false;
+        }
+        true
+    }
+
     pub fn process(&self, p: &Proc) {
         let dir = self.pid_dir(p.pid);
         fs::create_dir_all(dir.join("fd")).unwrap();
@@ -102,7 +137,8 @@ impl FakeProc {
             cmdline.push(0);
         }
         fs::write(dir.join("cmdline"), cmdline).unwrap();
-        let fields: Vec<String> = (3..=21).map(|n| n.to_string()).collect();
+        let mut fields: Vec<String> = (3..=21).map(|n| n.to_string()).collect();
+        fields[1] = p.ppid.to_string();
         fs::write(
             dir.join("stat"),
             format!(
@@ -115,9 +151,16 @@ impl FakeProc {
         )
         .unwrap();
         if let Some(exe) = p.exe {
-            symlink(exe, dir.join("exe")).unwrap();
+            let target = self.fs(exe);
+            if !target.exists() {
+                fs::create_dir_all(target.parent().unwrap()).unwrap();
+                fs::write(&target, b"").unwrap();
+            }
+            symlink(&target, dir.join("exe")).unwrap();
         }
         symlink(format!("net:[{}]", p.net_ns), dir.join("ns/net")).unwrap();
+        symlink(format!("mnt:[{}]", p.mnt_ns), dir.join("ns/mnt")).unwrap();
+        fs::write(dir.join("maps"), p.maps).unwrap();
         for (n, inode) in p.sockets.iter().enumerate() {
             symlink(
                 format!("socket:[{inode}]"),
@@ -201,6 +244,21 @@ impl Drop for FakeProc {
             }
         }
     }
+}
+
+/// A `maps` line for the file at `path`, with its real device and inode, as the kernel prints
+/// them.
+pub fn maps_line(path: &Path) -> String {
+    use std::os::unix::fs::MetadataExt;
+    let m = fs::metadata(path).unwrap();
+    let dev = m.dev();
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    format!(
+        "7f0000000000-7f0000001000 r-xp 00000000 {major:02x}:{minor:02x} {} {}",
+        m.ino(),
+        path.display()
+    )
 }
 
 /// Counts the opens of files (inotify `IN_OPEN`), to pin which files the collector reads and how

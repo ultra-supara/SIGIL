@@ -109,6 +109,11 @@ pub const SCOPES: &[ScopeInfo] = &[
         id: "runtime_api",
         checks: &["runtime_api.version"],
     },
+    // PR-4d-2: the executable and mappings of the runtime and its descendants (observe mode).
+    ScopeInfo {
+        id: "runtime_processes",
+        checks: &["processes.observed"],
+    },
     ScopeInfo {
         id: "runtime_artifacts",
         checks: &[

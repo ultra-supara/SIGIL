@@ -35,14 +35,18 @@ fn the_default_policy_requires_only_implemented_scopes() {
         binary: false,
         code: false,
     });
-    assert_eq!(ids(&audit), ["model_store", "exposure"]);
+    assert_eq!(
+        ids(&audit),
+        ["model_store", "exposure", "runtime_processes"]
+    );
     assert_eq!(
         ids(&required),
         [
             "model_store.inventory",
             "model_store.integrity",
             "model_store.license",
-            "exposure.binds"
+            "exposure.binds",
+            "processes.observed"
         ]
     );
     assert_eq!(policy.open_questions.treatment, OqTreatment::CountAsGap);
@@ -485,7 +489,15 @@ fn an_active_feature_adds_the_active_scopes() {
         binary: false,
         code: false,
     });
-    assert_eq!(ids(&audit), ["model_store", "exposure", "runtime_api"]);
+    assert_eq!(
+        ids(&audit),
+        [
+            "model_store",
+            "exposure",
+            "runtime_processes",
+            "runtime_api"
+        ]
+    );
     // Without an active feature, the active scopes are not requested.
     let (audit, required) = policy.scope(&ScopeInput {
         mode: Mode::Observe,
@@ -494,7 +506,10 @@ fn an_active_feature_adds_the_active_scopes() {
         binary: false,
         code: false,
     });
-    assert_eq!(ids(&audit), ["model_store", "exposure"]);
+    assert_eq!(
+        ids(&audit),
+        ["model_store", "exposure", "runtime_processes"]
+    );
     assert!(!ids(&required).contains(&"runtime_api.version".to_string()));
     // A policy may leave them out, and must name known scopes.
     let base = "schema = \"sigil-policy/1\"\nname = \"x\"\n[scope]\naudit = [\"model_store\"]\n";

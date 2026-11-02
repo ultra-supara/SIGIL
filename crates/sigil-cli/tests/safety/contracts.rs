@@ -305,10 +305,16 @@ fn resolve(e: &Event, dirfd: Option<usize>, path: usize, cwd: &Path) -> Option<P
 pub struct AllowEntry {
     pub scope: String,
     pub pattern: String,
+    /// The operations allowed (`ops=a,b`, see `proc_op`); `None` allows every path-taking call.
+    pub ops: Option<Vec<String>>,
     pub reason: String,
 }
 
-/// `proc_allowlist.txt`, parsed.
+/// The operations an `ops=` list may name.
+const PROC_OPS: &[&str] = &["open", "readlink", "stat", "list"];
+
+/// `proc_allowlist.txt`, parsed. A token after the pattern other than `ops=…` is a malformed entry
+/// and panics: read as no `ops`, it would allow every operation.
 pub fn proc_allowlist() -> Vec<AllowEntry> {
     include_str!("proc_allowlist.txt")
         .lines()
@@ -322,9 +328,21 @@ pub fn proc_allowlist() -> Vec<AllowEntry> {
                 .map(|(a, b)| (a.trim(), b.trim()))
                 .unwrap_or((line, ""));
             let mut it = body.split_whitespace();
+            let scope = it.next()?.to_string();
+            let pattern = it.next()?.to_string();
+            let ops = it.next().map(|t| {
+                let list = t.strip_prefix("ops=").unwrap_or_else(|| {
+                    panic!("proc_allowlist.txt: unexpected token {t:?} in {line:?}")
+                });
+                list.split(',').map(str::to_string).collect()
+            });
+            if let Some(t) = it.next() {
+                panic!("proc_allowlist.txt: unexpected token {t:?} in {line:?}");
+            }
             Some(AllowEntry {
-                scope: it.next()?.to_string(),
-                pattern: it.next()?.to_string(),
+                scope,
+                pattern,
+                ops,
                 reason: reason.to_string(),
             })
         })
@@ -352,9 +370,25 @@ fn pattern_matches(pattern: &str, path: &Path) -> bool {
         })
 }
 
-fn proc_allowed(path: &Path, scopes: &[&str], list: &[AllowEntry]) -> bool {
-    list.iter()
-        .any(|e| scopes.contains(&e.scope.as_str()) && pattern_matches(&e.pattern, path))
+/// The operation a path-taking syscall performs, as `ops=` names it; any other name is its own.
+fn proc_op(syscall: &str) -> &str {
+    match syscall {
+        "open" | "openat" | "openat2" => "open",
+        "readlink" | "readlinkat" => "readlink",
+        "stat" | "lstat" | "newfstatat" | "statx" | "access" | "faccessat" | "faccessat2" => "stat",
+        "getdents64" => "list",
+        other => other,
+    }
+}
+
+/// An entry of `scopes` matches `path` and allows `op` (external plan review, P2: an `open` of a
+/// magic link reaches what it names, so link entries allow `readlink` and `stat` only).
+fn proc_allowed(path: &Path, op: &str, scopes: &[&str], list: &[AllowEntry]) -> bool {
+    list.iter().any(|e| {
+        scopes.contains(&e.scope.as_str())
+            && pattern_matches(&e.pattern, path)
+            && e.ops.as_ref().is_none_or(|ops| ops.iter().any(|o| o == op))
+    })
 }
 
 fn short(s: &str) -> String {
@@ -644,7 +678,8 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
             ),
             "getdents64" => {
                 if let Some(path) = e.args.first().and_then(|a| fd_path(a)) {
-                    if path.starts_with("/proc") && !proc_allowed(&path, &p.proc_scopes, &allowlist)
+                    if path.starts_with("/proc")
+                        && !proc_allowed(&path, "list", &p.proc_scopes, &allowlist)
                     {
                         push(
                             Contract::C6ProcScope,
@@ -724,12 +759,14 @@ pub fn check(run: &TracedRun, p: &Policy) -> Vec<Violation> {
                         );
                     }
                 }
-                if path.starts_with("/proc") && !proc_allowed(path, &p.proc_scopes, &allowlist) {
+                let op = proc_op(name);
+                if path.starts_with("/proc") && !proc_allowed(path, op, &p.proc_scopes, &allowlist)
+                {
                     push(
                         Contract::C6ProcScope,
                         e,
                         format!(
-                            "accesses {} (not in proc_allowlist.txt for scopes {:?})",
+                            "accesses {} by {op} (not in proc_allowlist.txt for scopes {:?})",
                             path.display(),
                             p.proc_scopes
                         ),
@@ -1124,6 +1161,65 @@ mod tests {
         );
     }
 
+    /// External plan review, P2: a link entry allows only its `ops`, under the scope that has it.
+    #[test]
+    fn c6_proc_allowlist_by_operation() {
+        let cwd = hex("/fx");
+        let dir = hex("/proc/123");
+        let allowed = [
+            format!("readlinkat(5<{dir}>, \"{}\", 0x1, 256) = 9", hex("exe")),
+            format!(
+                "newfstatat(5<{dir}>, \"{}\", {{st_mode=S_IFREG|0755}}, 0) = 0",
+                hex("exe")
+            ),
+            format!(
+                "statx(5<{dir}>, \"{}\", 0, STATX_BASIC_STATS, 0x1) = 0",
+                hex("exe")
+            ),
+            format!("readlinkat(5<{dir}>, \"{}\", 0x1, 256) = 15", hex("ns/mnt")),
+            format!(
+                "openat(5<{dir}>, \"{}\", O_RDONLY|O_NOFOLLOW|O_CLOEXEC) = 6",
+                hex("maps")
+            ),
+        ];
+        let lines: Vec<(u32, String)> = allowed.iter().map(|l| (10, l.clone())).collect();
+        assert_eq!(
+            found(&check(&with(&lines), &policy(&["runtime", "observe"]))),
+            vec![]
+        );
+        let denied = [
+            format!(
+                "openat(AT_FDCWD<{cwd}>, \"{}\", O_RDONLY|O_CLOEXEC) = 6",
+                hex("/proc/self/exe")
+            ),
+            format!(
+                "openat(5<{dir}>, \"{}\", O_RDONLY|O_CLOEXEC) = 6",
+                hex("fd/4")
+            ),
+            format!(
+                "openat2(5<{dir}>, \"{}\", {{flags=O_RDONLY, resolve=0}}, 24) = 6",
+                hex("ns/mnt")
+            ),
+            format!(
+                "newfstatat(5<{dir}>, \"{}\", {{st_mode=S_IFSOCK}}, 0) = 0",
+                hex("ns/net")
+            ),
+        ];
+        let lines: Vec<(u32, String)> = denied.iter().map(|l| (10, l.clone())).collect();
+        let v = check(&with(&lines), &policy(&["runtime", "observe"]));
+        assert_eq!(
+            found(&v),
+            vec![
+                (Contract::C6ProcScope, "openat".into()),
+                (Contract::C6ProcScope, "openat".into()),
+                (Contract::C6ProcScope, "openat2".into()),
+                (Contract::C6ProcScope, "newfstatat".into()),
+            ],
+        );
+        assert!(v[0].detail.contains("/proc/self/exe by open"), "{v:#?}");
+        assert!(v[3].detail.contains("/proc/123/ns/net by stat"), "{v:#?}");
+    }
+
     #[test]
     fn harness_requires_the_binary_to_start_and_rule_lines_to_parse() {
         let run = from_lines(
@@ -1151,6 +1247,12 @@ mod tests {
             assert!(["runtime", "observe"].contains(&e.scope.as_str()), "{e:?}");
             assert!(e.pattern.starts_with("/proc"), "{e:?}");
             assert!(e.reason.len() >= 10, "entry needs a reason: {e:?}");
+            for op in e.ops.iter().flatten() {
+                assert!(
+                    PROC_OPS.contains(&op.as_str()),
+                    "unknown operation {op:?}: {e:?}"
+                );
+            }
         }
     }
 }

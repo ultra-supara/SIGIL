@@ -703,6 +703,114 @@ fn observe_mode_reads_only_allowlisted_proc() {
     }
 }
 
+/// A process the test started, killed and reaped however the test ends (a failed assertion
+/// included). The fake runtime's child dies with it (`PR_SET_PDEATHSIG`).
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// PR-4d-2: observe mode reads the runtime's and its descendant's executable identity (`stat`
+/// through `exe`), `maps`, and `ns/mnt`, and nothing else new. A fake `ollama serve` with one child
+/// runs as this user, untraced; only `sigil` is traced.
+#[test]
+fn observe_mode_reads_the_runtime_s_executable_and_mappings_only_through_the_allowlist() {
+    let case =
+        "observe_mode_reads_the_runtime_s_executable_and_mappings_only_through_the_allowlist";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let build = fx.tmp.path().join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    let Some(exe) = fixtures::require(case, fixtures::fake_runtime(&build)) else {
+        return;
+    };
+    let mut runtime = KillOnDrop(
+        std::process::Command::new(&exe)
+            .arg("serve")
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(runtime.0.stdout.as_mut().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    let child: u32 = line
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("the fake runtime reported no child pid ({e}): {line:?}"));
+    let parent = runtime.0.id();
+    let models = fixtures::ollama_store(&fx.target);
+    let session = fx.out.join("session.json");
+    let args = os(&[
+        &"inspect",
+        &"ollama",
+        &"--mode",
+        &"observe",
+        &"--models-dir",
+        &models,
+        &"--out",
+        &session,
+    ]);
+    let r = run("inspect-observe-runtime", &fx, &refs(&args));
+    drop(runtime);
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    for pid in [parent, child] {
+        let dir = PathBuf::from(format!("/proc/{pid}"));
+        // The engine reads each entry relative to the process's open `/proc/<pid>` directory, so
+        // the calls are matched by that dirfd and the entry's name.
+        let at = |name: &str, call: &[&str]| {
+            r.events.iter().any(|e| {
+                call.contains(&e.name.as_str())
+                    && e.args.first().and_then(|a| fd_path(a)).as_deref() == Some(dir.as_path())
+                    && e.args
+                        .get(1)
+                        .and_then(|a| crate::trace::str_arg(a))
+                        .as_deref()
+                        == Some(Path::new(name))
+            })
+        };
+        assert!(
+            at("exe", &["newfstatat", "statx", "fstatat64"]),
+            "no stat through {pid}/exe"
+        );
+        assert!(at("maps", &["openat"]), "no read of {pid}/maps");
+        assert!(at("ns/mnt", &["readlinkat"]), "no readlink of {pid}/ns/mnt");
+    }
+    assert_clean(&r, &policy(&fx, &[&session], &["runtime", "observe"]));
+    // Under the static scope, the new entries are violations: they do real work.
+    let v = check(&r, &policy(&fx, &[&session], &["runtime"]));
+    for name in ["maps", "ns/mnt", "exe"] {
+        let path = format!("/proc/{parent}/{name}");
+        assert!(
+            v.iter()
+                .any(|x| x.contract == Contract::C6ProcScope && x.detail.contains(&path)),
+            "{path} was not flagged under the static scope:\n{}",
+            report(&r, &v)
+        );
+    }
+    // The session names both processes.
+    let s: serde_json::Value = serde_json::from_slice(&std::fs::read(&session).unwrap()).unwrap();
+    let pids: Vec<u64> = s["processes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["process"]["pid"].as_u64().unwrap())
+        .collect();
+    assert!(
+        pids.contains(&u64::from(parent)) && pids.contains(&u64::from(child)),
+        "{pids:?}"
+    );
+}
+
 #[test]
 fn session_render_writes_only_its_out() {
     if !require_tracer("session_render_writes_only_its_out") {

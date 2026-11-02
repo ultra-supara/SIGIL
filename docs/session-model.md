@@ -216,6 +216,13 @@ The rule then yields an open question at most.
   session then has exactly one `ServiceUnit` source, naming that instance. A `ServiceUnit` source
   names an instance of that root, the key `ExecStart`, and a line from 1, and only the install
   root's `bin/ollama` (at the root's path plus `/bin/ollama`) carries one.
+- **Observed processes agree with what they link (PR-4d-2):**
+  - P1: a `ProcessExe` source names a recorded process whose `exe` is that instance, once; a process whose `exe` is an instance is named by that instance's `ProcessExe` source;
+  - P2: a mapping's instance has the mapping's `dev:ino`;
+  - P3: `processes.observed` entries are scoped to the audit or to a recorded process, once each;
+  - P4: a process is recorded once;
+  - P5: when `processes.observed` is required, there is an entry for the audit and one for every recorded process. A runtime's entry (role `ollama serve`) is never `OutOfScope`, whether the check is required or not. A session from before PR-4d-2 does not require the check and has no entry, so P5 holds of it;
+  - P6: a process's `maps_read` agrees with its `mappings` and with its entry. `NotRead` has no mapping, and `Part` at least one. A `Complete` entry is about a process read `Whole`. An `Unavailable` or `OutOfScope` one is about a process `NotRead` whose executable is not linked: linking takes the identity, which was not read. An `OutOfScope` one is about a process that holds a recorded listener, the only process the engine records outside the runtime's tree.
 - **Code facts agree with the request and the inputs (PR-5a, [below](#code-analysis-pr-5a)):**
   - C1: `request.code` is only for a binary inspection, with a `binary_code_bytes` budget. A
     binary inspection has code facts only with `request.code`;
@@ -592,7 +599,7 @@ The full session validates. `crates/sigil-model/tests/docs.rs` checks this excer
 | Session root | `Session`, `SchemaVersion`, `ToolInfo`, `KnowledgeRef`, `RunRequest`, `ObservationMeta` | One run. Knowledge hashes, the request (deterministic), and observation metadata (not analysis) |
 | Content and placement | `Artifact`, `Slice`, `FileInstance`, `InstanceContent`, `StatInfo`, `Stability` | What was read and where it was found, with change detection |
 | Model store | `Model`, `ModelProvenance`, `ModelLayer`, `LayerRole`, `BlobLookup`, `LicenseText` | One manifest, what its path says, its layers as written with how each blob lookup ended, and the license text read |
-| Process observation | `ProcessObs`, `ProcessRef`, `MappingObs`, `NsInode` | What was seen in a process at an instant: its name, arguments, executable, network namespace, whether its fds could be listed, and its mappings |
+| Process observation | `ProcessObs`, `ProcessRef`, `MappingObs`, `MapsRead`, `NsInode` | What was seen in a process during the observation (`at`): its name, arguments, executable, network namespace, whether its fds could be listed, and its mappings, with how much of its `maps` they stand for (`maps_read`: `Whole`, `Part`, or `NotRead`; PR-4d-2) |
 | Listeners | `Listener`, `Protocol`, `ListenerOwner` | Listening sockets in SIGIL's network namespace, and who holds each one as far as the readable fd tables show. Never attributed by port |
 | Active probes | `ActiveFeature`, `ApiProbe`, `ProbeResult`, `ProbePhase` | What `--active` asked for (`request.active`) and how each probe ended. A refused connection is an observation (`NotPresent` with basis `ConnectionRefused`); a timeout is not |
 | Evidence | `EvidenceRef`, `Loc`, `ConfigRef`, `Basis`, `RuleSupportRef` | Typed pointers into the session. How each fact was obtained |
@@ -891,11 +898,11 @@ names that name its component, and the values of the database's version fields
 versions of one kind whose major keys disagree, or two values of one commit field) needs the
 database, so the engine decides it; `validate` checks the other four statuses, that a
 `Conflicting` claim has two identity assertions or versions at least, and I1. `Required`
-assertions come with PR-4d, and code checks with M1 profiles.
+assertions come in a later PR, and code checks with M1 profiles.
 
 ## Fields added to `sigil-session/1`
 
-A field added after sessions without it were written is optional on read, so those sessions still load. A missing one reads as empty. SIGIL always writes it, so a session it writes has every field.
+A field added after sessions without it were written is optional on read, so those sessions still load. A missing one reads as what such a session did: an empty list, `false`, or `NotRead` (the table). SIGIL always writes it, so a session it writes has every field.
 
 | Field | Added in | Missing reads as |
 |---|---|---|
@@ -906,6 +913,7 @@ A field added after sessions without it were written is optional on read, so tho
 | `request.code` | PR-5a | `false` (no code analyzed) |
 | `binaries[].container.Elf.returns` | PR-4c-2b | `[]` (no returned value read) |
 | `binaries[].container.MachO.imports` | PR-4c-3b | `[]` (no import read) |
+| `processes[].maps_read` | PR-4d-2 | `NotRead` (`maps` not read) |
 
 The schema leaves these fields out of `required`. Every other field is required by both the schema and serde.
 
@@ -915,7 +923,7 @@ The schema leaves these fields out of `required`. Every other field is required 
 
 The schema is **backward compatible, not forward compatible.**
 - This SIGIL reads every `sigil-session/1` an earlier SIGIL wrote.
-- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`. A build from before PR-4d-1 refuses a session from `--service-unit`: its unit is discovered by `Argument` outside a binary root. A validation rule can refuse one too: by C6, a build from before #105 refuses a session with a `cxx.*` hint on a Mach-O import bound to `/usr/lib/libc++.1.dylib`.
+- An earlier SIGIL may refuse a session this one writes. Every type denies unknown fields and variants, so a build from before PR-3b-2 refuses a session with `request.active` or `probes`, one from before PR-4a a session with `reference_matches`, one from before PR-4b-1 a session with `binaries`, one from before PR-4b-2a a binary inspection (`discovered_by: Argument`), one from before PR-5a a session with `request.code`, one from before PR-4c-2b a session with an ELF's `returns`, and one from before PR-4c-3b a session with a Mach-O's `imports`. A build from before PR-4d-1 refuses a session from `--service-unit`: its unit is discovered by `Argument` outside a binary root. A build from before PR-4d-2 refuses a session that records a process, since each one has `maps_read`; it reads any other, since the other types existed, but checks less of it. A validation rule can refuse one too: by C6, a build from before #105 refuses a session with a `cxx.*` hint on a Mach-O import bound to `/usr/lib/libc++.1.dylib`.
 - A change that a newer reader must not ignore needs `sigil-session/2`.
 
 ## Not in the model yet

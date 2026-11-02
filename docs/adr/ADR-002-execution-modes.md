@@ -25,7 +25,7 @@ This ADR turns the promises into named contracts and states **exactly how each i
 | Mode | Purpose | CLI paths |
 |---|---|---|
 | **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `session verify`, `explain`, and `rules`, which read only a saved session (and a policy file) or nothing |
-| **observe** | static, plus reads of the documented `/proc` entries | `inspect ollama --mode observe` |
+| **observe** | static, plus reads of the documented `/proc` entries: sockets and fd tables, `/proc/<pid>/stat` of every process, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (never opened) | `inspect ollama --mode observe` |
 | **active** | Explicitly requested features that contact something | `inspect ollama --active api-probe`, with `--mode static` or `--mode observe`. Off by default |
 
 PR-1 made the contracts below checkable for the v0.1 CLI. Since PR-3b-1 they are checked over the v2 commands.
@@ -39,7 +39,7 @@ PR-1 made the contracts below checkable for the v0.1 CLI. Since PR-3b-1 they are
 | C-3 | **Never `mmap` an inspected target file.** Targets are read with `read`/`pread` | all modes |
 | C-4 | **No network I/O.** No socket-family syscall of any address family (`AF_INET`, `AF_INET6`, `AF_UNIX`, `AF_NETLINK`, …) | static, observe |
 | C-5 | **Read-only.** No write-capable open (`O_WRONLY`/`O_RDWR`/`O_CREAT`/`O_TRUNC`/`O_APPEND`/`O_TMPFILE`) and no file-system mutation (`rename*`, `unlink*`, `rmdir`, `mkdir*`, `symlink*`, `link*`, `truncate`, `ch{mod,own}*`, `*xattr`, `utime*`, `mknod*`) except on the output files the user named and the temporary siblings the run itself creates for them (`.<name>.sigil-<pid>-<k>.tmp`, `O_EXCL`; one is exchanged with the output and the other name unlinked). Creating the missing parent directories of those outputs is allowed | static, observe |
-| C-6 | **`/proc` access stays within its documented scope.** Every path-taking access under `/proc`, and every directory listing there, must match the allowlist in `crates/sigil-cli/tests/safety/proc_allowlist.txt` for the run's scope. `ptrace` and `process_vm_*` are violations | static (runtime entries only), observe (plus observe entries) |
+| C-6 | **`/proc` access stays within its documented scope.** Every path-taking access under `/proc`, and every directory listing there, must match the allowlist in `crates/sigil-cli/tests/safety/proc_allowlist.txt` for the run's scope, and its operation: an entry names the operations it allows (`open`, `readlink`, `stat`, `list`), so `/proc/<pid>/exe` allows `readlink` and `stat` but not `open`. `ptrace` and `process_vm_*` are violations | static (runtime entries only), observe (plus observe entries) |
 
 **Active mode.** This completes the active mode defined in §1. It changes none of C-1…C-6 for static and observe runs. An active feature is added to a static or observe run; it does not replace the mode. Every contract of the mode applies, except that C-4 allows the feature's own connection:
 
@@ -111,7 +111,7 @@ The filter is the `%process`, `%network`, `%file`, and `%desc` classes plus ever
 - TCP connect, UDP bind, and `AF_UNIX` connect (C-4);
 - the same TCP connect with another destination allowed (C-4 active), and with exactly its own destination allowed (no violation);
 - append to a target, create a file in the target root, rename a target, and an `openat2` write (C-5);
-- read `/proc/self/environ`, `openat2` on `/proc/self/status`, and `process_vm_readv` (C-6);
+- read `/proc/self/environ`, `openat2` on `/proc/self/status`, an `open` of `/proc/self/exe` under the observe scope, and `process_vm_readv` (C-6);
 - `io_uring_setup` (harness integrity).
 
 **Failure reports** name, for each violation:
