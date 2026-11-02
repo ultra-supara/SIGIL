@@ -1655,5 +1655,21 @@ mod tests {
                 }
             }
         }
+        #[test]
+        fn unsupported_configured_syntax_remains_not_modeled() {
+            let (values, gaps) = parse(b"[Service]\nWorkingDirectory=~\n");
+            let value = configured(&values, &ValueKey::Cwd).unwrap();
+            assert_eq!(
+                value.value,
+                TriValue::Unknown {
+                    reason: sigil_model::UnknownReason::NotModeled {
+                        what: "line 2: unsupported WorkingDirectory syntax".into(),
+                    },
+                }
+            );
+            assert!(gaps
+                .iter()
+                .any(|gap| gap == "line 2: unsupported WorkingDirectory syntax"));
+        }
     }
 }

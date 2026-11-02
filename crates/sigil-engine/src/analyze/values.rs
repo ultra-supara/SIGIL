@@ -85,3 +85,72 @@ pub fn value_id(
     let digest = Sha256::digest(bytes);
     ValueId::new(format!("value:{digest:x}")).map_err(|_| "invalid value identity".to_string())
 }
+
+/// Project minimized process facts into requested-read coverage without additional I/O.
+/// Complete describes individual successful reads, not an atomic process snapshot.
+pub fn observed_coverage(facts: &crate::observe::proc::ProcFacts) -> Vec<sigil_model::Coverage> {
+    use sigil_model::{
+        CheckId, Coverage, CoverageState, NotObservable, Observability, Ref, Unavailability,
+    };
+    let Ok(check) = CheckId::new("values.observed") else {
+        return vec![];
+    };
+    let entry = |scope, state| Coverage {
+        check: check.clone(),
+        scope,
+        state,
+        budget: None,
+    };
+    let mut missing = vec![];
+    if let Observability::NotObservable(why) = facts.process_list {
+        missing.push(format!(
+            "the process list was not read to its end ({why:?}); process values may be missing"
+        ));
+    } else if !facts.pid1_visible {
+        missing.push(format!(
+            "PID 1 is not visible ({:?}); hidden processes may have unobserved values",
+            NotObservable::PermissionDenied
+        ));
+    }
+    missing.extend(facts.process_gaps.iter().cloned());
+    missing.extend(facts.value_gaps.iter().cloned());
+    for detail in &facts.value_details {
+        for gap in &detail.missing {
+            if gap.contains("process_values") || gap.contains("proc_environ_total_bytes") {
+                missing.push(format!("process {}: {gap}", detail.process.pid));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    let audit = if missing.is_empty() {
+        CoverageState::Complete
+    } else {
+        CoverageState::Partial { missing }
+    };
+    let mut out = vec![entry(Ref::Audit, audit)];
+    for detail in &facts.value_details {
+        let state = if detail.denied {
+            CoverageState::Unavailable {
+                why: Unavailability::PermissionDenied,
+            }
+        } else if detail.missing.is_empty() {
+            CoverageState::Complete
+        } else {
+            CoverageState::Partial {
+                missing: detail.missing.clone(),
+            }
+        };
+        out.push(entry(Ref::Process(detail.process.clone()), state));
+    }
+    for process in &facts.value_outside {
+        out.push(entry(
+            Ref::Process(process.clone()),
+            CoverageState::OutOfScope {
+                why: "the recorded listener holder is outside the runtime and its descendants"
+                    .into(),
+            },
+        ));
+    }
+    out
+}
