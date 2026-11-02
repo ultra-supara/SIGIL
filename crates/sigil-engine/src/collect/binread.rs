@@ -116,7 +116,13 @@ pub(crate) fn read(
         parsed.insert(a.id.clone(), p.clone());
     }
     if let Some(artifact) = read.artifact.as_mut() {
-        if let Some(parsed_artifact) = parsed.get(&artifact.id).or(fresh.as_ref()) {
+        // Preserve recognition for the existing non-closing `not parsed` content summary.
+        // This format tag is not a slice/container witness: only stable cached reads below
+        // may establish slice hashes, BinaryFacts, code outcomes, or inventory.
+        if let Some(fresh) = fresh.as_ref() {
+            artifact.format = fresh.format;
+        }
+        if let Some(parsed_artifact) = parsed.get(&artifact.id) {
             artifact.format = parsed_artifact.format;
             artifact.slices = parsed_artifact
                 .slices
@@ -154,13 +160,27 @@ pub(crate) type Slices = (
 /// ([`read`]), so no part comes from a read that saw one.
 pub(crate) fn binaries(
     parsed: BTreeMap<ArtifactId, ParsedArtifact>,
-    artifacts: &[Artifact],
+    artifacts: &mut [Artifact],
 ) -> Slices {
     let (mut out, mut code, mut scans) = (vec![], vec![], vec![]);
     for (id, parsed_artifact) in parsed {
-        let Some(artifact) = artifacts.iter().find(|a| a.id == id) else {
+        let Some(artifact) = artifacts.iter_mut().find(|a| a.id == id) else {
             continue;
         };
+        // The first placement may have been unstable. Only the shared stable cache can
+        // establish content witnesses, including for a later identical placement.
+        artifact.format = parsed_artifact.format;
+        artifact.slices = parsed_artifact
+            .slices
+            .iter()
+            .map(|slice| Slice {
+                id: SliceId::from_parts(&id, slice.arch, slice.offset),
+                arch: slice.arch,
+                offset: slice.offset,
+                size: slice.size,
+                sha256: slice.sha256.clone(),
+            })
+            .collect();
         for parsed_slice in parsed_artifact.slices {
             let slice_id = SliceId::from_parts(&id, parsed_slice.arch, parsed_slice.offset);
             if !artifact.slices.iter().any(|slice| slice.id == slice_id) {

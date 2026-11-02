@@ -218,7 +218,7 @@ fn collect_with(
         instance.path_proof = None;
         facts.instances.push(instance);
     }
-    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &facts.artifacts);
+    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &mut facts.artifacts);
     Ok(facts)
 }
 

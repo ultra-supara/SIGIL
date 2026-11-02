@@ -191,11 +191,9 @@ pub(crate) fn decode(
             }
             // Charged before the decode, success or not (plan review P1-3): a function that fails
             // still spends the artifact's budget, so failing functions cannot decode forever.
-            if run.instructions >= run.budgets.instructions {
-                run.limit("decoded-instruction", run.budgets.instructions);
+            if !run.charge(super::Work::Instructions, 1) {
                 return Err(Failure::ArtifactInstructions);
             }
-            run.instructions += 1;
             count += 1;
             if count > FUNCTION_INSTRUCTIONS {
                 return Err(Failure::Instructions);

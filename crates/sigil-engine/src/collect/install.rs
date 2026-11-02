@@ -152,7 +152,7 @@ fn collect_with(
             c.state()
         }
     };
-    let (binaries, code, scans) = super::binread::binaries(c.parsed, &c.artifacts);
+    let (binaries, code, scans) = super::binread::binaries(c.parsed, &mut c.artifacts);
     Ok(InstallFacts {
         root_path,
         root_id,
@@ -603,6 +603,91 @@ mod tests {
         assert!(changed.binaries.is_empty());
         assert!(super::collect(d.path(), budgets).unwrap().code.is_empty());
     }
+    #[test]
+    fn unstable_reads_discard_slice_witnesses_and_stable_duplicates_restore_content() {
+        use crate::code::{CodeBudgets, CodeOutcome};
+        use std::io::Write;
+
+        for change in ["grow", "replace", "vanish"] {
+            for duplicate in [false, true] {
+                let d = tempfile::TempDir::new().unwrap();
+                let lib = d.path().join("lib/ollama");
+                std::fs::create_dir_all(&lib).unwrap();
+                let bytes = std::fs::read(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/code/spawn.so"),
+                )
+                .unwrap();
+                let path = lib.join("a.so");
+                std::fs::write(&path, &bytes).unwrap();
+                if duplicate {
+                    std::fs::write(lib.join("z.so"), &bytes).unwrap();
+                }
+                let mut budgets = InstallBudgets::default();
+                budgets.binary.code = Some(CodeBudgets::default());
+                let facts = collect_with(d.path(), budgets, &|rel| {
+                    if rel.display() != "lib/ollama/a.so" {
+                        return;
+                    }
+                    match change {
+                        "grow" => std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .unwrap()
+                            .write_all(b"!")
+                            .unwrap(),
+                        "replace" => {
+                            let replacement = d.path().join("replacement");
+                            std::fs::write(&replacement, &bytes).unwrap();
+                            std::fs::rename(replacement, &path).unwrap();
+                        }
+                        "vanish" => std::fs::remove_file(&path).unwrap(),
+                        _ => unreachable!(),
+                    }
+                })
+                .unwrap();
+                let unstable = facts
+                    .instances
+                    .iter()
+                    .find(|i| i.path.as_bytes().ends_with(b"/a.so"))
+                    .unwrap();
+                assert_ne!(unstable.stability, Stability::NoChangeDetected);
+                assert_eq!(facts.artifacts.len(), 1);
+                if duplicate {
+                    assert_eq!(facts.binaries.len(), 1, "{change}: stable duplicate");
+                    assert_eq!(facts.code.len(), 1);
+                    assert_eq!(facts.artifacts[0].slices.len(), 1);
+                    assert!(matches!(&facts.code[0].1,
+                        CodeOutcome::Analyzed { call_sites, .. } if !call_sites.is_empty()));
+                } else {
+                    assert!(facts.binaries.is_empty(), "{change}");
+                    assert!(facts.code.is_empty(), "{change}");
+                    assert!(
+                        facts.artifacts[0].slices.is_empty(),
+                        "{change}: unstable reads must not retain slice witnesses"
+                    );
+                    assert!(facts.artifacts[0].code_slice_inventory.is_none());
+                    let coverage = crate::analyze::install_code::coverage(
+                        &facts,
+                        budgets.binary.code.unwrap().bytes,
+                    )
+                    .unwrap();
+                    let content = coverage
+                        .iter()
+                        .find(|c| matches!(c.scope, sigil_model::Ref::Artifact(_)))
+                        .expect("recognized unstable content retains its not-parsed summary");
+                    assert_eq!(
+                        content.state,
+                        CoverageState::Partial {
+                            missing: vec![sigil_model::BINARY_NOT_PARSED.to_string()],
+                        }
+                    );
+                    assert_eq!(content.budget.as_ref().unwrap().used, 0);
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_parent_swap_preserving_the_leaf_inode_cannot_mint_a_path_proof() {
         use std::cell::Cell;

@@ -1203,15 +1203,10 @@ pub(crate) const JOIN_COST: u64 = 4;
 /// [`JOIN_COST`], and each register joined its [`join_cost`]. Past `budgets.value_steps` the run
 /// stops, and the function fails.
 fn charge(run: &mut Run, cost: u64) -> Result<(), Failure> {
-    match run.value_steps.checked_add(cost) {
-        Some(total) if total <= run.budgets.value_steps => {
-            run.value_steps = total;
-            Ok(())
-        }
-        _ => {
-            run.limit("value-step", run.budgets.value_steps);
-            Err(Failure::ArtifactValueSteps)
-        }
+    if run.charge(super::Work::Values, cost) {
+        Ok(())
+    } else {
+        Err(Failure::ArtifactValueSteps)
     }
 }
 

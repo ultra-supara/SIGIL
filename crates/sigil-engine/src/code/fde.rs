@@ -31,7 +31,6 @@ pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
     // worst about 184 MiB at the default limit of 2^20, dropped when this returns. Real files
     // have one or two CIEs.
     let mut cies = BTreeMap::new();
-    let mut seen = 0;
     // Where the next entry starts: after the last one walked.
     let mut next: usize = 0;
     let mut out = vec![];
@@ -63,11 +62,9 @@ pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
                 break;
             }
         };
-        if seen >= run.budgets.fdes {
-            run.limit("FDE", seen as u64);
+        if !run.charge(super::Work::Fdes, 1) {
             break;
         }
-        seen += 1;
         let fde = match partial.parse(|frame, bases, offset| cie(&mut cies, frame, bases, offset)) {
             Ok(fde) => fde,
             Err(e) => {
@@ -157,6 +154,18 @@ mod tests {
         (0x10d8, 0x10ef),
         (0x10ef, 0x1110),
     ];
+
+    #[test]
+    fn fde_work_is_shared_between_slices() {
+        let (bytes, base) = eh_frame("values.so");
+        let mut run = Run::new(CodeBudgets {
+            fdes: 10,
+            ..CodeBudgets::default()
+        });
+        assert_eq!(parse(&bytes, base, &mut run), VALUES);
+        assert_eq!(parse(&bytes, base, &mut run), VALUES[1..2]);
+        assert!(run.stopped());
+    }
 
     #[test]
     fn the_fdes_of_a_linked_file() {

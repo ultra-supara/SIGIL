@@ -220,12 +220,26 @@ pub fn parse<R: ReadCacheOps>(
     file: Option<(&File, u64)>,
     sought: Option<Sought<'_>>,
 ) -> Parsed {
+    let mut analysis = budgets
+        .code
+        .zip(file)
+        .map(|(b, (f, size))| code::ArtifactAnalysis::legacy(f, size, b));
+    parse_with_analysis(data, budgets, file, sought, analysis.as_mut())
+}
+
+pub(crate) fn parse_with_analysis<R: ReadCacheOps>(
+    data: &Bounded<R>,
+    budgets: BinaryBudgets,
+    file: Option<(&File, u64)>,
+    sought: Option<Sought<'_>>,
+    analysis: Option<&mut code::ArtifactAnalysis<'_>>,
+) -> Parsed {
     let parsed = match FileKind::parse(data) {
         Ok(FileKind::Elf32) => {
-            parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file, sought)
+            parse_as::<R, elf::FileHeader32<Endianness>>(data, budgets, file, sought, analysis)
         }
         Ok(FileKind::Elf64) => {
-            parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file, sought)
+            parse_as::<R, elf::FileHeader64<Endianness>>(data, budgets, file, sought, analysis)
         }
         _ => None,
     };
@@ -274,6 +288,7 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     budgets: BinaryBudgets,
     file: Option<(&File, u64)>,
     sought: Option<Sought<'_>>,
+    analysis: Option<&mut code::ArtifactAnalysis<'_>>,
 ) -> Option<Parsed> {
     let Parts {
         elf: mut e,
@@ -291,10 +306,7 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         e.gaps
             .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
     }
-    let code = match (budgets.code, file) {
-        (Some(c), Some((f, size))) => Some(code::analyze(&mut e, &sections, &dynamic, f, size, c)),
-        _ => None,
-    };
+    let code = analysis.map(|a| code::analyze(&mut e, &sections, &dynamic, a));
     // PR-4c-2a: last, so that neither the container nor the code step sees its reads. The
     // returned strings it reads are facts of the container (PR-4c-2b).
     let scan = match (sought, file) {

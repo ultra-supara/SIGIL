@@ -246,8 +246,6 @@ fn relocations<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     run: &mut Run,
 ) -> (BTreeMap<u64, Reloc>, Vec<(u64, FieldReloc)>) {
     let endian = e.endian;
-    let limit = run.budgets.relocations;
-    let mut count: usize = 0;
     // The file ranges read: the parse cache serves a repeat free, so a table many sections name
     // would otherwise be collected once per section.
     let mut read: BTreeSet<(u64, u64)> = BTreeSet::new();
@@ -295,11 +293,9 @@ fn relocations<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             }
         };
         for r in entries {
-            if count >= limit {
-                run.limit("relocation", limit as u64);
+            if !run.charge(crate::code::Work::Relocations, 1) {
                 return (relocs, eh_relocs);
             }
-            count += 1;
             let off: u64 = r.r_offset(endian).into();
             let item = FieldReloc {
                 r_type: r.r_type(endian, false).0,

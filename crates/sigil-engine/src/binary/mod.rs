@@ -16,7 +16,7 @@ use std::fs::File;
 
 use sigil_model::{Arch, ContainerFacts, Format, GoBuildInfo, Sha256Hex};
 
-use crate::code::{CodeBudgets, CodeOutcome};
+use crate::code::{ArtifactAnalysis, CodeBudgets, CodeOutcome};
 use scan::{ScanOutcome, Sought};
 
 /// Budgets of one artifact's parse, recorded as `binary_parse_bytes`, `binary_imports`, and
@@ -90,7 +90,16 @@ pub fn parse(file: &File, size: u64, budgets: BinaryBudgets) -> Parsed {
 /// [`parse`], and with `sought` the signature scan on the same fd (PR-4c-2a, PR-4c-2b).
 fn parse_elf(file: &File, size: u64, budgets: BinaryBudgets, sought: Option<Sought<'_>>) -> Parsed {
     let data = read::Bounded::new(read::Budgeted::new(file, size), size, budgets.parse_bytes);
-    elf::parse(&data, budgets, Some((file, size)), sought)
+    let mut analysis = budgets
+        .code
+        .map(|b| ArtifactAnalysis::legacy(file, size, b));
+    elf::parse_with_analysis(
+        &data,
+        budgets,
+        Some((file, size)),
+        sought,
+        analysis.as_mut(),
+    )
 }
 
 /// Parses a recognized ELF or Mach-O artifact. A recognized but malformed Mach-O is returned
