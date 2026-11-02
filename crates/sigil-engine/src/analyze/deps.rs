@@ -505,18 +505,10 @@ impl Analyzer<'_, '_> {
         let TriValue::Known(cwd) = &value.value else {
             return Err(CWD_GAP);
         };
-        if !cwd.as_bytes().starts_with(b"/")
-            || cwd.as_bytes().ends_with(b" (deleted)")
-            || cwd.as_bytes().contains(&0)
-        {
-            return Err(CWD_GAP);
-        }
+        sigil_model::dependency_path::qualify_cwd(cwd.as_bytes())?;
         used.push(value.id.clone());
         used.sort();
         used.dedup();
-        if cwd.as_bytes().len() > sigil_model::dependency_path::MAX_LOOKUP_BYTES {
-            return Err("dependency path: lookup byte limit 65536 exceeded");
-        }
         let (absolute, _) = sigil_model::dependency_search::absolute(path, Some(cwd.as_bytes()))?;
         Ok((absolute, used))
     }
@@ -775,14 +767,16 @@ impl Analyzer<'_, '_> {
                 return;
             }
         }
-        let origin = parent(self.files[owner].path.as_bytes());
-        let expanded = match expand(text, &origin) {
-            Ok(value) => value,
-            Err(gap) => {
-                self.gap(requester, gap);
-                return;
-            }
-        };
+        let expanded =
+            match sigil_model::dependency_path::bounded_parent(self.files[owner].path.as_bytes())
+                .and_then(|origin| expand(text, origin))
+            {
+                Ok(value) => value,
+                Err(gap) => {
+                    self.gap(requester, gap);
+                    return;
+                }
+            };
         let (absolute, mut used) = match self.absolute(context, &expanded, used.to_vec()) {
             Ok(value) => value,
             Err(gap) => {

@@ -2087,7 +2087,10 @@ impl<'a> Validator<'a> {
             }
             _ => return Err("search witness does not match via"),
         };
-        let expanded = expand(raw, &parent(owner.path.as_bytes()))?;
+        let expanded = expand(
+            raw,
+            crate::dependency_path::bounded_parent(owner.path.as_bytes())?,
+        )?;
         let (absolute, uses_cwd) =
             crate::dependency_search::absolute(&expanded, cwd.map(|(_, path)| path))?;
         if uses_cwd {
@@ -2269,14 +2272,18 @@ impl<'a> Validator<'a> {
                         self.dependency_error(at, "cwd requires the collector mount namespace");
                     }
                     match &value.value {
-                        TriValue::Known(path)
-                            if path.as_bytes().starts_with(b"/")
-                                && !path.as_bytes().ends_with(b" (deleted)")
-                                && !path.as_bytes().contains(&0) =>
-                        {
-                            if same_process_read && same && self.s.request.mode == Mode::Observe {
-                                cwd = Some(path.as_bytes());
-                                cwd_id = Some(id);
+                        TriValue::Known(path) => {
+                            match crate::dependency_path::qualify_cwd(path.as_bytes()) {
+                                Ok(()) => {
+                                    if same_process_read
+                                        && same
+                                        && self.s.request.mode == Mode::Observe
+                                    {
+                                        cwd = Some(path.as_bytes());
+                                        cwd_id = Some(id);
+                                    }
+                                }
+                                Err(why) => self.dependency_error(at, why),
                             }
                         }
                         _ => self.dependency_error(
@@ -5101,6 +5108,77 @@ mod dependency_index_tests {
             "../../../schemas/examples/session-v1/20-observed-processes.json"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn repeated_saved_candidates_do_not_scan_oversized_shared_cwd() {
+        let mut s: Session = serde_json::from_str(include_str!(
+            "../../../schemas/examples/session-v1/21-deps-values.json"
+        ))
+        .unwrap();
+        s.validate().unwrap();
+        let value_index = s
+            .values
+            .iter()
+            .position(|v| matches!(v.key, ValueKey::Cwd) && matches!(v.value, TriValue::Known(_)))
+            .unwrap();
+        let id = s.values[value_index].id.clone();
+        let mut relation = s
+            .relations
+            .iter()
+            .find(|r| {
+                matches!(r,
+            Relation::Candidate { via: SearchRule::Runpath, context: Some(c), .. }
+                if c.process.is_some())
+            })
+            .unwrap()
+            .clone();
+        let Relation::Candidate {
+            context: Some(context),
+            ..
+        } = &mut relation
+        else {
+            unreachable!()
+        };
+        context.values.push(id);
+        let owner_bytes = s
+            .instances
+            .iter()
+            .find(|f| f.id == context.requester)
+            .unwrap()
+            .path
+            .as_bytes()
+            .len();
+        s.relations
+            .retain(|r| !matches!(r, Relation::Candidate { .. }));
+        for _ in 0..128 {
+            s.relations.push(relation.clone());
+        }
+        if let Relation::Candidate { from, .. } = &relation {
+            let binary = s.binaries.iter_mut().find(|b| b.slice == *from).unwrap();
+            if let ContainerFacts::Elf(elf) = &mut binary.container {
+                elf.runpath = vec!["".into()];
+            }
+        }
+        s.validate().unwrap();
+        s.values[value_index].value = TriValue::Known(format!("/{}", "x".repeat(1_048_576)).into());
+        crate::dependency_path::CONTEXT_SCAN_BYTES.set(0);
+        let errors = s.validate().unwrap_err();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(
+                    |e| matches!(e, ValidationError::DependencyContext { why, .. }
+            if why.contains("lookup byte limit"))
+                )
+                .count(),
+            128
+        );
+        assert_eq!(
+            crate::dependency_path::CONTEXT_SCAN_BYTES.get(),
+            128 * owner_bytes,
+            "only bounded owner paths may be scanned; shared cwd must not be scanned"
+        );
     }
 
     fn coverage(check: &str, scope: Ref, state: CoverageState) -> Coverage {

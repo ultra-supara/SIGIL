@@ -592,6 +592,41 @@ impl<'a> PathIndex<'a> {
     }
 }
 
+// Count bytes offered to content scans, not elapsed time. No production overhead.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CONTEXT_SCAN_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Bound the original owner before searching for its parent. Borrowing also avoids
+/// a parent allocation for each Candidate, including searches without ORIGIN.
+pub fn bounded_parent(path: &[u8]) -> Result<&[u8], &'static str> {
+    if path.len() > MAX_LOOKUP_BYTES {
+        return Err(PathGap::ByteLimit.message());
+    }
+    #[cfg(test)]
+    CONTEXT_SCAN_BYTES.with(|n| n.set(n.get() + path.len()));
+    Ok(match path.iter().rposition(|b| *b == b'/') {
+        Some(0) => &path[..1],
+        Some(at) => &path[..at],
+        None => &path[..0],
+    })
+}
+
+/// Qualify only contextual cwd inputs. Legacy stored values remain unrestricted.
+/// Length must precede content inspection because many Candidates share one cwd.
+pub fn qualify_cwd(cwd: &[u8]) -> Result<(), &'static str> {
+    if cwd.len() > MAX_LOOKUP_BYTES {
+        return Err(PathGap::ByteLimit.message());
+    }
+    #[cfg(test)]
+    CONTEXT_SCAN_BYTES.with(|n| n.set(n.get() + cwd.len()));
+    if !cwd.starts_with(b"/") || cwd.ends_with(b" (deleted)") || cwd.contains(&0) {
+        return Err("dependency cwd: qualified absolute nondeleted cwd required");
+    }
+    Ok(())
+}
+
 pub fn parent(path: &[u8]) -> Vec<u8> {
     match path.iter().rposition(|b| *b == b'/') {
         Some(0) => b"/".to_vec(),
@@ -654,14 +689,12 @@ pub fn direct_lookup_path(
     if !needed.contains(&b'/') {
         return Err("DirectPath needs a slash in the original declaration");
     }
-    let expanded = expand(needed, &parent(requester_path))?;
+    let expanded = expand(needed, bounded_parent(requester_path)?)?;
     if expanded.starts_with(b"/") {
         return Ok(expanded);
     }
     let cwd = cwd.ok_or("dependency cwd: qualified same-process cwd required")?;
-    if !cwd.starts_with(b"/") || cwd.contains(&0) || cwd.ends_with(b" (deleted)") {
-        return Err("dependency cwd: qualified absolute nondeleted cwd required");
-    }
+    qualify_cwd(cwd)?;
     if cwd.len().saturating_add(1).saturating_add(expanded.len()) > MAX_LOOKUP_BYTES {
         return Err("dependency path: lookup byte limit 65536 exceeded");
     }
@@ -693,6 +726,46 @@ pub fn checked_join(directory: &[u8], tail: &[u8]) -> Result<Vec<u8>, PathGap> {
 mod tests {
     use super::*;
     use crate::{ArtifactId, DiscoverySource, RecordedDirectory, StatInfo, UntrustedText};
+    #[test]
+    fn contextual_length_guards_precede_parent_and_cwd_scans() {
+        let parent = format!("/{}/app", "x".repeat(1_048_576));
+        let final_component = format!("/scan/{}", "x".repeat(1_048_576));
+        CONTEXT_SCAN_BYTES.set(0);
+        for _ in 0..128 {
+            for path in [&parent, &final_component] {
+                assert_eq!(
+                    bounded_parent(path.as_bytes()),
+                    Err(PathGap::ByteLimit.message())
+                );
+                assert_eq!(
+                    qualify_cwd(path.as_bytes()),
+                    Err(PathGap::ByteLimit.message())
+                );
+            }
+        }
+        assert_eq!(
+            CONTEXT_SCAN_BYTES.get(),
+            0,
+            "oversized shared text reached a scan"
+        );
+        for (path, expected) in [
+            ("/app", "/"),
+            ("app", ""),
+            ("rel/app", "rel"),
+            ("/scan/app", "/scan"),
+        ] {
+            let parent = bounded_parent(path.as_bytes()).unwrap();
+            assert_eq!(parent, expected.as_bytes());
+            assert_eq!(
+                parent.as_ptr(),
+                path.as_ptr(),
+                "parent must borrow owner storage"
+            );
+        }
+        qualify_cwd(b"/scan").unwrap();
+        assert_eq!(CONTEXT_SCAN_BYTES.get(), 4 + 3 + 7 + 9 + 5);
+    }
+
     fn root() -> ScanRoot {
         ScanRoot {
             id: RootId::new("install").unwrap(),

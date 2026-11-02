@@ -1831,3 +1831,51 @@ fn observed_ambiguity_is_isolated_from_other_process_keys_and_nonobserved_rows()
         assert!(!gaps(&a, "/scan/app").contains(&"dependency value: ambiguous observed inputs"));
     }
 }
+
+#[test]
+fn oversized_owner_and_cwd_report_byte_gap_before_path_work() {
+    for long_parent in [false, true] {
+        let mut w = World::new();
+        w.elf(
+            "/scan/bin/app",
+            ElfType::Exec,
+            &["lib.so"],
+            &[],
+            &["/scan/lib"],
+        );
+        w.elf("/scan/lib/lib.so", ElfType::Dyn, &[], &[], &[]);
+        w.instances[0].path = if long_parent {
+            format!("/scan/{}/app", "x".repeat(1_048_576))
+        } else {
+            format!("/scan/bin/{}", "x".repeat(1_048_576))
+        }
+        .into();
+        w.instances[0].path_proof = None;
+        let a = w.run();
+        assert!(gaps(&a, "/scan/bin/app")
+            .iter()
+            .any(|g| g.contains("lookup byte limit")));
+        assert!(edges(&a, "/scan/bin/app", "lib.so", SearchRule::Runpath).is_empty());
+    }
+    for source in ["", "rel"] {
+        let mut w = World::new();
+        w.elf(
+            "/scan/bin/app",
+            ElfType::Exec,
+            &["lib.so", "sub/lib.so"],
+            &[],
+            &[source],
+        );
+        w.process(10, "/scan/bin/app", Some(7));
+        w.value(
+            10,
+            ValueKey::Cwd,
+            TriValue::Known(format!("/{}\0", "x".repeat(1_048_576)).into()),
+            ProcessValueRead::Cwd,
+        );
+        let a = w.run();
+        assert!(gaps(&a, "/scan/bin/app")
+            .iter()
+            .any(|g| g.contains("lookup byte limit")));
+    }
+}
