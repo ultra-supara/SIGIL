@@ -1,0 +1,1317 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "capabilities",
+      "version": "0.1.0",
+      "sha256": "2620e766e87f4ecc97f2bc24d3cd0e10cb538ca8c0ece532d69afaaf0ac7215c"
+    }
+  ],
+  "request": {
+    "mode": "Observe",
+    "roots": [
+      {"id": "install", "path": "/usr/local"},
+      {"id": "models", "path": "/usr/share/ollama/.ollama/models"},
+      {"id": "service-unit", "path": "/etc/systemd/system/ollama.service"}
+    ],
+    "audit": ["runtime_artifacts", "runtime_processes"],
+    "required_checks": [
+      "artifacts.dependencies",
+      "artifacts.discovery",
+      "processes.observed",
+      "values.configured",
+      "values.observed"
+    ],
+    "budgets": {
+      "dependency_candidates": 65536,
+      "dependency_contexts": 8192,
+      "dependency_search_paths": 65536,
+      "fds_per_process": 65536,
+      "files": 4096,
+      "proc_environ_bytes": 1048576,
+      "proc_environ_total_bytes": 33554432,
+      "proc_maps_bytes": 16777216,
+      "proc_maps_entries": 65536,
+      "proc_maps_total_bytes": 268435456,
+      "proc_status_bytes": 65536,
+      "process_values": 65536,
+      "processes_listed": 32768,
+      "service_unit_bytes": 1048576,
+      "service_unit_values": 16384,
+      "tcp_table_bytes": 16777216
+    },
+    "observe_env": true,
+    "model_filter": null,
+    "active": [],
+    "code": false
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": 42
+  },
+  "artifacts": [
+    {
+      "id": "sha256:1919191919191919191919191919191919191919191919191919191919191919",
+      "size": 312,
+      "format": "Other",
+      "slices": []
+    },
+    {
+      "id": "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Exec"}},
+      "slices": [
+        {
+          "id": "sha256:2020202020202020202020202020202020202020202020202020202020202020#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2020202020202020202020202020202020202020202020202020202020202020"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2121212121212121212121212121212121212121212121212121212121212121",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Exec"}},
+      "slices": [
+        {
+          "id": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2121212121212121212121212121212121212121212121212121212121212121"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1048576,
+      "format": {"Elf": {"kind": "Dyn"}},
+      "slices": [
+        {
+          "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ]
+    },
+    {
+      "id": "sha256:2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "size": 5,
+      "format": "Other",
+      "slices": []
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:install/bin/ollama",
+      "root": "install",
+      "path": "/usr/local/bin/ollama",
+      "path_proof": {
+        "root_dev": 2049,
+        "root_ino": 49,
+        "parents": [{"name": "bin", "dev": 2049, "ino": 52}]
+      },
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2020202020202020202020202020202020202020202020202020202020202020"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1020,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Walk",
+        {
+          "ProcessExe": {
+            "process": {
+              "pid": 4242,
+              "start_ticks": 1000,
+              "boot_id": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        },
+        {
+          "ServiceUnit": {
+            "config": {"file": "inst:service-unit/ollama.service", "key": "ExecStart", "line": 6}
+          }
+        }
+      ]
+    },
+    {
+      "id": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libggml-cpu-haswell.so",
+      "path_proof": {
+        "root_dev": 2049,
+        "root_ino": 49,
+        "parents": [
+          {"name": "lib", "dev": 2049, "ino": 50},
+          {"name": "ollama", "dev": 2049, "ino": 51}
+        ]
+      },
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1022,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    },
+    {
+      "id": "inst:install/lib/ollama/llama-server",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/llama-server",
+      "path_proof": {
+        "root_dev": 2049,
+        "root_ino": 49,
+        "parents": [
+          {"name": "lib", "dev": 2049, "ino": 50},
+          {"name": "ollama", "dev": 2049, "ino": 51}
+        ]
+      },
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2121212121212121212121212121212121212121212121212121212121212121"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1021,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Walk",
+        {
+          "ProcessExe": {
+            "process": {
+              "pid": 4300,
+              "start_ticks": 1200,
+              "boot_id": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "inst:models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "root": "models",
+      "path": "/usr/share/ollama/.ollama/models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1030,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    },
+    {
+      "id": "inst:service-unit/ollama.service",
+      "root": "service-unit",
+      "path": "/etc/systemd/system/ollama.service",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:1919191919191919191919191919191919191919191919191919191919191919"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1019,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 312,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Argument"]
+    }
+  ],
+  "models": [],
+  "processes": [
+    {
+      "process": {
+        "pid": 4242,
+        "start_ticks": 1000,
+        "boot_id": "00000000-0000-4000-8000-000000000000"
+      },
+      "at": "2026-10-07T07:00:01Z",
+      "roles": ["ollama serve"],
+      "exe": {"Instance": {"instance": "inst:install/bin/ollama"}},
+      "mappings": [
+        {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1020,
+          "path_text": "/usr/local/bin/ollama",
+          "deleted": false,
+          "instance": "inst:install/bin/ollama",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 5001,
+          "path_text": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "deleted": false,
+          "instance": null,
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        }
+      ],
+      "maps_read": "Whole",
+      "name": "ollama",
+      "argv": ["/usr/local/bin/ollama", "serve"],
+      "net_ns": {"Inode": 4026531840},
+      "mnt_ns": {"Inode": 42},
+      "fd_table": "Observed"
+    },
+    {
+      "process": {
+        "pid": 4300,
+        "start_ticks": 1200,
+        "boot_id": "00000000-0000-4000-8000-000000000000"
+      },
+      "at": "2026-10-07T07:00:01Z",
+      "roles": [],
+      "exe": {"Instance": {"instance": "inst:install/lib/ollama/llama-server"}},
+      "mappings": [
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1021,
+          "path_text": "/usr/local/lib/ollama/llama-server",
+          "deleted": false,
+          "instance": "inst:install/lib/ollama/llama-server",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1022,
+          "path_text": "/usr/local/lib/ollama/libggml-cpu-haswell.so",
+          "deleted": false,
+          "instance": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 1030,
+          "path_text": "/usr/share/ollama/.ollama/models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+          "deleted": false,
+          "instance": "inst:models/blobs/sha256-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        },
+        {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "at": "2026-10-07T07:00:01Z",
+          "dev": 2049,
+          "ino": 5001,
+          "path_text": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "deleted": false,
+          "instance": null,
+          "same_mount_ns": {
+            "Yes": {"why": null, "basis": {"Observed": {"source": "Proc"}}, "unresolved": []}
+          }
+        }
+      ],
+      "maps_read": "Whole",
+      "name": "llama-server",
+      "argv": null,
+      "net_ns": {"Inode": 4026531840},
+      "mnt_ns": {"Inode": 42},
+      "fd_table": "Observed"
+    }
+  ],
+  "listeners": [],
+  "probes": [],
+  "values": [
+    {
+      "id": "value:081533ca37ac3f5679b48f4fe70cf2d7bd5349a676640bbefa5a270c7a4e3ea7",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "DYLD_LIBRARY_PATH"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:110238060ae402ce6590b75243921693c2df291d5189b9cedbdd64071e078943",
+      "process_role": "ollama serve",
+      "key": {"Env": "CUDA_VISIBLE_DEVICES"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:19bde066fd2939069a13a9f22154e94a1de81e3845db54e9ae95fee385087515",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": "Group",
+      "value": {"Known": "1000"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "EffectiveGid"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:233753bd27fdf1b7cded8b509324205639d067427df4c4839c772b1b4ea93550",
+      "process_role": "ollama serve",
+      "key": "Cwd",
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.WorkingDirectory"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:2eb627aeec9cbea3813f095da39dfac23f3427ebb8bffcd1583f9ac4d1b7bea5",
+      "process_role": "ollama serve",
+      "key": {"Env": "OLLAMA_LIBRARY_PATH"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:31b075b1b48916eb08f1bbe1aebe3ba8604467323157804f62c822caca91a3a6",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "LD_LIBRARY_PATH"},
+      "value": {"Known": "/usr/local/lib/ollama"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:327ffe4d45684728f3e72edba2f93f56877104e8dbee4efd6ba08ee979fc7f77",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": "Cwd",
+      "value": {"Known": "/usr/local/lib/ollama"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "Cwd"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:3624885aa54e3455cedc246c6ea8d479469a8d13b150163d57d85a0e17dc536d",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "CUDA_VISIBLE_DEVICES"},
+      "value": {"Known": ""},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:43f331ac3918f4dfabbe82c8f4359b2af3fbda7bdebf2b1de50ab061e51c926d",
+      "process_role": "ollama serve",
+      "key": {"Env": "GGML_BACKEND_DIR"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:4afa86ddb91001386edc2f3a6a0a16515ac791e6393796c04b1bd0f7956ea8c3",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": "User",
+      "value": {"Known": "1000"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "EffectiveUid"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:55640ba542897a33e844150e7fd40fa46a8574a7912d7faf9e9f559a367ba350",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "HIP_VISIBLE_DEVICES"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:5d2941d7bffc4272bb35c460bf2306ff070ad406b5aa74b8e2745a6e23596344",
+      "process_role": "ollama serve",
+      "key": {"Env": "OLLAMA_MODELS"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:70fecab8c2709d0cf310819a05bd11c2c514ee707920736eb9876c702c45e506",
+      "process_role": "ollama serve",
+      "key": {"Env": "HIP_VISIBLE_DEVICES"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:79d7af6298a42c67b7c1da046271614249e782f48005734da5644df8b87d5fa7",
+      "process_role": "ollama serve",
+      "key": {"Env": "GGML_BACKEND_PATH"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:7d9ab942c775bd022a79d9b2f4e677691bd3bbb0a6b03fd6d42320441a58722b",
+      "process_role": "ollama serve",
+      "key": {"Env": "OLLAMA_HOST"},
+      "value": {"Known": "http://127.0.0.1:11434"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:7e3e67a89aef86baa92e7a019ba49ee10998d2bcd0504c34ac855e09d8b64e53",
+      "process_role": "ollama serve",
+      "key": {"Env": "DYLD_LIBRARY_PATH"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:8143897abeec8174aee6eb7a210fe37e3f316e774d6c2afb65c1e28008b70472",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "GGML_BACKEND_DIR"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:82708a624dff9fbeab5577af1ca1cf29c471645b26a0bf6a3e22ce2f11115b49",
+      "process_role": "ollama serve",
+      "key": "Group",
+      "value": {"Known": "1000"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "EffectiveGid"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:876e486de83831075f7b0935ad978667340c3192f5b9ff67ab7a7809ea870ac2",
+      "process_role": "ollama serve",
+      "key": {"Env": "OLLAMA_MODELS"},
+      "value": {"Known": "/usr/share/ollama/.ollama/models"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:8e0ba3d12a468cce274c7b41994d3a87a86dfbe0de027873d13fc3c35432d16c",
+      "process_role": "ollama serve",
+      "key": {"Env": "CUDA_VISIBLE_DEVICES"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:8ec7d7fcc774ed0c2afa99a7b3d06c350302bc23d5a1025f1fe29e2788da382f",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "OLLAMA_HOST"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:969d9f3d7145f6510e57194abb2c6a6ce0c404c023bb954662f4b68805bb2df8",
+      "process_role": "ollama serve",
+      "key": "Group",
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Group"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:9b5e75f0b217b2704053802e8c1196b02947b3e28f24d8a6b486d0940813d2f8",
+      "process_role": "ollama serve",
+      "key": "User",
+      "value": {"Known": "ollama"},
+      "origin": {
+        "Configured": {
+          "file": {"file": "inst:service-unit/ollama.service", "key": "User", "line": 7},
+          "directive": "User"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:9e1841b07408f1e330da2475441f5b46641e7683cd38ebd3686f5fb4f9bbd9e4",
+      "process_role": "ollama serve",
+      "key": {"Env": "LD_LIBRARY_PATH"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:9ec7681bc7547ca003da7593ec36fa4be6abc819f40fd23edb8d429347d80df2",
+      "process_role": "ollama serve",
+      "key": {"Env": "HIP_VISIBLE_DEVICES"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:a0e8a200901b67c829383dbef9253b6a1143c15d5d1d0d9083cf557abe91b4cd",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "GGML_BACKEND_PATH"},
+      "value": {"Known": "/usr/local/lib/ollama"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:adcd0ab41695e7994a70e9d3af624c7ada815b6fafbdcf71a5694095fca2b3ed",
+      "process_role": "ollama serve",
+      "key": "Cwd",
+      "value": {"Known": "/usr/local"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "Cwd"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:b0454093998ec61847cd5d87ff2a75ebf2d392e3ef5fa4ff841873613a099b61",
+      "process_role": "ollama serve",
+      "key": {"Env": "LD_LIBRARY_PATH"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:b504b36a05a0a2fc119088e133fe0b7ffcf7ed5594a32f3d5bacddd4b64fc2c5",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "OLLAMA_MODELS"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:b7b300ffe0b75d1908907826182ab5f966710b4740a367216a95179be351e0c2",
+      "process_role": "ollama serve",
+      "key": {"Env": "DYLD_LIBRARY_PATH"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:b8ce47444b30a83ae780f9de9b67cc26921540d91bcc45c37a954728463551c2",
+      "process_role": "ollama serve",
+      "key": {"Env": "OLLAMA_LIBRARY_PATH"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:beaddd2e2de7671aa51e6b50126250f899b8bdd8af87d551c98bc192a232a890",
+      "process_role": "observed:a06db02de6fa11280e6c7dd4c5965565410296c3f7964928fcbdafad112bb69f",
+      "key": {"Env": "OLLAMA_LIBRARY_PATH"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:c8043ffb42311aedd1dfb2fbd90e7ae8e200e1ea7e3c21e2b6b00c56860e8b11",
+      "process_role": "ollama serve",
+      "key": {"Env": "GGML_BACKEND_PATH"},
+      "value": "Absent",
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "InitialEnvironment"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:c8b774bca8c34a528501f9dca9f459f504010eeed889867487cfda94efc1b14f",
+      "process_role": "ollama serve",
+      "key": {"Env": "OLLAMA_HOST"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    },
+    {
+      "id": "value:eb239f5258ab0910fea5e119de47be9796b17074db759a339bd7040781ad34f9",
+      "process_role": "ollama serve",
+      "key": "User",
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {
+        "PredictedLaunch": {
+          "rules": ["systemd.User"],
+          "from": ["value:9b5e75f0b217b2704053802e8c1196b02947b3e28f24d8a6b486d0940813d2f8"]
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:f3b890563453fc2b39b9db20195eb7ec804ebda922ebb844be1aedeecb187388",
+      "process_role": "ollama serve",
+      "key": "User",
+      "value": {"Known": "1000"},
+      "origin": {
+        "ObservedProcess": {
+          "process": {
+            "pid": 4242,
+            "start_ticks": 1000,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "source": "Proc",
+          "read": "EffectiveUid"
+        }
+      },
+      "applies_to": []
+    },
+    {
+      "id": "value:f908184adf244b66e0f0b31731720cb4cd9556e1b0086bbee52b70970b86502a",
+      "process_role": "ollama serve",
+      "key": {"Env": "GGML_BACKEND_DIR"},
+      "value": {
+        "Unknown": {
+          "reason": {
+            "NotModeled": {
+              "what": "effective unit selection and drop-ins unexamined; supplied unit only"
+            }
+          }
+        }
+      },
+      "origin": {"PredictedLaunch": {"rules": ["systemd.Environment"], "from": []}},
+      "applies_to": []
+    }
+  ],
+  "components": [],
+  "releases": [],
+  "binaries": [
+    {
+      "slice": "sha256:2020202020202020202020202020202020202020202020202020202020202020#x86_64@0",
+      "container": {
+        "Elf": {
+          "abi": {"is_64": true, "little_endian": true, "machine": 62},
+          "interp": null,
+          "soname": null,
+          "needed": [],
+          "rpath": [],
+          "runpath": [],
+          "build_id": null,
+          "comment": [],
+          "stripped": true,
+          "exports": 0,
+          "imports": [],
+          "data": []
+        }
+      },
+      "go": null,
+      "gaps": []
+    },
+    {
+      "slice": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+      "container": {
+        "Elf": {
+          "abi": {"is_64": true, "little_endian": true, "machine": 62},
+          "interp": null,
+          "soname": null,
+          "needed": ["libggml-cpu-haswell.so"],
+          "rpath": [],
+          "runpath": ["$ORIGIN"],
+          "build_id": null,
+          "comment": [],
+          "stripped": true,
+          "exports": 0,
+          "imports": [],
+          "data": []
+        }
+      },
+      "go": null,
+      "gaps": []
+    },
+    {
+      "slice": "sha256:2222222222222222222222222222222222222222222222222222222222222222#x86_64@0",
+      "container": {
+        "Elf": {
+          "abi": {"is_64": true, "little_endian": true, "machine": 62},
+          "interp": null,
+          "soname": null,
+          "needed": [],
+          "rpath": [],
+          "runpath": [],
+          "build_id": null,
+          "comment": [],
+          "stripped": true,
+          "exports": 0,
+          "imports": [],
+          "data": []
+        }
+      },
+      "go": null,
+      "gaps": []
+    }
+  ],
+  "hints": [],
+  "code": [],
+  "relations": [
+    {
+      "Candidate": {
+        "from": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+        "needed": "libggml-cpu-haswell.so",
+        "candidate": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+        "via": "LdLibraryPath",
+        "context": {
+          "search": {
+            "LdLibraryPath": {
+              "value": "value:31b075b1b48916eb08f1bbe1aebe3ba8604467323157804f62c822caca91a3a6",
+              "component": 0
+            }
+          },
+          "requester": "inst:install/lib/ollama/llama-server",
+          "search_dir": "/usr/local/lib/ollama",
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "values": ["value:31b075b1b48916eb08f1bbe1aebe3ba8604467323157804f62c822caca91a3a6"],
+          "loader_chain": ["inst:install/lib/ollama/llama-server"]
+        }
+      }
+    },
+    {
+      "Candidate": {
+        "from": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+        "needed": "libggml-cpu-haswell.so",
+        "candidate": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+        "via": "Runpath",
+        "context": {
+          "search": {"Runpath": {"entry": 0, "component": 0}},
+          "requester": "inst:install/lib/ollama/llama-server",
+          "search_dir": "/usr/local/lib/ollama",
+          "process": null,
+          "values": [],
+          "loader_chain": ["inst:install/lib/ollama/llama-server"]
+        }
+      }
+    },
+    {
+      "Candidate": {
+        "from": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+        "needed": "libggml-cpu-haswell.so",
+        "candidate": "inst:install/lib/ollama/libggml-cpu-haswell.so",
+        "via": "Runpath",
+        "context": {
+          "search": {"Runpath": {"entry": 0, "component": 0}},
+          "requester": "inst:install/lib/ollama/llama-server",
+          "search_dir": "/usr/local/lib/ollama",
+          "process": {
+            "pid": 4300,
+            "start_ticks": 1200,
+            "boot_id": "00000000-0000-4000-8000-000000000000"
+          },
+          "values": [],
+          "loader_chain": ["inst:install/lib/ollama/llama-server"]
+        }
+      }
+    },
+    {
+      "Declares": {
+        "from": "sha256:2121212121212121212121212121212121212121212121212121212121212121#x86_64@0",
+        "needed": "libggml-cpu-haswell.so",
+        "kind": "ElfNeeded"
+      }
+    }
+  ],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "artifacts.dependencies",
+      "scope": {"Root": "install"},
+      "state": {
+        "Partial": {
+          "missing": [
+            "ld.so.cache not read",
+            "hardware-capability directories not modeled",
+            "secure execution not modeled; candidates conditional",
+            "common default directories are possibilities, not complete loader configuration",
+            "static placement context has no same-process initial environment"
+          ]
+        }
+      },
+      "budget": null
+    },
+    {
+      "check": "artifacts.discovery",
+      "scope": {"Root": "install"},
+      "state": "Complete",
+      "budget": null
+    },
+    {"check": "processes.observed", "scope": "Audit", "state": "Complete", "budget": null},
+    {
+      "check": "processes.observed",
+      "scope": {
+        "Process": {
+          "pid": 4242,
+          "start_ticks": 1000,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        }
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "processes.observed",
+      "scope": {
+        "Process": {
+          "pid": 4300,
+          "start_ticks": 1200,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        }
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "values.configured",
+      "scope": {"Root": "service-unit"},
+      "state": {
+        "Partial": {
+          "missing": ["effective unit selection and drop-ins unexamined; supplied unit only"]
+        }
+      },
+      "budget": null
+    },
+    {"check": "values.observed", "scope": "Audit", "state": "Complete", "budget": null},
+    {
+      "check": "values.observed",
+      "scope": {
+        "Process": {
+          "pid": 4242,
+          "start_ticks": 1000,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        }
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "values.observed",
+      "scope": {
+        "Process": {
+          "pid": 4300,
+          "start_ticks": 1200,
+          "boot_id": "00000000-0000-4000-8000-000000000000"
+        }
+      },
+      "state": "Complete",
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": ["artifacts.dependencies", "values.configured"],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}

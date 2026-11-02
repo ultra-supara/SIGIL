@@ -93,7 +93,7 @@ fn scramble(s: &mut Session) {
 }
 
 #[test]
-fn legacy_goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
+fn goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
     let mut reproduced = 0;
     let mut refused = 0;
     for entry in fs::read_dir(examples_dir()).unwrap() {
@@ -134,6 +134,9 @@ fn legacy_goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
                 VALUES_CONFIGURED,
                 VALUES_OBSERVED,
             ],
+            // A focused synthetic fixture, unlike the historical 01–20 sessions:
+            // it supplies only discovery/processes and the three deps/value checks.
+            "21-deps-values.json" => &[ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY, ARTIFACTS_RELEASE],
             _ => &[],
         };
         if !added.is_empty() {
@@ -177,7 +180,8 @@ fn legacy_goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
         assert_eq!(s, expected, "{}", path.display());
         reproduced += 1;
     }
-    assert_eq!((reproduced, refused), (14, 6));
+    assert_eq!((reproduced, refused), (14, 7));
+    assert_eq!(reproduced + refused, 21);
 }
 
 /// The policy example 18 was evaluated under: it denies `posix.network` and
