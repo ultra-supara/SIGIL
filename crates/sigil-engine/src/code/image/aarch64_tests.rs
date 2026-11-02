@@ -823,11 +823,12 @@ fn plt_adrp_uses_signed_page_pc_across_a_page_boundary() {
             relocs: BTreeMap::new(),
             excluded: vec![],
             plt: vec![(pc - 32, pc + 16)],
+            plt_verified: vec![],
             bounds: Image::empty(Kind::Shared),
         };
-        stubs(&mut image, &mut reader, &mut run).unwrap();
+        stubs(&mut image, None, &mut reader, &mut run).unwrap();
         assert_eq!(image.stubs.get(&pc), Some(&witness));
-        assert_eq!(reader.used(), 16);
+        assert_eq!(reader.used(), 48);
     }
 }
 
@@ -888,4 +889,172 @@ fn aarch64_loader_granules_cannot_hide_readonly_file_aliases() {
     let mut overlap = segments;
     overlap[1].addr = 0x2000;
     assert!(validate_segments(&overlap).is_err());
+}
+
+#[test]
+fn an_import_reference_in_unproved_plt0_cannot_disappear() {
+    let mut bytes = fixture("elf-clang-plt.so");
+    // Independent reviewer reproduction: BL at executable VA0x103e0 targets the real
+    // connect stub0x10400. Remove both original calls, leaving exactly this reference.
+    assert_eq!(u32le(&bytes, 0x3e0), 0xa9bf7bf0);
+    put32(&mut bytes, 0x3e0, 0x94000008);
+    put32(&mut bytes, 0x3a0, 0xd503201f);
+    put32(&mut bytes, 0x3c4, 0xd503201f);
+    let (calls, gaps) = run_calls(&bytes);
+    assert!(calls.is_empty(), "no FDE establishes a function at0x103e0");
+    assert!(
+        gaps.iter()
+            .any(|g| g.contains("0x103e0") && g.contains("no exact function bounds")),
+        "calls={calls:?} gaps={gaps:?}"
+    );
+}
+
+#[test]
+fn a_plt_name_prefix_does_not_hide_an_ordinary_function_section() {
+    let mut bytes = fixture("elf-clang-plt.so");
+    let text_header = sh(&bytes, ".text");
+    let names_header = u64le(&bytes, 40) as usize + u16le(&bytes, 62) as usize * 64;
+    let name = u64le(&bytes, names_header + 24) as usize + u32le(&bytes, text_header) as usize;
+    bytes[name..name + 5].copy_from_slice(b".pltX");
+    let (calls, gaps) = run_calls(&bytes);
+    assert_eq!(
+        calls.iter().map(|(pc, _)| *pc).collect::<Vec<_>>(),
+        [0x103a0, 0x103c4],
+        "{gaps:?}"
+    );
+    assert!(gaps.is_empty(), "{gaps:?}");
+}
+
+#[test]
+fn every_unproved_plt0_word_stays_searchable_and_healthy_calls_survive() {
+    for (name, start, offset, stub, calls) in [
+        (
+            "elf-clang-plt.so",
+            0x103e0u64,
+            0x3e0usize,
+            0x10400u64,
+            [0x3a0usize, 0x3c4],
+        ),
+        ("elf-gcc-plt.so", 0x260, 0x260, 0x280, [0x2b4, 0x2d8]),
+    ] {
+        let original = fixture(name);
+        let (image, run) = normal(&original);
+        assert!(
+            run.clone_gaps().is_empty(),
+            "{name}: {:?}",
+            run.clone_gaps()
+        );
+        for pc in (start..stub + 16).step_by(4) {
+            assert!(image.verified_plt_instruction(pc), "{name} {pc:#x}");
+        }
+        assert!(run_calls(&original).1.is_empty());
+        for index in 0..8 {
+            let pc = start + index * 4;
+            let word = 0x94000000 | ((stub - pc) / 4) as u32;
+            let mut mutation = original.clone();
+            put32(&mut mutation, offset + index as usize * 4, word);
+            let (image, run) = normal(&mutation);
+            assert!(run
+                .clone_gaps()
+                .iter()
+                .any(|g| g.contains("unproved PLT resolver header")));
+            for pc in (start..stub).step_by(4) {
+                assert!(!image.verified_plt_instruction(pc));
+            }
+            assert!(image.verified_plt_instruction(stub));
+            let (retained, gaps) = run_calls(&mutation);
+            assert_eq!(retained.len(), 2, "{name} index{index}: {gaps:?}");
+            assert!(!gaps.is_empty());
+            for at in calls {
+                put32(&mut mutation, at, 0xd503201f);
+            }
+            let (retained, gaps) = run_calls(&mutation);
+            assert!(retained.is_empty(), "{name} index{index}: {retained:?}");
+            assert!(!gaps.is_empty());
+            if name.starts_with("elf-clang") {
+                assert!(
+                    gaps.iter().any(|g| g.contains(&format!("{pc:#x}"))
+                        && g.contains("no exact function bounds")),
+                    "{gaps:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn plt0_requires_the_unique_unrelocated_dynamic_resolver_slot() {
+    let original = fixture("elf-clang-plt.so");
+    let (_, dynoff, size) = section(&original, ".dynamic");
+    let got_tag = (dynoff..dynoff + size)
+        .step_by(16)
+        .find(|at| u64le(&original, *at as usize) == 3)
+        .unwrap() as usize;
+    let got = u64le(&original, got_tag + 8);
+    for case in 0..5 {
+        let mut bytes = original.clone();
+        match case {
+            0 => put64(&mut bytes, got_tag, 21),          // absent DT_PLTGOT
+            1 => put64(&mut bytes, got_tag + 8, got + 8), // points into symbol-owned word
+            2 => {
+                let other = (dynoff..dynoff + size)
+                    .step_by(16)
+                    .find(|at| u64le(&bytes, *at as usize) == 14)
+                    .unwrap() as usize;
+                put64(&mut bytes, other, 3);
+                put64(&mut bytes, other + 8, got);
+            }
+            3 => {
+                // A syntactically valid header loading connect's slot is a reference, not PLT0.
+                put32(&mut bytes, 0x3e8, 0xf9426e11);
+                put32(&mut bytes, 0x3ec, 0x91136210);
+            }
+            _ => {
+                let (_, rel, _) = section(&bytes, ".rela.plt");
+                put64(&mut bytes, rel as usize, got + 16);
+            }
+        }
+        let (image, run, _) = inspect(&bytes, 0, bytes.len() as u64, CodeBudgets::default());
+        if let Some(image) = image {
+            assert!(!image.verified_plt_instruction(0x103e0), "case{case}");
+        }
+        assert!(!run.clone_gaps().is_empty(), "case{case}");
+        let (_, gaps) = run_calls(&bytes);
+        assert!(!gaps.is_empty(), "case{case}");
+    }
+}
+
+#[test]
+fn a_truncated_plt_section_does_not_close_search_with_unproved_jump_slots() {
+    let mut bytes = fixture("elf-clang-plt.so");
+    let plt = sh(&bytes, ".plt");
+    // The physical stub remains, but its section now claims only the32-byte resolver header.
+    put64(&mut bytes, plt + 32, 32);
+    let (calls, gaps) = run_calls(&bytes);
+    assert!(calls.is_empty());
+    assert!(!gaps.is_empty(), "unproved JUMP_SLOT must not vanish");
+}
+
+#[test]
+fn an_import_reference_in_an_unproved_stub_stays_searchable() {
+    let original = fixture("elf-cases.so");
+    let (image, _) = normal(&original);
+    let target = *image.stubs.keys().next().unwrap();
+    let (_, off, _) = section(&original, ".plt");
+    let start = image.plt[0].0;
+    let bad_stub = start + 48;
+    let mut bytes = original.clone();
+    put32(
+        &mut bytes,
+        (off + bad_stub - start) as usize,
+        0x94000000 | (((target as i64 - bad_stub as i64) / 4) as u32 & 0x03ff_ffff),
+    );
+    let (calls, gaps) = run_calls(&bytes);
+    assert!(!calls.is_empty());
+    assert!(
+        gaps.iter().any(
+            |g| g.contains(&format!("{bad_stub:#x}")) && g.contains("no exact function bounds")
+        ),
+        "{gaps:?}"
+    );
 }

@@ -65,10 +65,18 @@ pub(crate) struct A64ElfImage {
     /// None permanently poisons duplicate/composed/unsupported relocations.
     pub relocs: BTreeMap<u64, Option<Relocation>>,
     pub excluded: Vec<(u64, u64)>,
+    /// Exact-name section hints for PLT discovery, not permission to skip searching bytes.
     pub plt: Vec<(u64, u64)>,
+    /// Only complete byte-validated ABI scaffolding; no section-name-only exclusion.
+    plt_verified: Vec<(u64, u64)>,
     bounds: Image,
 }
 impl A64ElfImage {
+    pub fn verified_plt_instruction(&self, pc: u64) -> bool {
+        self.plt_verified
+            .get(self.plt_verified.partition_point(|r| r.1 <= pc))
+            .is_some_and(|r| r.0 <= pc && pc.checked_add(4).is_some_and(|end| end <= r.1))
+    }
     pub fn executable(&self, start: u64, end: u64) -> bool {
         start < end
             && self
@@ -393,12 +401,13 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
         relocs: BTreeMap::new(),
         excluded: vec![],
         plt: vec![],
+        plt_verified: vec![],
         bounds: Image::empty(Kind::Relocatable),
     };
     mappings(&mut image, &sections, &segments)?;
     mapping_symbols(&mut image, &sections, reader, run)?;
     let dynamic_tables = if object {
-        BTreeSet::new()
+        DynamicTables::default()
     } else {
         dynamic_tables(reader, window, &sections, &segments, dynamic, run)?
     };
@@ -435,7 +444,7 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
         if section.ty != 4 || section.entsize != 24 || section.size % 24 != 0 {
             return Err("unsupported REL/packed or malformed relocation table");
         }
-        if !object && !dynamic_tables.contains(&index) {
+        if !object && !dynamic_tables.relocations.contains(&index) {
             return Err("relocation table not owned by PT_DYNAMIC");
         }
         let destination = if object {
@@ -617,7 +626,26 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
         run.gap("code: AArch64 overlapping FDE ranges".into());
     }
     if !object {
-        stubs(&mut image, reader, run)?;
+        // PLT0's BR is resolver machinery only for DT_PLTGOT's reserved third word.
+        // Neither a symbol relocation nor a competing dynamic write may own those words.
+        let resolver = dynamic_tables.plt_got.and_then(|got| {
+            let finish = got.checked_add(24)?;
+            let mapping = image
+                .mappings
+                .get(image.mappings.partition_point(|m| m.end <= got))?;
+            (got & 7 == 0
+                && mapping.start <= got
+                && finish <= mapping.end
+                && mapping.readable
+                && !mapping.executable
+                && mapping.file_offset.is_some()
+                && dynamic_writes
+                    .range(..finish)
+                    .next_back()
+                    .is_none_or(|(_, end)| *end <= got))
+            .then(|| got + 16)
+        });
+        stubs(&mut image, resolver, reader, run)?;
     }
     if run.stopped() {
         return Err("artifact work limit");
@@ -774,7 +802,7 @@ fn mappings(image: &mut A64ElfImage, sections: &[Section], segments: &[Segment])
             end: finish,
             offset: s.off,
         });
-        if s.name.starts_with(b".plt") {
+        if s.name == b".plt" {
             image.plt.push((start, finish));
         }
     }
@@ -889,6 +917,11 @@ fn slot_mapping(at: u64, segments: &[Segment]) -> bool {
         })
 }
 
+#[derive(Default)]
+struct DynamicTables {
+    relocations: BTreeSet<usize>,
+    plt_got: Option<u64>,
+}
 fn dynamic_tables(
     reader: &mut Reader<'_>,
     window: SliceWindow,
@@ -896,7 +929,7 @@ fn dynamic_tables(
     segments: &[Segment],
     dynamic: Option<Segment>,
     run: &mut Run,
-) -> Result<BTreeSet<usize>> {
+) -> Result<DynamicTables> {
     let d = dynamic.ok_or("missing PT_DYNAMIC target table")?;
     if d.filesz / 16 > crate::binary::elf::MAX_DYNAMIC
         || d.filesz % 16 != 0
@@ -922,7 +955,7 @@ fn dynamic_tables(
         }
         if matches!(
             tag,
-            2 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 17 | 18 | 19 | 20 | 23 | 35 | 36 | 37
+            2 | 3 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 17 | 18 | 19 | 20 | 23 | 35 | 36 | 37
         ) && tags.insert(tag, u64le(row, 8)).is_some()
         {
             return Err("duplicate dynamic table tag");
@@ -975,7 +1008,10 @@ fn dynamic_tables(
             return Err("ambiguous dynamic relocation ownership");
         }
     }
-    Ok(tables)
+    Ok(DynamicTables {
+        relocations: tables,
+        plt_got: tags.get(&3).copied(),
+    })
 }
 #[allow(clippy::too_many_arguments)]
 fn symbol(
@@ -1077,13 +1113,87 @@ fn eh_patches(relocs: &BTreeMap<u64, Option<Relocation>>, base: u64) -> Result<B
     }
     Ok(patches)
 }
-fn stubs(image: &mut A64ElfImage, reader: &mut Reader<'_>, run: &mut Run) -> Result<()> {
-    for &(start, finish) in &image.plt {
-        // ABI PLT0 is 32 bytes; each ordinary stub is exactly four instructions.
-        if finish - start < 32 || (finish - start - 32) % 16 != 0 {
-            return Err("unsupported PLT layout");
+/// Decode the exact ordinary ADRP/LDR/ADD/BR slot-address sequence. This helper proves the
+/// computed address only; callers still prove slot ownership or the reserved resolver role.
+fn plt_slot(bytes: &[u8], pc: u64, run: &mut Run) -> Result<Option<u64>> {
+    if bytes.len() != 16 {
+        return Err("invalid PLT sequence length");
+    }
+    let mut words = [0u32; 4];
+    let mut first = None;
+    let mut valid = true;
+    for (i, b) in bytes.chunks_exact(4).enumerate() {
+        charge(run, Work::Instructions, 1)?;
+        words[i] = u32le(b, 0);
+        let decoded = decode_a64(words[i], end(pc, i as u64 * 4)?);
+        valid &= decoded.is_ok();
+        if i == 0 {
+            first = decoded.ok();
         }
-        let mut pc = end(start, 32)?;
+    }
+    let target = (|| {
+        let Operation::Address { dst, address } = first?.operation else {
+            return None;
+        };
+        if !valid
+            || words[0] & 0x9f00001f != 0x90000010
+            || dst.name != RegisterName::Gpr(16)
+            || dst.width != Width::X
+            || words[1] & 0xffc003ff != 0xf9400211
+            || words[2] & 0xffc003ff != 0x91000210
+            || words[3] != 0xd61f0220
+        {
+            return None;
+        }
+        let load = u64::from((words[1] >> 10) & 4095) * 8;
+        let add = u64::from((words[2] >> 10) & 4095);
+        if load != add {
+            return None;
+        }
+        address.checked_add(load)
+    })();
+    Ok(target)
+}
+
+fn stubs(
+    image: &mut A64ElfImage,
+    resolver: Option<u64>,
+    reader: &mut Reader<'_>,
+    run: &mut Run,
+) -> Result<()> {
+    for &(start, finish) in &image.plt {
+        // A name is only a discovery hint. Unsupported layouts remain searchable and partial.
+        if finish - start < 32 || (finish - start - 32) % 16 != 0 {
+            run.gap(format!("code: AArch64 unproved PLT layout at {start:#x}"));
+            continue;
+        }
+        let header_end = end(start, 32)?;
+        charge(run, Work::Slots, 1)?;
+        let header_valid = if image.excluded(start, header_end) {
+            false
+        } else {
+            let bytes = image
+                .read_code(start, 32, reader, run)
+                .ok_or("PLT header read failed")?;
+            let mut valid = true;
+            for i in [0, 5, 6, 7] {
+                charge(run, Work::Instructions, 1)?;
+                let word = u32le(&bytes, i * 4);
+                valid &= word == if i == 0 { 0xa9bf7bf0 } else { 0xd503201f };
+                valid &= decode_a64(word, end(start, i as u64 * 4)?).is_ok();
+            }
+            let slot = plt_slot(&bytes[4..20], end(start, 4)?, run)?;
+            valid && resolver.is_some() && slot == resolver
+        };
+        if header_valid {
+            image.plt_verified.push((start, header_end));
+        } else {
+            run.gap(format!(
+                "code: AArch64 unproved PLT resolver header at {start:#x}"
+            ));
+        }
+
+        let mut pc = header_end;
         while pc < finish {
             charge(run, Work::Slots, 1)?;
             if image.excluded(pc, end(pc, 16)?) {
@@ -1096,44 +1206,28 @@ fn stubs(image: &mut A64ElfImage, reader: &mut Reader<'_>, run: &mut Run) -> Res
             let bytes = image
                 .read_code(pc, 16, reader, run)
                 .ok_or("PLT read failed")?;
-            let mut decoded = vec![];
-            for (i, b) in bytes.chunks_exact(4).enumerate() {
-                charge(run, Work::Instructions, 1)?;
-                decoded.push(decode_a64(u32le(b, 0), pc + i as u64 * 4));
-            }
-            let words: Vec<_> = bytes.chunks_exact(4).map(|b| u32le(b, 0)).collect();
-            let target = (|| {
-                let a = decoded[0].as_ref().ok()?;
-                let Operation::Address { dst, address } = a.operation else {
-                    return None;
-                };
-                if words[0] & 0x9f00001f != 0x90000010
-                    || dst.name != RegisterName::Gpr(16)
-                    || dst.width != Width::X
-                {
-                    return None;
-                }
-                if words[1] & 0xffc003ff != 0xf9400211
-                    || words[2] & 0xffc003ff != 0x91000210
-                    || words[3] != 0xd61f0220
-                    || decoded.iter().any(|d| d.is_err())
-                {
-                    return None;
-                }
-                let load = u64::from((words[1] >> 10) & 4095) * 8;
-                let add = u64::from((words[2] >> 10) & 4095);
-                if load != add {
-                    return None;
-                }
-                let slot = address.checked_add(load)?;
-                image.slots.get(&slot).filter(|w| !w.weak).cloned()
-            })();
+            let target = plt_slot(&bytes, pc, run)?
+                .and_then(|slot| image.slots.get(&slot))
+                .filter(|w| !w.weak)
+                .cloned();
             if let Some(witness) = target {
                 image.stubs.insert(pc, witness);
+                image.plt_verified.push((pc, end(pc, 16)?));
             } else {
                 run.gap(format!("code: AArch64 unproved PLT stub at {pc:#x}"));
             }
             pc = end(pc, 16)?;
+        }
+    }
+    normalize(&mut image.plt_verified);
+    // A truncated/renamed/missing PLT section cannot turn an unresolved JUMP_SLOT route
+    // into an empty successful search. Both collections are bounded by prior slot charges.
+    let witnessed: BTreeSet<_> = image.stubs.values().map(|w| w.at).collect();
+    for (&slot, witness) in &image.slots {
+        if witness.relocation == JUMP_SLOT && !witnessed.contains(&slot) {
+            run.gap(format!(
+                "code: AArch64 JUMP_SLOT at {slot:#x} has no proved PLT stub"
+            ));
         }
     }
     Ok(())

@@ -45,9 +45,6 @@ impl Candidates {
         }
         self.scanned = Some(false);
         for r in &image.code {
-            if image.plt.binary_search(&(r.start, r.end)).is_ok() {
-                continue;
-            }
             let mut pc = r.start;
             while pc < r.end {
                 let n = (r.end - pc).min(1 << 20);
@@ -55,6 +52,12 @@ impl Candidates {
                     return false;
                 };
                 for raw in bytes.chunks_exact(4) {
+                    // Each skipped instruction belongs to byte-validated ABI machinery.
+                    // Section names and unproved PLT headers/stubs never grant an exclusion.
+                    if image.verified_plt_instruction(pc) {
+                        pc += 4;
+                        continue;
+                    }
                     if !run.charge(Work::Instructions, 1) {
                         return false;
                     }
