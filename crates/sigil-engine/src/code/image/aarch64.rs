@@ -413,6 +413,8 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
     };
     let mut symbols = BTreeMap::new();
     let mut eh_relocs = BTreeMap::new();
+    // Keep extents independently of payloads: poisoning must never shrink a prior write.
+    let mut object_writes = vec![];
     let mut poison_slots = BTreeSet::new();
     let mut dynamic_writes = BTreeMap::new();
     let eh: Vec<_> = sections
@@ -430,16 +432,6 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
         }
         if object && (section.info == 0 || section.info >= sections.len()) {
             return Err("invalid object relocation target section");
-        }
-        let relevant = !object
-            || sections.get(section.info).is_some_and(|s| s.flags & 4 != 0)
-            || Some(section.info) == eh_index;
-        if !relevant {
-            // All relocation-bearing data is forbidden as a raw constant.
-            if let Some(s) = sections.get(section.info) {
-                mark_relocated(&mut image, end(window.base, s.off)?, s.size);
-            }
-            continue;
         }
         if section.ty != 4 || section.entsize != 24 || section.size % 24 != 0 {
             return Err("unsupported REL/packed or malformed relocation table");
@@ -464,6 +456,36 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
             let kind = info as u32;
             let sym = (info >> 32) as u32;
             let addend = u64le(&row, 16) as i64;
+            let object_extent = if let Some(s) = destination {
+                let width =
+                    object_write_width(kind).ok_or("unmodeled object relocation write extent")?;
+                if end(off, width)? > s.size {
+                    return Err("object relocation write outside target section");
+                }
+                if width == 0 {
+                    continue;
+                }
+                if !matches!(s.ty, 1 | 8 | 14..=16) {
+                    // Symbol/string/relocation tables are consumed as metadata proof below.
+                    // Their unmodeled mutation cannot be treated as unavailable value data.
+                    return Err("object relocation modifies proof metadata");
+                }
+                // Non-code data still needs the same full-width validation. Never trust raw
+                // constants from a relocation-bearing mapping, even for unsupported payloads.
+                if s.ty != 8 {
+                    mark_relocated(&mut image, end(end(window.base, s.off)?, off)?, width);
+                }
+                if Some(section.info) == eh_index {
+                    if kind != 261 || off & 3 != 0 {
+                        return Err("unsupported FDE relocation");
+                    }
+                } else if s.flags & 4 == 0 {
+                    continue;
+                }
+                Some((end(end(window.base, s.off)?, off)?, width))
+            } else {
+                None
+            };
             let symbol = symbol(
                 reader,
                 window,
@@ -480,17 +502,28 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
                 symbol: symbol.ok(),
                 identity: (section.link, sym),
             };
-            if let Some(s) = destination {
-                inside(off, 4, s.size)?;
+            if let Some((pc, width)) = object_extent {
                 if Some(section.info) == eh_index {
                     if eh_relocs.insert(off, Some(relocation)).is_some() {
                         eh_relocs.insert(off, None);
                     }
                     continue;
                 }
-                let pc = end(end(window.base, s.off)?, off)?;
-                if off & 3 != 0 || !image.executable(pc, end(pc, 4)?) {
-                    return Err("relocation outside aligned executable section");
+                let finish = end(pc, width)?;
+                if !image.executable(pc, finish) {
+                    return Err("relocation write outside executable section");
+                }
+                object_writes.push((pc, finish));
+                let supported = matches!(
+                    kind,
+                    CALL26 | JUMP26 | ADR_GOT_PAGE | LD64_GOT_LO12 | ADR_PAGE | ADD_LO12
+                );
+                if supported && off & 3 != 0 {
+                    return Err("unaligned object instruction relocation");
+                }
+                if !supported {
+                    image.excluded.push((pc, finish));
+                    run.gap(format!("code: AArch64 unsupported relocation at {pc:#x}"));
                 }
                 if image.relocs.insert(pc, Some(relocation)).is_some() {
                     image.relocs.insert(pc, None);
@@ -573,16 +606,25 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
             }
         }
     }
-    // All duplicate and unsupported object fields are excluded, including stale-value sources.
-    for (&pc, r) in &image.relocs {
-        if r.as_ref().is_none_or(|r| {
-            !matches!(
-                r.kind,
-                CALL26 | JUMP26 | ADR_GOT_PAGE | LD64_GOT_LO12 | ADR_PAGE | ADD_LO12
-            )
-        }) {
-            image.excluded.push((pc, end(pc, 4)?));
-            run.gap(format!("code: AArch64 unsupported relocation at {pc:#x}"));
+    // Sort once and poison each overlap component, including duplicates and transitive
+    // overlap. Both the original and later write extents survive regardless of table order.
+    // The vector is bounded by the record reservations already made above.
+    object_writes.sort_unstable();
+    let mut writes = object_writes.into_iter().peekable();
+    while let Some((start, mut finish)) = writes.next() {
+        let mut overlapping = false;
+        while let Some((_, next_end)) = writes.next_if(|(next, _)| *next < finish) {
+            finish = finish.max(next_end);
+            overlapping = true;
+        }
+        if overlapping {
+            for (_, payload) in image.relocs.range_mut(start..finish) {
+                *payload = None;
+            }
+            image.excluded.push((start, finish));
+            run.gap(format!(
+                "code: AArch64 overlapping relocation writes at {start:#x}"
+            ));
         }
     }
     normalize(&mut image.excluded);
@@ -893,6 +935,23 @@ fn mapping_symbols(
         ));
     }
     Ok(())
+}
+
+/// AAELF64 data fields and single-instruction relocation storage widths, not the number
+/// of immediate bits or the width of a load's runtime operand. See Arm's aaelf64 tables:
+/// https://github.com/ARM-software/abi-aa/blob/main/aaelf64/aaelf64.rst
+/// COPY and unmodeled extension/vendor/reserved extents are rejected.
+/// Knowing a width does not establish support for that relocation's semantics.
+fn object_write_width(kind: u32) -> Option<u64> {
+    match kind {
+        0 | 256 => Some(0),                     // NONE, including the withdrawn alias
+        259 | 262 => Some(2),                   // ABS16, PREL16
+        258 | 261 | 308 | 314 | 316 => Some(4), // ABS/PREL/GOTREL/PLT32, PATCHINST
+        257 | 260 | 307 | 317 | 1025..=1030 | 1032 => Some(8), // 64-bit data
+        1031 => Some(16),                       // TLSDESC is two pointer-sized words
+        263..=280 | 282..=293 | 299..=306 | 309..=313 | 512..=573 => Some(4),
+        _ => None,
+    }
 }
 
 fn mark_relocated(image: &mut A64ElfImage, start: u64, len: u64) {

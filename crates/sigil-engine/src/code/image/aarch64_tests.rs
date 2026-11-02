@@ -1058,3 +1058,297 @@ fn an_import_reference_in_an_unproved_stub_stays_searchable() {
         "{gaps:?}"
     );
 }
+
+fn object_write(bytes: &mut [u8], row: usize, off: u64, kind: u32) {
+    put64(bytes, row, off);
+    put64(bytes, row + 8, u64::from(kind));
+    put64(bytes, row + 16, 0xd65f03c0d503201f);
+}
+
+#[test]
+fn object_write_extent_invalidates_every_intersected_function() {
+    let original = fixture("elf-clang-o2.o");
+    assert_eq!(run_calls(&original).0.len(), 2);
+    let (_, rel, _) = section(&original, ".rela.text");
+    // ABS32 control precedes the exact review ABS64 mutation. At .text+0x20 the
+    // low word is NOP and ABS64's high word replaces the next function entry with RET.
+    for (kind, width) in [
+        (258, 4),
+        (257, 8),
+        (260, 8),
+        (307, 8),
+        (1031, 16),
+        (299, 4),
+        (573, 4),
+        (316, 4),
+        (317, 8),
+        (1029, 8),
+    ] {
+        let mut bytes = original.clone();
+        object_write(&mut bytes, rel as usize, 0x20, kind);
+        let (image, _) = normal(&bytes);
+        let (calls, gaps) = run_calls(&bytes);
+        assert_eq!(
+            calls.iter().any(|(pc, _)| *pc == 0x78),
+            width == 4,
+            "kind={kind} fdes={:?} excluded={:?} calls={calls:?}",
+            image.fdes,
+            image.excluded
+        );
+        assert!(image.excluded(0x60 + width - 1, 0x60 + width));
+        assert!(!image.excluded(0x60 + width, 0x60 + width + 1));
+        assert!(!gaps.is_empty());
+    }
+    // Byte-aligned 16-bit data writes may straddle an instruction/function boundary.
+    for (off, second) in [(0x22, true), (0x23, false)] {
+        for kind in [259, 262] {
+            let mut bytes = original.clone();
+            object_write(&mut bytes, rel as usize, off, kind);
+            let (image, _) = normal(&bytes);
+            assert_eq!(image.fdes.contains(&(0x64, 0x88)), second);
+            assert_eq!(
+                run_calls(&bytes).0.iter().any(|(pc, _)| *pc == 0x78),
+                second
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_object_write_width_cannot_leave_a_proved_image() {
+    let original = fixture("elf-clang-o2.o");
+    let (_, rel, _) = section(&original, ".rela.text");
+    for kind in [0xdead, 281, 1024, 0xffff_ffff] {
+        let mut bytes = original.clone();
+        object_write(&mut bytes, rel as usize, 0x20, kind);
+        let (image, run, _) = inspect(&bytes, 0, bytes.len() as u64, CodeBudgets::default());
+        assert!(image.is_none(), "unmodeled width {kind:#x}");
+        assert!(!run.clone_gaps().is_empty());
+        assert!(run_calls(&bytes).0.is_empty());
+    }
+}
+
+#[test]
+fn object_prel64_write_cannot_leave_the_overwritten_entry_trusted() {
+    let mut bytes = fixture("elf-clang-o2.o");
+    let (_, rel, _) = section(&bytes, ".rela.text");
+    object_write(&mut bytes, rel as usize, 0x20, 260);
+    let (calls, gaps) = run_calls(&bytes);
+    assert!(
+        calls.is_empty(),
+        "PREL64 overlaps both functions: {calls:?}"
+    );
+    assert!(!gaps.is_empty());
+    let mut embedded = vec![0u8; 0x100];
+    embedded.extend_from_slice(&bytes);
+    embedded.extend_from_slice(&bytes); // An adjacent image cannot lend the first slice bytes.
+    let (image, _, _) = inspect(&embedded, 0x100, bytes.len() as u64, CodeBudgets::default());
+    let image = image.unwrap();
+    assert_eq!(image.excluded, [(0x160, 0x168)]);
+    assert!(image.fdes.is_empty());
+}
+
+#[test]
+fn object_writes_must_fit_their_own_section_at_full_width() {
+    let original = fixture("elf-clang-o2.o");
+    let (_, rel, _) = section(&original, ".rela.text");
+    let (_, text, size) = section(&original, ".text");
+    assert_eq!(text + size, section(&original, ".eh_frame").1);
+    for (kind, width) in [(257, 8), (260, 8), (258, 4), (259, 2), (1031, 16)] {
+        let mut bytes = original.clone();
+        object_write(&mut bytes, rel as usize + 24, size - width, kind);
+        let (image, _) = normal(&bytes);
+        assert_eq!(image.fdes, [(0x40, 0x64)]);
+        assert_eq!(
+            run_calls(&bytes)
+                .0
+                .iter()
+                .map(|(pc, _)| *pc)
+                .collect::<Vec<_>>(),
+            [0x54]
+        );
+        let mut invalid = vec![size - width + 1, size, u64::MAX];
+        if width > 4 {
+            // Aligned and physically readable in the adjacent .eh_frame is still outside
+            // the relocation's target section; the former four-byte check accepted this.
+            invalid.insert(0, size - 4);
+        }
+        for off in invalid {
+            object_write(&mut bytes, rel as usize + 24, off, kind);
+            let (image, run, _) = inspect(&bytes, 0, bytes.len() as u64, CodeBudgets::default());
+            assert!(image.is_none(), "kind={kind} off={off:#x}");
+            assert!(!run.clone_gaps().is_empty());
+        }
+    }
+}
+
+#[test]
+fn object_write_poisoning_preserves_both_extents_in_either_order() {
+    let original = fixture("elf-clang-o2.o");
+    let (_, rel, _) = section(&original, ".rela.text");
+    for records in [
+        [(0x20, 257), (0x20, 258)], // longer first, shorter last
+        [(0x20, 258), (0x20, 257)],
+        [(0x20, 257), (0x24, CALL26)], // supported payload overlaps an unsupported write
+        [(0x24, CALL26), (0x20, 257)],
+        [(0x20, 257), (0x24, 260)],
+        [(0x24, 260), (0x20, 257)],
+    ] {
+        let mut bytes = original.clone();
+        for (index, (off, kind)) in records.iter().copied().enumerate() {
+            object_write(&mut bytes, rel as usize + index * 24, off, kind);
+        }
+        let (image, _) = normal(&bytes);
+        assert!(image.fdes.is_empty(), "{records:?}: {:?}", image.fdes);
+        assert!(
+            image.excluded(0x64, 0x68),
+            "{records:?}: {:?}",
+            image.excluded
+        );
+        for (off, _) in records {
+            assert!(image.relocs[&(0x40 + off)].is_none(), "{records:?}");
+        }
+        assert!(run_calls(&bytes).0.is_empty());
+    }
+}
+
+#[test]
+fn object_transitive_write_overlap_is_poisoned_independent_of_table_order() {
+    let original = fixture("elf-clang-o2.o");
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let mut bytes = original.clone();
+        let header = sh(&bytes, ".rela.text");
+        let table = (bytes.len() + 7) & !7;
+        bytes.resize(table + 72, 0);
+        put64(&mut bytes, header + 24, table as u64);
+        put64(&mut bytes, header + 32, 72);
+        for (index, n) in order.iter().copied().enumerate() {
+            object_write(&mut bytes, table + index * 24, 0x1c + n * 4, 257);
+        }
+        let (image, _) = normal(&bytes);
+        assert_eq!(image.excluded, [(0x5c, 0x6c)], "order={order:?}");
+        assert!(image.fdes.is_empty());
+        assert!(image.relocs.values().all(Option::is_none));
+    }
+}
+
+#[test]
+fn object_full_write_extent_also_invalidates_provisional_value_solving() {
+    let mut bytes = fixture("elf-clang-o2.o");
+    let (control, mut run) = normal(&bytes);
+    let proofs = Proofs {
+        executable: &|s, e| control.executable(s, e),
+        excluded: &|s, e| control.excluded(s, e),
+        noreturn: &|_, _| false,
+        candidates: &[0x78],
+    };
+    let cfg = decode_cfg(&bytes[0x64..0x88], 0x64, 0x88, &proofs, &mut run).unwrap();
+    let (_, rel, _) = section(&bytes, ".rela.text");
+    object_write(&mut bytes, rel as usize, 0x20, 257);
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(&bytes).unwrap();
+    let mut reader = Reader::new(f.as_file(), bytes.len() as u64, 1 << 28);
+    let mut run = Run::new(CodeBudgets::default());
+    let image = build(
+        &mut reader,
+        SliceWindow {
+            base: 0,
+            len: bytes.len() as u64,
+        },
+        &mut run,
+    )
+    .unwrap();
+    let before = reader.used();
+    // Even a previously accepted raw CFG cannot bypass the final ELF value entry point.
+    assert!(matches!(
+        image.solve_values(&cfg, &mut reader, &mut run),
+        Err(value::Failure::InvalidImage)
+    ));
+    assert_eq!(reader.used(), before);
+}
+
+#[test]
+fn object_data_and_unwind_relocations_share_the_extent_boundary_check() {
+    let original = fixture("elf-clang-o2.o");
+    // Give an empty existing section distinct file-backed readonly bytes. No aliases.
+    let mut data = original.clone();
+    let data_index = section(&data, ".note.GNU-stack").0;
+    let header = sh(&data, ".note.GNU-stack");
+    let start = (data.len() + 7) & !7;
+    data.resize(start + 16, 0);
+    put64(&mut data, header + 8, 2);
+    put64(&mut data, header + 24, start as u64);
+    put64(&mut data, header + 32, 16);
+    let rel_header = sh(&data, ".rela.text");
+    let (_, rel, _) = section(&data, ".rela.text");
+    put32(&mut data, rel_header + 44, data_index as u32);
+    put64(&mut data, rel_header + 32, 24);
+    object_write(&mut data, rel as usize, 8, 257);
+    let (image, _) = normal(&data);
+    assert!(
+        image
+            .mappings
+            .iter()
+            .find(|m| m.start == start as u64)
+            .unwrap()
+            .relocated
+    );
+    for (off, kind) in [(9, 257), (0, 0xdead)] {
+        object_write(&mut data, rel as usize, off, kind);
+        assert!(inspect(&data, 0, data.len() as u64, CodeBudgets::default())
+            .0
+            .is_none());
+    }
+    let (_, rel, _) = section(&original, ".rela.eh_frame");
+    let (_, _, size) = section(&original, ".eh_frame");
+    for (off, kind) in [
+        (size - 4, 257),
+        (size - 4, 260),
+        (0x1c, 0xdead),
+        (0x1c, 257),
+    ] {
+        let mut bytes = original.clone();
+        object_write(&mut bytes, rel as usize, off, kind);
+        assert!(
+            inspect(&bytes, 0, bytes.len() as u64, CodeBudgets::default())
+                .0
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn object_relocations_cannot_modify_metadata_read_as_proof() {
+    let original = fixture("elf-clang-o2.o");
+    for (target, offset) in [(".symtab", 6 * 24), (".strtab", 0), (".rela.text", 0)] {
+        let mut bytes = original.clone();
+        // Turn an empty section into one additional relocation table, retaining both
+        // original call relocations and FDEs so they cannot mask the metadata hazard.
+        let header = sh(&bytes, ".note.GNU-stack");
+        let info = section(&bytes, target).0;
+        let symbols = section(&bytes, ".symtab").0;
+        let table = (bytes.len() + 7) & !7;
+        bytes.resize(table + 24, 0);
+        put32(&mut bytes, header + 4, 4);
+        put64(&mut bytes, header + 24, table as u64);
+        put64(&mut bytes, header + 32, 24);
+        put32(&mut bytes, header + 40, symbols as u32);
+        put32(&mut bytes, header + 44, info as u32);
+        put64(&mut bytes, header + 48, 8);
+        put64(&mut bytes, header + 56, 24);
+        object_write(&mut bytes, table, offset, 257);
+        let (image, run, _) = inspect(&bytes, 0, bytes.len() as u64, CodeBudgets::default());
+        assert!(
+            image.is_none(),
+            "unapplied write to {target} must invalidate its proof"
+        );
+        assert!(!run.clone_gaps().is_empty());
+    }
+}
