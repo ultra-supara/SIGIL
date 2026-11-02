@@ -72,19 +72,14 @@ impl<'a> Values<'a> {
         let mut by_process: BTreeMap<ProcessKey, BTreeMap<ValueCode, Vec<&ProcessValue>>> =
             BTreeMap::new();
         for value in values {
-            let ValueOrigin::ObservedProcess {
-                process,
-                source: ObsSource::Proc,
-                read: Some(read),
-            } = &value.origin
-            else {
+            let ValueOrigin::ObservedProcess { process, .. } = &value.origin else {
                 continue;
             };
-            let code = match (&value.key, read) {
-                (ValueKey::Cwd, ProcessValueRead::Cwd) => ValueCode::Cwd,
-                (ValueKey::Env(name), ProcessValueRead::InitialEnvironment)
-                    if name.as_bytes() == b"LD_LIBRARY_PATH" =>
-                {
+            // Every observed row for a required key contributes to ambiguity, including
+            // legacy or nonqualifying sources. Qualify only after establishing uniqueness.
+            let code = match &value.key {
+                ValueKey::Cwd => ValueCode::Cwd,
+                ValueKey::Env(name) if name.as_bytes() == b"LD_LIBRARY_PATH" => {
                     ValueCode::LibraryPath
                 }
                 _ => continue,
@@ -110,7 +105,16 @@ impl<'a> Values<'a> {
             .map(Vec::as_slice)
         {
             None | Some([]) => Ok(None),
-            Some([value]) => Ok(Some(*value)),
+            Some([value]) => {
+                let required = match code {
+                    ValueCode::Cwd => ProcessValueRead::Cwd,
+                    ValueCode::LibraryPath => ProcessValueRead::InitialEnvironment,
+                };
+                let qualified = matches!(&value.origin, ValueOrigin::ObservedProcess {
+                    source: ObsSource::Proc, read: Some(read), ..
+                } if *read == required);
+                Ok(qualified.then_some(*value))
+            }
             Some(_) => Err("dependency value: ambiguous observed inputs"),
         }
     }

@@ -1648,3 +1648,186 @@ fn duplicate_artifacts_keep_the_first_object_classification() {
         1
     );
 }
+
+#[test]
+fn observed_library_path_ambiguity_precedes_source_qualification() {
+    for (source, read) in [
+        (ObsSource::Proc, None),
+        (ObsSource::Proc, Some(ProcessValueRead::Cwd)),
+        (ObsSource::File, Some(ProcessValueRead::InitialEnvironment)),
+        (
+            ObsSource::Config,
+            Some(ProcessValueRead::InitialEnvironment),
+        ),
+    ] {
+        let mut w = World::new();
+        w.elf("/scan/app", ElfType::Exec, &["lib.so"], &[], &[]);
+        w.elf("/scan/work/lib.so", ElfType::Dyn, &[], &[], &[]);
+        w.process(10, "/scan/app", Some(7));
+        let key = ValueKey::Env("LD_LIBRARY_PATH".into());
+        w.value(
+            10,
+            key.clone(),
+            TriValue::Known("/scan/work".into()),
+            ProcessValueRead::InitialEnvironment,
+        );
+        w.value(
+            10,
+            key,
+            TriValue::Known("/scan/work".into()),
+            ProcessValueRead::InitialEnvironment,
+        );
+        w.values[1].origin = ValueOrigin::ObservedProcess {
+            process: pref(10),
+            source,
+            read,
+        };
+        let a = w.with(
+            DepsOptions {
+                observe_env: true,
+                observer_mnt_ns: Some(7),
+            },
+            DepsBudgets::default(),
+        );
+        assert!(
+            edges(&a, "/scan/app", "lib.so", SearchRule::LdLibraryPath).is_empty(),
+            "duplicate {source:?}/{read:?}"
+        );
+        assert!(gaps(&a, "/scan/app").contains(&"dependency value: ambiguous observed inputs"));
+    }
+}
+
+#[test]
+fn observed_cwd_ambiguity_precedes_source_qualification() {
+    for (source, read) in [
+        (ObsSource::Proc, None),
+        (ObsSource::Proc, Some(ProcessValueRead::InitialEnvironment)),
+        (ObsSource::File, Some(ProcessValueRead::Cwd)),
+        (ObsSource::Config, Some(ProcessValueRead::Cwd)),
+    ] {
+        let mut w = World::new();
+        w.elf("/scan/app", ElfType::Exec, &["lib.so"], &[], &[""]);
+        w.elf("/scan/work/lib.so", ElfType::Dyn, &[], &[], &[]);
+        w.process(10, "/scan/app", Some(7));
+        w.value(
+            10,
+            ValueKey::Cwd,
+            TriValue::Known("/scan/work".into()),
+            ProcessValueRead::Cwd,
+        );
+        w.value(
+            10,
+            ValueKey::Cwd,
+            TriValue::Known("/scan/work".into()),
+            ProcessValueRead::Cwd,
+        );
+        w.values[1].origin = ValueOrigin::ObservedProcess {
+            process: pref(10),
+            source,
+            read,
+        };
+        let a = w.run();
+        assert!(
+            edges(&a, "/scan/app", "lib.so", SearchRule::Runpath).is_empty(),
+            "duplicate {source:?}/{read:?}"
+        );
+        assert!(gaps(&a, "/scan/app").contains(&"dependency value: ambiguous observed inputs"));
+    }
+}
+
+#[test]
+fn observed_unused_cwd_ambiguity_preserves_absolute_runpath_candidates() {
+    let mut w = World::new();
+    w.elf(
+        "/scan/app",
+        ElfType::Exec,
+        &["lib.so"],
+        &[],
+        &["/scan/work"],
+    );
+    w.elf("/scan/work/lib.so", ElfType::Dyn, &[], &[], &[]);
+    w.process(10, "/scan/app", Some(7));
+    w.value(
+        10,
+        ValueKey::Cwd,
+        TriValue::Known("/scan/work".into()),
+        ProcessValueRead::Cwd,
+    );
+    w.value(
+        10,
+        ValueKey::Cwd,
+        TriValue::Known("/scan/other".into()),
+        ProcessValueRead::Cwd,
+    );
+    let a = w.run();
+    let e = edges(&a, "/scan/app", "lib.so", SearchRule::Runpath);
+    assert_eq!(e.len(), 2);
+    assert!(e
+        .iter()
+        .any(|(_, c)| c.process == Some(pref(10)) && c.values.is_empty()));
+    assert!(!gaps(&a, "/scan/app").contains(&"dependency value: ambiguous observed inputs"));
+}
+
+#[test]
+fn observed_ambiguity_is_isolated_from_other_process_keys_and_nonobserved_rows() {
+    for mutation in 0..5 {
+        let mut w = World::new();
+        w.elf("/scan/app", ElfType::Exec, &["lib.so"], &[], &[]);
+        w.elf("/scan/work/lib.so", ElfType::Dyn, &[], &[], &[]);
+        w.process(10, "/scan/app", Some(7));
+        let key = ValueKey::Env("LD_LIBRARY_PATH".into());
+        let used = w.value(
+            10,
+            key.clone(),
+            TriValue::Known("/scan/work".into()),
+            ProcessValueRead::InitialEnvironment,
+        );
+        w.value(
+            10,
+            key,
+            TriValue::Known("/scan/other".into()),
+            ProcessValueRead::InitialEnvironment,
+        );
+        match mutation {
+            0 => {
+                w.values[1].origin = ValueOrigin::Configured {
+                    file: ConfigRef {
+                        file: id("/scan/app"),
+                        key: "Environment".into(),
+                        line: 9,
+                    },
+                    directive: "Environment".into(),
+                }
+            }
+            1 => {
+                w.values[1].origin = ValueOrigin::PredictedLaunch {
+                    rules: vec!["unverified-unit".into()],
+                    from: vec![],
+                }
+            }
+            2 | 3 => {
+                let ValueOrigin::ObservedProcess { process, .. } = &mut w.values[1].origin else {
+                    panic!("observed fixture")
+                };
+                if mutation == 2 {
+                    process.start_ticks += 1;
+                } else {
+                    process.boot_id = "other-boot".into();
+                }
+            }
+            4 => w.values[1].key = ValueKey::Cwd,
+            _ => unreachable!(),
+        }
+        let a = w.with(
+            DepsOptions {
+                observe_env: true,
+                observer_mnt_ns: Some(7),
+            },
+            DepsBudgets::default(),
+        );
+        let e = edges(&a, "/scan/app", "lib.so", SearchRule::LdLibraryPath);
+        assert_eq!(e.len(), 1, "mutation {mutation}");
+        assert_eq!(e[0].1.values, vec![used]);
+        assert!(!gaps(&a, "/scan/app").contains(&"dependency value: ambiguous observed inputs"));
+    }
+}
