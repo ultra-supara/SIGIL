@@ -29,6 +29,7 @@ pub mod binary_input;
 pub mod canonical;
 pub mod code;
 pub mod code_abi;
+pub mod code_coverage;
 pub mod coverage;
 pub mod dependency_path;
 pub mod dependency_search;

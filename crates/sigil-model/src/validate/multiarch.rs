@@ -1,4 +1,4 @@
-//! Additive evidence contract. Coverage aggregation is a separate, required gate.
+//! Additive evidence contract; strict coverage lives in `code_coverage`.
 use std::collections::BTreeSet;
 
 use super::Validator;
@@ -16,6 +16,15 @@ impl Validator<'_> {
         if !marked {
             // Historical installation facts may name non-x86/ELF slices. Preserve the
             // legacy validator's contract; only genuinely new evidence needs the marker.
+            for binary in &s.binaries {
+                if matches!(&binary.container, ContainerFacts::MachO(m) if m.little_endian.is_some())
+                {
+                    self.code_error(
+                        &binary.slice,
+                        "Mach-O byte-order observation needs multiarch-v1",
+                    );
+                }
+            }
             for a in &s.artifacts {
                 if a.code_slice_inventory.is_some() {
                     self.code_error(&a.id, "code_slice_inventory needs multiarch-v1");
@@ -47,14 +56,24 @@ impl Validator<'_> {
             return;
         }
 
-        // Task 4 must replace this gate with the complete slice/inventory/parent coverage
-        // contract before any producer or saved-session reader accepts MultiarchV1.
-        self.code_error(
-            "request.code_analysis",
-            "multiarch coverage validation is not enabled",
-        );
         if !s.request.code {
             self.code_error("request", "marker needs request.code");
+        }
+        // Task 11/16 must enable slice-aware reasons and library-aware matching together
+        // in the evaluator and saved-result validator. Legacy capability results stay intact.
+        if s.policy_violations.iter().any(|v| {
+            v.policy_rule
+                .as_str()
+                .starts_with(crate::CAPABILITY_DENY_PREFIX)
+        }) || s
+            .open_questions
+            .iter()
+            .any(|q| q.rule.as_str() == crate::CAPABILITY_RULE)
+        {
+            self.code_error(
+                "policy",
+                "marked capability decisions await slice-aware policy validation",
+            );
         }
         if !s
             .request
@@ -103,14 +122,17 @@ impl Validator<'_> {
                 Some((&b.slice, e.imports.iter().map(|i| &i.name).collect()))
             })
             .collect();
-        // Per-call layout gaps belong to slice code coverage, never container observations.
-        // Before removing the gate, Task 4 must check coverage applicability and require gaps
-        // independently for each applicable check: another check's Partial cannot justify a
-        // Complete child. Coverage inventory, duplicates and aggregation also belong there.
+        // Only the applicable check can justify a partial argument layout. A second check's
+        // Partial must not lend its gaps to a complete or missing applicable child.
+        let applicable = if crate::is_binary_inspection(&s.request) {
+            BINARY_CODE
+        } else {
+            ARTIFACTS_CODE
+        };
         let mut code_gaps: std::collections::HashMap<&SliceId, BTreeSet<&str>> =
             std::collections::HashMap::new();
         for coverage in &s.coverage {
-            if !matches!(coverage.check.as_str(), BINARY_CODE | ARTIFACTS_CODE) {
+            if coverage.check.as_str() != applicable {
                 continue;
             }
             if let (Ref::Slice(slice), CoverageState::Partial { missing }) =
@@ -131,6 +153,12 @@ impl Validator<'_> {
                 continue;
             };
             let macho = matches!(binary.container, ContainerFacts::MachO(_));
+            if macho && !facts.call_sites.is_empty() {
+                self.code_error(
+                    &facts.slice,
+                    "marked Mach-O call facts await library-aware policy validation",
+                );
+            }
             if !matches!(slice.arch, Arch::X86_64 | Arch::Aarch64) {
                 self.code_error(&facts.slice, "unsupported code architecture");
             }

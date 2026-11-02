@@ -106,6 +106,15 @@ pub enum ContainerFacts {
 #[serde(deny_unknown_fields)]
 pub struct MachOFacts {
     pub is_64: bool,
+    /// Header byte order observed for MultiarchV1. Legacy writers omit this field.
+    /// A marked code producer must carry Header.order from the same fd and retain it only
+    /// after stability succeeds; CPU type and width alone do not establish little endian.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::session::present"
+    )]
+    pub little_endian: Option<bool>,
     pub cpu_type: i32,
     pub cpu_subtype: i32,
     pub fat_cpu_type: Option<i32>,

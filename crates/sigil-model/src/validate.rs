@@ -27,6 +27,7 @@
 //!   not evaluate policy: it never decides an action, a treatment, or which checks are required.
 //!   It only refuses a session whose verdict, counts, or completeness contradict what it records.
 
+mod code_coverage;
 mod multiarch;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -936,6 +937,8 @@ impl<'a> Validator<'a> {
         self.multiarch_code();
         if s.request.code_analysis.is_none() {
             self.code_coverage();
+        } else {
+            self.multiarch_coverage();
         }
         self.identity_coverage();
         self.import_hints();

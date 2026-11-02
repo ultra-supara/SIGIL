@@ -1036,6 +1036,7 @@ fn a_macho_content_with_imports_under_code_is_not_analyzed() {
     let mut s = binary_code();
     s.artifacts[0].format = Format::MachO;
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        little_endian: None,
         is_64: true,
         cpu_type: 0x0100_0007,
         cpu_subtype: 3,
@@ -1088,6 +1089,7 @@ fn a_macho_content_without_imports_gets_no_capabilities() {
     let mut s = binary_code();
     s.artifacts[0].format = Format::MachO;
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        little_endian: None,
         is_64: true,
         cpu_type: 0x0100_0007,
         cpu_subtype: 3,
@@ -1130,6 +1132,7 @@ fn a_macho_content_with_imports_lists_them_and_gets_capability_rows() {
     };
     let facts = |file_type: u32, imports: Vec<MachOImport>| {
         ContainerFacts::MachO(MachOFacts {
+            little_endian: None,
             is_64: true,
             cpu_type: 0x0100_0007,
             cpu_subtype: 3,
@@ -1611,6 +1614,7 @@ fn a_macho_content_has_the_identity_rows_too() {
     let mut s = binary_code();
     s.artifacts[0].format = Format::MachO;
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        little_endian: None,
         is_64: true,
         cpu_type: 0x0100_0007,
         cpu_subtype: 3,

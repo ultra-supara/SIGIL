@@ -130,6 +130,7 @@ const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("Session", "binaries"),
     ("ElfFacts", "returns"),
     ("MachOFacts", "imports"),
+    ("MachOFacts", "little_endian"),
     ("ProcessObs", "maps_read"),
     ("ElfFacts", "abi"),
     ("ProcessObs", "mnt_ns"),
@@ -388,6 +389,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample(
             "ContainerFacts",
             ContainerFacts::MachO(MachOFacts {
+                little_endian: None,
                 is_64: true,
                 cpu_type: 0x0100_000c,
                 cpu_subtype: 0,
@@ -407,6 +409,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
         sample(
             "MachOFacts",
             MachOFacts {
+                little_endian: None,
                 is_64: true,
                 cpu_type: 0x0100_000c,
                 cpu_subtype: 0,

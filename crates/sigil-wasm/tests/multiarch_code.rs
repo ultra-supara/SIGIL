@@ -1,5 +1,8 @@
-//! The viewer must fail closed until Task 4 installs multiarchitecture coverage validation.
-use sigil_model::{code_abi, CodeAnalysis, Session};
+//! Native viewer entry points share strict marked coverage validation with actual WASM.
+#[allow(dead_code)]
+#[path = "../../sigil-model/tests/support/multiarch.rs"]
+mod support;
+use sigil_model::{code_abi, CodeAnalysis, Ref, Session};
 use sigil_wasm::render_session_markdown_inner;
 
 #[test]
@@ -23,7 +26,7 @@ fn historical_install_architecture_and_format_remain_readable() {
 }
 
 #[test]
-fn marked_saved_sessions_are_gated_in_both_native_and_wasm_entrypoints() {
+fn incomplete_marked_saved_sessions_are_rejected_by_native_and_wasm_entrypoints() {
     let mut s: Session = serde_json::from_str(include_str!(
         "../../../schemas/examples/session-v1/16-binary-code.json"
     ))
@@ -34,12 +37,12 @@ fn marked_saved_sessions_are_gated_in_both_native_and_wasm_entrypoints() {
     s.knowledge.push(code_abi::V1.knowledge().unwrap());
     let json = serde_json::to_string(&s).unwrap();
     let errors = s.validate().unwrap_err();
-    assert!(errors.iter().any(|e| e
-        .to_string()
-        .contains("multiarch coverage validation is not enabled")));
+    assert!(errors
+        .iter()
+        .any(|e| e.to_string().contains("missing code slice inventory")));
     assert!(render_session_markdown_inner(&json)
         .unwrap_err()
-        .contains("multiarch coverage validation is not enabled"));
+        .contains("missing code slice inventory"));
     s.knowledge.last_mut().unwrap().version = "unknown".into();
     assert!(
         render_session_markdown_inner(&serde_json::to_string(&s).unwrap())
@@ -58,6 +61,31 @@ fn canonical_call_ids_are_required_only_in_marked_viewer_sessions() {
         s.knowledge.push(code_abi::V1.knowledge().unwrap());
         let error = render_session_markdown_inner(&serde_json::to_string(&s).unwrap()).unwrap_err();
         assert!(error.contains("call ID must match its canonical address"));
-        assert!(error.contains("multiarch coverage validation is not enabled"));
+        assert!(error.contains("missing code slice inventory"));
+    }
+}
+
+#[test]
+fn coverage_inventory_matrix_renders_and_rejects_missing_children() {
+    for s in support::matrix() {
+        for s in [s.clone(), support::installation(s)] {
+            let json = s.to_canonical_json().unwrap();
+            let markdown = render_session_markdown_inner(&json).unwrap();
+            assert!(!markdown.is_empty());
+            let round: Session = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                render_session_markdown_inner(&round.to_canonical_json().unwrap()).unwrap(),
+                markdown
+            );
+            if s.artifacts[0].slices.is_empty() {
+                continue;
+            }
+            let mut bad = s;
+            let id = bad.artifacts[0].slices[0].id.clone();
+            bad.coverage.retain(|c| c.scope != Ref::Slice(id.clone()));
+            let error =
+                render_session_markdown_inner(&serde_json::to_string(&bad).unwrap()).unwrap_err();
+            assert!(error.contains("missing or duplicate required code scope"));
+        }
     }
 }

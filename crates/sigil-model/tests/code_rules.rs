@@ -532,6 +532,7 @@ fn macho_session() -> Session {
         weak: false,
     };
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        little_endian: None,
         is_64: true,
         cpu_type: 0x0100_0007,
         cpu_subtype: 3,
@@ -988,6 +989,7 @@ fn c3_a_mach_o_is_unsupported() {
         s.relations
             .retain(|r| !matches!(r, Relation::Declares { .. }));
         s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+            little_endian: None,
             is_64: true,
             cpu_type: X86_64,
             cpu_subtype: 3,

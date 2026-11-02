@@ -63,6 +63,7 @@ fn go_info() -> GoBuildInfo {
 
 fn macho() -> ContainerFacts {
     ContainerFacts::MachO(MachOFacts {
+        little_endian: None,
         is_64: true,
         cpu_type: 0x0100_0007,
         cpu_subtype: 3,

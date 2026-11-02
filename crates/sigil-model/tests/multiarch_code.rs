@@ -1,6 +1,9 @@
 //! Additive multiarchitecture contracts; no producer or decoder is enabled here.
 use serde_json::{json, Value};
 use sigil_model::*;
+#[allow(dead_code)]
+#[path = "support/multiarch.rs"]
+mod coverage_support;
 
 fn legacy() -> Session {
     serde_json::from_str(include_str!(
@@ -62,8 +65,6 @@ fn legacy_json_is_byte_identical() {
     assert_eq!(actual, include_str!("data/multiarch-legacy-sha256.txt"));
 }
 
-const GATE: &str = "multiarch coverage validation is not enabled";
-
 fn marked() -> Session {
     let mut s = legacy();
     s.request.code_analysis = Some(CodeAnalysis::MultiarchV1);
@@ -74,6 +75,21 @@ fn marked() -> Session {
     s.coverage.retain(|c| c.check.as_str() != BINARY_IDENTITY);
     s.knowledge.push(code_abi::V1.knowledge().unwrap());
     s.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Complete);
+    if let ContainerFacts::Elf(e) = &mut s.binaries[0].container {
+        e.abi = Some(ElfAbi {
+            is_64: true,
+            little_endian: true,
+            machine: 62,
+        });
+    }
+    let mut child = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap()
+        .clone();
+    child.scope = Ref::Slice(s.code[0].slice.clone());
+    s.coverage.push(child);
     s
 }
 
@@ -117,6 +133,7 @@ fn macho(arch: Arch) -> Session {
     };
     s.artifacts[0].format = Format::MachO;
     s.binaries[0].container = ContainerFacts::MachO(MachOFacts {
+        little_endian: Some(true),
         is_64: true,
         cpu_type: if arch == Arch::Aarch64 {
             0x0100_000c
@@ -161,10 +178,22 @@ fn errors(s: &Session) -> Vec<String> {
 }
 fn assert_contract(s: &Session) {
     let errors = errors(s);
+    let mut expected = vec![];
+    for facts in &s.code {
+        if !facts.call_sites.is_empty()
+            && s.binaries
+                .iter()
+                .any(|b| b.slice == facts.slice && matches!(b.container, ContainerFacts::MachO(_)))
+        {
+            expected.push(format!(
+                "{}: marked Mach-O call facts await library-aware policy validation",
+                facts.slice
+            ));
+        }
+    }
     assert_eq!(
-        errors,
-        vec![format!("request.code_analysis: {GATE}")],
-        "only the temporary Task 4 gate is permitted"
+        errors, expected,
+        "only explicit staged policy gates are permitted"
     );
 }
 fn rejects(s: &Session, needle: &str) {
@@ -176,7 +205,7 @@ fn rejects(s: &Session, needle: &str) {
 }
 
 #[test]
-fn marker_is_gated_until_coverage_validation_exists() {
+fn marker_accepts_complete_elf_contract_and_keeps_macho_policy_gate() {
     for s in [marked(), arm(), macho(Arch::Aarch64), macho(Arch::X86_64)] {
         assert_contract(&s);
     }
@@ -695,6 +724,7 @@ fn unmarked_binary_code_keeps_legacy_unsupported_validation() {
     let mut s = arm();
     s.request.code_analysis = None;
     s.artifacts[0].code_slice_inventory = None;
+    s.coverage.retain(|c| !matches!(c.scope, Ref::Slice(_)));
     s.code[0].call_sites.clear();
     rejects(&s, CODE_UNSUPPORTED);
 }
@@ -859,6 +889,7 @@ fn marked_legacy_calls_still_respect_the_register_abi_limit() {
     // A marker-free historical session keeps its prior validation semantics.
     s.request.code_analysis = None;
     s.artifacts[0].code_slice_inventory = None;
+    s.coverage.retain(|c| !matches!(c.scope, Ref::Slice(_)));
     assert!(s.validate().is_ok());
 }
 
@@ -923,7 +954,7 @@ fn code_gaps(s: &mut Session, check: &str, missing: Vec<String>) {
     for c in &mut s.coverage {
         if c.check.as_str() == BINARY_CODE && !matches!(c.scope, Ref::Slice(_)) {
             c.state = CoverageState::Partial {
-                missing: missing.clone(),
+                missing: vec![format!("code: incomplete slice {}", s.code[0].slice)],
             };
         }
     }
@@ -956,7 +987,8 @@ fn partial_open() -> Session {
 fn review_partial_layout_needs_its_exact_slice_code_gap() {
     let gap =
         "code: argument layout incomplete at cs:0x4d: variadic argument positions are not modeled";
-    for check in [BINARY_CODE, ARTIFACTS_CODE] {
+    {
+        let check = BINARY_CODE;
         let mut s = partial_open();
         code_gaps(&mut s, check, vec![gap.into()]);
         assert!(s.binaries[0].gaps.is_empty());
@@ -1000,8 +1032,9 @@ fn review_partial_layout_needs_its_exact_slice_code_gap() {
             !(c.check.as_str() == check && c.scope == Ref::Slice(s.code[0].slice.clone()))
         });
         let errors = errors(&s);
-        assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors.iter().any(|e| e.contains(GATE)));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("missing or duplicate required code scope")));
         assert!(errors
             .iter()
             .any(|e| e == "cs:0x4d: partial argument layout gap is missing"));
@@ -1257,11 +1290,10 @@ fn review_call_id_reason_boundary_cannot_merge_two_calls() {
     code_gaps(&mut s, BINARY_CODE, vec![first_gap.into()]);
     // The permissive legacy ID constructor allows the delimiter, but marked facts cannot.
     let invalid = errors(&s);
-    assert_eq!(invalid.len(), 2, "{invalid:?}");
+    assert_eq!(invalid.len(), 1, "{invalid:?}");
     assert!(invalid
         .iter()
         .any(|e| e.contains("call ID must match its canonical address")));
-    assert!(invalid.iter().any(|e| e.contains(GATE)));
 
     s.code[0].call_sites[1].id = CallId::new("cs:0x50").unwrap();
     rejects(&s, "cs:0x50: partial argument layout gap is missing");
@@ -1323,4 +1355,61 @@ fn review_unmarked_historical_call_ids_keep_legacy_validation() {
             assert!(s.to_canonical_json().is_ok());
         }
     }
+}
+
+#[test]
+fn wrong_check_cannot_supply_an_argument_layout_gap() {
+    let gap =
+        "code: argument layout incomplete at cs:0x4d: variadic argument positions are not modeled";
+    for install in [false, true] {
+        let mut good = partial_open();
+        code_gaps(&mut good, BINARY_CODE, vec![gap.into()]);
+        if install {
+            good = coverage_support::installation(good);
+        }
+        assert_contract(&good);
+        let check = if install { ARTIFACTS_CODE } else { BINARY_CODE };
+        let wrong = if install { BINARY_CODE } else { ARTIFACTS_CODE };
+        for missing_applicable in [false, true] {
+            let mut s = good.clone();
+            let index = s
+                .coverage
+                .iter()
+                .position(|c| c.check.as_str() == check && matches!(c.scope, Ref::Slice(_)))
+                .unwrap();
+            let mut extra = s.coverage[index].clone();
+            extra.check = CheckId::new(wrong).unwrap();
+            if missing_applicable {
+                s.coverage.remove(index);
+            } else {
+                s.coverage[index].state = CoverageState::Complete;
+            }
+            s.coverage.push(extra);
+            rejects(&s, "partial argument layout gap is missing");
+            rejects(&s, "unexpected code check or scope");
+        }
+    }
+}
+
+#[test]
+fn marked_macho_calls_remain_gated_until_library_aware_policy() {
+    for arch in [Arch::Aarch64, Arch::X86_64] {
+        rejects(
+            &macho(arch),
+            "marked Mach-O call facts await library-aware policy validation",
+        );
+    }
+}
+
+#[test]
+fn marked_capability_decisions_remain_gated_until_slice_aware_policy() {
+    let mut s: Session = serde_json::from_str(include_str!(
+        "../../../schemas/examples/session-v1/18-capability-policy.json"
+    ))
+    .unwrap();
+    s.request.code_analysis = Some(CodeAnalysis::MultiarchV1);
+    rejects(
+        &s,
+        "marked capability decisions await slice-aware policy validation",
+    );
 }

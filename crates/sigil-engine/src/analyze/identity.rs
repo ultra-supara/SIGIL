@@ -785,6 +785,7 @@ mod tests {
         let macho = BinaryFacts {
             slice: slice('a'),
             container: ContainerFacts::MachO(MachOFacts {
+                little_endian: None,
                 is_64: true,
                 cpu_type: 0x0100_000c,
                 cpu_subtype: 0,
