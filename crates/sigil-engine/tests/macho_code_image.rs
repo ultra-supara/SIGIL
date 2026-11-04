@@ -1,4 +1,4 @@
-//! Same-fd Mach-O image and descriptor boundaries; no decoder dispatch.
+//! Same-fd Mach-O image and descriptor boundaries.
 mod common;
 use sha2::{Digest, Sha256};
 use sigil_engine::binary::{parse_artifact, BinaryBudgets};
@@ -363,7 +363,15 @@ fn check_collection(bytes: &[u8], slices: usize, partial_inventory: bool) {
     {
         assert!(matches!(c.state, CoverageState::Partial { .. }));
         if matches!(c.scope, Ref::Artifact(_)) {
-            assert_eq!(c.budget.as_ref().unwrap().used, 0);
+            let used: u64 = facts
+                .code
+                .iter()
+                .filter_map(|(_, c)| match c {
+                    sigil_engine::code::CodeOutcome::Analyzed { budget, .. } => Some(budget.used),
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(c.budget.as_ref().unwrap().used, used);
         }
     }
     if !partial_inventory {
@@ -383,7 +391,7 @@ fn check_collection(bytes: &[u8], slices: usize, partial_inventory: bool) {
     assert!(facts
         .code
         .iter()
-        .all(|(_, c)| matches!(c, sigil_engine::code::CodeOutcome::Unsupported)));
+        .all(|(_, c)| matches!(c, sigil_engine::code::CodeOutcome::Analyzed { call_sites, gaps, .. } if call_sites.is_empty() && !gaps.is_empty())));
     let session = sigil_engine::inspect::binary_session(
         &sigil_engine::inspect::BinaryRequest {
             paths: vec![tree.path().join("bin/ollama")],

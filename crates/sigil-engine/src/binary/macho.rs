@@ -11,6 +11,7 @@ use sigil_model::{
 
 use super::read::{Bounded, Budgeted};
 use super::{BinaryBudgets, MachCodeMetadata, Parsed, ParsedArtifact, ParsedSlice};
+#[cfg(test)]
 use crate::code::CodeOutcome;
 
 mod imports;
@@ -1036,9 +1037,36 @@ pub(super) fn parse_artifact(
             }
         }
     }
-    // Code is analyzed only in x86-64 ELF (PR-5a spec §4.1).
-    for slice in &mut slices {
-        slice.code = budgets.code.map(|_| CodeOutcome::Unsupported);
+    if let Some(code_budgets) = budgets.code {
+        let mut analysis = crate::code::ArtifactAnalysis::new(file, size, code_budgets);
+        let artifact_id = sigil_model::ArtifactId::new(format!("sha256:{artifact_sha256}")).ok()?;
+        slices.sort_by_key(|s| {
+            (
+                s.offset,
+                sigil_model::SliceId::from_parts(&artifact_id, s.arch, s.offset),
+            )
+        });
+        for slice in &mut slices {
+            let id = sigil_model::SliceId::from_parts(&artifact_id, slice.arch, slice.offset);
+            slice.code = Some(match (&slice.container, &slice.macho_code) {
+                (Some(ContainerFacts::MachO(facts)), Some(local)) => crate::code::macho::analyze(
+                    &mut analysis,
+                    id,
+                    crate::code::reader::SliceWindow {
+                        base: slice.offset,
+                        len: slice.size,
+                    },
+                    slice.arch,
+                    facts,
+                    &local.local_gaps,
+                    local.ambiguous,
+                ),
+                _ => analysis.slice(true, |_, run| {
+                    run.gap(sigil_model::code_coverage::CODE_SLICE_NOT_PARSED.into());
+                    (vec![], vec![])
+                }),
+            });
+        }
     }
     let code_inventory = if inventory_gaps.is_empty() && !slices.is_empty() {
         sigil_model::CodeSliceInventory::Complete
