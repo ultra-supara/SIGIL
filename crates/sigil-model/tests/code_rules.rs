@@ -157,19 +157,73 @@ fn c1_code_facts_need_request_code() {
 }
 
 /// C1 and C4 are about a binary inspection's code. The golden examples of an install session
-/// carry the M1 analyzer's code facts (plan §4.6.5), and the model change is additive (spec §5).
+/// carry either legacy M1 facts or explicitly requested, marked multiarchitecture facts.
 #[test]
 fn c1_and_c4_leave_the_code_of_an_install_session_alone() {
     let mut seen = 0;
+    let mut marked = 0;
     for (name, s) in common::examples() {
         if s.code.is_empty() || is_binary_inspection(&s.request) {
             continue;
         }
-        seen += 1;
-        assert!(!s.request.code, "{name}");
+        if s.request.code_analysis == Some(CodeAnalysis::MultiarchV1) {
+            marked += 1;
+            assert!(s.request.code, "{name}");
+            assert!(s
+                .request
+                .roots
+                .iter()
+                .any(|r| r.id.as_str() == INSTALL_ROOT));
+            assert!(s
+                .coverage
+                .iter()
+                .any(|c| c.check.as_str() == ARTIFACTS_CODE));
+            let mut without_request = s.clone();
+            without_request.request.code = false;
+            assert!(
+                code_errors(&without_request)
+                    .iter()
+                    .any(|e| e.contains("marker needs request.code")),
+                "{name}"
+            );
+            let mut without_marker = s.clone();
+            without_marker.request.code_analysis = None;
+            assert!(!code_errors(&without_marker).is_empty(), "{name}");
+            for facts in &s.code {
+                let mut unsupported = s.clone();
+                let child = unsupported
+                    .coverage
+                    .iter_mut()
+                    .find(|c| {
+                        c.check.as_str() == ARTIFACTS_CODE
+                            && c.scope == Ref::Slice(facts.slice.clone())
+                    })
+                    .unwrap();
+                assert!(matches!(
+                    child.state,
+                    CoverageState::Complete | CoverageState::Partial { .. }
+                ));
+                child.state = CoverageState::Unsupported {
+                    what: CODE_UNSUPPORTED.into(),
+                };
+                child.budget = None;
+                assert!(
+                    !code_errors(&unsupported).is_empty(),
+                    "{name}: code facts on unsupported slice"
+                );
+            }
+        } else {
+            seen += 1;
+            assert!(!s.request.code, "{name}");
+            assert_eq!(s.request.code_analysis, None, "{name}");
+        }
         assert_eq!(code_errors(&s), Vec::<String>::new(), "{name}");
     }
     assert!(seen > 0, "no install example has code facts");
+    assert_eq!(
+        marked, 1,
+        "the marked Mach-O installation must be exercised"
+    );
 }
 
 #[test]

@@ -922,7 +922,7 @@ fn newly_scannable_alias_preserves_the_original_code_outcome() {
 }
 
 #[test]
-fn macho_descriptor_loss_and_unparsed_children_stay_distinct_without_dispatch() {
+fn macho_descriptor_loss_and_unparsed_children_stay_distinct_after_dispatch() {
     let original = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/macho/hello-universal"),
@@ -934,11 +934,23 @@ fn macho_descriptor_loss_and_unparsed_children_stay_distinct_without_dispatch() 
         complete.artifacts[0].code_slice_inventory,
         Some(CodeSliceInventory::Complete)
     );
-    assert!(complete
-        .coverage
-        .iter()
-        .filter(|c| c.check.as_str() == BINARY_CODE)
-        .all(|c| matches!(c.state, CoverageState::Unsupported { .. }) && c.budget.is_none()));
+    assert_eq!(
+        complete.request.code_analysis,
+        Some(CodeAnalysis::MultiarchV1)
+    );
+    for slice in &complete.artifacts[0].slices {
+        let child = complete
+            .coverage
+            .iter()
+            .find(|c| c.check.as_str() == BINARY_CODE && c.scope == Ref::Slice(slice.id.clone()))
+            .unwrap();
+        assert!(matches!(&child.state, CoverageState::Partial { missing }
+            if missing.iter().any(|g| g == "code: Mach-O unwind: missing exact bounds")));
+        assert!(child
+            .budget
+            .as_ref()
+            .is_some_and(|b| b.used > 0 && b.used <= b.limit));
+    }
     for lost_descriptor in [false, true] {
         let mut b = original.clone();
         if lost_descriptor {
@@ -962,10 +974,43 @@ fn macho_descriptor_loss_and_unparsed_children_stay_distinct_without_dispatch() 
             ),
             lost_descriptor
         );
-        assert!(s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE
-            && matches!(c.scope, Ref::Instance(_))
-            && matches!(c.state, CoverageState::Partial { .. })
-            && c.budget.as_ref().is_some_and(|b| b.used == 0)));
+        let healthy = s.artifacts[0]
+            .slices
+            .iter()
+            .find(|s| s.arch == Arch::Aarch64)
+            .unwrap();
+        let child = s
+            .coverage
+            .iter()
+            .find(|c| c.check.as_str() == BINARY_CODE && c.scope == Ref::Slice(healthy.id.clone()))
+            .unwrap();
+        assert!(matches!(&child.state, CoverageState::Partial { missing }
+            if missing.iter().any(|g| g == "code: Mach-O unwind: missing exact bounds")));
+        assert!(child
+            .budget
+            .as_ref()
+            .is_some_and(|b| b.used > 0 && b.used <= b.limit));
+        let children: Vec<_> = s
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == BINARY_CODE && matches!(c.scope, Ref::Slice(_)))
+            .collect();
+        assert_eq!(children.len(), s.artifacts[0].slices.len());
+        assert!(children
+            .iter()
+            .all(|c| matches!(c.state, CoverageState::Partial { .. })));
+        let used: u64 = children
+            .iter()
+            .map(|c| c.budget.as_ref().unwrap().used)
+            .sum();
+        let parent = s
+            .coverage
+            .iter()
+            .find(|c| c.check.as_str() == BINARY_CODE && matches!(c.scope, Ref::Instance(_)))
+            .unwrap();
+        assert!(matches!(&parent.state, CoverageState::Partial { missing }
+            if missing.contains(&format!("code: incomplete slice {}", healthy.id))));
+        assert_eq!(parent.budget.as_ref().unwrap().used, used);
         if !lost_descriptor {
             assert!(s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE && matches!(c.scope, Ref::Slice(_)) && matches!(&c.state, CoverageState::Partial { missing } if missing == &[sigil_model::code_coverage::CODE_SLICE_NOT_PARSED]) && c.budget.as_ref().is_some_and(|b| b.used == 0)));
         }
