@@ -523,8 +523,11 @@ pub(crate) fn arguments(
         values.push(model(&state.regs[n], *reg, image, reader, run)?);
     }
     let id = call_id(call)?;
-    if let Some(gap) = plan.coverage_gap(&id) {
-        run.gap(gap);
+    if plan
+        .coverage_gap(&id)
+        .is_some_and(|gap| !run.required_gap(gap))
+    {
+        return Err(Failure::Budget);
     }
     Ok(Arguments {
         values,

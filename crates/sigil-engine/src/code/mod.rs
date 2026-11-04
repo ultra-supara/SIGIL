@@ -360,6 +360,19 @@ impl Run {
         }
     }
 
+    /// A retained fact may require its exact diagnostic. Refuse the transaction when
+    /// that diagnostic cannot fit; only the fixed exhaustion summary bypasses the cap.
+    /// Optional legacy diagnostics continue to use `gap` without changing their behavior.
+    pub fn required_gap(&mut self, gap: String) -> bool {
+        self.gap(gap.clone());
+        if self.gaps.contains(&gap) {
+            true
+        } else {
+            self.limit("gaps", self.budgets.gaps as u64);
+            false
+        }
+    }
+
     /// A gap listed whatever the count. Only for a small fixed set of strings: the limits, and
     /// `binary_code_bytes` exceeded. So the listed gaps can pass `budgets.gaps` by those, plus
     /// the line counting `more`.

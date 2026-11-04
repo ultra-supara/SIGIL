@@ -781,3 +781,39 @@ fn macho_descriptor_loss_and_unparsed_children_stay_distinct_without_dispatch() 
         s.validate().unwrap();
     }
 }
+
+#[test]
+fn mandatory_layout_gap_boundaries_preserve_earlier_function() {
+    for (count, cap, retained) in [
+        (255, 256, 256),
+        (256, 256, 257),
+        (257, 256, 1),
+        (255, 0, 1),
+        (255, 254, 1),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/code-aarch64-gap-limit/calls-{count}.o"
+        ));
+        let s = inspect_paths(
+            vec![path],
+            Some(sigil_engine::code::CodeBudgets {
+                gaps: cap,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(
+            s.code[0].call_sites.len(),
+            retained,
+            "count={count}, cap={cap}"
+        );
+        assert_eq!(s.code[0].functions.len(), if retained == 1 { 1 } else { 2 });
+        let healthy = s.code[0].call_sites.iter().find(|c| matches!(&c.target, CallTarget::Import { symbol, .. } if symbol.as_bytes() == b"connect")).unwrap();
+        assert_eq!(healthy.args_layout, Some(ArgumentLayout::Complete));
+        assert!(s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE && matches!(&c.state,CoverageState::Partial { missing } if retained > 1 || missing.contains(&format!("code: gaps limit {cap} reached")))));
+        s.validate().unwrap();
+        let json = s.to_canonical_json().unwrap();
+        let decoded: Session = serde_json::from_str(&json).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(json, decoded.to_canonical_json().unwrap());
+    }
+}

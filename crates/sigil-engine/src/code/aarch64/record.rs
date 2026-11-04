@@ -372,4 +372,79 @@ mod tests {
         assert!(!run.stopped());
         assert!(run.clone_gaps().is_empty());
     }
+    #[test]
+    fn mandatory_layout_gap_reservation_counts_preexisting_unique_gaps() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/code-aarch64-gap-limit/calls-256.o"
+        ))
+        .unwrap();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&bytes).unwrap();
+        let parsed = crate::binary::parse(&file, bytes.len() as u64, Default::default());
+        let sigil_model::ContainerFacts::Elf(elf) = parsed.container else {
+            panic!("ELF")
+        };
+        for cap in [256, 257] {
+            let mut owner = ArtifactAnalysis::new(
+                &file,
+                bytes.len() as u64,
+                CodeBudgets {
+                    gaps: cap,
+                    ..Default::default()
+                },
+            );
+            let outcome = owner.slice(true, |reader, run| {
+                let image = crate::code::image::aarch64::build(
+                    reader,
+                    SliceWindow {
+                        base: 0,
+                        len: bytes.len() as u64,
+                    },
+                    run,
+                )
+                .unwrap();
+                for _ in 0..8 {
+                    run.gap("code: independent earlier diagnostic".into());
+                }
+                analyze(
+                    &image,
+                    &elf.imports,
+                    crate::code::data::signatures().unwrap(),
+                    reader,
+                    run,
+                )
+            });
+            let CodeOutcome::Analyzed {
+                functions,
+                call_sites,
+                gaps,
+                ..
+            } = outcome
+            else {
+                panic!("analyzed")
+            };
+            assert_eq!(call_sites.len(), if cap == 256 { 1 } else { 257 });
+            assert_eq!(functions.len(), if cap == 256 { 1 } else { 2 });
+            assert_eq!(
+                gaps.iter()
+                    .filter(|g| g.contains("independent earlier diagnostic"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                gaps.iter()
+                    .filter(|g| g.starts_with("code: argument layout incomplete at "))
+                    .count(),
+                cap - 1
+            );
+            assert_eq!(owner.run.stopped(), cap == 256);
+            if cap == 256 {
+                let next = owner.slice(true, |_, _| panic!("exhausted artifact must not restart"));
+                assert!(
+                    matches!(next, CodeOutcome::Analyzed { budget, gaps, call_sites, .. } if budget.used == 0 && call_sites.is_empty() && gaps == ["code: artifact budget exhausted before slice"])
+                );
+            }
+        }
+    }
 }

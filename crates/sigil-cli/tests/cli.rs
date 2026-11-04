@@ -3354,3 +3354,19 @@ fn aarch64_code_binary_install_service_and_observe_share_the_same_facts() {
     assert_eq!(limited.code, 4, "{}", limited.stderr);
     assert!(session_of(&limited).code.is_empty());
 }
+
+#[test]
+fn aarch64_required_layout_gap_exhaustion_is_a_valid_partial_report() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code-aarch64-gap-limit/calls-257.o");
+    let r = binary(&[&"--code", &path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let s = session_of(&r);
+    s.validate().unwrap();
+    assert_eq!(s.code[0].functions.len(), 1);
+    assert_eq!(s.code[0].call_sites.len(), 1);
+    assert!(s.coverage.iter().any(|c| c.check.as_str() == "binary.code" && matches!(&c.state, CoverageState::Partial { missing } if missing.iter().any(|g| g == "code: gaps limit 256 reached"))));
+    let r = binary(&[&"--code", &path, &"--fail-on-incomplete"]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    assert_eq!(session_of(&r).code, s.code);
+}
