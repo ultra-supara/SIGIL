@@ -241,6 +241,30 @@ fn discarded_invalid_descriptors_preserve_healthy_sibling_evidence() {
     parent(&mut s, state, Some(4));
     valid(&s);
     valid(&installation(s.clone()));
+    let mut forged = s.clone();
+    forged.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Complete);
+    parent(&mut forged, CoverageState::Complete, Some(4));
+    code_error(
+        &forged,
+        "discarded fat descriptor requires partial code inventory",
+    );
+    code_error(
+        &installation(forged),
+        "discarded fat descriptor requires partial code inventory",
+    );
+    for gap in [
+        "fat header: architecture slices overlap",
+        "fat slice at 2048: hash: read error",
+    ] {
+        let mut bad = s.clone();
+        bad.binaries[0].gaps = vec![gap.into()];
+        bad.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Complete);
+        parent(&mut bad, CoverageState::Complete, Some(4));
+        code_error(
+            &bad,
+            "discarded fat descriptor requires partial code inventory",
+        );
+    }
     assert_eq!(s.code.len(), 1);
     assert!(!s.code[0].functions.is_empty());
     assert_eq!(s.artifacts[0].slices.len(), 1);
