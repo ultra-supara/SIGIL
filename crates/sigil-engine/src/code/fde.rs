@@ -110,6 +110,8 @@ pub(crate) struct FdeRecord {
     pub end: u64,
 }
 
+/// Mach-O exact-record mode: CIE references must name already-walked record boundaries.
+/// Both CIEs and FDEs charge the shared entry budget; legacy ELF entry points remain unchanged.
 pub(crate) fn parse_records(bytes: &[u8], base: u64, run: &mut Run) -> Vec<FdeRecord> {
     parse_records_inner(bytes, base, run, true, true, |fde| fde)
 }
@@ -119,7 +121,7 @@ fn parse_records_inner<T>(
     base: u64,
     run: &mut Run,
     charge_fdes: bool,
-    report_empty: bool,
+    strict_records: bool,
     mut record: impl FnMut(FdeRecord) -> T,
 ) -> Vec<T> {
     let mut frame = EhFrame::new(bytes, LittleEndian);
@@ -128,7 +130,8 @@ fn parse_records_inner<T>(
     let bases = BaseAddresses::default().set_eh_frame(base);
     // The CIEs parsed, by offset, so each is parsed once, not once per FDE: the parse reads its
     // augmentation string, whose length the input sets, so one long CIE shared by many FDEs would
-    // make the walk quadratic. At most one is added per FDE read, so the FDE limit bounds them.
+    // make the walk quadratic. Legacy lookup adds at most one per charged FDE. Exact-record
+    // lookup keeps only walked CIEs, charging each to the shared entry limit before insertion.
     // A kept CIE is 88 bytes, about 184 with the map's overhead (measured over 2^20 of them): at
     // worst about 184 MiB at the default limit of 2^20, dropped when this returns. Real files
     // have one or two CIEs.
@@ -153,6 +156,12 @@ fn parse_records_inner<T>(
             }
             Ok(Some(CieOrFde::Cie(cie))) => {
                 next = end_of(bytes, cie.offset(), cie.entry_len());
+                if strict_records {
+                    if !run.charge(super::Work::Fdes, 1) {
+                        break;
+                    }
+                    cies.insert(cie.offset(), cie);
+                }
                 continue;
             }
             Ok(Some(CieOrFde::Fde(partial))) => {
@@ -167,7 +176,22 @@ fn parse_records_inner<T>(
         if charge_fdes && !run.charge(super::Work::Fdes, 1) {
             break;
         }
-        let fde = match partial.parse(|frame, bases, offset| cie(&mut cies, frame, bases, offset)) {
+        if strict_records && !cies.contains_key(&partial.cie_offset().0) {
+            run.gap(format!(
+                "code: .eh_frame: FDE at offset {:#x}: CIE at {:#x} is not a walked CIE record boundary",
+                partial.offset(), partial.cie_offset().0
+            ));
+            continue;
+        }
+        let fde = match partial.parse(|frame, bases, offset| {
+            if strict_records {
+                cies.get(&offset.0)
+                    .cloned()
+                    .ok_or(gimli::Error::NoEntryAtGivenOffset(offset.0 as u64))
+            } else {
+                cie(&mut cies, frame, bases, offset)
+            }
+        }) {
             Ok(fde) => fde,
             Err(e) => {
                 run.gap(format!("code: .eh_frame: {e}"));
@@ -197,7 +221,7 @@ fn parse_records_inner<T>(
                 start,
                 end,
             })),
-            Some(_) if report_empty => run.gap(format!(
+            Some(_) if strict_records => run.gap(format!(
                 "code: .eh_frame: empty FDE at offset {:#x}",
                 fde.offset()
             )),

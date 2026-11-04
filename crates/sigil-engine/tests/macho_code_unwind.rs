@@ -513,3 +513,75 @@ fn unrelocated_object_fdes_translate_section_vms_and_agree_with_explicit_compact
     let got = unwind::read_bounds(&v, &mut reader, &mut Run::new(CodeBudgets::default()));
     assert_eq!(ranges(&got), [(0x11d8, 0x11eb), (0x11f8, 0x120e)]);
 }
+
+fn embedded_cie_fixture() -> Vec<u8> {
+    let mut bytes = fixture("arm64-classic");
+    let eh = section_at(&bytes, b"__eh_frame");
+    // Copy a well-formed CIE into the first FDE's instruction bytes. The actual
+    // sequential record boundaries remain CIE0, FDE0x14, FDE0x48.
+    let cie = bytes[eh..eh + 0x14].to_vec();
+    bytes[eh + 0x30..eh + 0x44].copy_from_slice(&cie);
+    bytes
+}
+
+#[test]
+fn walked_cie_boundary_control_keeps_both_exact_fdes() {
+    let bytes = embedded_cie_fixture();
+    // Both FDE pointers still name the actual CIE record at offset0.
+    let (bounds, gaps) = analyze(&bytes);
+    assert_eq!(ranges(&bounds), [(0x520, 0x544), (0x544, 0x568)]);
+    assert!(gaps.is_empty(), "{gaps:?}");
+}
+
+#[test]
+fn embedded_cie_inside_another_fde_is_rejected_without_changing_legacy_elf_lookup() {
+    let mut bytes = embedded_cie_fixture();
+    let eh = section_at(&bytes, b"__eh_frame");
+    // The second FDE now points backwards from0x4c to interior pseudo-CIE0x30.
+    put32(&mut bytes, eh + 0x4c, 0x1c);
+    let (bounds, gaps) = analyze(&bytes);
+    assert_eq!(ranges(&bounds), [(0x520, 0x544)]);
+    assert!(
+        gaps.iter().any(|g| g.contains("CIE") && g.contains("0x30")),
+        "{gaps:?}"
+    );
+
+    // Compatibility control: the existing ELF entry point retains its historical
+    // permissive CIE lookup; the new record-boundary rule is Mach-O-only.
+    let header = section_header(&bytes, b"__eh_frame");
+    let size = u64::from_le_bytes(bytes[header + 40..header + 48].try_into().unwrap()) as usize;
+    let vm = u64::from_le_bytes(bytes[header + 32..header + 40].try_into().unwrap());
+    let mut run = Run::new(CodeBudgets::default());
+    assert_eq!(
+        fde::parse(&bytes[eh..eh + size], vm, &mut run),
+        [(0x520, 0x544), (0x544, 0x568)]
+    );
+    assert!(run.into_gaps().is_empty());
+}
+
+#[test]
+fn walked_cies_charge_the_exact_record_entry_budget_without_changing_legacy_fde_limits() {
+    let bytes = fixture("arm64-classic");
+    let header = section_header(&bytes, b"__eh_frame");
+    let eh = section_at(&bytes, b"__eh_frame");
+    let size = u64::from_le_bytes(bytes[header + 40..header + 48].try_into().unwrap()) as usize;
+    let vm = u64::from_le_bytes(bytes[header + 32..header + 40].try_into().unwrap());
+    for (limit, expected, stopped) in [(1, 0, true), (2, 1, true), (3, 2, false)] {
+        let mut run = Run::new(CodeBudgets {
+            fdes: limit,
+            ..CodeBudgets::default()
+        });
+        assert_eq!(
+            fde::parse_records(&bytes[eh..eh + size], vm, &mut run).len(),
+            expected
+        );
+        assert_eq!(run.stopped(), stopped);
+    }
+    let mut legacy = Run::new(CodeBudgets {
+        fdes: 2,
+        ..CodeBudgets::default()
+    });
+    assert_eq!(fde::parse(&bytes[eh..eh + size], vm, &mut legacy).len(), 2);
+    assert!(!legacy.stopped());
+    assert!(legacy.into_gaps().is_empty());
+}
