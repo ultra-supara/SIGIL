@@ -73,16 +73,15 @@ pub(crate) fn children(
             } else {
                 match outcomes.get(&slice.id) {
                     Some(CodeOutcome::Analyzed { gaps, budget, .. })
-                        if !matches!(binaries.get(&slice.id), Some(BinaryFacts {container: ContainerFacts::Elf(e),..}) if e.abi.is_none()) => (
-                        if gaps.is_empty() {
-                            CoverageState::Complete
-                        } else {
-                            CoverageState::Partial {
-                                missing: gaps.clone(),
-                            }
-                        },
-                        Some(budget.clone()),
-                    ),
+                        if !matches!(binaries.get(&slice.id), Some(BinaryFacts {container: ContainerFacts::Elf(e),..}) if e.abi.is_none()) => {
+                        let mut missing = gaps.clone();
+                        if binaries.get(&slice.id).is_some_and(|b| code_coverage::imports_incomplete(b)) {
+                            missing.push("code: import evidence incomplete".into());
+                        }
+                        missing.sort();
+                        missing.dedup();
+                        (if missing.is_empty() { CoverageState::Complete } else { CoverageState::Partial { missing } }, Some(budget.clone()))
+                    },
                     _ => (
                         CoverageState::Unsupported {
                             what: format!(

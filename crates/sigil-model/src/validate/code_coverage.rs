@@ -2,7 +2,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::Validator;
-use crate::code_coverage::{aggregate_code_slices, CODE_SLICE_NOT_PARSED, CODE_SLICE_NOT_STARTED};
+use crate::code_coverage::{
+    aggregate_code_slices, imports_incomplete, CODE_SLICE_NOT_PARSED, CODE_SLICE_NOT_STARTED,
+};
 use crate::index::SessionLookup;
 use crate::*;
 
@@ -27,30 +29,6 @@ fn fat_descriptor_lost(gap: &str) -> bool {
     gap.strip_prefix("fat slice ")
         .and_then(|rest| rest.split_once(": "))
         .is_some_and(|(index, _)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
-}
-
-fn imports_incomplete(binary: &BinaryFacts) -> bool {
-    binary.gaps.iter().any(|gap| {
-        gap.starts_with("imports:")
-            || gap.starts_with("binary_parse_bytes:")
-            || match &binary.container {
-                ContainerFacts::Elf(_) => [
-                    "dynamic:",
-                    "symbols:",
-                    "malformed: symbols:",
-                    "sections:",
-                    "malformed: section names:",
-                    "malformed: program headers:",
-                ]
-                .iter()
-                .any(|prefix| gap.starts_with(prefix)),
-                ContainerFacts::MachO(_) => {
-                    ["load commands:", "load dylib:", "LC_DYLD_CHAINED_FIXUPS:"]
-                        .iter()
-                        .any(|prefix| gap.starts_with(prefix))
-                }
-            }
-    })
 }
 
 fn supported(a: &Artifact, slice: &Slice, binary: &BinaryFacts) -> bool {

@@ -77,6 +77,13 @@ impl Candidates {
                         return false;
                     }
                     let word = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+                    // Authenticated indirect branch/call encodings are outside the audited
+                    // decoder subset. Do not silently declare the search complete.
+                    if matches!(word & 0xffdf_f800, 0xd71f_0800 | 0xd61f_0800) {
+                        run.gap(format!(
+                            "code: AArch64 authenticated branch at {pc:#x} is unsupported"
+                        ));
+                    }
                     let candidate = if image.object && image.relocs.contains_key(&pc) {
                         // Include unsupported target-bearing forms: no silent loss of references.
                         true
