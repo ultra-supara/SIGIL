@@ -212,6 +212,83 @@ fn marker_accepts_complete_elf_contract_and_keeps_macho_policy_gate() {
 }
 
 #[test]
+fn incomplete_imports_cannot_claim_complete_code() {
+    for gap in [
+        "imports: truncated symbol table",
+        "binary_parse_bytes: 4 exceeded",
+    ] {
+        for mut s in [marked(), arm(), macho(Arch::Aarch64), macho(Arch::X86_64)] {
+            s.binaries[0].gaps.push(gap.into());
+            let container = s
+                .coverage
+                .iter_mut()
+                .find(|c| c.check.as_str() == BINARY_CONTAINER)
+                .unwrap();
+            container.state = CoverageState::Partial {
+                missing: vec![gap.into()],
+            };
+            s.outcome.completeness = Completeness::Incomplete {
+                missing_required: vec![CheckId::new(BINARY_CONTAINER).unwrap()],
+                gaps: vec![],
+            };
+            rejects(
+                &s,
+                "incomplete import evidence cannot have complete code coverage",
+            );
+        }
+    }
+    let mut partial = marked();
+    partial.binaries[0]
+        .gaps
+        .push("imports: truncated symbol table".into());
+    code_gaps(
+        &mut partial,
+        BINARY_CODE,
+        vec!["code: import evidence incomplete".into()],
+    );
+    assert!(!errors(&partial)
+        .iter()
+        .any(|e| e.contains("incomplete import evidence cannot have complete code coverage")));
+    let mut unrelated = marked();
+    unrelated.binaries[0]
+        .gaps
+        .push("go: metadata unavailable".into());
+    unrelated
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CONTAINER)
+        .unwrap()
+        .state = CoverageState::Partial {
+        missing: vec!["go: metadata unavailable".into()],
+    };
+    unrelated.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![CheckId::new(BINARY_CONTAINER).unwrap()],
+        gaps: vec![],
+    };
+    assert_contract(&unrelated);
+}
+
+#[test]
+fn arm64_macho_requires_a_supported_cpu_subtype() {
+    for subtype in [0, 1] {
+        let mut s = macho(Arch::Aarch64);
+        let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+            unreachable!()
+        };
+        m.cpu_subtype = subtype;
+        assert_contract(&s);
+    }
+    for subtype in [2, 12, 99] {
+        let mut s = macho(Arch::Aarch64);
+        let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+            unreachable!()
+        };
+        m.cpu_subtype = subtype;
+        rejects(&s, "analyzed slice requires a supported parsed ABI");
+    }
+}
+
+#[test]
 fn marker_requires_code_roots_and_exact_archived_knowledge() {
     let mut s = marked();
     s.request.code = false;
