@@ -1,0 +1,143 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "941c06a1553e5b6724825b486b783d7da7833849b86d62b10845684ba80fa3c2",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "artifacts.code"
+        ],
+        "gaps": [
+          "capability:posix.network@sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4",
+      "size": 928,
+      "format": "MachO",
+      "paths": [
+        "/examples/sample-install/bin/ollama"
+      ],
+      "slices": [
+        {
+          "id": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+          "arch": "aarch64",
+          "sha256": "98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "open_questions": [
+    {
+      "id": "capability:posix.network@sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0"
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "artifacts.code",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 3
+      }
+    },
+    {
+      "check": "artifacts.container",
+      "required": false,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "artifacts.dependencies",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Partial": 1
+      }
+    },
+    {
+      "check": "artifacts.discovery",
+      "required": false,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "artifacts.identity",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Partial": 1
+      }
+    },
+    {
+      "check": "artifacts.release",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Partial": 1
+      }
+    },
+    {
+      "check": "model_store.inventory",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unavailable": 1
+      }
+    },
+    {
+      "check": "values.configured",
+      "required": false,
+      "closed": true,
+      "states": {
+        "OutOfScope": 1
+      }
+    }
+  ]
+}

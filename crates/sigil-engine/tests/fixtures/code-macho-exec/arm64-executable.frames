@@ -1,0 +1,70 @@
+arm64-executable:	file format Mach-O arm64
+
+.debug_frame contents:
+
+
+.eh_frame contents:
+
+00000000 00000010 00000000 CIE
+  Format:                DWARF32
+  Version:               1
+  Augmentation:          "zR"
+  Code alignment factor: 1
+  Data alignment factor: -8
+  Return address column: 30
+  Augmentation data:     10
+
+  DW_CFA_def_cfa: WSP +0
+
+  CFA=WSP
+
+00000014 00000030 00000018 FDE cie=00000000 pc=100000570...100000594
+  Format:       DWARF32
+  DW_CFA_advance_loc: 4 to 0x100000574
+  DW_CFA_def_cfa_offset: +16
+  DW_CFA_advance_loc: 4 to 0x100000578
+  DW_CFA_def_cfa: W29 +16
+  DW_CFA_offset: W30 -8
+  DW_CFA_offset: W29 -16
+  : +0
+  DW_CFA_advance_loc: 20 to 0x10000058c
+  DW_CFA_def_cfa: WSP +16
+  DW_CFA_advance_loc: 4 to 0x100000590
+  DW_CFA_def_cfa_offset: +0
+  DW_CFA_restore: W30
+  DW_CFA_restore: W29
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x100000570: CFA=WSP
+  0x100000574: CFA=WSP+16
+  0x100000578: CFA=W29+16: W29=[CFA-16], W30=[CFA-8]
+  0x10000058c: CFA=WSP+16: W29=[CFA-16], W30=[CFA-8]
+  0x100000590: CFA=WSP
+
+00000048 0000002c 0000004c FDE cie=00000000 pc=100000594...1000005b8
+  Format:       DWARF32
+  DW_CFA_advance_loc: 4 to 0x100000598
+  DW_CFA_def_cfa_offset: +16
+  DW_CFA_advance_loc: 4 to 0x10000059c
+  DW_CFA_def_cfa: W29 +16
+  DW_CFA_offset: W30 -8
+  DW_CFA_offset: W29 -16
+  : +0
+  DW_CFA_advance_loc: 20 to 0x1000005b0
+  DW_CFA_def_cfa: WSP +16
+  DW_CFA_advance_loc: 4 to 0x1000005b4
+  DW_CFA_def_cfa_offset: +0
+  DW_CFA_restore: W30
+  DW_CFA_restore: W29
+  DW_CFA_nop:
+
+  0x100000594: CFA=WSP
+  0x100000598: CFA=WSP+16
+  0x10000059c: CFA=W29+16: W29=[CFA-16], W30=[CFA-8]
+  0x1000005b0: CFA=WSP+16: W29=[CFA-16], W30=[CFA-8]
+  0x1000005b4: CFA=WSP
+

@@ -1,0 +1,3 @@
+fixture	slice	stub	slot	symbol	library	ordinal	mode
+arm64-executable	arm64	0x1000005b8	0x100008000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+x86-executable	x86_64	0x1000005a8	0x100003000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy

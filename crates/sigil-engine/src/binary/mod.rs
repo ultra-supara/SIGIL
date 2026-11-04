@@ -58,6 +58,8 @@ pub struct Parsed {
 /// One parsed architecture slice of an artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSlice {
+    /// Local causes, before fat-wide compatibility diagnostics are copied.
+    pub(crate) macho_code: Option<MachCodeMetadata>,
     pub offset: u64,
     pub size: u64,
     pub arch: Arch,
@@ -71,6 +73,13 @@ pub struct ParsedSlice {
     /// The signature scan (PR-4c-2a): of an ELF slice parsed with needles, or marked
     /// `NameAndHashOnly` by the read. `None` for a Mach-O slice.
     pub scan: Option<ScanOutcome>,
+}
+
+/// Typed input for future Mach-O dispatch. Sibling diagnostics stay in inventory/gaps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MachCodeMetadata {
+    pub local_gaps: Vec<String>,
+    pub ambiguous: bool,
 }
 
 /// The format and parsed slices of one artifact.
@@ -128,6 +137,7 @@ pub fn parse_artifact(
                 sigil_model::CodeSliceInventory::Complete
             },
             slices: vec![ParsedSlice {
+                macho_code: None,
                 offset: 0,
                 size,
                 arch,

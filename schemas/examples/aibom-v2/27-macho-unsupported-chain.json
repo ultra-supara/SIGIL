@@ -1,0 +1,111 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "d1537ecf3a506e5e1ffb1483692316ae32e3ee8a9f7f90729137ae0e8e310d29",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.code"
+        ],
+        "gaps": [
+          "capability:posix.network@sha256:3128f8e8adba7f43d11d88e69972f8b56a57333014db8015b00ed1b36c2bea44#aarch64@0"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:3128f8e8adba7f43d11d88e69972f8b56a57333014db8015b00ed1b36c2bea44",
+      "size": 33008,
+      "format": "MachO",
+      "paths": [
+        "/examples/authenticated-chain"
+      ],
+      "slices": [
+        {
+          "id": "sha256:3128f8e8adba7f43d11d88e69972f8b56a57333014db8015b00ed1b36c2bea44#aarch64@0",
+          "arch": "aarch64",
+          "sha256": "3128f8e8adba7f43d11d88e69972f8b56a57333014db8015b00ed1b36c2bea44",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "open_questions": [
+    {
+      "id": "capability:posix.network@sha256:3128f8e8adba7f43d11d88e69972f8b56a57333014db8015b00ed1b36c2bea44#aarch64@0",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:3128f8e8adba7f43d11d88e69972f8b56a57333014db8015b00ed1b36c2bea44#aarch64@0"
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 2
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": false,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.dependencies",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    }
+  ]
+}

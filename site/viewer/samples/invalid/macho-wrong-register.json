@@ -1,0 +1,479 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "capabilities",
+      "version": "0.1.0",
+      "sha256": "2620e766e87f4ecc97f2bc24d3cd0e10cb538ca8c0ece532d69afaaf0ac7215c"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "code-abi-signatures",
+      "version": "1",
+      "sha256": "af6afceff3bd76c9e18ae0321cd8260ccc79c96354f4e35bfe09fca61efca735"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [
+      {
+        "id": "binary-1",
+        "path": "/examples/code-macho/duplicate-name-dylibs"
+      }
+    ],
+    "audit": [
+      "binary_code"
+    ],
+    "required_checks": [
+      "binary.code"
+    ],
+    "budgets": {
+      "binary_bytes": 68719476736,
+      "binary_code_bytes": 268435456,
+      "binary_imports": 4096,
+      "binary_parse_bytes": 67108864,
+      "binary_scan_bytes": 67108864,
+      "dependency_candidates": 65536,
+      "dependency_contexts": 8192,
+      "dependency_search_paths": 65536
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": true,
+    "code_analysis": "multiarch-v1"
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123",
+      "size": 49488,
+      "format": "MachO",
+      "slices": [
+        {
+          "id": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+          "arch": "aarch64",
+          "offset": 0,
+          "size": 49488,
+          "sha256": "fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123"
+        }
+      ],
+      "code_slice_inventory": "Complete"
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:binary-1/duplicate-name-dylibs",
+      "root": "binary-1",
+      "path": "/examples/code-macho/duplicate-name-dylibs",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 21,
+        "mode": 33204,
+        "uid": 1000,
+        "gid": 1000,
+        "size": 49488,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Argument"
+      ]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "binaries": [
+    {
+      "slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+      "container": {
+        "MachO": {
+          "is_64": true,
+          "little_endian": true,
+          "cpu_type": 16777228,
+          "cpu_subtype": 0,
+          "fat_cpu_type": null,
+          "fat_cpu_subtype": null,
+          "fat_alignment": null,
+          "file_type": 6,
+          "flags": 1048709,
+          "uuid": null,
+          "id_dylib": "/sigil/fixture.dylib",
+          "load_dylibs": [
+            "/usr/lib/libSystem.B.dylib",
+            "/sigil/libfoo.dylib"
+          ],
+          "rpaths": [],
+          "dylinker": null,
+          "imports": [
+            {
+              "name": "_connect",
+              "library": {
+                "Dylib": {
+                  "ordinal": 1,
+                  "name": "/usr/lib/libSystem.B.dylib"
+                }
+              },
+              "weak": false
+            },
+            {
+              "name": "_connect",
+              "library": {
+                "Dylib": {
+                  "ordinal": 2,
+                  "name": "/sigil/libfoo.dylib"
+                }
+              },
+              "weak": false
+            },
+            {
+              "name": "dyld_stub_binder",
+              "library": {
+                "Dylib": {
+                  "ordinal": 1,
+                  "name": "/usr/lib/libSystem.B.dylib"
+                }
+              },
+              "weak": false
+            }
+          ]
+        }
+      },
+      "go": null,
+      "gaps": []
+    }
+  ],
+  "hints": [
+    {
+      "subject": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+      "feature": "posix.network",
+      "signal": "Import",
+      "value": "_connect",
+      "at": {
+        "Symbol": "_connect"
+      }
+    }
+  ],
+  "code": [
+    {
+      "slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+      "functions": [
+        {
+          "id": "fn:0x550",
+          "entry": 1360,
+          "end": 1396,
+          "bounds": "EhFrameFde",
+          "names": []
+        },
+        {
+          "id": "fn:0x574",
+          "entry": 1396,
+          "end": 1432,
+          "bounds": "EhFrameFde",
+          "names": []
+        },
+        {
+          "id": "fn:0x598",
+          "entry": 1432,
+          "end": 1468,
+          "bounds": "EhFrameFde",
+          "names": []
+        }
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0x564",
+          "caller": "fn:0x550",
+          "addr": 1380,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {
+                  "Dylib": {
+                    "ordinal": 1,
+                    "name": "/usr/lib/libSystem.B.dylib"
+                  }
+                },
+                "weak": false
+              }
+            }
+          },
+          "args": [
+            {
+              "ConstInt": {
+                "reg": "rdi",
+                "value": 0
+              }
+            },
+            {
+              "ConstInt": {
+                "reg": "x1",
+                "value": 0
+              }
+            },
+            {
+              "ConstInt": {
+                "reg": "x2",
+                "value": 0
+              }
+            }
+          ],
+          "args_layout": "Complete"
+        },
+        {
+          "id": "cs:0x588",
+          "caller": "fn:0x574",
+          "addr": 1416,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {
+                  "Dylib": {
+                    "ordinal": 1,
+                    "name": "/usr/lib/libSystem.B.dylib"
+                  }
+                },
+                "weak": false
+              }
+            }
+          },
+          "args": [
+            {
+              "ConstInt": {
+                "reg": "x0",
+                "value": 1
+              }
+            },
+            {
+              "ConstInt": {
+                "reg": "x1",
+                "value": 0
+              }
+            },
+            {
+              "ConstInt": {
+                "reg": "x2",
+                "value": 0
+              }
+            }
+          ],
+          "args_layout": "Complete"
+        },
+        {
+          "id": "cs:0x5ac",
+          "caller": "fn:0x598",
+          "addr": 1452,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {
+                  "Dylib": {
+                    "ordinal": 2,
+                    "name": "/sigil/libfoo.dylib"
+                  }
+                },
+                "weak": false
+              }
+            }
+          },
+          "args": [],
+          "args_layout": {
+            "Partial": {
+              "reason": "unknown or unsupported ABI prototype"
+            }
+          }
+        }
+      ],
+      "predicate_checks": [],
+      "close_checks": [],
+      "guard_regions": [],
+      "param_mappings": []
+    }
+  ],
+  "relations": [
+    {
+      "Declares": {
+        "from": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+        "needed": "/sigil/libfoo.dylib",
+        "kind": "MachOLoadDylib"
+      }
+    },
+    {
+      "Declares": {
+        "from": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+        "needed": "/usr/lib/libSystem.B.dylib",
+        "kind": "MachOLoadDylib"
+      }
+    }
+  ],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "scope": {
+        "Instance": "inst:binary-1/duplicate-name-dylibs"
+      },
+      "state": {
+        "Partial": {
+          "missing": [
+            "code: incomplete slice sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0"
+          ]
+        }
+      },
+      "budget": {
+        "budget": "binary_code_bytes",
+        "used": 7432,
+        "limit": 268435456
+      }
+    },
+    {
+      "check": "binary.code",
+      "scope": {
+        "Slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0"
+      },
+      "state": {
+        "Partial": {
+          "missing": [
+            "code: argument layout incomplete at cs:0x5ac: unknown or unsupported ABI prototype"
+          ]
+        }
+      },
+      "budget": {
+        "budget": "binary_code_bytes",
+        "used": 7432,
+        "limit": 268435456
+      }
+    },
+    {
+      "check": "binary.container",
+      "scope": {
+        "Instance": "inst:binary-1/duplicate-name-dylibs"
+      },
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "binary.dependencies",
+      "scope": {
+        "Instance": "inst:binary-1/duplicate-name-dylibs"
+      },
+      "state": {
+        "Unsupported": {
+          "what": "Mach-O dependencies: declared only"
+        }
+      },
+      "budget": null
+    },
+    {
+      "check": "binary.identity",
+      "scope": {
+        "Instance": "inst:binary-1/duplicate-name-dylibs"
+      },
+      "state": {
+        "Unsupported": {
+          "what": "string scan: ELF only"
+        }
+      },
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0"
+      },
+      "evidence": [
+        {
+          "Code": {
+            "slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+            "loc": {
+              "CallSite": "cs:0x564"
+            }
+          }
+        },
+        {
+          "Code": {
+            "slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+            "loc": {
+              "CallSite": "cs:0x588"
+            }
+          }
+        }
+      ],
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    }
+  ],
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.code"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  }
+}

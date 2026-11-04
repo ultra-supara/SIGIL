@@ -140,8 +140,8 @@ session `INCOMPLETE`. That is `Partial`, `BudgetExceeded`, `Error`, or `Unsuppor
 - `Partial`: some code was not analyzed, for example a reference that could not be confirmed, a
   refused read, or a limit reached. Its gaps say why;
 - `BudgetExceeded` and `Error`: the input's container state, copied;
-- `Unsupported`: a Mach-O or fat file, an ELF of another machine, an x32 or big-endian ELF, or a
-  file that is not a container. x86-64 and AArch64 ELF64 little-endian code are analyzed.
+- `Unsupported`: an unsupported Mach-O slice, an ELF of another machine, an x32 or big-endian ELF, or a
+  file that is not a container. x86-64/AArch64 ELF64 little-endian and the [Mach-O subset](binary-inspect.md#mach-o-code) are analyzed.
 
 For `multiarch-v1` ELF sessions, a capability question uses its own slice's
 `binary.code` or `artifacts.code` diagnostic. A partial sibling or content summary
@@ -149,8 +149,11 @@ cannot turn a complete local search into an incomplete one. Conversely, incomple
 or unsupported local code yields `CheckIncomplete`, never a complete-search reason.
 Confirmed direct calls still support a violation with exact slice and call IDs.
 Explicit `binary_code_audit = []` / `install_code_audit = []` remove the corresponding
-required check; they do not turn missing calls into violations. Marked Mach-O
-capability decisions remain disabled until library-aware policy validation is enabled.
+required check; they do not turn missing calls into violations. Marked Mach-O decisions
+require the exact call witness and its archived raw-symbol × feature × library mapping.
+A same-name import from another dylib cannot confer eligibility. Relevant unresolved
+calls retain their own symbol and call-site evidence, even beside an admitted violation.
+Unknown capability-table digests fail closed; historical archives must be retained.
 
 Code facts are facts, not findings. Only a capability denial (above) acts on them: without one,
 code analysis never changes the verdict. What `binary.code` records:

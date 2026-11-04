@@ -707,6 +707,17 @@ mod tests {
 
     #[test]
     fn aarch64_unstable_recognition_is_separate_from_stable_evidence() {
+        unstable_multiarch_recognition("code-aarch64/elf-clang-plt.so", 1);
+    }
+
+    #[test]
+    fn macho_unstable_recognition_is_separate_from_stable_evidence() {
+        for (name, slices) in [("arm64-classic", 1), ("universal", 2)] {
+            unstable_multiarch_recognition(&format!("code-macho/{name}"), slices);
+        }
+    }
+
+    fn unstable_multiarch_recognition(fixture: &str, slices: usize) {
         use crate::code::{CodeBudgets, CodeOutcome};
         use std::io::Write;
 
@@ -717,7 +728,8 @@ mod tests {
                 std::fs::create_dir_all(&lib).unwrap();
                 let bytes = std::fs::read(
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/fixtures/code-aarch64/elf-clang-plt.so"),
+                        .join("tests/fixtures")
+                        .join(fixture),
                 )
                 .unwrap();
                 let path = lib.join("a.so");
@@ -763,9 +775,9 @@ mod tests {
                 assert_ne!(unstable.stability, Stability::NoChangeDetected);
                 assert_eq!(facts.artifacts.len(), 1);
                 if duplicate {
-                    assert_eq!(facts.binaries.len(), 1, "{change}: stable duplicate");
-                    assert_eq!(facts.code.len(), 1);
-                    assert_eq!(facts.artifacts[0].slices.len(), 1);
+                    assert_eq!(facts.binaries.len(), slices, "{change}: stable duplicate");
+                    assert_eq!(facts.code.len(), slices);
+                    assert_eq!(facts.artifacts[0].slices.len(), slices);
                     assert!(matches!(&facts.code[0].1,
                         CodeOutcome::Analyzed { call_sites, .. } if !call_sites.is_empty()));
                 } else {
