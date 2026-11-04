@@ -370,6 +370,47 @@ fn inspect_with_binary_budgets(
     )
     .unwrap()
 }
+
+#[test]
+fn incomplete_imports_produce_partial_code_session() {
+    let s = inspect_with_binary_budgets(
+        vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/issue129/import-data.o")],
+        sigil_engine::binary::BinaryBudgets {
+            imports: 0,
+            code: Some(Default::default()),
+            ..Default::default()
+        },
+    );
+    assert!(s
+        .binaries
+        .iter()
+        .any(|b| b.gaps.iter().any(|g| g.starts_with("imports:"))));
+    assert!(s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE
+        && matches!(c.scope, Ref::Slice(_))
+        && matches!(c.state, CoverageState::Partial { .. })));
+    s.validate().unwrap();
+}
+
+#[test]
+fn authenticated_got_branch_is_incomplete() {
+    use object::{Object, ObjectSection};
+    let original = std::fs::read(a64_fixture("elf-clang-got.so")).unwrap();
+    let file = object::File::parse(original.as_slice()).unwrap();
+    let section = file.section_by_name(".text").unwrap();
+    let off = section.file_range().unwrap().0 + (0x10370 - section.address());
+    for word in [
+        0xd73f0911, 0xd73f0d11, 0xd71f0911, 0xd71f0d11, 0xd63f091f, 0xd63f0d1f, 0xd61f091f,
+        0xd61f0d1f,
+    ] {
+        let mut bytes = original.clone();
+        put32(&mut bytes, off as usize, word);
+        let s = inspect_bytes(&bytes);
+        assert!(s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE && matches!(c.scope, Ref::Slice(_)) && matches!(&c.state, CoverageState::Partial { missing } if missing.iter().any(|g| g.contains("authenticated")))), "{word:#x}");
+        assert_eq!(calls(&s), [0x1039c]);
+        s.validate().unwrap();
+    }
+}
 #[test]
 fn real_aarch64_elf_calls_match_independent_oracle() {
     for name in [
