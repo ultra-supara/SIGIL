@@ -293,8 +293,18 @@ fn classic(
     claims: &mut Claims,
     run: &mut Run,
 ) -> Result<()> {
-    let (mut at, mut ordinal, mut symbol, mut weak, mut segment, mut offset, mut addend, mut kind) =
-        (0, 0, None, false, None, 0u64, 0i64, 1u8);
+    // Apple BindOpcodes::forEachBind: only lazy streams start with pointer type;
+    // an ordinal must be explicitly set, including ordinal zero (SelfImage).
+    let (mut at, mut ordinal, mut symbol, mut weak, mut segment, mut offset, mut addend, mut kind) = (
+        0,
+        None,
+        None,
+        false,
+        None,
+        0u64,
+        0i64,
+        if lazy { 1u8 } else { 0 },
+    );
     let mut ended = false;
     while at < b.len() {
         ended = false;
@@ -312,24 +322,21 @@ fn classic(
                 if !lazy {
                     return Ok(());
                 }
+                // dyld's lazy DONE separates entries without resetting any bind state.
                 ended = true;
-                segment = None;
-                offset = 0;
-                addend = 0;
-                kind = 1;
             }
-            0x10 => ordinal = i64::from(imm),
+            0x10 => ordinal = Some(i64::from(imm)),
             0x20 => {
-                ordinal = i64::from(
+                ordinal = Some(i64::from(
                     i32::try_from(uleb(b, &mut at)?).map_err(|_| "library ordinal overflow")?,
-                );
+                ));
             }
             0x30 => {
-                ordinal = if imm == 0 {
+                ordinal = Some(if imm == 0 {
                     0
                 } else {
                     i64::from((0xf0 | imm) as i8)
-                }
+                })
             }
             0x40 => {
                 if imm & !1 != 0 {
@@ -368,7 +375,11 @@ fn classic(
             }
             let symbol = symbol.as_ref().ok_or("bind without symbol")?;
             let segment = segment.ok_or("bind without segment")?;
-            let library = library(ordinal, &c.dylibs, run)?;
+            let library = library(
+                ordinal.ok_or("bind without library ordinal")?,
+                &c.dylibs,
+                run,
+            )?;
             for _ in 0..count {
                 charge(run, Work::Slots, 1)?;
                 let (vm, _) = slot(v, segment, offset)?;

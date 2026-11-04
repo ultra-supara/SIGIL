@@ -126,7 +126,7 @@ fn command(b: &[u8], kind: u32) -> usize {
 fn stream_body() -> Vec<u8> {
     let mut s = vec![0x11, 0x40];
     s.extend_from_slice(b"_connect\0");
-    s.extend_from_slice(&[0x72, 0, 0x90, 0]);
+    s.extend_from_slice(&[0x51, 0x72, 0, 0x90, 0]);
     s
 }
 fn with_stream(s: &[u8], lazy: bool) -> Vec<u8> {
@@ -489,10 +489,6 @@ fn partial_overlapping_pointer_claims_and_lazy_reuse_are_distinct() {
     let (g, gaps) = analyze(&with_stream(&s, true));
     assert_eq!(g.len(), 2);
     assert!(gaps.is_empty(), "{gaps:?}");
-    let s = stream_body()[1..].to_vec();
-    let (g, gaps) = analyze(&with_stream(&s, false));
-    assert!(gaps.is_empty());
-    assert_eq!(g[&0x8000].library, MachOLibrary::SelfImage);
 }
 #[test]
 fn shared_entry_name_and_read_limits_refuse_before_retaining_witnesses() {
@@ -531,4 +527,63 @@ fn shared_entry_name_and_read_limits_refuse_before_retaining_witnesses() {
         .into_gaps()
         .iter()
         .any(|g| g.contains("binary_code_bytes")));
+}
+#[test]
+fn lazy_done_preserves_segment_offset_name_library_and_weak_state() {
+    let mut s = stream_body();
+    s[1] = 0x41;
+    s.extend_from_slice(&[0x90, 0]);
+    let (g, gaps) = analyze(&with_stream(&s, true));
+    assert!(gaps.is_empty(), "{gaps:?}");
+    assert_eq!(g.keys().copied().collect::<Vec<_>>(), [0x8000, 0x8008]);
+    assert!(g
+        .values()
+        .all(|w| w.weak && w.symbol.as_bytes() == b"_connect"));
+    assert_eq!(g[&0x8000].library, g[&0x8008].library);
+}
+#[test]
+fn lazy_done_preserves_nonzero_addend_and_explicit_unsupported_type() {
+    for state in [vec![0x60, 1], vec![0x52]] {
+        let mut s = stream_body();
+        s.pop();
+        s.extend(state);
+        s.extend_from_slice(&[0, 0x72, 8, 0x90, 0]);
+        let (g, gaps) = analyze(&with_stream(&s, true));
+        assert!(g.is_empty(), "{s:x?}: {g:?}");
+        assert!(
+            gaps.iter().any(|g| g.contains("type or nonzero addend")),
+            "{gaps:?}"
+        );
+    }
+}
+#[test]
+fn classic_pointer_type_and_library_ordinal_must_be_explicit() {
+    // This stream deliberately has no SET_TYPE, even after the common helper is corrected.
+    let mut missing_type = vec![0x11, 0x40];
+    missing_type.extend_from_slice(b"_connect\0");
+    missing_type.extend_from_slice(&[0x72, 0, 0x90, 0]);
+    let (g, gaps) = analyze(&with_stream(&missing_type, false));
+    assert!(g.is_empty());
+    assert!(!gaps.is_empty());
+    // Lazy type alone is implicit. An omitted ordinal is never explicit SelfImage.
+    let (g, gaps) = analyze(&with_stream(&missing_type, true));
+    assert!(gaps.is_empty(), "{gaps:?}");
+    assert!(g.contains_key(&0x8000));
+    for lazy in [false, true] {
+        let mut s = missing_type[1..].to_vec();
+        s.insert(s.len() - 4, 0x51);
+        let (g, gaps) = analyze(&with_stream(&s, lazy));
+        assert!(g.is_empty(), "{lazy}: {g:?}");
+        assert!(
+            gaps.iter().any(|g| g.contains("without library ordinal")),
+            "{gaps:?}"
+        );
+        for explicit_zero in [0x10, 0x30] {
+            let mut s = s.clone();
+            s.insert(0, explicit_zero);
+            let (g, gaps) = analyze(&with_stream(&s, lazy));
+            assert!(gaps.is_empty(), "{gaps:?}");
+            assert_eq!(g[&0x8000].library, MachOLibrary::SelfImage);
+        }
+    }
 }
