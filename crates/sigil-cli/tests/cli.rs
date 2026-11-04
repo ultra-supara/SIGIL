@@ -3472,6 +3472,30 @@ fn aarch64_code_binary_install_service_and_observe_share_the_same_facts() {
 }
 
 #[test]
+fn aarch64_import_budget_returns_a_valid_partial_session() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/issue129/import-data.o");
+    let result = binary(&[&"--code", &"--budget", &"binary_imports=0", &path]);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let session = session_of(&result);
+    session.validate().unwrap();
+    assert!(session
+        .coverage
+        .iter()
+        .any(|c| c.check.as_str() == sigil_model::BINARY_CODE
+            && matches!(c.scope, sigil_model::Ref::Slice(_))
+            && matches!(c.state, CoverageState::Partial { .. })));
+    let incomplete = binary(&[
+        &"--code",
+        &"--budget",
+        &"binary_imports=0",
+        &"--fail-on-incomplete",
+        &path,
+    ]);
+    assert_eq!(incomplete.code, 4, "{}", incomplete.stderr);
+}
+
+#[test]
 fn aarch64_required_layout_gap_exhaustion_is_a_valid_partial_report() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../sigil-engine/tests/fixtures/code-aarch64-gap-limit/calls-257.o");
