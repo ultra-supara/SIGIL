@@ -61,7 +61,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 21);
+    assert_eq!(all.len(), 22);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -2346,4 +2346,17 @@ fn an_evidence_cell_shows_three_references_then_the_count() {
         )),
         "{md}"
     );
+}
+
+#[test]
+fn aarch64_call_and_partial_slice_match_the_committed_report() {
+    let mut s = aarch64_code();
+    s.canonicalize();
+    let md = render_session(&s);
+    assert_eq!(md, include_str!("data/aarch64-code.md"));
+    let html = sigil_model::render::html::from_markdown(&md);
+    assert!(html.contains("x0=0, x1=0, x2=0"));
+    assert!(html.contains("none found in the code searched; binary.code is partial"));
+    assert!(!html.contains("<script>"));
+    assert!(!html.contains('\u{1b}'));
 }

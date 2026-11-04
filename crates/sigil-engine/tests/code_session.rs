@@ -205,7 +205,7 @@ fn unsupported_installation_code_is_required_by_default_but_can_be_opted_out() {
     std::fs::create_dir_all(tree.path().join("bin")).unwrap();
     std::fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
     let mut binary = std::fs::read(fixture("net-plt-gcc.so")).unwrap();
-    binary[18..20].copy_from_slice(&183u16.to_le_bytes());
+    binary[18..20].copy_from_slice(&40u16.to_le_bytes());
     std::fs::write(tree.path().join("bin/ollama"), binary).unwrap();
     let models = TempDir::new().unwrap();
     let mut budgets = InstallBudgets::default();
@@ -377,14 +377,12 @@ fn unsupported_inputs() {
     assert!(matches!(container.state, CoverageState::Unsupported { .. }));
     assert_eq!(code_state(&s, 0).state, container.state);
     assert_eq!(code_state(&s, 0).budget, None);
-    // Another machine: Unsupported, without a budget.
-    assert_eq!(
+    // AArch64 is analyzed, but this data fixture supplies no exact function bounds.
+    assert!(matches!(
         code_state(&s, 1).state,
-        CoverageState::Unsupported {
-            what: CODE_UNSUPPORTED.to_string()
-        }
-    );
-    assert_eq!(code_state(&s, 1).budget, None);
+        CoverageState::Partial { .. }
+    ));
+    assert!(code_state(&s, 1).budget.is_some());
     assert!(s.code.is_empty());
     s.validate().unwrap();
 }
@@ -525,7 +523,7 @@ fn a_mach_o_input_is_unsupported() {
     assert_eq!(
         code_state(&s, 0).state,
         CoverageState::Unsupported {
-            what: CODE_UNSUPPORTED.to_string()
+            what: sigil_model::code_coverage::CODE_NO_SUPPORTED_SLICE.to_string()
         }
     );
     assert_eq!(code_state(&s, 0).budget, None);
@@ -612,7 +610,11 @@ fn a_code_request_never_changes_the_container_coverage() {
         assert_eq!(container(&with), container(&without), "{shown}");
         assert_eq!(with.binaries, without.binaries, "{shown}");
         assert_eq!(with.hints, without.hints, "{shown}");
-        assert_eq!(with.artifacts, without.artifacts, "{shown}");
+        let mut container_artifacts = with.artifacts.clone();
+        for a in &mut container_artifacts {
+            a.code_slice_inventory = None;
+        }
+        assert_eq!(container_artifacts, without.artifacts, "{shown}");
         assert!(with.validate().is_ok(), "{shown}: {:?}", with.validate());
         let _ = code_state(&with, 0);
         for facts in &with.code {

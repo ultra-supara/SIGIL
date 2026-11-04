@@ -1301,3 +1301,84 @@ fn active_api_probe_refused() {
         .unwrap();
     probe_case("inspect-active-api-probe-refused", dest, "→ refused");
 }
+
+/// Task 10: all four producers read the A64 bytes through the hashing fd exactly
+/// once. Installation/service/observation assembly adds no target code reads.
+#[test]
+fn aarch64_producers_share_same_fd_and_target_reads() {
+    let case = "aarch64_producers_share_same_fd_and_target_reads";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let models = fixtures::ollama_store(&fx.target);
+    let install = fx.target.join("install");
+    std::fs::create_dir_all(install.join("bin")).unwrap();
+    std::fs::create_dir_all(install.join("lib/ollama")).unwrap();
+    let input = install.join("bin/ollama");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so"),
+        &input,
+    )
+    .unwrap();
+    let unit = fx.target.join("ollama.service");
+    std::fs::write(
+        &unit,
+        format!("[Service]\nExecStart={} serve\n", input.display()),
+    )
+    .unwrap();
+    let mut expected_reads = None;
+    let mut expected_code = None;
+    for mode in ["binary", "install", "service", "observe"] {
+        let output = fx.out.join(format!("{mode}.json"));
+        let mut args = if mode == "binary" {
+            os(&[&"binary", &"inspect", &input])
+        } else {
+            let mut args = os(&[&"inspect", &"ollama", &"--models-dir", &models]);
+            if mode == "service" {
+                args.extend(os(&[&"--service-unit", &unit]));
+            } else {
+                args.extend(os(&[&"--install-dir", &install]));
+            }
+            if mode == "observe" {
+                args.extend(os(&[&"--mode", &"observe"]));
+            }
+            args
+        };
+        args.extend(os(&[&"--code", &"--out", &output]));
+        let r = run(&format!("aarch64-{mode}"), &fx, &refs(&args));
+        assert!(r.status.unwrap().success(), "{mode}: {}", r.stderr);
+        assert_read_under(&r, &install);
+        let reads = input_reads(&r, &input)
+            .into_iter()
+            .filter(|e| matches!(e.name.as_str(), "read" | "pread64"))
+            .map(|e| (e.name.clone(), e.args[2..].to_vec(), e.ret.clone()))
+            .collect::<Vec<_>>();
+        assert!(!reads.is_empty());
+        if let Some(expected) = &expected_reads {
+            assert_eq!(&reads, expected, "{mode}: {}", r.trace_dir.display());
+        } else {
+            expected_reads = Some(reads);
+        }
+        let s: sigil_model::Session =
+            serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        s.validate().unwrap();
+        assert_eq!(
+            s.request.code_analysis,
+            Some(sigil_model::CodeAnalysis::MultiarchV1)
+        );
+        assert_eq!(s.code[0].call_sites.len(), 2);
+        if let Some(expected) = &expected_code {
+            assert_eq!(&s.code, expected);
+        } else {
+            expected_code = Some(s.code);
+        }
+        let scopes: &[&str] = if mode == "observe" {
+            &["runtime", "observe"]
+        } else {
+            &["runtime"]
+        };
+        assert_clean(&r, &policy(&fx, &[&output], scopes));
+    }
+}

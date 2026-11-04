@@ -122,7 +122,6 @@ pub(crate) fn scan_ranges(img: &Image) -> Vec<(Region, u64, u64)> {
 ///   stub or slot for `k` in {0, 1, 2, 4} (a branch is `k = 0`, R-g), and in an executable the
 ///   4- or 8-byte value at `p` equal to one.
 pub(crate) fn references(img: &Image, reader: &mut Reader<'_>, run: &mut Run) -> Vec<Reference> {
-    let limit = run.budgets.references;
     let mut found: Vec<Reference> = vec![];
     if img.kind == Kind::Relocatable {
         for (p, r) in &img.relocs {
@@ -135,8 +134,7 @@ pub(crate) fn references(img: &Image, reader: &mut Reader<'_>, run: &mut Run) ->
             let Some(name) = target else {
                 continue;
             };
-            if found.len() >= limit {
-                run.limit("references", limit as u64);
+            if !run.charge(super::Work::References, 1) {
                 break;
             }
             found.push(Reference {
@@ -221,8 +219,7 @@ pub(crate) fn references(img: &Image, reader: &mut Reader<'_>, run: &mut Run) ->
                         .and_then(|w| hit(u64::from_le_bytes(w)));
                 }
                 if let Some(name) = name {
-                    if found.len() >= limit {
-                        run.limit("references", limit as u64);
+                    if !run.charge(super::Work::References, 1) {
                         break 'ranges;
                     }
                     found.push(Reference {

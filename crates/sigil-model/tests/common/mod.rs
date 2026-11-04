@@ -1486,6 +1486,7 @@ pub fn examples() -> Vec<(&'static str, Session)> {
         ("19-service-unit", service_unit()),
         ("20-observed-processes", observed_processes()),
         ("21-deps-values", dependencies_and_values()),
+        ("22-aarch64-code", aarch64_code()),
     ]
 }
 
@@ -2746,6 +2747,164 @@ pub fn dependencies_and_values() -> Session {
     s.outcome.completeness = Completeness::Incomplete {
         missing_required: ids(&[ARTIFACTS_DEPENDENCIES, VALUES_CONFIGURED]),
         gaps: vec![],
+    };
+    s
+}
+
+/// M3 ELF presentation example: a proved AArch64 call and an independent partial
+/// input. All content identities and placements are synthetic, not measurements.
+pub fn aarch64_code() -> Session {
+    let mut s = binary_code();
+    for k in &mut s.knowledge {
+        if k.kind == KnowledgeKind::Policy {
+            k.id = "deny-capabilities".into();
+            k.sha256 = id(&hex(0xa4));
+        }
+    }
+    let input = id("inst:binary-1/aarch64-call.o");
+    s.instances[0].id = input;
+    for c in &mut s.coverage {
+        c.scope = Ref::Instance(s.instances[0].id.clone());
+    }
+    s.request.code_analysis = Some(CodeAnalysis::MultiarchV1);
+    s.knowledge.push(code_abi::V1.knowledge().unwrap());
+    let artifact: ArtifactId = id(&format!("sha256:{}", hex(0x22)));
+    let slice = SliceId::from_parts(&artifact, Arch::Aarch64, 0);
+    s.artifacts[0].id = artifact.clone();
+    s.artifacts[0].slices[0].id = slice.clone();
+    s.artifacts[0].slices[0].arch = Arch::Aarch64;
+    s.artifacts[0].slices[0].sha256 = id(&hex(0x22));
+    s.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Complete);
+    s.instances[0].content = InstanceContent::Read { artifact };
+    s.instances[0].path = t("/examples/aarch64-call.o");
+    s.request.roots[0].path = s.instances[0].path.clone();
+    s.binaries[0].slice = slice.clone();
+    if let ContainerFacts::Elf(elf) = &mut s.binaries[0].container {
+        elf.abi = Some(ElfAbi {
+            is_64: true,
+            little_endian: true,
+            machine: 183,
+        });
+        elf.comment.clear();
+    }
+    s.hints[0].subject = slice.clone();
+    s.code[0].slice = slice.clone();
+    s.code[0].functions[0].end = 0x58;
+    s.code[0].functions[0].names = vec![t("connect_zero<script>\u{1b}")];
+    let call = &mut s.code[0].call_sites[0];
+    call.id = id("cs:0x4c");
+    call.addr = 0x4c;
+    call.args = [Reg::X0, Reg::X1, Reg::X2]
+        .into_iter()
+        .map(|reg| ArgValue::ConstInt { reg, value: 0 })
+        .collect();
+    call.args_layout = Some(ArgumentLayout::Complete);
+    let mut complete = s
+        .coverage
+        .iter()
+        .find(|c| c.check.as_str() == BINARY_CODE)
+        .unwrap()
+        .clone();
+    complete.scope = Ref::Slice(slice.clone());
+    s.coverage.push(complete);
+
+    let mut partial_artifact = s.artifacts[0].clone();
+    partial_artifact.id = id(&format!("sha256:{}", hex(0x23)));
+    let partial_slice = SliceId::from_parts(&partial_artifact.id, Arch::Aarch64, 0);
+    partial_artifact.slices[0].id = partial_slice.clone();
+    partial_artifact.slices[0].sha256 = id(&hex(0x23));
+    let mut partial_instance = s.instances[0].clone();
+    partial_instance.id = id("inst:binary-2/aarch64-partial.o");
+    partial_instance.stat.ino = 22;
+    partial_instance.root = binary_root(2).unwrap();
+    partial_instance.path = t("/examples/aarch64-partial.o");
+    partial_instance.content = InstanceContent::Read {
+        artifact: partial_artifact.id.clone(),
+    };
+    s.request.roots.push(ScanRoot {
+        id: partial_instance.root.clone(),
+        path: partial_instance.path.clone(),
+    });
+    let mut partial_binary = s.binaries[0].clone();
+    partial_binary.slice = partial_slice.clone();
+    let mut hint = s.hints[0].clone();
+    hint.subject = partial_slice.clone();
+    s.hints.push(hint);
+    for check in [BINARY_CONTAINER, BINARY_IDENTITY] {
+        s.coverage.push(coverage(
+            check,
+            Ref::Instance(partial_instance.id.clone()),
+            CoverageState::Complete,
+        ));
+    }
+    let used = BudgetUse {
+        budget: BINARY_CODE_BYTES.into(),
+        used: 0,
+        limit: 256 << 20,
+    };
+    s.coverage.push(Coverage {
+        check: id(BINARY_CODE),
+        scope: Ref::Slice(partial_slice.clone()),
+        state: CoverageState::Partial {
+            missing: vec!["code: no usable FDE bounds".into()],
+        },
+        budget: Some(used.clone()),
+    });
+    s.coverage.push(Coverage {
+        check: id(BINARY_CODE),
+        scope: Ref::Instance(partial_instance.id.clone()),
+        state: CoverageState::Partial {
+            missing: vec![format!("code: incomplete slice {partial_slice}")],
+        },
+        budget: Some(used),
+    });
+    s.artifacts.push(partial_artifact);
+    s.instances.push(partial_instance);
+    s.binaries.push(partial_binary);
+    let rule: PolicyRuleRef = id("policy:capabilities.deny.posix.network");
+    s.policy_violations.push(PolicyViolation {
+        policy_rule: rule.clone(),
+        subject: Ref::Slice(slice.clone()),
+        evidence: vec![EvidenceRef::Code {
+            slice,
+            loc: loc_cs("cs:0x4c"),
+        }],
+        decision: PolicyDecision {
+            action: Action::Fail,
+            source: rule,
+            reason: Some(NO_CONNECTIONS.into()),
+            expires: None,
+        },
+    });
+    let question: OpenQuestionId = id(&format!("capability:posix.network@{partial_slice}"));
+    s.open_questions.push(OpenQuestion {
+        id: question.clone(),
+        rule: id(CAPABILITY_RULE),
+        subject: Ref::Slice(partial_slice.clone()),
+        conditions: vec![Condition {
+            id: id("calls:posix.network"),
+            state: CondState::Unknown {
+                reason: UnknownReason::CheckIncomplete {
+                    check: id(BINARY_CODE),
+                },
+                evidence: None,
+            },
+            unresolved: vec![],
+        }],
+        evidence: vec![EvidenceRef::Code {
+            slice: partial_slice,
+            loc: Loc::Symbol(t("connect")),
+        }],
+        decision: OpenQuestionDecision {
+            treatment: OqTreatment::CountAsGap,
+            source: id("policy:open_questions.default"),
+            reason: None,
+        },
+    });
+    s.outcome.verdict = Verdict::Fail;
+    s.outcome.completeness = Completeness::Incomplete {
+        missing_required: vec![id(BINARY_CODE)],
+        gaps: vec![question],
     };
     s
 }

@@ -748,6 +748,7 @@ fn capabilities(
     b: &crate::binary::BinaryFacts,
     code: Option<&Coverage>,
 ) {
+    let code = super::code_coverage_for_slice(s, &b.slice, code);
     let imports = match &b.container {
         crate::binary::ContainerFacts::Elf(elf) => elf.imports.len(),
         crate::binary::ContainerFacts::MachO(macho) if macho_imports_shown(macho, b) => {
@@ -1138,6 +1139,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                 let coverage = artifact.and_then(|a| s.coverage.iter().find(|c| {
                     c.check.as_str() == crate::ARTIFACTS_CODE && c.scope == Ref::Artifact(a.id.clone())
                 }));
+                let coverage = super::code_coverage_for_slice(s, &b.slice, coverage);
                 let facts = s.code.iter().find(|facts| facts.slice == b.slice);
                 capabilities.iter().map(|feature| {
                     let imports: std::collections::BTreeSet<_> = import_hints(s, &b.slice)
@@ -1149,6 +1151,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                     let calls = if count == 1 { "call" } else { "calls" };
                     let status = match coverage.map(|c| &c.state) {
                         Some(CoverageState::Complete) => format!("{count} direct {calls}"),
+                        Some(CoverageState::Partial { .. }) if count == 0 && s.request.code_analysis.is_some() => "none found in searched code; partial".to_string(),
                         Some(CoverageState::Partial { .. }) => format!("{count} direct {calls}; partial"),
                         _ => "not analyzed".to_string(),
                     };

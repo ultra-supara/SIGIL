@@ -2,7 +2,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    Artifact, BudgetUse, CodeSliceInventory, Coverage, CoverageState, Ref, BINARY_CODE_BYTES,
+    Artifact, BinaryFacts, BudgetUse, CodeSliceInventory, ContainerFacts, Coverage, CoverageState,
+    Ref, BINARY_CODE_BYTES,
 };
 
 pub const CODE_SLICE_NOT_PARSED: &str = "code: slice not parsed";
@@ -11,6 +12,46 @@ pub const CODE_NO_SUPPORTED_SLICE: &str = "code: no supported slice";
 pub const CODE_SLICE_NOT_STARTED: &str = "code: artifact budget exhausted before slice";
 /// The shared reader's descriptor bound, applied independently to each marked artifact.
 pub const MAX_CODE_SLICES: usize = 64;
+
+/// Whether recorded parser gaps prevent proving that all capability imports were collected.
+pub fn imports_incomplete(binary: &BinaryFacts) -> bool {
+    binary.gaps.iter().any(|gap| {
+        gap.starts_with("imports:")
+            || gap.starts_with("binary_parse_bytes:")
+            || match &binary.container {
+                ContainerFacts::Elf(_) => [
+                    "dynamic:",
+                    "symbols:",
+                    "malformed: symbols:",
+                    "sections:",
+                    "malformed: section names:",
+                    "malformed: program headers:",
+                ]
+                .iter()
+                .any(|prefix| gap.starts_with(prefix)),
+                ContainerFacts::MachO(_) => {
+                    ["load commands:", "load dylib:", "LC_DYLD_CHAINED_FIXUPS:"]
+                        .iter()
+                        .any(|prefix| gap.starts_with(prefix))
+                }
+            }
+    })
+}
+
+/// Why a marked slice with capability imports has no confirmed direct call.
+/// Only the slice's own applicable code check can establish a complete local search.
+pub fn unknown_capability_call(
+    state: Option<&CoverageState>,
+    check: crate::CheckId,
+) -> crate::UnknownReason {
+    if matches!(state, Some(CoverageState::Complete)) {
+        crate::UnknownReason::NotModeled {
+            what: "calls that are not direct (through a function pointer, or from data)".into(),
+        }
+    } else {
+        crate::UnknownReason::CheckIncomplete { check }
+    }
+}
 
 pub(crate) fn valid_gaps(missing: &[String]) -> bool {
     !missing.is_empty()

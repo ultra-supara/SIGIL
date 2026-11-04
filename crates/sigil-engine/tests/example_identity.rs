@@ -46,7 +46,8 @@ fn every_binary_inspection_example_carries_the_claims_the_engine_derives() {
         [
             "15-binary-inspect",
             "16-binary-code",
-            "18-capability-policy"
+            "18-capability-policy",
+            "22-aarch64-code"
         ]
     );
 }

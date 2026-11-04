@@ -3,6 +3,7 @@
 //! a relocatable object the relocations on code fields. The builders are [`linked`] (an
 //! executable or shared object) and [`relocatable`].
 
+pub(crate) mod aarch64;
 mod linked;
 mod relocatable;
 

@@ -1,5 +1,5 @@
 //! Level C for the capability imports (PR-5a spec): where each is called directly, with the
-//! argument values, in x86-64 ELF64 little-endian files. Nothing is executed or mapped: every
+//! argument values, in the bounded x86-64 and AArch64 ELF64 little-endian profiles. Nothing is executed or mapped: every
 //! byte is read with `pread` and charged to `binary_code_bytes` first, and every collection that
 //! grows with the input has a limit (spec §4.10).
 
@@ -14,6 +14,7 @@ use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 
 use crate::binary::elf::{Dynamic, Elf, Sections};
 
+pub(crate) mod aarch64;
 pub mod data;
 pub(crate) mod decode;
 pub(crate) mod fde;
@@ -101,14 +102,126 @@ pub enum CodeOutcome {
         gaps: Vec<String>,
         budget: BudgetUse,
     },
-    /// Not an x86-64 ELF64 little-endian slice.
+    /// Not an admitted architecture/container ABI.
     Unsupported,
 }
 
-/// The gaps and limits of one artifact's analysis.
+/// Owns the charged reader and work limits for one artifact, across slice callbacks.
+/// Callbacks receive the same fd reader; unsupported slices never invoke them.
+pub(crate) struct ArtifactAnalysis<'f> {
+    reader: Reader<'f>,
+    run: Run,
+    slices: usize,
+}
+
+impl<'f> ArtifactAnalysis<'f> {
+    /// The multiarchitecture contract: one combined reference cap, one detailed-gap cap.
+    /// Create once per artifact and visit supported slices in deterministic descriptor order.
+    pub fn new(file: &'f File, size: u64, budgets: CodeBudgets) -> Self {
+        let mut run = Run::new(budgets);
+        run.legacy_x86 = false;
+        Self {
+            reader: Reader::new(file, size, budgets.bytes),
+            run,
+            slices: 0,
+        }
+    }
+
+    /// Preserve the historical independent text-relocation/search caps for x86-only ELF.
+    /// New multiarchitecture dispatch uses `new` or switches before work. Session-wide
+    /// mixed x86 selection remains unresolved because recognition follows collection.
+    pub fn legacy(file: &'f File, size: u64, budgets: CodeBudgets) -> Self {
+        let mut artifact = Self::new(file, size, budgets);
+        artifact.run.legacy_x86 = true;
+        artifact
+    }
+
+    pub fn multiarch(&mut self) {
+        self.run.legacy_x86 = false;
+    }
+
+    pub fn size(&self) -> u64 {
+        self.reader.size()
+    }
+
+    pub fn slice(
+        &mut self,
+        supported: bool,
+        analyze: impl FnOnce(&mut Reader<'_>, &mut Run) -> (Vec<Function>, Vec<CallSite>),
+    ) -> CodeOutcome {
+        if !supported {
+            return CodeOutcome::Unsupported;
+        }
+        let before = self.reader.used();
+        let work_before = self.run.work_used();
+        let unstarted = self.run.stopped()
+            || (self.slices > 0 && self.run.detailed_gaps >= self.run.budgets.gaps);
+        let (functions, call_sites) = if unstarted {
+            self.run.stopped = true;
+            self.run.gap_always(ARTIFACT_EXHAUSTED.to_string());
+            (vec![], vec![])
+        } else {
+            analyze(&mut self.reader, &mut self.run)
+        };
+        let used = self.reader.used() - before;
+        if self.slices > 0
+            && self.run.stopped()
+            && used == 0
+            && self.run.work_used() == work_before
+            && functions.is_empty()
+            && call_sites.is_empty()
+        {
+            self.run.gap_always(ARTIFACT_EXHAUSTED.to_string());
+        }
+        self.slices += 1;
+        let gaps = listed(
+            std::mem::take(&mut self.run.gaps).into_iter(),
+            std::mem::take(&mut self.run.more),
+        );
+        CodeOutcome::Analyzed {
+            functions,
+            call_sites,
+            gaps,
+            budget: BudgetUse {
+                budget: BINARY_CODE_BYTES.to_string(),
+                used,
+                limit: self.reader.limit(),
+            },
+        }
+    }
+}
+
+const ARTIFACT_EXHAUSTED: &str = "code: artifact budget exhausted before slice";
+
+/// Aggregate work charged before collection/decoding. Text references share `References`
+/// except in the explicitly selected legacy x86 mode.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Work {
+    References,
+    TextReferences,
+    Fdes,
+    Slots,
+    Relocations,
+    Instructions,
+    Values,
+    Calls,
+    Names,
+}
+
+/// Artifact-wide counters and the current slice's gaps. Slice completion drains only the
+/// gap set/overflow summary; detailed-gap use and all work counters remain owned here.
 pub(crate) struct Run {
     pub budgets: CodeBudgets,
     gaps: BTreeSet<String>,
+    detailed_gaps: usize,
+    legacy_x86: bool,
+    references: u64,
+    text_references: u64,
+    fdes: u64,
+    slots: u64,
+    relocations: u64,
+    call_sites: u64,
+    name_bytes: u64,
     more: u64,
     stopped: bool,
     /// Instructions decoded so far, over all functions.
@@ -122,11 +235,107 @@ impl Run {
         Run {
             budgets,
             gaps: BTreeSet::new(),
+            detailed_gaps: 0,
+            legacy_x86: true,
+            references: 0,
+            text_references: 0,
+            fdes: 0,
+            slots: 0,
+            relocations: 0,
+            call_sites: 0,
+            name_bytes: 0,
             more: 0,
             stopped: false,
             instructions: 0,
             value_steps: 0,
         }
+    }
+
+    fn work_used(&self) -> [u64; 9] {
+        [
+            self.references,
+            self.text_references,
+            self.fdes,
+            self.slots,
+            self.relocations,
+            self.instructions,
+            self.value_steps,
+            self.call_sites,
+            self.name_bytes,
+        ]
+    }
+
+    fn counter(&mut self, work: Work) -> (&mut u64, u64, &'static str) {
+        match work {
+            Work::References => (
+                &mut self.references,
+                self.budgets.references as u64,
+                "references",
+            ),
+            Work::TextReferences if !self.legacy_x86 => (
+                &mut self.references,
+                self.budgets.references as u64,
+                "references",
+            ),
+            Work::TextReferences => (
+                &mut self.text_references,
+                self.budgets.references as u64,
+                "references",
+            ),
+            Work::Fdes => (&mut self.fdes, self.budgets.fdes as u64, "FDE"),
+            Work::Slots => (&mut self.slots, self.budgets.slots as u64, "GOT-slot"),
+            Work::Relocations => (
+                &mut self.relocations,
+                self.budgets.relocations as u64,
+                "relocation",
+            ),
+            Work::Instructions => (
+                &mut self.instructions,
+                self.budgets.instructions,
+                "decoded-instruction",
+            ),
+            Work::Values => (
+                &mut self.value_steps,
+                self.budgets.value_steps,
+                "value-step",
+            ),
+            Work::Calls => (
+                &mut self.call_sites,
+                self.budgets.call_sites as u64,
+                "call-site",
+            ),
+            Work::Names => (&mut self.name_bytes, self.budgets.name_bytes, "name-byte"),
+        }
+    }
+
+    /// Check a transactional collection before allocating its output. No charge on refusal.
+    pub fn fits(&mut self, work: Work, n: u64) -> bool {
+        let (used, limit, what) = self.counter(work);
+        if used.checked_add(n).is_some_and(|total| total <= limit) {
+            return true;
+        }
+        self.limit(what, limit);
+        false
+    }
+
+    /// Reserve work without emitting a diagnostic yet. The legacy linked-image walk reports
+    /// its limit after parser diagnostics, preserving the historical gap-cap ordering.
+    fn try_charge(&mut self, work: Work, n: u64) -> bool {
+        let (used, limit, _) = self.counter(work);
+        let Some(total) = used.checked_add(n).filter(|total| *total <= limit) else {
+            return false;
+        };
+        *used = total;
+        true
+    }
+
+    pub fn charge(&mut self, work: Work, n: u64) -> bool {
+        if self.try_charge(work, n) {
+            return true;
+        }
+        let (_, limit, what) = self.counter(work);
+        self.limit(what, limit);
+        false
     }
 
     /// Records a gap. A gap already listed is not recorded again. Past `budgets.gaps` listed
@@ -136,10 +345,31 @@ impl Run {
         if self.gaps.contains(&gap) {
             return;
         }
-        if self.gaps.len() < self.budgets.gaps {
+        let listed = if self.legacy_x86 {
+            // In the legacy first slice fixed diagnostics also occupy the historical cap;
+            // an artifact owner reused across slices must still bound total detail entries.
+            self.gaps.len().max(self.detailed_gaps)
+        } else {
+            self.detailed_gaps
+        };
+        if listed < self.budgets.gaps {
+            self.detailed_gaps += 1;
             self.gaps.insert(gap);
         } else {
             self.more = self.more.saturating_add(1);
+        }
+    }
+
+    /// A retained fact may require its exact diagnostic. Refuse the transaction when
+    /// that diagnostic cannot fit; only the fixed exhaustion summary bypasses the cap.
+    /// Optional legacy diagnostics continue to use `gap` without changing their behavior.
+    pub fn required_gap(&mut self, gap: String) -> bool {
+        self.gap(gap.clone());
+        if self.gaps.contains(&gap) {
+            true
+        } else {
+            self.limit("gaps", self.budgets.gaps as u64);
+            false
         }
     }
 
@@ -180,6 +410,7 @@ impl Run {
     }
 
     /// The listed gaps, sorted, with the count of the rest.
+    #[cfg(test)]
     pub fn into_gaps(self) -> Vec<String> {
         listed(self.gaps.into_iter(), self.more)
     }
@@ -191,6 +422,7 @@ impl Run {
     }
 
     /// The outcome, with the reader's use of `binary_code_bytes`.
+    #[cfg(test)]
     pub fn finish(
         self,
         reader: &Reader<'_>,
@@ -224,7 +456,7 @@ fn listed(gaps: impl Iterator<Item = String>, more: u64) -> Vec<String> {
 
 /// Code analysis of one ELF slice (spec §4): the image, the references, their confirmation, and
 /// the names of what was recorded. It runs after the container facts, on the same parse and the
-/// same fd (`file`, of `size` bytes from the read's `fstat`). It never fails: what cannot be
+/// same fd, held by the artifact's analysis owner. It never fails: what cannot be
 /// analyzed is a gap. Only an x86-64 ELF64 little-endian file is analyzed (R-c).
 ///
 /// R-h: nothing it does reaches the container's facts or gaps.
@@ -237,52 +469,47 @@ pub(crate) fn analyze<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     e: &mut Elf<'d, R, H>,
     sections: &Sections<'d, R, H>,
     dynamic: &Dynamic,
-    file: &File,
-    size: u64,
-    budgets: CodeBudgets,
+    analysis: &mut ArtifactAnalysis<'_>,
 ) -> CodeOutcome {
     let endian = e.endian;
-    if e.header.e_machine(endian) != elf::EM_X86_64
-        || !e.header.is_class_64()
-        || !endian.is_little_endian()
-    {
-        return CodeOutcome::Unsupported;
-    }
-    let container = std::mem::take(&mut e.gaps);
-    let mut run = Run::new(budgets);
-    let mut reader = Reader::new(file, size, budgets.bytes);
-    let mut rec = Recorder::default();
-    let refusals = e.data.refusals();
-    let img = match data::signatures() {
-        Err(why) => {
-            run.gap_always(format!("code: signatures: {why}"));
-            None
-        }
-        Ok(sig) => {
-            let img = if e.header.e_type(endian) == elf::ET_REL {
-                image::relocatable(e, sections, sig, &mut reader, &mut run)
-            } else {
-                image::linked(e, sections, dynamic, sig, &mut reader, &mut run)
-            };
-            // A limit reached while the image was built (slots, relocations, FDEs, the bytes)
-            // ends the analysis there: nothing is searched.
-            if let Some(img) = img.as_ref().filter(|_| !run.stopped()) {
-                let refs = search::references(img, &mut reader, &mut run);
-                search::confirm(img, refs, sig, &mut reader, &mut run, &mut rec);
+    let supported = e.header.e_machine(endian) == elf::EM_X86_64
+        && e.header.is_class_64()
+        && endian.is_little_endian();
+    analysis.slice(supported, |reader, run| {
+        let container = std::mem::take(&mut e.gaps);
+        let mut rec = Recorder::default();
+        let refusals = e.data.refusals();
+        let img = match data::signatures() {
+            Err(why) => {
+                run.gap_always(format!("code: signatures: {why}"));
+                None
             }
-            img
+            Ok(sig) => {
+                let img = if e.header.e_type(endian) == elf::ET_REL {
+                    image::relocatable(e, sections, sig, reader, run)
+                } else {
+                    image::linked(e, sections, dynamic, sig, reader, run)
+                };
+                // A limit reached while the image was built (slots, relocations, FDEs, the bytes)
+                // ends the analysis there: nothing is searched.
+                if let Some(img) = img.as_ref().filter(|_| !run.stopped()) {
+                    let refs = search::references(img, reader, run);
+                    search::confirm(img, refs, sig, reader, run, &mut rec);
+                }
+                img
+            }
+        };
+        if e.data.refusals() > refusals {
+            run.gap_always("code: binary_parse_bytes exceeded".to_string());
         }
-    };
-    if e.data.refusals() > refusals {
-        run.gap_always("code: binary_parse_bytes exceeded".to_string());
-    }
-    if let Some(img) = &img {
-        rec.fill_names(e, sections, img, &run);
-    }
-    for gap in std::mem::replace(&mut e.gaps, container) {
-        run.gap(format!("code: {gap}"));
-    }
-    run.finish(&reader, rec.functions, rec.call_sites)
+        if let Some(img) = &img {
+            rec.fill_names(e, sections, img, run);
+        }
+        for gap in std::mem::replace(&mut e.gaps, container) {
+            run.gap(format!("code: {gap}"));
+        }
+        (rec.functions, rec.call_sites)
+    })
 }
 
 /// The integration tests' ELF builder (`tests/common/elf.rs`), for the unit tests' synthetic files.
@@ -359,6 +586,218 @@ mod tests {
         CodeBudgets {
             gaps,
             ..CodeBudgets::default()
+        }
+    }
+
+    fn one_function() -> Function {
+        Function {
+            id: sigil_model::FnId::new("fn:0x1").unwrap(),
+            entry: 1,
+            end: 2,
+            bounds: sigil_model::BoundsSource::EhFrameFde,
+            names: vec![],
+        }
+    }
+
+    fn analyzed(outcome: CodeOutcome) -> (Vec<Function>, Vec<String>, u64) {
+        let CodeOutcome::Analyzed {
+            functions,
+            gaps,
+            budget,
+            ..
+        } = outcome
+        else {
+            panic!("unsupported");
+        };
+        (functions, gaps, budget.used)
+    }
+
+    #[test]
+    fn slice_loop_byte_budget_preserves_first_facts_and_reports_deltas() {
+        let f = eight_bytes();
+        let mut artifact = ArtifactAnalysis::new(
+            &f,
+            8,
+            CodeBudgets {
+                bytes: 4,
+                ..CodeBudgets::default()
+            },
+        );
+        let a = analyzed(artifact.slice(true, |reader, _| {
+            reader::read_slice(reader, reader::SliceWindow { base: 0, len: 4 }, 0, 3).unwrap();
+            (vec![one_function()], vec![])
+        }));
+        let b = analyzed(artifact.slice(true, |reader, run| {
+            let why = reader::read_slice(reader, reader::SliceWindow { base: 4, len: 4 }, 0, 2)
+                .unwrap_err();
+            run.refusal(why, "synthetic slice", reader);
+            (vec![], vec![])
+        }));
+        assert_eq!(a, (vec![one_function()], vec![], 3));
+        assert!(b.0.is_empty());
+        assert!(b
+            .1
+            .contains(&"code: artifact budget exhausted before slice".to_string()));
+        assert_eq!(b.2, 0);
+        let c = analyzed(artifact.slice(true, |_, _| {
+            panic!("stopped artifact must not start a later slice")
+        }));
+        assert_eq!(c.2, 0);
+        assert_eq!(artifact.reader.used(), 3);
+        assert_eq!(
+            artifact.slice(false, |_, _| panic!("unsupported")),
+            CodeOutcome::Unsupported
+        );
+    }
+
+    #[test]
+    fn a_slice_that_did_work_is_not_reported_as_unstarted() {
+        let f = eight_bytes();
+        let mut artifact = ArtifactAnalysis::new(
+            &f,
+            8,
+            CodeBudgets {
+                references: 4,
+                ..CodeBudgets::default()
+            },
+        );
+        artifact.slice(true, |_, run| {
+            assert!(run.charge(Work::References, 2));
+            (vec![], vec![])
+        });
+        let second = analyzed(artifact.slice(true, |_, run| {
+            assert!(run.charge(Work::References, 1));
+            assert!(!run.charge(Work::References, 2));
+            (vec![one_function()], vec![])
+        }));
+        assert_eq!(second.0, [one_function()]);
+        assert_eq!(second.1, ["code: references limit 4 reached"]);
+    }
+
+    #[test]
+    fn gap_limit_is_shared_but_attributed_per_slice() {
+        let f = eight_bytes();
+        let mut artifact = ArtifactAnalysis::new(&f, 8, small(2));
+        let a = analyzed(artifact.slice(true, |_, run| {
+            run.gap("code: A".into());
+            (vec![], vec![])
+        }));
+        let b = analyzed(artifact.slice(true, |_, run| {
+            run.gap("code: B".into());
+            (vec![], vec![])
+        }));
+        assert_eq!(a.1, ["code: A"]);
+        assert_eq!(b.1, ["code: B"]);
+        for _ in 2..64 {
+            let later =
+                analyzed(artifact.slice(true, |_, _| panic!("shared detail allowance exhausted")));
+            assert_eq!(later.1, ["code: artifact budget exhausted before slice"]);
+            assert_eq!(later.2, 0);
+        }
+        assert_eq!(
+            artifact.slice(false, |_, _| panic!("unsupported")),
+            CodeOutcome::Unsupported
+        );
+    }
+
+    #[test]
+    fn later_slice_gap_details_cannot_multiply_the_cap_in_either_mode() {
+        let f = eight_bytes();
+        for legacy in [false, true] {
+            let mut artifact = if legacy {
+                ArtifactAnalysis::legacy(&f, 8, small(2))
+            } else {
+                ArtifactAnalysis::new(&f, 8, small(2))
+            };
+            artifact.slice(true, |_, run| {
+                run.gap("code: A".into());
+                (vec![], vec![])
+            });
+            let second = analyzed(artifact.slice(true, |_, run| {
+                for gap in ["code: B", "code: C", "code: D"] {
+                    run.gap(gap.into());
+                }
+                (vec![], vec![])
+            }));
+            assert_eq!(second.1, ["code: 2 more gaps not listed", "code: B"]);
+        }
+    }
+
+    fn shared_work_limit(work: Work) {
+        let f = eight_bytes();
+        let budgets = CodeBudgets {
+            references: 4,
+            fdes: 4,
+            slots: 4,
+            relocations: 4,
+            instructions: 4,
+            value_steps: 4,
+            call_sites: 4,
+            name_bytes: 4,
+            ..CodeBudgets::default()
+        };
+        let mut artifact = ArtifactAnalysis::new(&f, 8, budgets);
+        let first = analyzed(artifact.slice(true, |_, run| {
+            assert!(run.charge(work, 3));
+            (vec![one_function()], vec![])
+        }));
+        let second = analyzed(artifact.slice(true, |_, run| {
+            assert!(!run.charge(work, 2), "{work:?} limit reset across slices");
+            assert_eq!(*run.counter(work).0, 3, "refused work is not charged");
+            (vec![], vec![])
+        }));
+        assert_eq!(first, (vec![one_function()], vec![], 0));
+        assert!(second.0.is_empty());
+        assert!(second.1.contains(&ARTIFACT_EXHAUSTED.to_string()));
+        let later = analyzed(artifact.slice(true, |_, _| panic!("work after artifact exhaustion")));
+        assert_eq!(later.1, [ARTIFACT_EXHAUSTED]);
+        assert_eq!(later.2, 0);
+    }
+
+    macro_rules! shared_limit_test {
+        ($name:ident, $work:ident) => {
+            #[test]
+            fn $name() {
+                shared_work_limit(Work::$work);
+            }
+        };
+    }
+    shared_limit_test!(slice_references_do_not_reset, References);
+    shared_limit_test!(slice_fdes_do_not_reset, Fdes);
+    shared_limit_test!(slice_slots_do_not_reset, Slots);
+    shared_limit_test!(slice_relocations_do_not_reset, Relocations);
+    shared_limit_test!(slice_instructions_do_not_reset, Instructions);
+    shared_limit_test!(slice_value_steps_do_not_reset, Values);
+    shared_limit_test!(slice_calls_do_not_reset, Calls);
+    shared_limit_test!(slice_names_do_not_reset, Names);
+
+    #[test]
+    fn new_analysis_combines_reference_categories_legacy_selection_preserves_old_caps() {
+        let f = eight_bytes();
+        let budgets = CodeBudgets {
+            references: 4,
+            ..CodeBudgets::default()
+        };
+        for legacy in [false, true] {
+            let mut artifact = if legacy {
+                ArtifactAnalysis::legacy(&f, 8, budgets)
+            } else {
+                ArtifactAnalysis::new(&f, 8, budgets)
+            };
+            artifact.slice(true, |_, run| {
+                assert!(run.charge(Work::TextReferences, 2));
+                assert!(run.charge(Work::References, 1));
+                (vec![], vec![])
+            });
+            artifact.slice(true, |_, run| {
+                assert!(run.charge(Work::References, 1)); // unified cap exactly full
+                assert_eq!(run.charge(Work::TextReferences, 2), legacy);
+                if legacy {
+                    assert!(!run.charge(Work::TextReferences, 1)); // own legacy cap full
+                }
+                (vec![], vec![])
+            });
+            assert!(artifact.run.stopped());
         }
     }
 

@@ -1250,6 +1250,7 @@ mod tests {
         instances: Vec<FileInstance>,
     ) -> InstallFacts {
         InstallFacts {
+            recognized_multiarch: false,
             root_path: recorded(root_path),
             root_id,
             instances,

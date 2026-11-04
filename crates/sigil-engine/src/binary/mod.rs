@@ -16,7 +16,7 @@ use std::fs::File;
 
 use sigil_model::{Arch, ContainerFacts, Format, GoBuildInfo, Sha256Hex};
 
-use crate::code::{CodeBudgets, CodeOutcome};
+use crate::code::{ArtifactAnalysis, CodeBudgets, CodeOutcome};
 use scan::{ScanOutcome, Sought};
 
 /// Budgets of one artifact's parse, recorded as `binary_parse_bytes`, `binary_imports`, and
@@ -78,6 +78,8 @@ pub struct ParsedSlice {
 pub struct ParsedArtifact {
     pub format: Format,
     pub slices: Vec<ParsedSlice>,
+    /// Descriptor enumeration, kept separate from individual container diagnostics.
+    pub code_inventory: sigil_model::CodeSliceInventory,
 }
 
 /// Parses the ELF content of `file` (of `size` bytes, from the read's `fstat`), and analyzes its
@@ -90,7 +92,16 @@ pub fn parse(file: &File, size: u64, budgets: BinaryBudgets) -> Parsed {
 /// [`parse`], and with `sought` the signature scan on the same fd (PR-4c-2a, PR-4c-2b).
 fn parse_elf(file: &File, size: u64, budgets: BinaryBudgets, sought: Option<Sought<'_>>) -> Parsed {
     let data = read::Bounded::new(read::Budgeted::new(file, size), size, budgets.parse_bytes);
-    elf::parse(&data, budgets, Some((file, size)), sought)
+    let mut analysis = budgets
+        .code
+        .map(|b| ArtifactAnalysis::legacy(file, size, b));
+    elf::parse_with_analysis(
+        &data,
+        budgets,
+        Some((file, size)),
+        sought,
+        analysis.as_mut(),
+    )
 }
 
 /// Parses a recognized ELF or Mach-O artifact. A recognized but malformed Mach-O is returned
@@ -108,6 +119,14 @@ pub fn parse_artifact(
         let parsed = parse_elf(file, size, budgets, sought);
         return Some(ParsedArtifact {
             format: Format::Elf { kind },
+            code_inventory: if matches!(&parsed.container, ContainerFacts::Elf(e) if e.abi.is_none())
+            {
+                sigil_model::CodeSliceInventory::Partial {
+                    missing: vec![sigil_model::code_coverage::CODE_INVENTORY_INCOMPLETE.into()],
+                }
+            } else {
+                sigil_model::CodeSliceInventory::Complete
+            },
             slices: vec![ParsedSlice {
                 offset: 0,
                 size,

@@ -909,6 +909,7 @@ pub(super) fn parse_artifact(
     let format = recognized(&magic)?;
     let data = Bounded::new(Budgeted::new(file, size), size, budgets.parse_bytes);
     let mut slices = vec![];
+    let mut inventory_gaps = vec![];
     let fat_parsed = fat_magic(&magic).map(|fat| parse_fat(&data, size, fat));
     if let Some((descriptors, gaps)) = &fat_parsed {
         if (!gaps.is_empty() || descriptors.is_empty()) && java_class(&data, size) {
@@ -934,24 +935,36 @@ pub(super) fn parse_artifact(
         }
         Format::MachOFat => {
             let (descriptors, mut gaps) = fat_parsed?;
+            inventory_gaps.extend(gaps.iter().cloned());
             for descriptor in descriptors {
                 let expected_arch = arch(descriptor.cpu_type);
                 let digest = match hash_range(file, descriptor.offset, descriptor.size) {
                     Ok(digest) => digest,
                     Err(why) => {
-                        gaps.push(format!("fat slice at {}: hash: {why}", descriptor.offset));
+                        let gap = format!("fat slice at {}: hash: {why}", descriptor.offset);
+                        inventory_gaps.push(gap.clone());
+                        gaps.push(gap);
                         continue;
                     }
                 };
                 match fat_slice_facts(&data, &descriptor, budgets.imports, &mut names) {
-                    Ok(parsed) => slices.push(parsed_slice(
-                        descriptor.offset,
-                        descriptor.size,
-                        expected_arch,
-                        digest,
-                        parsed,
-                        &[],
-                    )),
+                    Ok(parsed) => {
+                        if let ContainerFacts::MachO(m) = &parsed.container {
+                            if macho_architecture(m.cpu_type, m.cpu_subtype)
+                                != macho_architecture(descriptor.cpu_type, descriptor.cpu_subtype)
+                            {
+                                inventory_gaps.push(FAT_CPU_MISMATCH_GAP.into());
+                            }
+                        }
+                        slices.push(parsed_slice(
+                            descriptor.offset,
+                            descriptor.size,
+                            expected_arch,
+                            digest,
+                            parsed,
+                            &[],
+                        ));
+                    }
                     Err(why) => {
                         gaps.push(format!("fat slice at {}: {why}", descriptor.offset));
                         slices.push(unparsed_slice(
@@ -990,5 +1003,19 @@ pub(super) fn parse_artifact(
     for slice in &mut slices {
         slice.code = budgets.code.map(|_| CodeOutcome::Unsupported);
     }
-    Some(ParsedArtifact { format, slices })
+    let code_inventory = if inventory_gaps.is_empty() && !slices.is_empty() {
+        sigil_model::CodeSliceInventory::Complete
+    } else {
+        inventory_gaps.push(sigil_model::code_coverage::CODE_INVENTORY_INCOMPLETE.into());
+        inventory_gaps.sort();
+        inventory_gaps.dedup();
+        sigil_model::CodeSliceInventory::Partial {
+            missing: inventory_gaps,
+        }
+    };
+    Some(ParsedArtifact {
+        format,
+        slices,
+        code_inventory,
+    })
 }

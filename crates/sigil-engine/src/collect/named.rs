@@ -43,6 +43,8 @@ impl Default for NamedBudgets {
 /// What the inputs gave, in argument order.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NamedFacts {
+    /// Recognition only; does not authorize retaining evidence from an unstable read.
+    pub recognized_multiarch: bool,
     /// `binary-<n>`, each at its file's canonical path.
     pub roots: Vec<ScanRoot>,
     pub instances: Vec<FileInstance>,
@@ -161,6 +163,7 @@ fn collect_with(
             scanning,
             &mut parsed,
             during_read,
+            &mut facts.recognized_multiarch,
         );
         let Some(mut instance) = read.instance else {
             return Err(fatal(path, &outcome(&read.outcome)));
@@ -218,7 +221,7 @@ fn collect_with(
         instance.path_proof = None;
         facts.instances.push(instance);
     }
-    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &facts.artifacts);
+    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &mut facts.artifacts);
     Ok(facts)
 }
 

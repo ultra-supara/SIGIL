@@ -121,8 +121,8 @@ struct BinaryArgs {
     #[arg(value_name = "PATH", required = true)]
     paths: Vec<PathBuf>,
     /// Also analyze code: the direct call sites of capability imports (connect, dlopen, getenv,
-    /// …), with their arguments and functions, and a binary.code check per input. x86-64 ELF
-    /// only; the file is never run or loaded.
+    /// …), with their arguments and functions, and a binary.code check per input. x86-64 and
+    /// AArch64 ELF64 little-endian; the file is never run or loaded.
     #[arg(long)]
     code: bool,
     /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies, and its
@@ -181,7 +181,7 @@ struct OllamaArgs {
     /// --install-dir [default: not read].
     #[arg(long, value_name = "FILE", conflicts_with = "install_dir")]
     service_unit: Option<PathBuf>,
-    /// Analyze direct capability-import calls in the installation's x86-64 ELF files.
+    /// Analyze direct capability-import calls in the installation's x86-64 and AArch64 ELF64 little-endian files.
     #[arg(long)]
     code: bool,
     /// Inventory only the model with this display name (e.g. llama3.2:latest).
@@ -1146,6 +1146,36 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
             path.terminal_line(),
             artifact_type(b.artifact)
         ));
+    }
+    if r.code_analysis.is_some() {
+        let check = if is_binary_inspection(r) {
+            sigil_model::BINARY_CODE
+        } else {
+            sigil_model::ARTIFACTS_CODE
+        };
+        let coverage: std::collections::BTreeMap<_, _> = s
+            .coverage
+            .iter()
+            .filter_map(|c| {
+                if c.check.as_str() != check {
+                    return None;
+                }
+                let sigil_model::Ref::Slice(slice) = &c.scope else {
+                    return None;
+                };
+                Some((slice, c))
+            })
+            .collect();
+        let mut slices: Vec<_> = s.artifacts.iter().flat_map(|a| &a.slices).collect();
+        slices.sort_by(|a, b| a.id.cmp(&b.id));
+        for slice in slices {
+            lines.push(format!(
+                "slice: {}  {}  code: {}",
+                shown(slice.id.as_str()),
+                slice.arch.name(),
+                entry_state(coverage.get(&slice.id).copied())
+            ));
+        }
     }
     lines.extend(release_line(s));
     for p in &s.probes {
