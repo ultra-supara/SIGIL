@@ -13,6 +13,22 @@ fn recognized(a: &Artifact) -> bool {
     )
 }
 
+// Only diagnostics that identify descriptor enumeration/hash loss belong here. An inner
+// parse error ("fat slice at <offset>: ...") keeps the descriptor and gets its own child.
+fn fat_descriptor_lost(gap: &str) -> bool {
+    if gap.starts_with("fat header:") {
+        return true;
+    }
+    if let Some(rest) = gap.strip_prefix("fat slice at ") {
+        return rest.split_once(": hash: ").is_some_and(|(offset, _)| {
+            !offset.is_empty() && offset.bytes().all(|b| b.is_ascii_digit())
+        });
+    }
+    gap.strip_prefix("fat slice ")
+        .and_then(|rest| rest.split_once(": "))
+        .is_some_and(|(index, _)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn imports_incomplete(binary: &BinaryFacts) -> bool {
     binary.gaps.iter().any(|gap| {
         gap.starts_with("imports:")
@@ -155,6 +171,19 @@ impl Validator<'_> {
                         self.code_error(&slice.id, "code slice belongs to a different artifact");
                     }
                     scopes.insert(Ref::Slice(slice.id.clone()));
+                    if a.format == Format::MachOFat
+                        && self
+                            .index
+                            .binaries
+                            .get(slice.id.as_str())
+                            .is_some_and(|b| b.gaps.iter().any(|gap| fat_descriptor_lost(gap)))
+                        && matches!(a.code_slice_inventory, Some(CodeSliceInventory::Complete))
+                    {
+                        self.code_error(
+                            &a.id,
+                            "discarded fat descriptor requires partial code inventory",
+                        );
+                    }
                     if let Some(BinaryFacts {
                         container: ContainerFacts::MachO(m),
                         ..

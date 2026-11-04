@@ -385,6 +385,11 @@ fn healthy_function_evidence_survives_unparsed_and_discarded_siblings() {
                 .retain(|c| c.scope != Ref::Slice(removed.id.clone()));
             inventory_partial(&mut s);
         } else {
+            // The descriptor was hashed and retained; only its inner header failed.
+            // This propagated diagnostic does not make descriptor enumeration incomplete.
+            s.binaries[0]
+                .gaps
+                .push("fat slice at 2048: malformed Mach-O header".into());
             child(&mut s, 1).state = CoverageState::Partial {
                 missing: vec!["code: slice not parsed".into()],
             };
