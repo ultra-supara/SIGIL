@@ -527,3 +527,33 @@ fn object_weak_local_and_overlapping_relocations_stay_gaps() {
         }
     }
 }
+
+#[test]
+fn x86_conditional_stub_edges_discard_the_function_without_becoming_calls() {
+    for condition in [0x84, 0x85] {
+        // JZ / JNZ: predicates are not capability-call evidence.
+        let mut bytes = fixture("x86-classic");
+        bytes[0x528..0x52f].copy_from_slice(&[0x0f, condition, 0x2a, 0, 0, 0, 0x90]);
+        let p = analyze(&bytes, Default::default());
+        let (functions, calls, gaps, _) = code(&p, 0);
+        assert_eq!(
+            calls.len(),
+            1,
+            "condition {condition:#x}: {calls:?}; {gaps:?}"
+        );
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].entry, 0x540);
+        assert_eq!(calls[0].addr, 0x54d);
+        assert_eq!(calls[0].kind, sigil_model::CallKind::Call);
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("external conditional branch at 0x528")),
+            "{gaps:?}"
+        );
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("function at 0x520: recording transaction discarded")),
+            "{gaps:?}"
+        );
+    }
+}

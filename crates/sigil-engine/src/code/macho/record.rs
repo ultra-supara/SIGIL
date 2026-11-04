@@ -126,9 +126,8 @@ impl Context<'_> {
     }
     fn x86(&self, i: &xd::Insn, kept: Option<&xv::Kept>) -> Result<Option<Target>, ()> {
         let ins = &i.ins;
-        if !matches!(ins.mnemonic(), Mnemonic::Call | Mnemonic::Jmp)
-            && ins.flow_control() != FlowControl::ConditionalBranch
-        {
+        // Conditional branches only contribute CFG edges, never call targets.
+        if !matches!(ins.mnemonic(), Mnemonic::Call | Mnemonic::Jmp) {
             return Ok(None);
         }
         match ins.op0_kind() {
@@ -654,6 +653,16 @@ fn x86_function(
             return Err(());
         }
         let ins = &i.ins;
+        if ins.flow_control() == FlowControl::ConditionalBranch
+            && (ins.op0_kind() != OpKind::NearBranch64
+                || !(b.start..b.end).contains(&ins.near_branch_target()))
+        {
+            run.gap(format!(
+                "code: Mach-O function at {:#x}: external conditional branch at {:#x} is not modeled",
+                b.start, ins.ip()
+            ));
+            return Err(());
+        }
         let target = if ins.is_ip_rel_memory_operand() {
             Some(ins.ip_rel_memory_address())
         } else if ins.op_count() > 0 && ins.op0_kind() == OpKind::NearBranch64 {
@@ -687,9 +696,7 @@ fn x86_function(
     let mut targets = BTreeMap::new();
     let mut tails = BTreeSet::new();
     for (&pc, i) in &cfg.insns {
-        if !matches!(i.ins.mnemonic(), Mnemonic::Call | Mnemonic::Jmp)
-            && i.ins.flow_control() != FlowControl::ConditionalBranch
-        {
+        if !matches!(i.ins.mnemonic(), Mnemonic::Call | Mnemonic::Jmp) {
             continue;
         }
         if i.ins.mnemonic() != Mnemonic::Call
