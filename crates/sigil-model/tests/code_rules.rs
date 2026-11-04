@@ -208,7 +208,9 @@ fn c1_and_c4_leave_the_code_of_an_install_session_alone() {
                 };
                 child.budget = None;
                 assert!(
-                    !code_errors(&unsupported).is_empty(),
+                    code_errors(&unsupported)
+                        .iter()
+                        .any(|e| e.contains("code child cannot carry facts")),
                     "{name}: code facts on unsupported slice"
                 );
             }
