@@ -92,6 +92,36 @@ fn parse_inner(
     charge_fdes: bool,
     dedup: bool,
 ) -> Vec<(u64, u64)> {
+    let mut out = parse_records_inner(bytes, base, run, charge_fdes, false, |fde| {
+        (fde.start, fde.end)
+    });
+    out.sort_unstable();
+    if dedup {
+        out.dedup();
+    }
+    out
+}
+
+/// Exact section offsets are retained for compact-unwind DWARF references.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FdeRecord {
+    pub offset: usize,
+    pub start: u64,
+    pub end: u64,
+}
+
+pub(crate) fn parse_records(bytes: &[u8], base: u64, run: &mut Run) -> Vec<FdeRecord> {
+    parse_records_inner(bytes, base, run, true, true, |fde| fde)
+}
+
+fn parse_records_inner<T>(
+    bytes: &[u8],
+    base: u64,
+    run: &mut Run,
+    charge_fdes: bool,
+    report_empty: bool,
+    mut record: impl FnMut(FdeRecord) -> T,
+) -> Vec<T> {
     let mut frame = EhFrame::new(bytes, LittleEndian);
     // ELF64: an address is 8 bytes, whatever the host's word (gimli's default).
     frame.set_address_size(8);
@@ -162,14 +192,18 @@ fn parse_inner(
         }
         let start = fde.initial_address();
         match start.checked_add(fde.len()) {
-            Some(end) if end > start => out.push((start, end)),
+            Some(end) if end > start => out.push(record(FdeRecord {
+                offset: fde.offset(),
+                start,
+                end,
+            })),
+            Some(_) if report_empty => run.gap(format!(
+                "code: .eh_frame: empty FDE at offset {:#x}",
+                fde.offset()
+            )),
             Some(_) => {}
             None => run.gap(format!("code: .eh_frame: FDE at {start:#x} wraps")),
         }
-    }
-    out.sort_unstable();
-    if dedup {
-        out.dedup();
     }
     out
 }

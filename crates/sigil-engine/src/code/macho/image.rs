@@ -41,6 +41,8 @@ pub(crate) struct MachCodeView {
     pub window: SliceWindow,
     pub arch: Arch,
     pub file_type: u32,
+    /// Linked image header address (base used by compact-unwind function offsets).
+    pub image_base: Option<u64>,
     pub executable: Vec<Region>,
     /// Readable, nonwritable and nonexecutable file-backed regions for constant strings.
     pub readonly: Vec<Region>,
@@ -182,6 +184,10 @@ pub(crate) fn build(
         window,
         arch,
         file_type,
+        image_base: segments
+            .iter()
+            .find(|s| s.relative.start == 0 && s.relative.end >= 32)
+            .map(|s| s.vm.start),
         executable: vec![],
         readonly: vec![],
         data_in_code: vec![],
