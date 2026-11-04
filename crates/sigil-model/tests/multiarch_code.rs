@@ -1455,3 +1455,43 @@ fn marked_elf_retains_exclusive_results_and_symbol_only_questions() {
         "cites something other than a posix.network import of its slice",
     );
 }
+
+#[test]
+fn capability_mapping_archive_pins_every_raw_symbol_feature_and_dylib() {
+    use sha2::{Digest, Sha256};
+    let source = include_str!("../../sigil-engine/signatures/capabilities.toml");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(source.as_bytes())),
+        capability_mapping::V1_SHA256
+    );
+    let table: toml::Value = toml::from_str(source).unwrap();
+    let mut expected = Vec::new();
+    for group in table["capability"].as_array().unwrap() {
+        for symbol in group["symbols"].as_array().unwrap() {
+            expected.push((
+                symbol["name"].as_str().unwrap(),
+                group["feature"].as_str().unwrap(),
+                group["macho_dylib"].as_str().unwrap(),
+            ));
+        }
+    }
+    expected.sort();
+    assert_eq!(capability_mapping::V1.entries(), expected);
+    assert_eq!(expected.len(), 133);
+    assert!(capability_mapping::archived(capability_mapping::V1_SHA256).is_some());
+    assert!(capability_mapping::archived(&"0".repeat(64)).is_none());
+    let mut old = legacy();
+    old.knowledge
+        .iter_mut()
+        .find(|k| k.id == CAPABILITY_TABLE_ID)
+        .unwrap()
+        .sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+    old.validate().unwrap(); // Marker-absent table semantics have not changed.
+    let mut elf = marked();
+    elf.knowledge
+        .iter_mut()
+        .find(|k| k.id == CAPABILITY_TABLE_ID)
+        .unwrap()
+        .sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+    elf.validate().unwrap(); // Marked ELF also keeps its historical table semantics.
+}

@@ -307,6 +307,16 @@ fn capabilities(
     pinned(session)?;
     let rule = RuleId::new(CAPABILITY_RULE).map_err(id_error)?;
     let calls = sigil_model::capability_calls::CapabilityCalls::new(session);
+    if !calls.mapping_supported()
+        && session
+            .binaries
+            .iter()
+            .any(|b| calls.marked_macho(&b.slice))
+    {
+        return Err(EvaluateError::Signatures(
+            "capability table has no archived Mach-O direct-call mapping".into(),
+        ));
+    }
     let states = code_states(session);
     let check = if sigil_model::is_binary_inspection(&session.request) {
         BINARY_CODE

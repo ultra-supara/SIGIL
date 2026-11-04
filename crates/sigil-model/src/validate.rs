@@ -4870,6 +4870,9 @@ impl<'a> Validator<'a> {
                 self.capability_error(&at, format!("a second violation of {feature} on {slice}"));
             }
             if macho_calls.marked_macho(slice) {
+                if !macho_calls.mapping_supported() {
+                    self.capability_error(&at, "marked Mach-O capability decisions require an archived capability table hash");
+                }
                 let expected = macho_calls.evidence(slice, feature).admitted;
                 if expected.is_empty()
                     || !crate::capability_calls::same_evidence(&expected, &v.evidence)
@@ -4976,6 +4979,9 @@ impl<'a> Validator<'a> {
                 }
             };
             if macho_calls.marked_macho(slice) {
+                if !macho_calls.mapping_supported() {
+                    self.capability_error(&at, "marked Mach-O capability decisions require an archived capability table hash");
+                }
                 let evidence = macho_calls.evidence(slice, feature);
                 let Ok(check) = CheckId::new(applicable) else {
                     continue;

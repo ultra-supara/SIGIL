@@ -261,7 +261,15 @@ fn named_library_classes_and_complete_binding_reason_are_separate_from_hint_look
         (MachOLibrary::Unbound, Unresolved),
         (MachOLibrary::FlatLookup, Unresolved),
     ] {
-        assert_eq!(classify(&library, feature.as_str()), expected);
+        assert_eq!(
+            classify(
+                &library,
+                &UntrustedText::new("_connect"),
+                feature.as_str(),
+                Some(&capability_mapping::V1)
+            ),
+            expected
+        );
         if matches!(library, MachOLibrary::Unbound | MachOLibrary::FlatLookup) {
             assert!(library.looked_up().admits(&feature));
         }
@@ -272,7 +280,11 @@ fn named_library_classes_and_complete_binding_reason_are_separate_from_hint_look
                 ordinal: 1,
                 name: Some(UntrustedText::new(LIBCXX))
             },
-            "cxx.filesystem"
+            &UntrustedText::new(
+                "__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE"
+            ),
+            "cxx.file_write",
+            Some(&capability_mapping::V1)
         ),
         Admitted
     );
@@ -477,5 +489,208 @@ fn libcxx_and_libsystem_only_admit_the_corresponding_pinned_raw_name() {
         assert!(questions(&s).is_empty());
         s.validate().unwrap();
         policy::verify(&s, &p).unwrap();
+    }
+}
+
+fn cxx_two_libraries(raw: &str, called_library: &str, both_calls: bool) -> (Session, Policy) {
+    let mut s = inspect("duplicate-name-dylibs");
+    s.code[0].call_sites.drain(..2);
+    let imports: Vec<_> = [LIBCXX, LIBSYSTEM]
+        .into_iter()
+        .enumerate()
+        .map(|(i, library)| MachOImport {
+            name: UntrustedText::new(raw),
+            library: MachOLibrary::Dylib {
+                ordinal: i as u32 + 1,
+                name: Some(UntrustedText::new(library)),
+            },
+            weak: false,
+        })
+        .collect();
+    let call = &mut s.code[0].call_sites[0];
+    let witness = imports.iter().find(|w| matches!(&w.library, MachOLibrary::Dylib { name: Some(name), .. } if name.as_bytes() == called_library.as_bytes())).unwrap().clone();
+    call.target = CallTarget::Import {
+        symbol: witness.name.clone(),
+        via: ImportVia::MachOStub,
+        macho_import: Some(witness),
+    };
+    if both_calls {
+        let mut other = call.clone();
+        other.id = CallId::new(format!("cs:{:#x}", other.addr + 4)).unwrap();
+        other.addr += 4;
+        let witness = imports.iter().find(|w| !matches!(&w.library, MachOLibrary::Dylib { name: Some(name), .. } if name.as_bytes() == called_library.as_bytes())).unwrap().clone();
+        other.target = CallTarget::Import {
+            symbol: witness.name.clone(),
+            via: ImportVia::MachOStub,
+            macho_import: Some(witness),
+        };
+        let reason = match other.args_layout.as_ref().unwrap() {
+            ArgumentLayout::Partial { reason } => reason,
+            _ => unreachable!(),
+        };
+        let gap = code_abi::argument_layout_gap(&other.id, reason);
+        for coverage in &mut s.coverage {
+            if matches!(coverage.scope, Ref::Slice(_)) && coverage.check.as_str() == BINARY_CODE {
+                let CoverageState::Partial { missing } = &mut coverage.state else {
+                    unreachable!()
+                };
+                missing.push(gap.clone());
+                missing.sort();
+            }
+        }
+        s.code[0].call_sites.push(other);
+    }
+    let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+        unreachable!()
+    };
+    m.load_dylibs = vec![UntrustedText::new(LIBCXX), UntrustedText::new(LIBSYSTEM)];
+    m.imports = imports;
+    m.imports.sort();
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { .. }));
+    for library in [LIBCXX, LIBSYSTEM] {
+        s.relations.push(Relation::Declares {
+            from: s.binaries[0].slice.clone(),
+            needed: UntrustedText::new(library),
+            kind: DeclKind::MachOLoadDylib,
+        });
+    }
+    s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
+    let p = Policy::load("schema = \"sigil-policy/1\"\nname = \"cxx-pinned\"\n[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"fail\"\nreason = \"test\"\n").unwrap();
+    policy::evaluate(&mut s, &p, common::policy_time()).unwrap();
+    (s, p)
+}
+#[test]
+fn same_name_cxx_calls_cannot_borrow_another_libraries_pinned_mapping() {
+    for (raw, mapped, other) in [
+        (
+            "__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE",
+            LIBCXX,
+            LIBSYSTEM,
+        ),
+        (
+            "__ZNSt10filesystem6removeERKNS_7__cxx114pathE",
+            LIBSYSTEM,
+            LIBCXX,
+        ),
+    ] {
+        for both in [false, true] {
+            let (s, p) = cxx_two_libraries(raw, other, both);
+            assert_eq!(
+                s.policy_violations.len(),
+                usize::from(both),
+                "{raw} {other}"
+            );
+            assert_eq!(questions(&s).len(), usize::from(!both));
+            if both {
+                assert_eq!(s.policy_violations[0].evidence.len(), 1);
+            }
+            let selected = sigil_model::capability_calls::CapabilityCalls::new(&s)
+                .evidence(&s.code[0].slice, "cxx.file_write");
+            assert_eq!(selected.admitted.len(), usize::from(both));
+            s.validate().unwrap();
+            policy::verify(&s, &p).unwrap();
+            let (positive, p) = cxx_two_libraries(raw, mapped, false);
+            assert_eq!(positive.policy_violations.len(), 1);
+            positive.validate().unwrap();
+            policy::verify(&positive, &p).unwrap();
+            let mut prior_build = positive.clone();
+            prior_build
+                .knowledge
+                .iter_mut()
+                .find(|k| k.id == CAPABILITY_TABLE_ID)
+                .unwrap()
+                .version = "prior-build".into();
+            prior_build.validate().unwrap();
+            policy::verify(&prior_build, &p).unwrap();
+            if !both {
+                let mut forged = s.clone();
+                forged.policy_violations = positive.policy_violations.clone();
+                forged.open_questions.clear();
+                assert!(forged
+                    .validate()
+                    .unwrap_err()
+                    .iter()
+                    .any(|e| matches!(e, ValidationError::Capability { .. })));
+            }
+            let md = sigil_model::render::markdown::render_session(&s);
+            let row = md
+                .lines()
+                .find(|line| line.starts_with("| cxx\\.file\\_write | "))
+                .unwrap();
+            if both {
+                assert!(row.contains("1\\: "), "{row}");
+            } else {
+                assert!(row.contains("none found"), "{row}");
+            }
+            let mut unknown = s.clone();
+            unknown
+                .knowledge
+                .iter_mut()
+                .find(|k| k.id == CAPABILITY_TABLE_ID)
+                .unwrap()
+                .sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+            assert!(unknown
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.to_string().contains("archived capability table hash")));
+            assert!(sigil_model::render::markdown::render_session(&unknown)
+                .contains("unrecognized capability table"));
+        }
+    }
+}
+
+#[test]
+fn cxx_unbound_and_flat_witnesses_remain_unresolved_under_the_pinned_mapping() {
+    for raw in [
+        "__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE",
+        "__ZNSt10filesystem6removeERKNS_7__cxx114pathE",
+    ] {
+        for library in [MachOLibrary::Unbound, MachOLibrary::FlatLookup] {
+            let mixed = library == MachOLibrary::FlatLookup;
+            let (mut s, p) = cxx_two_libraries(
+                raw,
+                if raw.starts_with("__ZNSt3") {
+                    LIBSYSTEM
+                } else {
+                    LIBCXX
+                },
+                mixed,
+            );
+            let witness = MachOImport {
+                name: UntrustedText::new(raw),
+                library: library.clone(),
+                weak: false,
+            };
+            s.code[0].call_sites[0].target = CallTarget::Import {
+                symbol: witness.name.clone(),
+                via: if mixed {
+                    ImportVia::MachOStub
+                } else {
+                    ImportVia::MachOReloc
+                },
+                macho_import: Some(witness.clone()),
+            };
+            let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+                unreachable!()
+            };
+            if !mixed {
+                m.file_type = MH_OBJECT;
+                m.imports.clear();
+                m.load_dylibs.clear();
+                s.relations
+                    .retain(|r| !matches!(r, Relation::Declares { .. }));
+            }
+            m.imports.push(witness);
+            m.imports.sort();
+            s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
+            policy::evaluate(&mut s, &p, common::policy_time()).unwrap();
+            assert_eq!(s.policy_violations.len(), usize::from(mixed));
+            assert_eq!(questions(&s).len(), 1);
+            assert_eq!(questions(&s)[0].evidence.len(), 2);
+            s.validate().unwrap();
+            policy::verify(&s, &p).unwrap();
+        }
     }
 }

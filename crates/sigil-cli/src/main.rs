@@ -1186,6 +1186,9 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
                 let capabilities: Vec<_> = features
                     .into_iter()
                     .map(|feature| {
+                        if !capability_calls.mapping_supported() {
+                            return format!("{feature} (call eligibility unavailable: unrecognized capability table)");
+                        }
                         let evidence = capability_calls.evidence(&slice.id, feature);
                         let unresolved = if evidence.unresolved.is_empty() {
                             String::new()

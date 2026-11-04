@@ -1,7 +1,7 @@
 //! Direct-call evidence for capability decisions. The legacy hint lookup rule stays separate.
 use crate::{
     CallSite, CallTarget, ContainerFacts, CoverageState, EvidenceRef, Loc, MachOImport,
-    MachOLibrary, Session, Signal, SliceId, UnknownReason, UntrustedText, LIBCXX, LIBSYSTEM,
+    MachOLibrary, Session, Signal, SliceId, UnknownReason, UntrustedText,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,14 +15,20 @@ pub enum DirectCallClass {
     Unresolved,
 }
 
-pub fn classify(library: &MachOLibrary, feature: &str) -> DirectCallClass {
+pub fn classify(
+    library: &MachOLibrary,
+    symbol: &UntrustedText,
+    feature: &str,
+    mapping: Option<&crate::capability_mapping::MachOCapabilityMap>,
+) -> DirectCallClass {
     match library {
         MachOLibrary::Dylib {
             ordinal,
             name: Some(name),
         } if *ordinal > 0 => {
-            if name.as_bytes() == LIBSYSTEM.as_bytes()
-                || (name.as_bytes() == LIBCXX.as_bytes() && feature.starts_with("cxx."))
+            if mapping
+                .and_then(|m| m.mapped_library(symbol, feature))
+                .is_some_and(|mapped| name.as_bytes() == mapped.as_bytes())
             {
                 DirectCallClass::Admitted
             } else {
@@ -37,6 +43,7 @@ pub fn classify(library: &MachOLibrary, feature: &str) -> DirectCallClass {
 pub struct CapabilityCalls<'a> {
     imports: BTreeMap<(&'a SliceId, &'a str), BTreeSet<&'a UntrustedText>>,
     calls: BTreeMap<&'a SliceId, Vec<&'a CallSite>>,
+    mapping: Option<&'static crate::capability_mapping::MachOCapabilityMap>,
     macho: BTreeMap<&'a SliceId, BTreeSet<&'a MachOImport>>,
 }
 #[derive(Default)]
@@ -76,16 +83,33 @@ impl<'a> CapabilityCalls<'a> {
             imports,
             calls,
             macho,
+            mapping: crate::capability_mapping::recorded(s),
         }
+    }
+    pub fn mapping_supported(&self) -> bool {
+        self.mapping.is_some()
     }
     pub fn marked_macho(&self, slice: &SliceId) -> bool {
         self.macho.contains_key(slice)
     }
     pub fn evidence(&self, slice: &SliceId, feature: &str) -> CapabilityEvidence {
         let mut out = CapabilityEvidence::default();
+        if self.marked_macho(slice) && self.mapping.is_none() {
+            return out;
+        }
         let Some(names) = self.imports.get(&(slice, feature)) else {
             return out;
         };
+        let names: BTreeSet<_> = names
+            .iter()
+            .copied()
+            .filter(|name| {
+                !self.marked_macho(slice)
+                    || self
+                        .mapping
+                        .is_some_and(|m| m.mapped_library(name, feature).is_some())
+            })
+            .collect();
         let mut unresolved_names = BTreeSet::new();
         for call in self.calls.get(slice).into_iter().flatten() {
             let CallTarget::Import {
@@ -107,7 +131,7 @@ impl<'a> CapabilityCalls<'a> {
                 else {
                     continue;
                 };
-                classify(&w.library, feature)
+                classify(&w.library, symbol, feature, self.mapping)
             } else {
                 DirectCallClass::Admitted
             };
@@ -127,7 +151,7 @@ impl<'a> CapabilityCalls<'a> {
             }
         }
         let symbols = if unresolved_names.is_empty() {
-            names
+            &names
         } else {
             &unresolved_names
         };

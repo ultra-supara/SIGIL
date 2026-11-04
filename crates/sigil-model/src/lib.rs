@@ -28,6 +28,7 @@ pub mod binary;
 pub mod binary_input;
 pub mod canonical;
 pub mod capability_calls;
+pub mod capability_mapping;
 pub mod code;
 pub mod code_abi;
 pub mod code_coverage;

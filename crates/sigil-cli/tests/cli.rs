@@ -3567,3 +3567,96 @@ fn macho_library_policy_binary_installation_and_saved_verification() {
         }
     }
 }
+
+#[test]
+fn macho_saved_cxx_mapping_cannot_borrow_another_named_library() {
+    use sigil_model::*;
+    let d = TempDir::new().unwrap();
+    let text = "schema = \"sigil-policy/1\"\nname = \"cxx-pinned\"\n[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"fail\"\nreason = \"test\"\n";
+    let path = d.path().join("deny-cxx.toml");
+    fs::write(&path, text).unwrap();
+    let policy = sigil_engine::policy::Policy::load(text).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code-macho/duplicate-name-dylibs");
+    let produced = binary(&[&"--code", &fixture]);
+    assert_eq!(produced.code, 0);
+    let mut s = session_of(&produced);
+    s.code[0].call_sites.drain(..2);
+    let raw =
+        UntrustedText::new("__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE");
+    let mut imports: Vec<_> = [LIBCXX, LIBSYSTEM]
+        .into_iter()
+        .enumerate()
+        .map(|(i, lib)| MachOImport {
+            name: raw.clone(),
+            library: MachOLibrary::Dylib {
+                ordinal: i as u32 + 1,
+                name: Some(UntrustedText::new(lib)),
+            },
+            weak: false,
+        })
+        .collect();
+    s.code[0].call_sites[0].target = CallTarget::Import {
+        symbol: raw,
+        via: ImportVia::MachOStub,
+        macho_import: Some(imports[1].clone()),
+    };
+    let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+        unreachable!()
+    };
+    m.load_dylibs = vec![UntrustedText::new(LIBCXX), UntrustedText::new(LIBSYSTEM)];
+    imports.sort();
+    m.imports = imports;
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { .. }));
+    for lib in [LIBCXX, LIBSYSTEM] {
+        s.relations.push(Relation::Declares {
+            from: s.binaries[0].slice.clone(),
+            needed: UntrustedText::new(lib),
+            kind: DeclKind::MachOLoadDylib,
+        });
+    }
+    s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
+    let at = s.outcome.policy_time.clone();
+    sigil_engine::policy::evaluate(&mut s, &policy, at).unwrap();
+    assert!(s.policy_violations.is_empty());
+    s.validate().unwrap();
+    let saved = d.path().join("session.json");
+    fs::write(&saved, s.to_canonical_json().unwrap()).unwrap();
+    let verified = run(&[&"session", &"verify", &saved, &"--policy", &path]);
+    assert_eq!(verified.code, 0, "{}", verified.stderr);
+    let rendered = run(&[&"session", &"render", &saved]);
+    assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+    let row = rendered
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("| cxx\\.file\\_write | "))
+        .unwrap();
+    assert!(row.contains("none found"), "{row}");
+    let rule = PolicyRuleRef::new("policy:capabilities.deny.cxx.file_write").unwrap();
+    s.policy_violations.push(PolicyViolation {
+        policy_rule: rule.clone(),
+        subject: Ref::Slice(s.code[0].slice.clone()),
+        evidence: vec![EvidenceRef::Code {
+            slice: s.code[0].slice.clone(),
+            loc: Loc::CallSite(s.code[0].call_sites[0].id.clone()),
+        }],
+        decision: PolicyDecision {
+            action: Action::Fail,
+            source: rule,
+            reason: Some("test".into()),
+            expires: None,
+        },
+    });
+    s.open_questions
+        .retain(|q| q.rule.as_str() != CAPABILITY_RULE);
+    s.outcome.verdict = Verdict::Fail;
+    fs::write(&saved, s.to_canonical_json().unwrap()).unwrap();
+    let rejected = run(&[&"session", &"verify", &saved, &"--policy", &path]);
+    assert_ne!(rejected.code, 0);
+    assert!(
+        rejected.stderr.contains("admitted direct call"),
+        "{}",
+        rejected.stderr
+    );
+}

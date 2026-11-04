@@ -66,7 +66,7 @@ pub fn capability_cell(
     facts: Option<&CodeFacts>,
     import: &UntrustedText,
 ) -> Shown {
-    capability_cell_for_feature(analyzed, code, facts, import, None)
+    capability_cell_for_feature(analyzed, code, facts, import, None, None)
 }
 
 /// Marked Mach-O capability cells exclude named imports from unrelated libraries. Unresolved
@@ -77,6 +77,7 @@ pub fn capability_cell_for_feature(
     facts: Option<&CodeFacts>,
     import: &UntrustedText,
     feature: Option<&str>,
+    mapping: Option<&crate::capability_mapping::MachOCapabilityMap>,
 ) -> Shown {
     if !analyzed {
         return Shown::own(NOT_ANALYZED);
@@ -86,9 +87,12 @@ pub fn capability_cell_for_feature(
         Some(CoverageState::Partial { .. }) => NONE_FOUND_PARTIAL,
         _ => return Shown::own(NOT_SEARCHED),
     };
+    if feature.is_some() && mapping.is_none() {
+        return Shown::own("call eligibility unavailable (unrecognized capability table)");
+    }
     let calls = calls_of(facts, import)
         .into_iter()
-        .filter(|c| feature.is_none_or(|feature| relevant_macho_call(c, feature)))
+        .filter(|c| feature.is_none_or(|feature| relevant_macho_call(c, feature, mapping)))
         .collect();
     selected_call_sites_cell(facts, calls).unwrap_or_else(|| Shown::own(none))
 }
@@ -132,9 +136,16 @@ fn selected_call_sites_cell(facts: Option<&CodeFacts>, calls: Vec<&CallSite>) ->
 }
 
 /// Same-name imports from another named dylib do not count as this capability's calls.
-pub fn relevant_macho_call(call: &CallSite, feature: &str) -> bool {
+pub fn relevant_macho_call(
+    call: &CallSite,
+    feature: &str,
+    mapping: Option<&crate::capability_mapping::MachOCapabilityMap>,
+) -> bool {
+    if mapping.is_none() {
+        return false;
+    }
     matches!(&call.target, CallTarget::Import { macho_import: Some(w), .. }
-        if crate::capability_calls::classify(&w.library, feature) != crate::capability_calls::DirectCallClass::OtherLibrary)
+        if crate::capability_calls::classify(&w.library, &w.name, feature, mapping) != crate::capability_calls::DirectCallClass::OtherLibrary)
 }
 
 /// One call site: `<function> @ 0x<addr>: <callee>(<reg>=<value>, …)`, and ` (tail jump)` after

@@ -789,6 +789,7 @@ fn capabilities(
                         (s.request.code_analysis.is_some()
                             && matches!(b.container, crate::ContainerFacts::MachO(_)))
                         .then_some(h.feature.as_str()),
+                        crate::capability_mapping::recorded(s),
                     )
                     .markdown(),
                 ]
@@ -1156,15 +1157,17 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                         .map(|hint| &hint.value).collect();
                     let count = facts.into_iter().flat_map(|f| &f.call_sites).filter(|call| {
                         matches!(&call.target, crate::CallTarget::Import { symbol, .. } if imports.contains(symbol))
-                            && (s.request.code_analysis.is_none() || !matches!(b.container, crate::ContainerFacts::MachO(_)) || super::code::relevant_macho_call(call, feature))
+                            && (s.request.code_analysis.is_none() || !matches!(b.container, crate::ContainerFacts::MachO(_)) || super::code::relevant_macho_call(call, feature, crate::capability_mapping::recorded(s)))
                     }).count();
                     let calls = if count == 1 { "call" } else { "calls" };
-                    let status = match coverage.map(|c| &c.state) {
+                    let status = if s.request.code_analysis.is_some() && matches!(b.container, crate::ContainerFacts::MachO(_)) && crate::capability_mapping::recorded(s).is_none() {
+                        "call eligibility unavailable (unrecognized capability table)".to_string()
+                    } else { match coverage.map(|c| &c.state) {
                         Some(CoverageState::Complete) => format!("{count} direct {calls}"),
                         Some(CoverageState::Partial { .. }) if count == 0 && s.request.code_analysis.is_some() => "none found in searched code; partial".to_string(),
                         Some(CoverageState::Partial { .. }) => format!("{count} direct {calls}; partial"),
                         _ => "not analyzed".to_string(),
-                    };
+                    }};
                     format!("{feature} ({status})")
                 }).collect::<Vec<_>>().join(", ")
             } else {
