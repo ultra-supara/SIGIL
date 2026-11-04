@@ -546,6 +546,44 @@ fn without_code_there_is_no_binary_code() {
 }
 
 #[test]
+#[ignore = "Task 0 frozen paths and filesystem metadata live outside git; run in the original worktree"]
+fn frozen_task0_x86_producers_are_byte_identical() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/issue48");
+    let policy = Policy::builtin_default().unwrap();
+    let standalone = with_code(&[fixture("net-plt-gcc.so")]);
+    let mut budgets = InstallBudgets::default();
+    budgets.binary.code = Some(CodeBudgets::default());
+    let installation = store_session(
+        &StoreRequest {
+            deps_budgets: Default::default(),
+            models_dir: root.join("baseline/inputs/models"),
+            model_filter: None,
+            budgets: FsBudgets::default(),
+            manifest_limit: DEFAULT_MANIFEST_LIMIT,
+            install: Some(InstallRequest {
+                source: InstallSource::Dir(root.join("baseline/inputs/install")),
+                budgets,
+            }),
+        },
+        &ActiveInput::default(),
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    for (name, s) in [("x86-binary", standalone), ("x86-install", installation)] {
+        s.validate().unwrap();
+        sigil_engine::policy::verify(&s, &policy).unwrap();
+        assert_eq!(
+            s.to_canonical_json().unwrap().as_bytes(),
+            std::fs::read(root.join(format!("task3/old-canonical/{name}.session.json"))).unwrap(),
+            "{name}: current producer versus frozen Task 0 bytes"
+        );
+    }
+}
+
+#[test]
 fn one_content_named_twice_has_one_code_facts() {
     let a = fixture("net-plt-gcc.so");
     let dir = TempDir::new().unwrap();

@@ -409,6 +409,59 @@ fn real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor() {
                 sigil_model::Ref::Root(_) | sigil_model::Ref::Artifact(_)
             ))
             .all(|c| matches!(c.state, sigil_model::CoverageState::Partial { .. })));
+        let policy = sigil_engine::policy::Policy::builtin_default().unwrap();
+        let named = sigil_engine::inspect::binary_session(
+            &sigil_engine::inspect::BinaryRequest {
+                paths: vec![dir.path().join("bin/ollama")],
+                deps_budgets: Default::default(),
+                budgets: sigil_engine::collect::named::NamedBudgets {
+                    binary: budgets.binary,
+                    ..Default::default()
+                },
+            },
+            &policy,
+            common::tool(),
+            common::observation(),
+            common::policy_time(),
+        )
+        .unwrap();
+        let models = tempfile::tempdir().unwrap();
+        let install = sigil_engine::inspect::store_session(
+            &sigil_engine::inspect::StoreRequest {
+                deps_budgets: Default::default(),
+                models_dir: models.path().to_path_buf(),
+                model_filter: None,
+                budgets: Default::default(),
+                manifest_limit: sigil_engine::collect::ollama_store::DEFAULT_MANIFEST_LIMIT,
+                install: Some(sigil_engine::inspect::InstallRequest {
+                    source: sigil_engine::inspect::InstallSource::Dir(dir.path().to_path_buf()),
+                    budgets,
+                }),
+            },
+            &Default::default(),
+            &policy,
+            common::tool(),
+            common::observation(),
+            common::policy_time(),
+        )
+        .unwrap();
+        assert_eq!(named.code, install.code);
+        for (session, check) in [(named, "binary.code"), (install, "artifacts.code")] {
+            assert_eq!(session.code[0].call_sites.len(), 2);
+            assert!(session
+                .coverage
+                .iter()
+                .filter(|c| {
+                    c.check.as_str() == check && !matches!(c.scope, sigil_model::Ref::Slice(_))
+                })
+                .all(|c| matches!(c.state, sigil_model::CoverageState::Partial { .. })));
+            session.validate().unwrap();
+            let json = session.to_canonical_json().unwrap();
+            let saved: sigil_model::Session = serde_json::from_str(&json).unwrap();
+            saved.validate().unwrap();
+            sigil_engine::policy::verify(&saved, &policy).unwrap();
+            assert_eq!(json, saved.to_canonical_json().unwrap());
+        }
     }
 }
 #[test]

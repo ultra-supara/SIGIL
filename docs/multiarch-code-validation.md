@@ -121,3 +121,116 @@ Only fixtures were measured, not a real deployed Ollama bundle. Docs and help no
 state the exact Mach-O subset, conditional compact bounds, library/ABI limits and
 old-reader limits. **Task10 mixed-x86 P2/user choice, M3-B/M3-C release gates and
 original #48 predicate/guard acceptance remain unresolved.** No PR/push/external send.
+
+## Task 18: acceptance evidence map (2026-11-04)
+
+Audited base `dda7a14d6ef1c30758f3bf1c91052292ab57056b`. This is an evidence
+inventory and focused compatibility supplement, **not acceptance of all §8 gates**.
+Task10 still exceeds the unified reference-work contract for mixed marked x86
+inputs and can repeat analysis through a newly scannable legacy x86 alias. Its
+mixed-x86 budget/alias P2 remains open. Task19 final-revision checks and original
+#48 Predicate/Guard acceptance remain open. Earlier passing results below apply
+to their recorded task revisions; Task18 did not repeat their large experiments.
+
+Test notation gives an exact runnable command: `E target::name` means
+`cargo test --locked -p sigil-engine --test target name -- --exact`;
+`M` substitutes `sigil-model`, `C` substitutes `sigil-cli`, and `W` substitutes
+`sigil-wasm`. For `E-lib name`, use
+`cargo test --locked -p sigil-engine --lib name` (substring module filter).
+These references identify existing evidence, not commands rerun in Task18.
+
+| Spec §8 requirement | Exact evidence and command reference | Status / limit |
+|---|---|---|
+| 1: clang/GCC -O0/-O2 ET_REL, PLT, real `-fno-plt`; intervals, call address, raw symbol, route, x0/x1/x2 | `E multiarch_code::real_aarch64_elf_calls_match_independent_oracle`; `E aarch64_elf::retained_oracle_rows_have_executable_bytes_and_independent_dump_evidence`; `E-lib code::image::aarch64::tests::every_clang_gcc_fixture_matches_independent_oracle_ranges_and_calls` | Eight positive C configurations, two expected source calls each; oracle `-` fields make no value claim. Stack-dependent O0 values remain unknown. Task1 build/oracle evidence and Task9/10 integration evidence; no targets executed. |
+| 2: Mach-O arm64/x86 classic/chained, thin/fat/object and exact bounds | `E macho_code_calls::real_thin_stubs_join_exact_import_witnesses` (four thin configurations/eight calls); `object_branches_keep_unbound_identity_without_guessed_prototype` in the same target; `E macho_code_unwind::native_object_explicit_lengths_and_linked_dwarf_offsets_are_separate_proofs`; `x86_linked_dwarf_mode_uses_its_own_architecture_encoding` in that target | Actual linked call positives are dylibs; MH_OBJECT has exact file-offset identities but Unbound/unknown prototypes keep partial argument layouts. Executable container coverage exists in `E macho_facts::a_linked_universal_executable_is_read_in_full`; equivalent end-to-end executable **call** coverage is not established by these dylib tests. |
+| 2: folded/missing/overlapping bounds, same-name libraries, authenticated/malformed chains | `E macho_code_calls::absent_or_folded_native_bounds_never_invent_functions`; `E macho_code_unwind::folded_native_regular_compressed_local_and_function_starts_never_supply_ends`; `malformed_indirect_overlapping_and_wrapping_fdes_never_create_bounds` in that target; `E macho_code_bind::malformed_chains_headers_starts_formats_ordinals_and_addends_are_transactional`; `E multiarch_policy::real_same_name_slots_do_not_inherit_another_dylibs_capability` | Negative outcomes stay gaps. Task13/14/15/16 reviewed evidence. No authenticated pointer support. |
+| 3: healthy dual-architecture fat, supported+unsupported, actual per-slice `binary.code`, policy and artifact byte sum | `E macho_code_calls::named_universal_session_accepts_exact_witnesses_and_library_aware_policy`; `unsupported_fat_child_preserves_proved_sibling_and_shared_budget` in that target; `E multiarch_policy::fat_questions_use_each_slice_and_reject_missing_duplicate_or_complete_parent`; `C cli::macho_thin_fat_install_service_observe_and_shared_budget` | Task17 cap7094 retains one complete child and partial sibling/parents. This proves the fat artifact case, not Task10's unresolved mixed named-x86 work accounting. |
+| 3: healthy arm64 + recorded unparsed x86 child / omitted invalid descriptor; named and install, saved roundtrip and reevaluation | `E macho_code_calls::real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor` | Task18 extends the real two-call sibling case through both public session producers, partial parents, canonical roundtrip, validation and `policy::verify`; both mutations pass. |
+| 3: deduplication, deterministic slice order, conflicting CPU/table | `E multiarch_code::stable_duplicates_share_code_and_children_in_binary_and_installation`; `M multiarch_coverage::shared_exhaustion_follows_slice_offsets_not_input_order`; `typed_fat_cpu_conflicts_cannot_claim_complete_inventory_or_code` in that target; `E macho_facts::a_fat_table_that_lists_one_architecture_twice_is_partial`; `a_slice_header_that_disagrees_with_its_table_entry_is_partial` in that target | Stable deduplication verified. The legacy newly-scannable alias case remains the Task10 blocker. |
+| 4: truncation, offsets/overflow, overlapping windows/mappings, ULEB and bad fixups | `E macho_code_image::unhashable_overflow_overlap_cpu_and_slice_count_fail_closed`; `section_tables_conflicting_mappings_and_data_in_code_fail_closed` in that target; `E macho_code_unwind::representative_section_and_record_truncations_are_gaps`; `E macho_code_bind::malformed_classic_streams_never_keep_a_partial_named_map`; `malformed_chains_headers_starts_formats_ordinals_and_addends_are_transactional` in that target; `E-lib code::image::aarch64::tests::hostile_metadata_and_truncations_preserve_image_invariants` | Representative boundaries and hostile cases are tested; no claim that every metadata-byte boundary of every format was exhaustively truncated. The literal exhaustive part of §8.4 is unverified. |
+| 4: signed displacement, unsupported instruction/write, transaction rollback | `E aarch64_decode::bl_pc_relative_edges`; `addresses_never_wrap_or_accept_unaligned_pcs` in that target; `E-lib code::aarch64::value::tests::rollback_is_per_function_including_actual_256_pass_limit`; `E multiarch_code::failed_reachable_instruction_rolls_back_its_whole_function`; `E macho_code_calls::two_pending_calls_are_rolled_back_after_reachable_unsupported_instruction`; `x86_conditional_stub_edges_discard_the_function_without_becoming_calls` in that target | Actual fixpoint failure/relocation/unsupported instructions discard staged function evidence and retain healthy functions. |
+| 4: invented witness, forged summary, missing/duplicate entry, budgets, wrong register, inventory, ABI/hash | `M multiarch_code::exact_macho_witness_and_bounds_are_scoped`; `every_nested_register_belongs_to_its_slice`, `argument_prefix_is_honest`, `marker_requires_code_roots_and_exact_archived_knowledge`, `marked_macho_forged_capability_decisions_are_rejected` in that target; `M multiarch_coverage::rejects_missing_duplicate_wrong_scope_and_forged_budgets`; `inventory_and_unparsed_mutations_are_independent_code_errors`, `child_budgets_use_checked_sums_and_no_synthetic_slice_ids` in that target | Strict saved-session mutations rejected. `E multiarch_policy::mixed_evidence_mutations_are_rejected_but_coherent_existing_import_edits_are_not_authenticated` documents the coherent unauthenticated-fact limit. |
+| 4: changed/vanished reads and hostile decoder corpus | `E-lib collect::named::tests::macho_changed_or_vanished_reads_discard_all_slice_facts`; `E-lib collect::install::tests::macho_unstable_recognition_is_separate_from_stable_evidence`; `E aarch64_decode::million_word_production_adapter_gate` plus the independent oracle commands below | Task17 stability controls and Task7 actual production adapter evidence. No repeated million-word or differential experiment in Task18. |
+| 5: old/new canonical sessions, strict schema, saved CLI, AI-BOM, escaping, viewer | `M multiarch_code::legacy_json_is_byte_identical`; `review_legacy_install_formats_and_arches_keep_base_validation`, `new_shapes_are_strict_in_serde_and_schema` in that target; `M schema::every_example_validates_against_the_schema`; `W samples::every_sample_is_a_golden_example_and_renders`; `every_invalid_sample_gives_its_error`, `macho_samples_preserve_library_and_slice_uncertainty` in that target; `E multiarch_policy::unknown_library_names_keep_only_existing_uncertainty_and_reports_escape_sources`; `C cli::macho_library_policy_binary_installation_and_saved_verification` | Task17 native/Node actual-package parity: 20 valid samples × Markdown/HTML = 40 renders, 16 invalid samples rejected, state6. Pinned old-reader execution against the new marked examples is not recorded; rejection is documented, not claimed as a measured test. |
+| 5: old x86 bytes, default/empty policy, code-off, order/duplicates, static/observe, saved verification | New `C cli::legacy_x86_order_duplicates_observe_and_saved_sessions_keep_the_code_contract`; ignored current-producer and fixed-model tests below; existing `C cli::eleven_inputs_are_summarized_in_argument_order`; `E code_session::without_code_there_is_no_binary_code` | New test covers 20 generated sessions, each CLI verified and rendered. Off omits marker, inventory, slice diagnostics, code facts/checks/budget and ABI knowledge. Exact Task0 bytes exist for default-policy static x86 binary/install only; Task0 did **not** freeze code-off, empty-policy, reordered/duplicate or observe outputs. These new variants prove current behavior, not historic byte equality. |
+| 6: full safety/MSRV/stable, bans, fixture/viewer double rebuild | Task1 double builds/checksums; Task5 earlier full workspace; Task17 required safety67, two pinned viewer builds, scoped clippy; commands in those sections above | **Task19 pending on the final revision**: no new full workspace/MSRV/stable/bans/strace/corpus/fixture/viewer rebuild in Task18. Earlier results do not substitute for its final gate. |
+| 7: original #48 Unknown1–7 and real-bundle measurement | Matrix below | PR-5b not implemented; #48 remains open. No real Apple Silicon/Ollama bundle survey; fixtures only. |
+
+Pinned fixture evidence is unchanged: clang/LLVM/LLD **21.1.8**, GCC **15.3.0**,
+GNU binutils **2.46**. Exact executable paths, full versions and SHA-256 are in
+each fixture family's `COMPILERS`; sources/build commands are in `build.log`.
+Independent evidence is LLVM objdump/readobj/dwarfdump/nm plus GNU objdump/readelf
+for ELF; Mach-O additionally uses bind/lazy-bind/chained-fixup/indirect-symbol
+dumps. The 11 ELF binaries have **36** oracle rows and 90 checksum entries; the
+18 Mach-O binaries have **65** oracle rows, 13 binding rows and 116 checksum entries.
+Oracle rows include deliberate unknown/negative cases; they are not all positive calls.
+Task1's reviewed checker accepts ten originals and rejects seventeen actual binary
+mutations. Task2's research unwind checker rejects fifteen malformed cases. These
+are distinct evidence sets, not a fabricated aggregate count of producer tests.
+
+Task7 actual production prefilter/adapter: seed `0x48c0ffee`, xorshift64 13/7/17;
+**1,103,289 visits = 1,000,000 uniform + 100,000 structured + 3,289 boundaries**,
+**179,358 eligible**, zero inconsistencies/panics/counted allocations in the
+recorded panic-abort harness. Independent LLVM/GNU comparison: **178,917 distinct
+eligible words**, zero semantic differences; all 731 thin arm64 fixture rows are
+inventoried, with fat-to-thin identities verified. Explicit fixture exclusions:
+`00000000`, `0000000f`, `d503233f`, `18000050`. Reproduction commands (already run
+in Task7; `$R` is its recorded disk evidence directory):
+
+```sh
+SIGIL_A64_ORACLE="$R/words.txt" cargo +1.93.0 test -p sigil-engine --test aarch64_decode --locked export_independent_oracle_input -- --ignored
+python3 crates/sigil-engine/tests/support/aarch64_oracle.py "$R/words.txt" "$R/oracle"
+SIGIL_A64_ORACLE="$R/oracle/llvm.jsonl" cargo +1.93.0 test -p sigil-engine --test aarch64_decode --locked verify_independent_oracle -- --ignored --nocapture
+SIGIL_A64_ORACLE="$R/oracle/gnu.jsonl" cargo +1.99.0 test -p sigil-engine --test aarch64_decode --locked verify_independent_oracle -- --ignored --nocapture
+```
+
+Schema/reader inventory: **21 pre-M3 schema session examples plus five frozen
+baseline/legacy cases** retain their canonical bytes; the pre-M3 unsupported
+Mach-O capture and pre-#127 legacy capture are included. New examples are paired session/AI-BOM
+`22-aarch64-code`, `23-macho-same-name`, `24-macho-fat`, `25-macho-mixed`,
+`26-macho-install`, `27-macho-unsupported-chain`, `28-macho-archived-library`
+under `schemas/examples/{session-v1,aibom-v2}` and matching viewer samples.
+Invalid viewer fixtures exercise missing marker, forged library/slice/parent,
+wrong register, oversized budget and unknown capability archive in addition to
+the earlier multiarch inventory/ABI mutations. No old golden was rewritten.
+
+Coverage remains open for instructions outside the audited whitelist (including
+literal loads, flag-setting/general shifted/extended arithmetic, SIMD/SVE/SME,
+PAC/BTI/additional hints and unsupported memory modes), unresolved BLR/BR and
+unproved veneer/GOT/relocation targets; stack/aggregate/unknown prototypes and
+variadic arguments beyond an archived fixed prefix; unsupported/unapplied or
+ambiguous relocations/mappings; missing/malformed/overlapping FDEs, relocated
+object FDE pairs, compact personality/LSDA and native linked folded compact-only
+bounds without independent exact extents; authenticated/other chained pointer
+formats, multi-start pages, threaded/weak-bind streams, compressed symbols,
+nonzero effective addends and bad/missing ordinals/chains. Unknown writes never
+establish preserved constants. Mach-O runtime memory constant/string recovery is
+conservative. Unsupported architectures/formats and each work/read/detail-gap
+limit retain explicit unsupported/partial coverage; no missing proof closes a search.
+
+| Original §4.6.5 condition | Code-evidence proof | Original #48 acceptance |
+|---|---|---|
+| 1: no FDE / decode failure | `E multiarch_code::code_failures_preserve_container_and_healthy_functions`; `failed_reachable_instruction_rolls_back_its_whole_function`; Mach-O missing/folded/FDE negatives above | Gap proved; actual Predicate `Unknown` is not implemented. Open. |
+| 2: unidentified indirect call in queried iteration | `E aarch64_decode::branch_register_and_conditional_forms`; `E-lib code::image::aarch64::tests::linked_got_provenance_rejects_wrong_register_slot_and_clobber` | No invented import; queried-iteration Predicate `Unknown` unimplemented. Open. |
+| 3: unresolved indirect jump in iteration | `E-lib code::aarch64::tests::unresolved_jump_and_outside_branch_fail_transaction` | CFG gap/rollback proved; Predicate `Unknown` unimplemented. Open. |
+| 4: unnamed conditions yield Depends | No shipped Predicate/Guard algorithm | PR-5b required. Open. |
+| 5: same atom name bound to different values | No shipped Predicate/Guard algorithm | PR-5b required. Open. |
+| 6: atom-defining call on a cycle | No shipped Predicate/Guard algorithm | PR-5b required. Open. |
+| 7: atom enumeration/state budget | No shipped Predicate/Guard algorithm | PR-5b required. Open. |
+
+Task18 actual runs used Rust1.93.0, `CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0`,
+serial builds and `TMPDIR=$PWD/target/tmp/issue48/task18/tmp`; no `/tmp` artifacts.
+Logs are `target/tmp/issue48/task18/`.
+
+| Actual command | Result |
+|---|---|
+| `cargo test --locked -p sigil-cli --test cli legacy_x86_order_duplicates_observe_and_saved_sessions_keep_the_code_contract -- --exact --nocapture` | 1 passed; 20 generation/verify/render cases across default/empty policy and code on/off. |
+| `cargo test --locked -p sigil-engine --test code_session frozen_task0_x86_producers_are_byte_identical -- --ignored --exact --nocapture` | 1 passed; two actual current-producer canonical sessions equal frozen default-policy Task0 binary/install bytes. Original filesystem/path prerequisite is explicit. |
+| `cargo test --locked -p sigil-model --test multiarch_code frozen_task0_canonical_bytes_and_reports_are_identical -- --ignored --exact --nocapture` | 1 passed; 26 canonical sessions, four Markdown/AI-BOM pairs and missing-code legacy report equal. |
+| `cargo test --locked -p sigil-engine --test macho_code_calls real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor -- --exact --nocapture` | 1 passed; both malformed sibling classes retain real healthy calls through named/install roundtrip and policy reevaluation. |
+| `cargo clippy --locked -p sigil-cli --test cli -p sigil-engine --test code_session --test macho_code_calls -- -D warnings`; `cargo fmt --all -- --check`; `git diff --check` | All exit 0. |
+
+Task18 does not establish historic-byte coverage for the variants absent from
+Task0, exhaustive metadata truncation, executable Mach-O call parity, a measured
+old strict reader on marked examples, Task10's mixed-x86 bound/alias fix, Task19's
+final gate, or PR-5b. No M3-B/M3-C release, merge, or issue closure is claimed.

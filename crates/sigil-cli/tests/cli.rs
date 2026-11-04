@@ -2518,6 +2518,97 @@ fn binary_code_session_is_byte_identical_but_for_the_observation() {
 }
 
 #[test]
+fn legacy_x86_order_duplicates_observe_and_saved_sessions_keep_the_code_contract() {
+    let models = store(true);
+    let install = TempDir::new().unwrap();
+    let install_root = install.path();
+    fs::create_dir_all(install.path().join("bin")).unwrap();
+    fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+    let exe = install.path().join("bin/ollama");
+    fs::copy(code_fixture("net-plt-gcc.so"), &exe).unwrap();
+    let duplicate = install.path().join("lib/ollama/copy.so");
+    fs::copy(&exe, &duplicate).unwrap();
+    let other = code_fixture("spawn.so");
+    let empty = write(
+        install.path(),
+        "empty.toml",
+        "schema = \"sigil-policy/1\"\nname = \"empty\"\n[scope]\n\
+         binary_audit = []\nbinary_code_audit = []\n\
+         install_audit = []\ninstall_code_audit = []\n",
+    );
+    let saved = install.path().join("saved.json");
+    for policy in [None, Some(&empty)] {
+        for enabled in [false, true] {
+            let mut flags: Vec<&dyn AsRef<OsStr>> = vec![&"--policy-time", &"2026-10-18T00:00:00Z"];
+            if enabled {
+                flags.push(&"--code");
+            }
+            if let Some(path) = policy {
+                flags.extend([&"--policy" as &dyn AsRef<OsStr>, path]);
+            }
+            let check = |result: Run| {
+                assert_eq!(result.code, 0, "{}", result.stderr);
+                let s = session_of(&result);
+                assert_eq!(s.request.code, enabled);
+                assert!(s.request.code_analysis.is_none());
+                assert!(s.artifacts.iter().all(|a| a.code_slice_inventory.is_none()));
+                assert!(!result
+                    .stderr
+                    .lines()
+                    .any(|line| line.starts_with("slice: ")));
+                assert!(!s.knowledge.iter().any(|k| k.id == "code-abi-signatures"));
+                if !enabled {
+                    assert!(s.code.is_empty());
+                    assert!(!s.request.budgets.contains_key("binary_code_bytes"));
+                    assert!(!s
+                        .coverage
+                        .iter()
+                        .any(|c| matches!(c.check.as_str(), "binary.code" | "artifacts.code")));
+                }
+                fs::write(&saved, &result.stdout).unwrap();
+                let mut verify: Vec<&dyn AsRef<OsStr>> = vec![&"session", &"verify", &saved];
+                if let Some(path) = policy {
+                    verify.extend([&"--policy" as &dyn AsRef<OsStr>, path]);
+                }
+                let verified = run(&verify);
+                assert_eq!(verified.code, 0, "{}", verified.stderr);
+                let rendered = run(&[&"session", &"render", &saved]);
+                assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+                assert_eq!(rendered.stdout, render_session(&s));
+                s
+            };
+            let mut args = flags.clone();
+            args.extend([&exe as &dyn AsRef<OsStr>, &other, &duplicate]);
+            let forward = check(binary(&args));
+            let mut args = flags.clone();
+            args.extend([&other as &dyn AsRef<OsStr>, &duplicate, &exe]);
+            let reverse = check(binary(&args));
+            assert_eq!(forward.code, reverse.code);
+            assert_eq!(forward.artifacts.len(), 2);
+            assert_eq!(forward.code.len(), if enabled { 2 } else { 0 });
+            if enabled {
+                assert_eq!(
+                    code_entry(&forward, 0).budget,
+                    code_entry(&forward, 2).budget
+                );
+            }
+            let mut args = flags.clone();
+            args.push(&exe);
+            let standalone = check(binary(&args));
+            for observe in [false, true] {
+                let mut args = flags.clone();
+                args.extend([&"--install-dir" as &dyn AsRef<OsStr>, &install_root]);
+                if observe {
+                    args.extend([&"--mode" as &dyn AsRef<OsStr>, &"observe"]);
+                }
+                let s = check(inspect(models.path(), &args));
+                assert_eq!(s.code, standalone.code);
+            }
+        }
+    }
+}
+
+#[test]
 fn binary_code_help_documents_the_flag_and_its_budget() {
     let r = binary(&[&"--help"]);
     assert_eq!(r.code, 0);
