@@ -4826,6 +4826,7 @@ impl<'a> Validator<'a> {
                 ),
             );
         }
+        let macho_calls = crate::capability_calls::CapabilityCalls::new(s);
         // The imports that each slice's `Import` hints give a feature.
         let mut imports: HashMap<(&SliceId, &str), OrderedMap<&UntrustedText, ()>> =
             HashMap::with_capacity(s.hints.len());
@@ -4867,6 +4868,15 @@ impl<'a> Validator<'a> {
             let at = format_args!("policy_violations[{} on {slice}]", v.policy_rule);
             if !violated.insert((slice, feature)) {
                 self.capability_error(&at, format!("a second violation of {feature} on {slice}"));
+            }
+            if macho_calls.marked_macho(slice) {
+                let expected = macho_calls.evidence(slice, feature).admitted;
+                if expected.is_empty()
+                    || !crate::capability_calls::same_evidence(&expected, &v.evidence)
+                {
+                    self.capability_error(&at, "must cite every admitted direct call site of the feature's imports exactly once, and nothing else");
+                }
+                continue;
             }
             if v.evidence.is_empty() {
                 self.capability_error(&at, "cites no call site");
@@ -4965,6 +4975,44 @@ impl<'a> Validator<'a> {
                     continue;
                 }
             };
+            if macho_calls.marked_macho(slice) {
+                let evidence = macho_calls.evidence(slice, feature);
+                let Ok(check) = CheckId::new(applicable) else {
+                    continue;
+                };
+                let expected_reason =
+                    evidence.question_reason(slice_states.get(slice).copied(), check);
+                if !matches!(&q.conditions[0].state, CondState::Unknown { reason, .. } if *reason == expected_reason)
+                {
+                    self.capability_error(
+                        &at,
+                        "capability question reason must match its slice code coverage and binding",
+                    );
+                }
+                if !asked.insert((slice, feature)) {
+                    self.capability_error(
+                        &at,
+                        format!("a second open question of {feature} on {slice}"),
+                    );
+                }
+                if evidence.unresolved.is_empty()
+                    && (!evidence.admitted.is_empty() || violated.contains(&(slice, feature)))
+                {
+                    self.capability_error(
+                        &at,
+                        "slice calls a feature import: that is a violation, not a question",
+                    );
+                }
+                if evidence.symbols.is_empty()
+                    || !crate::capability_calls::same_evidence(
+                        &evidence.question_evidence(),
+                        &q.evidence,
+                    )
+                {
+                    self.capability_error(&at, "must cite every relevant import and unresolved direct call site exactly once, and nothing else");
+                }
+                continue;
+            }
             if s.request.code_analysis.is_some()
                 && self
                     .index

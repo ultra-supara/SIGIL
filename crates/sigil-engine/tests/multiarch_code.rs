@@ -221,32 +221,6 @@ fn marked_unsupported_elf_does_not_confirm_a_call() {
 }
 
 #[test]
-fn marked_macho_capability_evaluation_remains_gated_without_mutation() {
-    let mut s = support::fat();
-    if let ContainerFacts::MachO(m) = &mut s.binaries[0].container {
-        m.imports.push(MachOImport {
-            name: UntrustedText::new("_connect"),
-            library: MachOLibrary::Unbound,
-            weak: false,
-        });
-    }
-    s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
-    assert!(!s.hints.is_empty());
-    let p = policy(true);
-    let (audit, checks) = p.scope(&ScopeInput::of(&s.request));
-    s.request.audit = audit;
-    s.request.required_checks = checks;
-    let before = s.clone();
-    assert!(
-        evaluate(&mut s, &p, Timestamp::new("2026-11-03T00:00:00Z").unwrap())
-            .unwrap_err()
-            .to_string()
-            .contains("multiarch capability policy is not enabled")
-    );
-    assert_eq!(s, before);
-}
-
-#[test]
 fn required_code_check_includes_every_slice_and_supports_explicit_opt_out() {
     for s in support::matrix() {
         for opt_out in [false, true] {

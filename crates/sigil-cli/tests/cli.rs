@@ -3439,3 +3439,131 @@ fn aarch64_capability_policy_round_trips_through_session_verify() {
         }
     }
 }
+
+#[test]
+fn macho_library_policy_binary_installation_and_saved_verification() {
+    let d = TempDir::new().unwrap();
+    let policy = d.path().join("deny-network.toml");
+    fs::write(&policy, "schema = \"sigil-policy/1\"\nname = \"no-network\"\n[scope]\nbinary_audit = []\n[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"test\"\n").unwrap();
+    let models = store(true);
+    for name in [
+        "arm64-classic",
+        "x86-classic",
+        "duplicate-name-dylibs",
+        "universal-mixed",
+        "arm64-object.o",
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sigil-engine/tests/fixtures/code-macho")
+            .join(name);
+        let r = binary(&[
+            &"--code",
+            &fixture,
+            &"--policy",
+            &policy,
+            &"--fail-on",
+            &"fail",
+            &"--fail-on-incomplete",
+        ]);
+        let unbound = name == "arm64-object.o";
+        assert_eq!(r.code, if unbound { 4 } else { 3 }, "{name}: {}", r.stderr);
+        let s = session_of(&r);
+        assert_eq!(s.policy_violations.len(), usize::from(!unbound), "{name}");
+        if unbound {
+            assert!(s
+                .open_questions
+                .iter()
+                .any(|q| q.rule.as_str() == sigil_model::CAPABILITY_RULE));
+        } else {
+            assert_eq!(s.policy_violations[0].evidence.len(), 2, "{name}");
+        }
+        assert!(r.stderr.contains("slice:"));
+        if name == "universal-mixed" {
+            assert!(matches!(
+                s.outcome.completeness,
+                sigil_model::Completeness::Incomplete { .. }
+            ));
+            let incomplete_only = binary(&[
+                &"--code",
+                &fixture,
+                &"--policy",
+                &policy,
+                &"--fail-on-incomplete",
+            ]);
+            assert_eq!(incomplete_only.code, 4, "{}", incomplete_only.stderr);
+        }
+        let saved = d.path().join("session.json");
+        fs::write(&saved, &r.stdout).unwrap();
+        let verified = run(&[&"session", &"verify", &saved, &"--policy", &policy]);
+        assert_eq!(verified.code, 0, "{name}: {}", verified.stderr);
+        let rendered = run(&[&"session", &"render", &saved]);
+        assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+        assert_eq!(rendered.stdout, render_session(&s));
+        let args = if name == "x86-classic" {
+            "rdi=0, rsi=0, rdx=0"
+        } else {
+            "x0=0, x1=0, x2=0"
+        };
+        if !unbound {
+            assert!(
+                rendered.stdout.contains(&esc_md(args)),
+                "{}",
+                rendered.stdout
+            );
+        }
+        if name == "duplicate-name-dylibs" || unbound {
+            let install = TempDir::new().unwrap();
+            fs::create_dir_all(install.path().join("bin")).unwrap();
+            fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+            fs::copy(&fixture, install.path().join("bin/ollama")).unwrap();
+            let installed = inspect(
+                models.path(),
+                &[
+                    &"--code",
+                    &"--install-dir",
+                    &install.path(),
+                    &"--policy",
+                    &policy,
+                ],
+            );
+            assert_eq!(installed.code, 0, "{}", installed.stderr);
+            let mut ins = session_of(&installed);
+            assert_eq!(ins.code, s.code);
+            if unbound {
+                let questions = |s: &Session| {
+                    s.open_questions
+                        .iter()
+                        .filter(|q| q.rule.as_str() == sigil_model::CAPABILITY_RULE)
+                        .map(|q| q.evidence.clone())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(questions(&ins), questions(&s));
+            } else {
+                assert_eq!(
+                    ins.policy_violations[0].evidence,
+                    s.policy_violations[0].evidence
+                );
+                let md = render_session(&ins);
+                assert!(md.contains(&esc_md("2 direct calls; partial")), "{md}");
+            }
+            fs::write(&saved, &installed.stdout).unwrap();
+            assert_eq!(
+                run(&[&"session", &"verify", &saved, &"--policy", &policy]).code,
+                0
+            );
+            let sigil_model::CallTarget::Import {
+                macho_import: Some(w),
+                ..
+            } = &mut ins.code[0].call_sites[0].target
+            else {
+                unreachable!()
+            };
+            w.weak = !w.weak;
+            fs::write(&saved, serde_json::to_vec(&ins).unwrap()).unwrap();
+            assert_ne!(
+                run(&[&"session", &"verify", &saved, &"--policy", &policy]).code,
+                0
+            );
+        }
+    }
+}

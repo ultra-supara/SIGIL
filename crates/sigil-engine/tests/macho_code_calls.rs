@@ -263,7 +263,7 @@ fn architecture_cfg_join_and_caller_clobbers_use_real_oracle() {
 #[path = "common/mod.rs"]
 mod common;
 #[test]
-fn named_session_keeps_task16_validator_and_policy_gate() {
+fn named_universal_session_accepts_exact_witnesses_and_library_aware_policy() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("universal");
     std::fs::write(&path, fixture("universal")).unwrap();
@@ -286,10 +286,10 @@ fn named_session_keeps_task16_validator_and_policy_gate() {
         common::observation(),
         common::policy_time(),
     );
-    assert!(
-        result.is_err(),
-        "Task16 validator gate must remain enabled: {result:?}"
-    );
+    let session = result.unwrap();
+    session.validate().unwrap();
+    assert_eq!(session.code.len(), 2);
+    assert!(session.code.iter().all(|f| f.call_sites.len() == 2));
     let denied=sigil_engine::policy::Policy::load("schema = \"sigil-policy/1\"\nname = \"denied\"\n[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"test\"\n").unwrap();
     let result = sigil_engine::inspect::binary_session(
         &request,
@@ -298,10 +298,14 @@ fn named_session_keeps_task16_validator_and_policy_gate() {
         common::observation(),
         common::policy_time(),
     );
-    assert!(
-        result.is_err(),
-        "Task16 library-aware policy gate remains in force"
-    );
+    let session = result.unwrap();
+    session.validate().unwrap();
+    assert_eq!(session.policy_violations.len(), 2);
+    assert!(session
+        .policy_violations
+        .iter()
+        .all(|v| v.evidence.len() == 2));
+    sigil_engine::policy::verify(&session, &denied).unwrap();
 }
 #[test]
 fn tail_calls_and_got_calls_require_actual_decoded_targets() {

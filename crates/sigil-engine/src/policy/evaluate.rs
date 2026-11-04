@@ -30,13 +30,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use sigil_model::{
-    Action, ArtifactId, AssumptionAcceptance, AssumptionId, CallId, CallTarget, CheckId,
-    Completeness, ComponentClaim, ComponentKey, CondId, CondState, Condition, CoverageState, Date,
-    EvidenceRef, FeatureHint, FeatureKey, IdentityAssertion, IdentityStatus, InstanceContent,
-    InstanceId, KnowledgeKind, Loc, OpenQuestion, OpenQuestionDecision, OpenQuestionId,
-    OqTreatment, Outcome, PolicyDecision, PolicyRuleRef, PolicyViolation, Ref, RuleId, Session,
-    Severity, Sha256Hex, Signal, SliceId, Timestamp, UnknownReason, UntrustedText, Verdict,
-    ARTIFACTS_CODE, BINARY_CODE, CAPABILITY_CONDITION_PREFIX, CAPABILITY_RULE, CAPABILITY_TABLE_ID,
+    Action, ArtifactId, AssumptionAcceptance, AssumptionId, CheckId, Completeness, ComponentClaim,
+    ComponentKey, CondId, CondState, Condition, CoverageState, Date, EvidenceRef, FeatureHint,
+    IdentityAssertion, IdentityStatus, InstanceContent, InstanceId, KnowledgeKind, OpenQuestion,
+    OpenQuestionDecision, OpenQuestionId, OqTreatment, Outcome, PolicyDecision, PolicyRuleRef,
+    PolicyViolation, Ref, RuleId, Session, Severity, Sha256Hex, Signal, SliceId, Timestamp,
+    UnknownReason, Verdict, ARTIFACTS_CODE, BINARY_CODE, CAPABILITY_CONDITION_PREFIX,
+    CAPABILITY_RULE, CAPABILITY_TABLE_ID,
 };
 
 use super::{CapabilityDeny, Policy, ScopeInput};
@@ -59,8 +59,6 @@ pub enum PolicyWarning {
 /// with this build. `ComponentDatabase`, `CapabilityId`, and `Signatures` are internal errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluateError {
-    /// Marked Mach-O capability evaluation awaits library-aware matching.
-    MultiarchCapabilitiesNotEnabled,
     /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
     /// resting on one of them could become settled or unsettled.
     AssumptionsChanged(Vec<AssumptionId>),
@@ -98,9 +96,6 @@ impl fmt::Display for EvaluateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let list = |items: Vec<&str>| items.join(", ");
         match self {
-            EvaluateError::MultiarchCapabilitiesNotEnabled => {
-                write!(f, "multiarch capability policy is not enabled")
-            }
             EvaluateError::AssumptionsChanged(ids) => write!(
                 f,
                 "the policy changes the acceptance of {}; analyze again with this policy",
@@ -295,7 +290,8 @@ pub fn evaluate(
 /// binaries and each denial in file order: nothing when the slice's `Import` hints give the
 /// feature no import; a violation citing every direct call site of those imports, by ID, when
 /// there is one; otherwise an open question, whatever `binary.code` says (a call that is not
-/// direct is not followed). The questions' decisions are set with the others'. Refused for a
+/// direct is not followed). Marked Mach-O calls additionally need an exact admitted library
+/// witness; unresolved direct sites retain their own question alongside admitted violations. The questions' decisions are set with the others'. Refused for a
 /// session that does not record this build's table, or whose hints are not the table's
 /// ([`pinned`]).
 fn capabilities(
@@ -308,41 +304,9 @@ fn capabilities(
     if policy.capabilities.is_empty() || session.binaries.is_empty() {
         return Ok((violations, questions));
     }
-    if session.request.code_analysis.is_some() {
-        let macho: BTreeSet<_> = session
-            .binaries
-            .iter()
-            .filter_map(|b| {
-                matches!(b.container, sigil_model::ContainerFacts::MachO(_)).then_some(&b.slice)
-            })
-            .collect();
-        let denied: BTreeSet<_> = policy.capabilities.iter().map(|d| &d.feature).collect();
-        if session.hints.iter().any(|h| {
-            h.signal == Signal::Import && macho.contains(&h.subject) && denied.contains(&h.feature)
-        }) {
-            return Err(EvaluateError::MultiarchCapabilitiesNotEnabled);
-        }
-    }
     pinned(session)?;
     let rule = RuleId::new(CAPABILITY_RULE).map_err(id_error)?;
-    // Each slice's imports of each feature, its call sites of an import, and its inputs'
-    // `binary.code` states, gathered once: walking the whole session for each slice and denial
-    // would grow with the square of the slices (PR review).
-    let mut imported: BTreeMap<(&SliceId, &FeatureKey), BTreeSet<&UntrustedText>> = BTreeMap::new();
-    for h in session.hints.iter().filter(|h| h.signal == Signal::Import) {
-        imported
-            .entry((&h.subject, &h.feature))
-            .or_default()
-            .insert(&h.value);
-    }
-    let mut calls: BTreeMap<&SliceId, Vec<(&CallId, &UntrustedText)>> = BTreeMap::new();
-    for facts in &session.code {
-        for c in &facts.call_sites {
-            if let CallTarget::Import { symbol, .. } = &c.target {
-                calls.entry(&facts.slice).or_default().push((&c.id, symbol));
-            }
-        }
-    }
+    let calls = sigil_model::capability_calls::CapabilityCalls::new(session);
     let states = code_states(session);
     let check = if sigil_model::is_binary_inspection(&session.request) {
         BINARY_CODE
@@ -364,26 +328,15 @@ fn capabilities(
         .collect();
     for slice in session.binaries.iter().map(|b| &b.slice) {
         for deny in &policy.capabilities {
-            let Some(imports) = imported.get(&(slice, &deny.feature)) else {
+            let evidence = calls.evidence(slice, deny.feature.as_str());
+            if evidence.symbols.is_empty() {
                 continue;
-            };
-            // By ID, so a canonical session re-evaluates to the same bytes.
-            let sites: Vec<EvidenceRef> = calls
-                .get(slice)
-                .into_iter()
-                .flatten()
-                .filter(|(_, symbol)| imports.contains(symbol))
-                .map(|(id, _)| *id)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .map(|id| EvidenceRef::Code {
-                    slice: slice.clone(),
-                    loc: Loc::CallSite(id.clone()),
-                })
-                .collect();
-            if !sites.is_empty() {
-                violations.push(violation(deny, slice, sites));
-                continue;
+            }
+            if !evidence.admitted.is_empty() {
+                violations.push(violation(deny, slice, evidence.admitted.clone()));
+                if evidence.unresolved.is_empty() {
+                    continue;
+                }
             }
             questions.push(OpenQuestion {
                 id: OpenQuestionId::new(format!("capability:{}@{slice}", deny.feature))
@@ -395,7 +348,7 @@ fn capabilities(
                         .map_err(id_error)?,
                     state: CondState::Unknown {
                         reason: if session.request.code_analysis.is_some() {
-                            sigil_model::code_coverage::unknown_capability_call(
+                            evidence.question_reason(
                                 slice_states.get(slice).copied(),
                                 CheckId::new(check).map_err(id_error)?,
                             )
@@ -410,13 +363,7 @@ fn capabilities(
                     },
                     unresolved: vec![],
                 }],
-                evidence: imports
-                    .iter()
-                    .map(|name| EvidenceRef::Code {
-                        slice: slice.clone(),
-                        loc: Loc::Symbol((*name).clone()),
-                    })
-                    .collect(),
+                evidence: evidence.question_evidence(),
                 decision: OpenQuestionDecision {
                     treatment: policy.open_questions.treatment,
                     source: policy.sources.open_questions.clone(),

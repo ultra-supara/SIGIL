@@ -18,7 +18,7 @@ use crate::text::UntrustedText;
 use crate::{ReleaseBasis, PROCESSES_OBSERVED};
 
 use super::code::{
-    capability_cell, coverage_line, no_capability_imports_kept, IMPORTS_CUT_SHORT,
+    capability_cell_for_feature, coverage_line, no_capability_imports_kept, IMPORTS_CUT_SHORT,
     IMPORTS_CUT_SHORT_NOTE, NO_CAPABILITY_IMPORTS,
 };
 use super::md::{self, esc, joined, section, table};
@@ -781,7 +781,16 @@ fn capabilities(
                 vec![
                     esc(h.feature.as_str()),
                     h.value.markdown_inline(),
-                    capability_cell(s.request.code, code, facts, &h.value).markdown(),
+                    capability_cell_for_feature(
+                        s.request.code,
+                        code,
+                        facts,
+                        &h.value,
+                        (s.request.code_analysis.is_some()
+                            && matches!(b.container, crate::ContainerFacts::MachO(_)))
+                        .then_some(h.feature.as_str()),
+                    )
+                    .markdown(),
                 ]
             })
             .collect();
@@ -1147,6 +1156,7 @@ fn binaries(out: &mut String, s: &Session, root: &crate::id::RootId, prefix: &[u
                         .map(|hint| &hint.value).collect();
                     let count = facts.into_iter().flat_map(|f| &f.call_sites).filter(|call| {
                         matches!(&call.target, crate::CallTarget::Import { symbol, .. } if imports.contains(symbol))
+                            && (s.request.code_analysis.is_none() || !matches!(b.container, crate::ContainerFacts::MachO(_)) || super::code::relevant_macho_call(call, feature))
                     }).count();
                     let calls = if count == 1 { "call" } else { "calls" };
                     let status = match coverage.map(|c| &c.state) {
