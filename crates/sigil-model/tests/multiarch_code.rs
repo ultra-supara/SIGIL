@@ -237,6 +237,20 @@ fn incomplete_imports_cannot_claim_complete_code() {
             );
         }
     }
+    for (mut s, gap) in [
+        (marked(), "symbols: no SHT_DYNSYM"),
+        (marked(), "dynamic: missing DT_NULL"),
+        (
+            macho(Arch::Aarch64),
+            "load commands: truncated command header",
+        ),
+    ] {
+        s.binaries[0].gaps.push(gap.into());
+        rejects(
+            &s,
+            "incomplete import evidence cannot have complete code coverage",
+        );
+    }
     let mut partial = marked();
     partial.binaries[0]
         .gaps
