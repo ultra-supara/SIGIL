@@ -26,3 +26,7 @@ bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1  universal
 ```
 
 The universal test compares each raw slice against its independently built thin source and the parser's slice hash. No fixture rebuild or large corpus was run. Mach-O code dispatch and its policy gate remain disabled; actual healthy-sibling call facts await Tasks 13–15. Task 10's mixed x86 resource/alias issue still blocks M3-B.
+
+Task 12 review fix (2026-11-04), base `056e908`: string eligibility now requires R without W or X on the whole segment. The new object/linked R/RX/RW test failed before the fix on an RX noninstruction section returning `hello`; it now passes. RX instruction bytes remain readable as code, and R nonexecutable sections still supply strings. Existing universal/object address assertions are retained.
+
+With the same two-job sequential build environment: `cargo test -p sigil-engine --test macho_code_image --test multiarch_code` passed 42 tests; scoped `cargo clippy -p sigil-engine --lib --test macho_code_image -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. No full suite, corpus or baseline rerun. Mach-O dispatch/policy gates and Task 10 HOLD remain unchanged.

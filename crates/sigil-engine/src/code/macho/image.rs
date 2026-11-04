@@ -42,6 +42,7 @@ pub(crate) struct MachCodeView {
     pub arch: Arch,
     pub file_type: u32,
     pub executable: Vec<Region>,
+    /// Readable, nonwritable and nonexecutable file-backed regions for constant strings.
     pub readonly: Vec<Region>,
     /// Slice-relative file ranges, as recorded by LC_DATA_IN_CODE.
     pub data_in_code: Vec<Range<u64>>,
@@ -233,7 +234,7 @@ pub(crate) fn build(
                 }
                 view.executable.push(region.clone());
             }
-            if segment.protection & 3 == 1 {
+            if segment.protection & 7 == 1 {
                 view.readonly.push(region);
             }
             view.sections.push(section);

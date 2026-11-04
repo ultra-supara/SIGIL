@@ -137,14 +137,34 @@ fn object_and_linked_addresses_and_cross_slice_payload_reads() {
         f.write_all(&bytes).unwrap();
         let mut reader = Reader::new(f.as_file(), bytes.len() as u64, 100);
         assert_eq!(v.read_code(&mut reader, address, 4).unwrap(), b"hell");
-        assert_eq!(
-            v.string(&mut reader, address).unwrap(),
-            Some(b"hello".to_vec())
-        );
+        assert_eq!(v.string(&mut reader, address).unwrap(), None);
         assert!(matches!(
             view(&bytes, 0x400, 32, Arch::Aarch64),
             Err(Error::Read(reader::Refusal::OutsideFile))
         ));
+    }
+}
+#[test]
+fn strings_require_readable_nonwritable_nonexecutable_segments() {
+    use std::io::Write;
+    for object in [false, true] {
+        for protection in [1, 5, 3] {
+            for flags in [0, 0x8000_0000] {
+                let bytes = synthetic(object, protection, flags);
+                let v = view(&bytes, 0, bytes.len() as u64, Arch::Aarch64).unwrap();
+                let mut file = tempfile::NamedTempFile::new().unwrap();
+                file.write_all(&bytes).unwrap();
+                let mut reader = Reader::new(file.as_file(), bytes.len() as u64, 100);
+                let address = if object { 0x200 } else { 0x1200 };
+                assert_eq!(
+                    v.string(&mut reader, address).unwrap(),
+                    (protection == 1).then(|| b"hello".to_vec()),
+                    "object={object}, protection={protection}, flags={flags:#x}"
+                );
+                assert_eq!(reader.used(), if protection == 1 { 16 } else { 0 });
+                assert_eq!(v.executable.is_empty(), protection != 5 || flags == 0);
+            }
+        }
     }
 }
 #[test]
