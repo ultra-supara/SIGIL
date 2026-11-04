@@ -19,6 +19,7 @@ pub mod data;
 pub(crate) mod decode;
 pub(crate) mod fde;
 pub(crate) mod image;
+pub(crate) mod macho;
 pub(crate) mod reader;
 pub(crate) mod record;
 pub(crate) mod search;

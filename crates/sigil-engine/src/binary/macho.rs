@@ -10,7 +10,7 @@ use sigil_model::{
 };
 
 use super::read::{Bounded, Budgeted};
-use super::{BinaryBudgets, Parsed, ParsedArtifact, ParsedSlice};
+use super::{BinaryBudgets, MachCodeMetadata, Parsed, ParsedArtifact, ParsedSlice};
 use crate::code::CodeOutcome;
 
 mod imports;
@@ -70,6 +70,7 @@ struct Header {
 }
 
 struct FatSlice {
+    ambiguous: bool,
     cpu_type: i32,
     cpu_subtype: i32,
     offset: u64,
@@ -608,11 +609,15 @@ fn parse_thin<R: object::read::ReadCacheOps>(
     size: u64,
     import_limit: u64,
     names: &mut u64,
+    observe_endian: bool,
 ) -> Result<(Arch, Parsed), String> {
     let header = parse_header(data, base, size)?;
     let (mut facts, mut gaps, found) = parse_commands(data, base, size, &header);
     let (kept, import_gaps) = imports::read(data, base, size, &header, &found, import_limit, names);
     facts.imports = kept;
+    if observe_endian {
+        facts.little_endian = Some(matches!(header.order, ByteOrder::Little));
+    }
     gaps.extend(import_gaps);
     gaps.sort();
     gaps.dedup();
@@ -758,6 +763,7 @@ fn parse_fat<R: object::read::ReadCacheOps>(
             continue;
         }
         slices.push(FatSlice {
+            ambiguous: false,
             cpu_type,
             cpu_subtype,
             offset,
@@ -767,11 +773,19 @@ fn parse_fat<R: object::read::ReadCacheOps>(
     }
     // Each architecture once, as lipo requires: the loader would take only one of two.
     let mut architectures = BTreeSet::new();
-    if !slices
-        .iter()
-        .all(|slice| architectures.insert(macho_architecture(slice.cpu_type, slice.cpu_subtype)))
-    {
+    let mut duplicates = BTreeSet::new();
+    for slice in &slices {
+        let cpu = macho_architecture(slice.cpu_type, slice.cpu_subtype);
+        if !architectures.insert(cpu) {
+            duplicates.insert(cpu);
+        }
+    }
+    if !duplicates.is_empty() {
         gaps.push(FAT_DUPLICATE_ARCH_GAP.to_string());
+        for slice in &mut slices {
+            slice.ambiguous =
+                duplicates.contains(&macho_architecture(slice.cpu_type, slice.cpu_subtype));
+        }
     }
     let mut overlapping = vec![false; slices.len()];
     for left in 0..slices.len() {
@@ -841,11 +855,16 @@ fn parsed_slice(
     parsed: Parsed,
     extra_gaps: &[String],
 ) -> ParsedSlice {
+    let macho_code = Some(MachCodeMetadata {
+        local_gaps: parsed.gaps.clone(),
+        ambiguous: false,
+    });
     let mut gaps = parsed.gaps;
     gaps.extend(extra_gaps.iter().cloned());
     gaps.sort();
     gaps.dedup();
     ParsedSlice {
+        macho_code,
         offset,
         size,
         arch,
@@ -863,6 +882,7 @@ fn fat_slice_facts<R: ReadCacheOps>(
     descriptor: &FatSlice,
     import_limit: u64,
     names: &mut u64,
+    observe_endian: bool,
 ) -> Result<Parsed, String> {
     let (_, mut parsed) = parse_thin(
         data,
@@ -870,6 +890,7 @@ fn fat_slice_facts<R: ReadCacheOps>(
         descriptor.size,
         import_limit,
         names,
+        observe_endian,
     )?;
     if let ContainerFacts::MachO(facts) = &mut parsed.container {
         facts.fat_cpu_type = Some(descriptor.cpu_type);
@@ -886,6 +907,7 @@ fn fat_slice_facts<R: ReadCacheOps>(
 
 fn unparsed_slice(offset: u64, size: u64, arch: Arch, sha256: Sha256Hex) -> ParsedSlice {
     ParsedSlice {
+        macho_code: None,
         offset,
         size,
         arch,
@@ -920,9 +942,14 @@ pub(super) fn parse_artifact(
     let mut names = imports::MAX_NAME_SCAN;
     match format {
         Format::MachO => {
-            if let Ok((slice_arch, parsed)) =
-                parse_thin(&data, 0, size, budgets.imports, &mut names)
-            {
+            if let Ok((slice_arch, parsed)) = parse_thin(
+                &data,
+                0,
+                size,
+                budgets.imports,
+                &mut names,
+                budgets.code.is_some(),
+            ) {
                 slices.push(parsed_slice(
                     0,
                     size,
@@ -947,23 +974,32 @@ pub(super) fn parse_artifact(
                         continue;
                     }
                 };
-                match fat_slice_facts(&data, &descriptor, budgets.imports, &mut names) {
+                match fat_slice_facts(
+                    &data,
+                    &descriptor,
+                    budgets.imports,
+                    &mut names,
+                    budgets.code.is_some(),
+                ) {
                     Ok(parsed) => {
-                        if let ContainerFacts::MachO(m) = &parsed.container {
+                        let mismatch = matches!(&parsed.container, ContainerFacts::MachO(m)
                             if macho_architecture(m.cpu_type, m.cpu_subtype)
-                                != macho_architecture(descriptor.cpu_type, descriptor.cpu_subtype)
-                            {
-                                inventory_gaps.push(FAT_CPU_MISMATCH_GAP.into());
-                            }
+                                != macho_architecture(descriptor.cpu_type, descriptor.cpu_subtype));
+                        if mismatch {
+                            inventory_gaps.push(FAT_CPU_MISMATCH_GAP.into());
                         }
-                        slices.push(parsed_slice(
+                        let mut slice = parsed_slice(
                             descriptor.offset,
                             descriptor.size,
                             expected_arch,
                             digest,
                             parsed,
                             &[],
-                        ));
+                        );
+                        if let Some(local) = &mut slice.macho_code {
+                            local.ambiguous = descriptor.ambiguous || mismatch;
+                        }
+                        slices.push(slice);
                     }
                     Err(why) => {
                         gaps.push(format!("fat slice at {}: {why}", descriptor.offset));
@@ -989,6 +1025,7 @@ pub(super) fn parse_artifact(
         _ => return None,
     }
     if data.refused() {
+        inventory_gaps.push(format!("binary_parse_bytes: {} exceeded", data.budget()));
         for slice in &mut slices {
             if slice.container.is_some() {
                 slice
@@ -1018,4 +1055,77 @@ pub(super) fn parse_artifact(
         slices,
         code_inventory,
     })
+}
+
+#[cfg(test)]
+mod code_metadata_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn thin(cpu: u32, subtype: u32) -> Vec<u8> {
+        [0xfeed_facfu32, cpu, subtype, 2, 0, 0, 0, 0]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect()
+    }
+    fn parse(entries: &[(Vec<u8>, u32, u32)]) -> ParsedArtifact {
+        let mut bytes = vec![0u8; 8 + entries.len() * 20];
+        bytes[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        bytes[4..8].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (i, (inner, cpu, subtype)) in entries.iter().enumerate() {
+            let offset = bytes.len() as u32;
+            for (j, w) in [*cpu, *subtype, offset, inner.len() as u32, 0]
+                .iter()
+                .enumerate()
+            {
+                let at = 8 + i * 20 + j * 4;
+                bytes[at..at + 4].copy_from_slice(&w.to_be_bytes());
+            }
+            bytes.extend(inner);
+        }
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(&bytes).unwrap();
+        let sha = Sha256Hex::new(format!("{:x}", Sha256::digest(&bytes))).unwrap();
+        parse_artifact(
+            f.as_file(),
+            bytes.len() as u64,
+            &sha,
+            &bytes[..4],
+            BinaryBudgets {
+                code: Some(Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+    #[test]
+    fn local_metadata_distinguishes_unparsed_siblings_duplicates_and_cpu_mismatch() {
+        let arm = 0x0100_000c;
+        let x86 = 0x0100_0007;
+        let p = parse(&[
+            (thin(arm, 0), arm, 0),
+            (vec![0xcf, 0xfa, 0xed, 0xfe], x86, 3),
+        ]);
+        assert!(!p.slices[0].gaps.is_empty());
+        assert!(p.slices[0]
+            .macho_code
+            .as_ref()
+            .unwrap()
+            .local_gaps
+            .is_empty());
+        assert!(!p.slices[0].macho_code.as_ref().unwrap().ambiguous);
+        assert!(p.slices[1].macho_code.is_none());
+        let p = parse(&[
+            (thin(arm, 0), arm, 0),
+            (thin(x86, 3), x86, 3),
+            (thin(x86, 3), x86, 3),
+        ]);
+        assert!(!p.slices[0].macho_code.as_ref().unwrap().ambiguous);
+        assert!(p.slices[1..]
+            .iter()
+            .all(|s| s.macho_code.as_ref().unwrap().ambiguous));
+        let p = parse(&[(thin(arm, 0), arm, 0), (thin(arm, 0), x86, 3)]);
+        assert!(!p.slices[0].macho_code.as_ref().unwrap().ambiguous);
+        assert!(p.slices[1].macho_code.as_ref().unwrap().ambiguous);
+    }
 }
