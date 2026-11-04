@@ -287,7 +287,7 @@ pub(crate) fn build(
             return Err(Error::Invalid("data-in-code limit"));
         }
         let entries = read(reader, window, at, len)?;
-        for entry in entries.chunks_exact(8) {
+        for entry in entries.as_chunks::<8>().0 {
             let len = u64::from(u16::from_le_bytes([entry[4], entry[5]]));
             let range = extent(u64::from(u32le(entry, 0)), len)?;
             if range.is_empty() || range.end > window.len {
@@ -330,7 +330,7 @@ fn segment(c: &[u8], window: SliceWindow, object: bool) -> Result<Segment, Error
         return Err(Error::Invalid("segment file bounds"));
     }
     let mut sections = Vec::new();
-    for s in c[72..].chunks_exact(80) {
+    for s in c[72..].as_chunks::<80>().0 {
         if !object && name(s, 16) != name(c, 8) {
             return Err(Error::Invalid("section segment name"));
         }

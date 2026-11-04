@@ -336,7 +336,7 @@ fn object(
         return Ok(vec![]);
     };
     let mut targets = BTreeMap::new();
-    for r in relocs.chunks_exact(8) {
+    for r in relocs.as_chunks::<8>().0 {
         let at = word(r, 0)?;
         let flags = word(r, 4)?;
         // ARM64_RELOC_UNSIGNED and X86_64_RELOC_UNSIGNED have the same type0/layout.
@@ -360,7 +360,7 @@ fn object(
         return Err("unresolved compact object function pointer");
     }
     let mut out = vec![];
-    for (i, e) in bytes.chunks_exact(32).enumerate() {
+    for (i, e) in bytes.as_chunks::<32>().0.iter().enumerate() {
         let entry_gap = |run: &mut Run, reason: &str| {
             run.gap(format!(
                 "code: Mach-O unwind: object entry {:#x}: {reason}",

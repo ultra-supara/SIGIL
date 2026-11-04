@@ -85,7 +85,7 @@ fn inner(v: &MachCodeView, r: &mut Reader<'_>, run: &mut Run, out: &mut Relocati
             s.relocation_offset.into(),
             u64::from(s.relocations) * 8,
         )?;
-        for rec in raw.chunks_exact(8) {
+        for rec in raw.as_chunks::<8>().0 {
             if !run.charge(Work::Relocations, 1) {
                 return Err("work limit");
             }
