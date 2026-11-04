@@ -4,6 +4,7 @@
 // Runs the CLI binary (assert_cmd), and serves the API probe on loopback from this process.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -3659,4 +3660,131 @@ fn macho_saved_cxx_mapping_cannot_borrow_another_named_library() {
         "{}",
         rejected.stderr
     );
+}
+
+#[test]
+fn macho_thin_fat_install_service_observe_and_shared_budget() {
+    use sigil_model::{CoverageState, Ref};
+    let models = store(true);
+    for name in [
+        "arm64-classic",
+        "x86-classic",
+        "universal",
+        "universal-mixed",
+    ] {
+        let install = TempDir::new().unwrap();
+        fs::create_dir_all(install.path().join("bin")).unwrap();
+        fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+        let exe = install.path().join("bin/ollama");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../sigil-engine/tests/fixtures/code-macho")
+                .join(name),
+            &exe,
+        )
+        .unwrap();
+        let units = unit_for(install.path());
+        let unit = units.path().join("ollama.service");
+        let expected = session_of(&binary(&[&"--code", &exe]));
+        let slice_states = |s: &Session, check: &str| {
+            s.coverage
+                .iter()
+                .filter(|c| c.check.as_str() == check && matches!(c.scope, Ref::Slice(_)))
+                .map(|c| (c.scope.clone(), c.state.clone(), c.budget.clone()))
+                .collect::<Vec<_>>()
+        };
+        for args in [
+            vec![&"--install-dir" as &dyn AsRef<OsStr>, &install.path()],
+            vec![&"--service-unit" as &dyn AsRef<OsStr>, &unit],
+            vec![
+                &"--install-dir" as &dyn AsRef<OsStr>,
+                &install.path(),
+                &"--mode",
+                &"observe",
+            ],
+        ] {
+            let off = session_of(&inspect(models.path(), &args));
+            assert!(off.code.is_empty());
+            assert!(off.request.code_analysis.is_none());
+            let mut with_code = args.clone();
+            with_code.push(&"--code");
+            let r = inspect(models.path(), &with_code);
+            assert_eq!(r.code, 0, "{name}: {}", r.stderr);
+            let s = session_of(&r);
+            assert_eq!(s.code, expected.code, "{name}");
+            assert_eq!(
+                s.relations, off.relations,
+                "code cannot change service identity"
+            );
+            assert_eq!(
+                slice_states(&s, "artifacts.code"),
+                slice_states(&expected, "binary.code")
+            );
+            let parents: Vec<_> = s
+                .coverage
+                .iter()
+                .filter(|c| {
+                    c.check.as_str() == "artifacts.code" && !matches!(c.scope, Ref::Slice(_))
+                })
+                .collect();
+            assert!(!parents.is_empty());
+            for parent in parents {
+                assert_eq!(
+                    matches!(parent.state, CoverageState::Complete),
+                    name != "universal-mixed"
+                );
+            }
+        }
+        let off = session_of(&binary(&[&exe]));
+        assert!(off.code.is_empty());
+        assert!(off.request.code_analysis.is_none());
+        if name == "universal" {
+            // The first (x86) slice consumes 7094 bytes; the next slice cannot reset that cap.
+            let cap = "binary_code_bytes=7094";
+            for (check, r) in [
+                (
+                    "binary.code",
+                    binary(&[&"--code", &exe, &"--budget", &cap, &"--fail-on-incomplete"]),
+                ),
+                (
+                    "artifacts.code",
+                    inspect(
+                        models.path(),
+                        &[
+                            &"--code",
+                            &"--install-dir",
+                            &install.path(),
+                            &"--budget",
+                            &cap,
+                            &"--fail-on-incomplete",
+                        ],
+                    ),
+                ),
+            ] {
+                assert_eq!(r.code, 4, "{}", r.stderr);
+                let s = session_of(&r);
+                let children = slice_states(&s, check);
+                assert_eq!(children.len(), 2);
+                assert_eq!(
+                    children
+                        .iter()
+                        .filter(|(_, state, _)| matches!(state, CoverageState::Complete))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    children
+                        .iter()
+                        .map(|(_, _, b)| b.as_ref().map_or(0, |b| b.used))
+                        .sum::<u64>(),
+                    7094
+                );
+                assert!(s
+                    .coverage
+                    .iter()
+                    .filter(|c| c.check.as_str() == check && !matches!(c.scope, Ref::Slice(_)))
+                    .all(|c| !matches!(c.state, CoverageState::Complete)));
+            }
+        }
+    }
 }

@@ -1073,8 +1073,11 @@ typed inventory and per-slice diagnostics after a stable read. x86-only requests
 the marker-absent contract. AArch64 ELF direct-call facts include proved argument
 locations and conservative values. Marked ELF capability decisions use the slice's own
 applicable code diagnostic; saved-session validation rejects inconsistent question
-reasons and invalid evidence. Marked Mach-O call facts and capability decisions remain
-rejected pending library-aware policy validation in Task 16.
+reasons and invalid evidence. Marked Mach-O call facts require exact same-slice raw-name,
+library and weak-status import witnesses. Capability decisions select the archived table
+by its recorded SHA and admit only that raw symbol × feature × named library mapping;
+relevant unresolved call sites remain open questions beside any admitted violation.
+The viewer uses the same archive, including when build-version metadata differs.
 
 The committed viewer uses the same model validator as the native reader. Schema and
 internal-consistency checks do not authenticate observation facts against target bytes.

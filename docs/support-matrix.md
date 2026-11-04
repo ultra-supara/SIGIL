@@ -12,16 +12,18 @@ ELF identity evidence and component claims. Code analysis is available through
 | ELF64 x86-64, little-endian | [Supported](binary-inspect.md#what-is-recorded) | [Partial: mapped imports](binary-inspect.md#capabilities-and-code---code) | [Partial: selected signatures](binary-inspect.md#signatures) | [Partial: direct calls](binary-inspect.md#capabilities-and-code---code) | [Partial: known ELF components](binary-inspect.md#components) | [Conditional ELF candidates](dependencies-and-values.md#dependency-candidates); backend loader planned |
 | ELF64 AArch64, little-endian | [Supported](binary-inspect.md#what-is-recorded) | [Partial: mapped imports](binary-inspect.md#capabilities-and-code---code) | [Partial: selected signatures](binary-inspect.md#signatures) | [Partial: bounded direct calls](binary-inspect.md#capabilities-and-code---code) | [Partial: known ELF components](binary-inspect.md#components) | [Conditional ELF candidates](dependencies-and-values.md#dependency-candidates); backend loader planned |
 | ELF32 or big-endian ELF | [Supported, subject to parsing gaps](binary-inspect.md#what-is-recorded) | [Partial: mapped imports](binary-inspect.md#capabilities-and-code---code) | [Partial: selected signatures](binary-inspect.md#signatures) | Unsupported; [architecture work](https://github.com/ultra-supara/SIGIL/issues/48) | [Partial: known ELF components](binary-inspect.md#components) | [Candidates only for the modeled ABIs](dependencies-and-values.md#dependency-candidates) |
-| Thin Mach-O | [Supported](binary-inspect.md#what-is-recorded) | [Partial: library-aware imports](binary-inspect.md#mach-o-imports) | Unsupported | Unsupported; [planned](https://github.com/ultra-supara/SIGIL/issues/48) | Planned | [Declared dependencies only](dependencies-and-values.md#dependency-candidates) |
-| Fat Mach-O | [Supported per slice](binary-inspect.md#what-is-recorded) | [Partial: per-slice imports](binary-inspect.md#mach-o-imports) | Unsupported | Unsupported; [planned](https://github.com/ultra-supara/SIGIL/issues/48) | Planned | [Declared dependencies only](dependencies-and-values.md#dependency-candidates) |
+| Thin Mach-O | [Supported](binary-inspect.md#what-is-recorded) | [Partial: library-aware imports](binary-inspect.md#mach-o-imports) | Unsupported | [Partial: bounded arm64/x86-64 calls](binary-inspect.md#mach-o-code) | Planned | [Declared dependencies only](dependencies-and-values.md#dependency-candidates) |
+| Fat Mach-O | [Supported per slice](binary-inspect.md#what-is-recorded) | [Partial: per-slice imports](binary-inspect.md#mach-o-imports) | Unsupported | [Partial: bounded arm64/x86-64 calls](binary-inspect.md#mach-o-code) | Planned | [Declared dependencies only](dependencies-and-values.md#dependency-candidates) |
 | Other formats | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 
 The [multiarchitecture evidence contract](session-model.md#multiarchitecture-evidence-reader-m3-a)
 is emitted for code requests that recognize AArch64 ELF or Mach-O. AArch64 ELF
 now records bounded direct calls and ABI argument locations, with slice diagnostics.
-x86-only requests retain the legacy contract. Mach-O code analysis remains unsupported.
+x86-only ELF requests retain the legacy contract. Mach-O supports the bounded subset
+described in [Mach-O code](binary-inspect.md#mach-o-code); unsupported slices keep a
+fat artifact partial. The local M3-C implementation has not cleared the final release gate.
 
-**M3-B release status remains incomplete:** mixed marked x86 analysis still has unresolved
+**M3-B and M3-C release status remains incomplete:** mixed marked x86 analysis still has unresolved
 aggregate work-budget accounting and alias-reuse behavior. The ELF implementation and its
 slice-aware policy do not resolve that resource contract or close
 [#48](https://github.com/ultra-supara/SIGIL/issues/48).

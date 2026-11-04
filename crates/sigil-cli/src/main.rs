@@ -106,9 +106,9 @@ enum InspectTarget {
 
 #[derive(Debug, Subcommand)]
 enum BinaryCommand {
-    /// Inspect one or more files into one session. An ELF executable, shared object, or
-    /// relocatable object gets its container facts; any other regular file is recorded as
-    /// unsupported; a path that is not a readable regular file is an error. With --code, the
+    /// Inspect one or more files into one session. ELF and thin/universal Mach-O executables,
+    /// shared libraries and relocatable objects get their container facts; any other regular file
+    /// is recorded as unsupported; a path that is not a readable regular file is an error. With --code, the
     /// direct call sites of capability imports are recorded too.
     Inspect(BinaryArgs),
 }
@@ -122,7 +122,8 @@ struct BinaryArgs {
     paths: Vec<PathBuf>,
     /// Also analyze code: the direct call sites of capability imports (connect, dlopen, getenv,
     /// …), with their arguments and functions, and a binary.code check per input. x86-64 and
-    /// AArch64 ELF64 little-endian; the file is never run or loaded.
+    /// AArch64 ELF64 little-endian and 64-bit little-endian Mach-O arm64/x86-64;
+    /// the file is never run or loaded.
     #[arg(long)]
     code: bool,
     /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies, and its

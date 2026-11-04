@@ -268,8 +268,8 @@ once rendered:
 - Only executable sections and the ranges of FDEs in `.eh_frame` are searched, and only code with
   an FDE is analyzed. Only the functions that hold a reference to a capability import are
   decoded, each from its FDE start.
-- x86-64 and AArch64 ELF64 little-endian. A Mach-O, an ELF of another machine, an ELF32, or a
-  big-endian ELF is `Unsupported`.
+- x86-64 and AArch64 ELF64 little-endian, plus the [Mach-O subset](#mach-o-code).
+  Other machines, ELF32 and big-endian code are `Unsupported`.
 - In a relocatable object (`.o`), addresses are file offsets.
 
 Absence therefore means "no direct call site in the scanned code", never "not called".
@@ -280,7 +280,7 @@ Absence therefore means "no direct call site in the scanned code", never "not ca
 |---|---|
 | Analyzed, and every reference to a capability import in the scanned code is a confirmed direct call (or part of another instruction) | `Complete`, with the code bytes read |
 | Analyzed with gaps (a reference not confirmed, a function not decoded or solved, a refused read, a limit reached), or a recognized ELF whose facts were not parsed | `Partial`, listing them (`not parsed` for the last); the confirmed calls are recorded all the same |
-| A Mach-O, an ELF of another machine, an ELF32 or big-endian ELF | `Unsupported`, naming the unsupported target |
+| An unsupported Mach-O slice, an ELF of another machine, an ELF32 or big-endian ELF | `Unsupported`, naming the unsupported target |
 | Not a supported container, over `binary_bytes`, or changed or removed while read | the `binary.container` status |
 
 Under the default policy, `binary.code` is required, so any status other than `Complete` makes the
@@ -292,7 +292,7 @@ while the named-input summary remains. Capability questions use that slice's dia
 a complete search leaves indirect calls unmodeled; an incomplete search gives
 `CheckIncomplete`. A confirmed direct call can support a denial even when other code
 was not searched. AArch64 calls show `x0`, `x1`, `x2`, and further proved argument locations;
-unknown values stay unknown. Mach-O calls remain unsupported.
+unknown values stay unknown. Mach-O calls retain their exact import/library witness.
 
 The [M3-B resource blocker](support-matrix.md) remains unresolved for mixed marked x86
 analysis; this is not a completed release milestone.
@@ -311,6 +311,34 @@ analysis; this is not a completed release milestone.
   most 256 distinct gaps are listed; the others are counted. These limits are not recorded in
   the session. The [session model](session-model.md#code-analysis-pr-5a) lists each one with its
   gap.
+
+## Mach-O code
+
+With `--code`, 64-bit little-endian arm64 and x86-64 `MH_EXECUTE`, `MH_DYLIB`,
+`MH_BUNDLE` and `MH_OBJECT` use slice-local executable mappings and exact bounds.
+Classic/lazy pointer binds and chained `DYLD_CHAINED_PTR_64` / `PTR_64_OFFSET`
+slots support decoded stub/GOT witnesses. Objects use supported external branch
+relocations and absolute artifact file offsets. Linked calls use unslid virtual addresses.
+A validated DWARF FDE gives an exact function extent; a relocated compact-unwind
+object entry can also supply an explicit extent. Linked native compact ranges and
+`LC_FUNCTION_STARTS` alone do not prove function ends: folded or unbounded functions
+remain partial. No target is executed, loaded, or dynamically bound by inspection.
+
+Every call retains raw symbol, exact library ordinal/name and weak status from the
+same slice. Policy admits only the archived raw-symbol × feature × named dylib
+mapping. Another same-name import cannot supply its library eligibility. Relevant
+Unbound, flat/self/main/weak lookup or unknown-library calls remain open questions;
+an admitted call and an unresolved call can produce both a violation and a question.
+Unknown or variadic ABI prototypes expose only the proved argument prefix and a gap.
+
+32-bit/big-endian/unknown CPUs are unsupported. Authenticated arm64e control flow
+and fixups, unsupported chained formats, nonzero bind addends and unproved indirect
+calls do not yield guessed targets. Missing/malformed chains, ambiguous mappings,
+unknown writes or incomplete bounds leave explicit gaps. All slices share one
+artifact byte/work budget. Reports retain each slice and its coverage; a healthy
+slice cannot close an unsupported, unparsed or lost sibling. Process mappings do not
+prove dynamic binding or trigger a second target read. These bounded direct-call
+facts do not implement the original #48 predicate/guard acceptance criteria.
 
 ## Mach-O imports
 

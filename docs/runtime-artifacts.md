@@ -16,7 +16,7 @@ separate questions:
 Dependency candidates and configured/observed values are described in [Dependency candidates and process values](dependencies-and-values.md).
 
 With `--code`, the same read also analyzes direct calls to capability imports in x86-64 and AArch64 ELF64
-little-endian files. Each distinct binary content has an `artifacts.code` coverage entry; the
+little-endian files and the [supported Mach-O subset](binary-inspect.md#mach-o-code). Each distinct binary content has an `artifacts.code` coverage entry; the
 root summary reflects discovery and all content entries. Marked multiarchitecture sessions
 also record one `artifacts.code` diagnostic per retained slice; capability counts and
 open-question reasons use that local diagnostic. Partial zero counts read `none found

@@ -1,0 +1,113 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "775e48284de98e0524f94da7f329f5a619b9809b6317d77c95a7595588e54ddf",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "cxx-pinned",
+      "version": "sigil-policy/1",
+      "sha256": "d26d1c4524396722eb76e35e9482c18354f78660fc9a7930d9d92f73a9b558eb"
+    }
+  },
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.code",
+          "binary.dependencies",
+          "binary.identity"
+        ],
+        "gaps": [
+          "capability:cxx.file_write@sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123",
+      "size": 49488,
+      "format": "MachO",
+      "paths": [
+        "/examples/code-macho/duplicate-name-dylibs"
+      ],
+      "slices": [
+        {
+          "id": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+          "arch": "aarch64",
+          "sha256": "fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [],
+  "open_questions": [
+    {
+      "id": "capability:cxx.file_write@sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0"
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 2
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.dependencies",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    }
+  ]
+}

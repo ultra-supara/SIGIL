@@ -11,8 +11,6 @@ use sigil_model::{
 
 use super::read::{Bounded, Budgeted};
 use super::{BinaryBudgets, MachCodeMetadata, Parsed, ParsedArtifact, ParsedSlice};
-#[cfg(test)]
-use crate::code::CodeOutcome;
 
 mod imports;
 

@@ -98,3 +98,26 @@ The model embeds an immutable 133-entry projection of `sigil-engine/signatures/c
 TDD reproduced the review's wrong-library false violation (**1 vs0 expected**) before the fix. Final sequential two-job/debug0 checks: engine `multiarch_policy` **9 passed** (both raw-name directions, positive controls, same-name both calls, Unbound/FlatLookup, unknown-hash refusal, same-hash prior-build metadata, evidence mutations and renderer checks); model `multiarch_code` **30 passed / 1 ignored**, legacy `capability_rules` **9 passed**; marked ELF **4 passed**; actual CLI **2 passed**. The original review file now fails `session verify` with the exact admitted-evidence diagnostic; a correctly re-evaluated session verifies and renders. The explicit frozen legacy comparison, scoped source clippy `-D warnings`, formatting and diff checks passed. Logs are under `target/tmp/issue48/task16-fix1`.
 
 No dependency, table-source bytes or schema changed; the projection adds no TOML parser to native/WASM model code. No full suite, corpus or viewer build was repeated. **Task17 must rebuild the committed viewer bundle from this updated model, check native/WASM parity and the gzip size budget before release.** The existing bundle does not include this policy-validation fix yet. Task10 mixed-x86 HOLD remains unresolved.
+
+## Task 17 — Mach-O CLI, safety and viewer (2026-11-04)
+
+Base `f705c9f0b7cd68862f5d95cde68f911af796e720`; Rust/Cargo 1.93.0,
+Node 22.22.2, strace 7.0. Logs and exact build hashes: `target/tmp/issue48/task17`.
+Builds used two jobs, debug0 and disk-backed workspace TMPDIR. No full workspace
+suite, large corpus or fixture regeneration was repeated; Task19 retains those gates.
+
+- `cargo test --locked -p sigil-cli --test cli macho_thin_fat_install_service_observe_and_shared_budget`: PASS. Actual thin arm64/x86, healthy/mixed universal bytes have identical calls and child coverage in binary/install/service/observe. Code-off retains no marker/facts and service relations agree. A 7,094-byte cap closes only the first fat slice, with exactly that total use and partial named/content/root summaries.
+- `SIGIL_SAFETY_REQUIRED=1 cargo test --locked -p sigil-cli --test safety`: **67 passed, 18 intentionally ignored negative harness controls**; no skipped required tracer. Thin arm64/x86 and fat static/install/service/observe read sequences match; all six safety contracts and unopened symlink-escape sentinels pass. Focused `--lib macho_unstable_recognition` and `--lib macho_changed_or_vanished_reads` pass: changed/replaced/vanished Mach-O reads discard slice/call witnesses, while a stable duplicate can restore content.
+- Session/AI-BOM examples 23–28 and viewer copies cover same-name library separation, healthy/mixed fat, Unbound installation calls, unsupported authenticated chain (valid Partial), and the Task16 libc++/libSystem archive regression. Normalization and synthetic edits are described in `site/viewer/samples/README.md`. Saved `session verify --policy` succeeds for the five actual normalized observations; all seven structurally inconsistent Mach-O mutations are refused. Unknown archive hashes do not fall back.
+- `cargo test --locked -p sigil-model --test schema every_example_validates_against_the_schema`, corresponding `aibom_schema` filter, `--test examples` (**2**), and `--test aibom` (**22**) pass. All **28** examples validate; prior golden files are unchanged. `cargo test --locked -p sigil-wasm` passes; final focused samples **3** pass.
+- CI's native `render_sample` loop produced Markdown and HTML for all **20** viewer samples. `node ci/check-committed-wasm.mjs target/tmp/issue48/task17/expected` matches all **40** renders and refuses all **16** invalid samples with their specific expected diagnostics. `node --test ci/viewer-state.test.mjs`: **6 passed**. The archive sample displays `none found` without a borrowed-library violation; Unbound installation questions retain call-site evidence.
+- Pinned `nightly-2026-01-20`, wasm-pack 0.15.0, Binaryen133: `ci/build-viewer-wasm.sh` ran twice with distinct empty Cargo targets and package outputs (`cargo-wasm-one/two`, `pkg-one/two`), sequentially. Every package file equals both builds and committed `site/viewer/pkg`. Actual wasm **1,358,575 bytes**, CI gzip **327,993 bytes**, **184,007 bytes** below 512,000. SHA-256 `21881a76f2d6dece6c951f70cfac394f67e5061b854a115a943e0792b68b39b2`.
+- Scoped CLI/engine/WASM all-target clippy `-D warnings`, fmt and diff checks pass. Clippy exposed one stale test-only `CodeOutcome` import in `binary/macho.rs`; removed without behavior changes. No analyzer/model production behavior changed in this task.
+
+Committed fixture SHA-256 values remain those in `code-macho/SHA256SUMS`; no fixture
+bytes changed (universal `bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1`,
+arm64 classic `154d9bf8aaf028e6d5bc682634343018516586bcf787714d0456ed3f40eecbc5`).
+Only fixtures were measured, not a real deployed Ollama bundle. Docs and help now
+state the exact Mach-O subset, conditional compact bounds, library/ABI limits and
+old-reader limits. **Task10 mixed-x86 P2/user choice, M3-B/M3-C release gates and
+original #48 predicate/guard acceptance remain unresolved.** No PR/push/external send.
