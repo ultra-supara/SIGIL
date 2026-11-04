@@ -4790,8 +4790,9 @@ impl<'a> Validator<'a> {
     /// cites every direct call site of the imports that its slice's `Import` hints give that
     /// feature, each once, and nothing else; a capability open question (rule
     /// `binary.capability_call`) cites every such import, each once, of a slice that calls none of
-    /// them directly. Both are judged by the session's own hints and code facts, never by a
-    /// capability table, and need the session to record the table it was analyzed with. Whether
+    /// them directly. Legacy and ELF decisions use the session's hints and code facts; marked
+    /// Mach-O decisions also use the archived capability table's symbol and library mapping.
+    /// Both need the session to record the table it was analyzed with. Whether
     /// the policy gave exactly these results is not the model's to say: `policy::verify` in the
     /// engine re-evaluates the session under the policy.
     fn capabilities(&mut self) {
