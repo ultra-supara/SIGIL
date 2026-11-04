@@ -13,6 +13,30 @@ fn recognized(a: &Artifact) -> bool {
     )
 }
 
+fn imports_incomplete(binary: &BinaryFacts) -> bool {
+    binary.gaps.iter().any(|gap| {
+        gap.starts_with("imports:")
+            || gap.starts_with("binary_parse_bytes:")
+            || match &binary.container {
+                ContainerFacts::Elf(_) => [
+                    "dynamic:",
+                    "symbols:",
+                    "malformed: symbols:",
+                    "sections:",
+                    "malformed: section names:",
+                    "malformed: program headers:",
+                ]
+                .iter()
+                .any(|prefix| gap.starts_with(prefix)),
+                ContainerFacts::MachO(_) => {
+                    ["load commands:", "load dylib:", "LC_DYLD_CHAINED_FIXUPS:"]
+                        .iter()
+                        .any(|prefix| gap.starts_with(prefix))
+                }
+            }
+    })
+}
+
 fn supported(a: &Artifact, slice: &Slice, binary: &BinaryFacts) -> bool {
     match (&a.format, &binary.container, slice.arch) {
         (Format::Elf { .. }, ContainerFacts::Elf(e), Arch::X86_64 | Arch::Aarch64) => {
@@ -248,11 +272,7 @@ impl Validator<'_> {
                             CoverageState::Complete | CoverageState::Partial { .. }
                         ) =>
                     {
-                        if c.state == CoverageState::Complete
-                            && b.gaps.iter().any(|g| {
-                                g.starts_with("imports:") || g.starts_with("binary_parse_bytes:")
-                            })
-                        {
+                        if c.state == CoverageState::Complete && imports_incomplete(b) {
                             self.code_error(
                                 &slice.id,
                                 "incomplete import evidence cannot have complete code coverage",
