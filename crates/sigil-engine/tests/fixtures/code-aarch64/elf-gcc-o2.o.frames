@@ -1,0 +1,60 @@
+elf-gcc-o2.o:	file format elf64-littleaarch64
+
+.debug_frame contents:
+
+
+.eh_frame contents:
+
+00000000 00000010 00000000 CIE
+  Format:                DWARF32
+  Version:               1
+  Augmentation:          "zR"
+  Code alignment factor: 4
+  Data alignment factor: -8
+  Return address column: 30
+  Augmentation data:     1B
+
+  DW_CFA_def_cfa: WSP +0
+
+  CFA=WSP
+
+00000014 0000001c 00000018 FDE cie=00000000 pc=00000000...00000024
+  Format:       DWARF32
+  DW_CFA_advance_loc: 4 to 0x4
+  DW_CFA_def_cfa_offset: +16
+  DW_CFA_offset: W29 -16
+  DW_CFA_offset: W30 -8
+  DW_CFA_advance_loc: 28 to 0x20
+  DW_CFA_restore: W30
+  DW_CFA_restore: W29
+  DW_CFA_def_cfa_offset: +0
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x0: CFA=WSP
+  0x4: CFA=WSP+16: W29=[CFA-16], W30=[CFA-8]
+  0x20: CFA=WSP
+
+00000034 00000020 00000038 FDE cie=00000000 pc=00000024...00000048
+  Format:       DWARF32
+  DW_CFA_advance_loc: 4 to 0x28
+  DW_CFA_def_cfa_offset: +16
+  DW_CFA_offset: W29 -16
+  DW_CFA_offset: W30 -8
+  DW_CFA_advance_loc: 28 to 0x44
+  DW_CFA_restore: W30
+  DW_CFA_restore: W29
+  DW_CFA_def_cfa_offset: +0
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x24: CFA=WSP
+  0x28: CFA=WSP+16: W29=[CFA-16], W30=[CFA-8]
+  0x44: CFA=WSP
+

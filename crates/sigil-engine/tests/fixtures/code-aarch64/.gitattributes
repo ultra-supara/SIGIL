@@ -1,0 +1,3 @@
+# Preserve byte-for-byte tool output, including its final blank lines.
+*.frames -whitespace
+*.gnu-frames -whitespace

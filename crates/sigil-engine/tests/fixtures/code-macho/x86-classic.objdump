@@ -1,0 +1,42 @@
+
+x86-classic:	file format mach-o 64-bit x86-64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000520 <_zero>:
+     520: 55                           	pushq	%rbp
+     521: 48 89 e5                     	movq	%rsp, %rbp
+     524: 31 ff                        	xorl	%edi, %edi
+     526: 31 f6                        	xorl	%esi, %esi
+     528: 31 d2                        	xorl	%edx, %edx
+     52a: e8 29 00 00 00               	callq	0x558 <dyld_stub_binder+0x558>
+     52f: ff c0                        	incl	%eax
+     531: 5d                           	popq	%rbp
+     532: c3                           	retq
+     533: 66 66 66 66 2e 0f 1f 84 00 00 00 00 00       	nopw	%cs:(%rax,%rax)
+
+0000000000000540 <_one>:
+     540: 55                           	pushq	%rbp
+     541: 48 89 e5                     	movq	%rsp, %rbp
+     544: bf 01 00 00 00               	movl	$0x1, %edi
+     549: 31 f6                        	xorl	%esi, %esi
+     54b: 31 d2                        	xorl	%edx, %edx
+     54d: e8 06 00 00 00               	callq	0x558 <dyld_stub_binder+0x558>
+     552: ff c0                        	incl	%eax
+     554: 5d                           	popq	%rbp
+     555: c3                           	retq
+
+Disassembly of section __TEXT,__stubs:
+
+0000000000000558 <__stubs>:
+     558: ff 25 a2 2a 00 00            	jmpq	*0x2aa2(%rip)           ## 0x3000 <dyld_stub_binder+0x3000>
+
+Disassembly of section __TEXT,__stub_helper:
+
+0000000000000560 <__stub_helper>:
+     560: 4c 8d 1d a1 2a 00 00         	leaq	0x2aa1(%rip), %r11      ## 0x3008 <__dyld_private>
+     567: 41 53                        	pushq	%r11
+     569: ff 25 91 1a 00 00            	jmpq	*0x1a91(%rip)           ## 0x2000 <dyld_stub_binder+0x2000>
+     56f: 90                           	nop
+     570: 68 00 00 00 00               	pushq	$0x0
+     575: e9 e6 ff ff ff               	jmp	0x560 <__stub_helper>

@@ -1,0 +1,53 @@
+i386-unsupported.o:	file format Mach-O 32-bit i386
+
+.debug_frame contents:
+
+
+.eh_frame contents:
+
+00000000 00000014 00000000 CIE
+  Format:                DWARF32
+  Version:               1
+  Augmentation:          "zR"
+  Code alignment factor: 1
+  Data alignment factor: -4
+  Return address column: 8
+  Augmentation data:     10
+
+  DW_CFA_def_cfa: EBP +4
+  DW_CFA_offset: EIP -4
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  CFA=EBP+4: EIP=[CFA-4]
+
+00000018 00000018 0000001c FDE cie=00000000 pc=100000000...10000001d
+  Format:       DWARF32
+  DW_CFA_advance_loc: 1 to 0x100000001
+  DW_CFA_def_cfa_offset: +8
+  DW_CFA_offset: ESP -8
+  DW_CFA_advance_loc: 2 to 0x100000003
+  DW_CFA_def_cfa_register: ESP
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x100000000: CFA=EBP+4: EIP=[CFA-4]
+  0x100000001: CFA=EBP+8: ESP=[CFA-8], EIP=[CFA-4]
+  0x100000003: CFA=ESP+8: ESP=[CFA-8], EIP=[CFA-4]
+
+00000034 00000018 00000038 FDE cie=00000000 pc=100000020...10000003d
+  Format:       DWARF32
+  DW_CFA_advance_loc: 1 to 0x100000021
+  DW_CFA_def_cfa_offset: +8
+  DW_CFA_offset: ESP -8
+  DW_CFA_advance_loc: 2 to 0x100000023
+  DW_CFA_def_cfa_register: ESP
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x100000020: CFA=EBP+4: EIP=[CFA-4]
+  0x100000021: CFA=EBP+8: ESP=[CFA-8], EIP=[CFA-4]
+  0x100000023: CFA=ESP+8: ESP=[CFA-8], EIP=[CFA-4]
+

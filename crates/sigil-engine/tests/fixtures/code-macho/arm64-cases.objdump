@@ -1,0 +1,107 @@
+
+arm64-cases:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000520 <_asm_zero>:
+     520: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     524: 910003fd     	mov	x29, sp
+     528: 2a1f03e0     	mov	w0, wzr
+     52c: aa1f03e1     	mov	x1, xzr
+     530: 2a1f03e2     	mov	w2, wzr
+     534: 9400003c     	bl	0x624 <dyld_stub_binder+0x624>
+     538: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     53c: d65f03c0     	ret
+
+0000000000000540 <_copy>:
+     540: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     544: 910003fd     	mov	x29, sp
+     548: 2a1f03e3     	mov	w3, wzr
+     54c: 2a0303e0     	mov	w0, w3
+     550: aa1f03e1     	mov	x1, xzr
+     554: 2a1f03e2     	mov	w2, wzr
+     558: 94000033     	bl	0x624 <dyld_stub_binder+0x624>
+     55c: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     560: d65f03c0     	ret
+
+0000000000000564 <_join_agree>:
+     564: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     568: 910003fd     	mov	x29, sp
+     56c: b4000060     	cbz	x0, 0x578 <_join_agree+0x14>
+     570: 52800000     	mov	w0, #0x0                ; =0
+     574: 14000002     	b	0x57c <_join_agree+0x18>
+     578: 2a1f03e0     	mov	w0, wzr
+     57c: aa1f03e1     	mov	x1, xzr
+     580: 2a1f03e2     	mov	w2, wzr
+     584: 94000028     	bl	0x624 <dyld_stub_binder+0x624>
+     588: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     58c: d65f03c0     	ret
+
+0000000000000590 <_join_disagree>:
+     590: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     594: 910003fd     	mov	x29, sp
+     598: b4000060     	cbz	x0, 0x5a4 <_join_disagree+0x14>
+     59c: 52800020     	mov	w0, #0x1                ; =1
+     5a0: 14000002     	b	0x5a8 <_join_disagree+0x18>
+     5a4: 2a1f03e0     	mov	w0, wzr
+     5a8: aa1f03e1     	mov	x1, xzr
+     5ac: 2a1f03e2     	mov	w2, wzr
+     5b0: 9400001d     	bl	0x624 <dyld_stub_binder+0x624>
+     5b4: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     5b8: d65f03c0     	ret
+
+00000000000005bc <_caller_clobber>:
+     5bc: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     5c0: 910003fd     	mov	x29, sp
+     5c4: 2a1f03e0     	mov	w0, wzr
+     5c8: aa1f03e1     	mov	x1, xzr
+     5cc: 2a1f03e2     	mov	w2, wzr
+     5d0: d2800210     	mov	x16, #0x10              ; =16
+     5d4: d2800231     	mov	x17, #0x11              ; =17
+     5d8: 94000005     	bl	0x5ec <_helper>
+     5dc: 2a1003e0     	mov	w0, w16
+     5e0: 94000011     	bl	0x624 <dyld_stub_binder+0x624>
+     5e4: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     5e8: d65f03c0     	ret
+
+00000000000005ec <_helper>:
+     5ec: 528000e0     	mov	w0, #0x7                ; =7
+     5f0: d65f03c0     	ret
+
+00000000000005f4 <_malformed_reserved>:
+     5f4: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     5f8: 910003fd     	mov	x29, sp
+     5fc: 2a1f03e0     	mov	w0, wzr
+     600: aa1f03e1     	mov	x1, xzr
+     604: 2a1f03e2     	mov	w2, wzr
+     608: 00000000     	udf	#0x0
+     60c: 94000006     	bl	0x624 <dyld_stub_binder+0x624>
+     610: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     614: d65f03c0     	ret
+
+0000000000000618 <_unsupported_indirect>:
+     618: d61f0100     	br	x8
+
+000000000000061c <_unsupported_pac>:
+     61c: d503233f     	paciasp
+     620: d65f03c0     	ret
+
+Disassembly of section __TEXT,__stubs:
+
+0000000000000624 <__stubs>:
+     624: 90000050     	adrp	x16, 0x8000 <dyld_stub_binder+0x8000>
+     628: f9400210     	ldr	x16, [x16]
+     62c: d61f0200     	br	x16
+
+Disassembly of section __TEXT,__stub_helper:
+
+0000000000000630 <__stub_helper>:
+     630: 90000051     	adrp	x17, 0x8000 <dyld_stub_binder+0x8000>
+     634: 91002231     	add	x17, x17, #0x8
+     638: a9bf47f0     	stp	x16, x17, [sp, #-0x10]!
+     63c: 90000030     	adrp	x16, 0x4000 <dyld_stub_binder+0x4000>
+     640: f9400210     	ldr	x16, [x16]
+     644: d61f0200     	br	x16
+     648: 18000050     	ldr	w16, 0x650 <__stub_helper+0x20>
+     64c: 17fffff9     	b	0x630 <__stub_helper>
+     650: 00000000     	udf	#0x0

@@ -164,6 +164,9 @@ pub(crate) enum Via {
     PltSec,
     Got,
     Reloc,
+    MachOStub,
+    MachOGot,
+    MachOReloc,
 }
 
 impl From<ImportVia> for Via {
@@ -173,6 +176,9 @@ impl From<ImportVia> for Via {
             ImportVia::PltSec => Via::PltSec,
             ImportVia::Got => Via::Got,
             ImportVia::Reloc => Via::Reloc,
+            ImportVia::MachOStub => Via::MachOStub,
+            ImportVia::MachOGot => Via::MachOGot,
+            ImportVia::MachOReloc => Via::MachOReloc,
         }
     }
 }
@@ -184,6 +190,9 @@ impl From<Via> for ImportVia {
             Via::PltSec => ImportVia::PltSec,
             Via::Got => ImportVia::Got,
             Via::Reloc => ImportVia::Reloc,
+            Via::MachOStub => ImportVia::MachOStub,
+            Via::MachOGot => ImportVia::MachOGot,
+            Via::MachOReloc => ImportVia::MachOReloc,
         }
     }
 }

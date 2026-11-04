@@ -1,0 +1,199 @@
+
+File: x86-cases.o
+Format: Mach-O 64-bit x86-64
+Arch: x86_64
+AddressSize: 64bit
+MachHeader {
+  Magic: Magic64 (0xFEEDFACF)
+  CpuType: X86-64 (0x1000007)
+  CpuSubType: CPU_SUBTYPE_X86_64_ALL (0x3)
+  FileType: Relocatable (0x1)
+  NumOfLoadCommands: 4
+  SizeOfLoadCommands: 440
+  Flags [ (0x0)
+  ]
+  Reserved: 0x0
+}
+Sections [
+  Section {
+    Index: 0
+    Name: __text (5F 5F 74 65 78 74 00 00 00 00 00 00 00 00 00 00)
+    Segment: __TEXT (5F 5F 54 45 58 54 00 00 00 00 00 00 00 00 00 00)
+    Address: 0x0
+    Size: 0xA4
+    Offset: 472
+    Alignment: 2
+    RelocationOffset: 0x508
+    RelocationCount: 7
+    Type: Regular (0x0)
+    Attributes [ (0x800004)
+      PureInstructions (0x800000)
+      SomeInstructions (0x4)
+    ]
+    Reserved1: 0x0
+    Reserved2: 0x0
+    Reserved3: 0x0
+  }
+  Section {
+    Index: 1
+    Name: __compact_unwind (5F 5F 63 6F 6D 70 61 63 74 5F 75 6E 77 69 6E 64)
+    Segment: __LD (5F 5F 4C 44 00 00 00 00 00 00 00 00 00 00 00 00)
+    Address: 0xA8
+    Size: 0x120
+    Offset: 640
+    Alignment: 3
+    RelocationOffset: 0x540
+    RelocationCount: 9
+    Type: Regular (0x0)
+    Attributes [ (0x20000)
+      Debug (0x20000)
+    ]
+    Reserved1: 0x0
+    Reserved2: 0x0
+    Reserved3: 0x0
+  }
+  Section {
+    Index: 2
+    Name: __eh_frame (5F 5F 65 68 5F 66 72 61 6D 65 00 00 00 00 00 00)
+    Segment: __TEXT (5F 5F 54 45 58 54 00 00 00 00 00 00 00 00 00 00)
+    Address: 0x1C8
+    Size: 0x168
+    Offset: 928
+    Alignment: 3
+    RelocationOffset: 0x0
+    RelocationCount: 0
+    Type: Coalesced (0xB)
+    Attributes [ (0x680000)
+      LiveSupport (0x80000)
+      NoTOC (0x400000)
+      StripStaticSyms (0x200000)
+    ]
+    Reserved1: 0x0
+    Reserved2: 0x0
+    Reserved3: 0x0
+  }
+]
+Relocations [
+  Section __text {
+    0x91 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+    0x73 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+    0x6B 1 2 1 X86_64_RELOC_BRANCH 0 _helper
+    0x5A 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+    0x3E 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+    0x21 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+    0xB 1 2 1 X86_64_RELOC_BRANCH 0 _connect
+  }
+  Section __compact_unwind {
+    0x100 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0xE0 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0xC0 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0xA0 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0x80 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0x60 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0x40 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0x20 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+    0x0 0 3 0 X86_64_RELOC_UNSIGNED 0 __text
+  }
+]
+Symbols [
+  Symbol {
+    Name: _asm_zero (81)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x0
+  }
+  Symbol {
+    Name: _caller_clobber (46)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x60
+  }
+  Symbol {
+    Name: _copy (1)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x14
+  }
+  Symbol {
+    Name: _helper (38)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x7C
+  }
+  Symbol {
+    Name: _join_agree (106)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x28
+  }
+  Symbol {
+    Name: _join_disagree (91)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x44
+  }
+  Symbol {
+    Name: _malformed_overlap (62)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x9C
+  }
+  Symbol {
+    Name: _malformed_reserved (118)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x84
+  }
+  Symbol {
+    Name: _unsupported_indirect (7)
+    Extern
+    Type: Section (0xE)
+    Section: __text (0x1)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x98
+  }
+  Symbol {
+    Name: _connect (29)
+    Extern
+    Type: Undef (0x0)
+    Section:  (0x0)
+    RefType: UndefinedNonLazy (0x0)
+    Flags [ (0x0)
+    ]
+    Value: 0x0
+  }
+]

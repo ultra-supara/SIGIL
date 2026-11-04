@@ -1,0 +1,44 @@
+
+elf-gcc-plt.so:	file format elf64-littleaarch64
+
+Disassembly of section .plt:
+
+0000000000000260 <.plt>:
+     260: a9bf7bf0     	stp	x16, x30, [sp, #-0x10]!
+     264: f00000f0     	adrp	x16, 0x1f000 <connect+0x1f000>
+     268: f947fe11     	ldr	x17, [x16, #0xff8]
+     26c: 913fe210     	add	x16, x16, #0xff8
+     270: d61f0220     	br	x17
+     274: d503201f     	nop
+     278: d503201f     	nop
+     27c: d503201f     	nop
+
+0000000000000280 <connect@plt>:
+     280: 90000110     	adrp	x16, 0x20000 <_GLOBAL_OFFSET_TABLE_+0x20>
+     284: f9400211     	ldr	x17, [x16]
+     288: 91000210     	add	x16, x16, #0x0
+     28c: d61f0220     	br	x17
+
+Disassembly of section .text:
+
+00000000000002a0 <zero>:
+     2a0: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     2a4: 52800002     	mov	w2, #0x0                // =0
+     2a8: d2800001     	mov	x1, #0x0                // =0
+     2ac: 910003fd     	mov	x29, sp
+     2b0: 52800000     	mov	w0, #0x0                // =0
+     2b4: 97fffff3     	bl	0x280 <connect@plt>
+     2b8: 11000400     	add	w0, w0, #0x1
+     2bc: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     2c0: d65f03c0     	ret
+
+00000000000002c4 <one>:
+     2c4: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     2c8: 52800002     	mov	w2, #0x0                // =0
+     2cc: d2800001     	mov	x1, #0x0                // =0
+     2d0: 910003fd     	mov	x29, sp
+     2d4: 52800020     	mov	w0, #0x1                // =1
+     2d8: 97ffffea     	bl	0x280 <connect@plt>
+     2dc: 11000400     	add	w0, w0, #0x1
+     2e0: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     2e4: d65f03c0     	ret

@@ -325,6 +325,38 @@ fn reg(r: Reg) -> &'static str {
         Reg::R13 => "r13",
         Reg::R14 => "r14",
         Reg::R15 => "r15",
+        Reg::X0 => "x0",
+        Reg::X1 => "x1",
+        Reg::X2 => "x2",
+        Reg::X3 => "x3",
+        Reg::X4 => "x4",
+        Reg::X5 => "x5",
+        Reg::X6 => "x6",
+        Reg::X7 => "x7",
+        Reg::X8 => "x8",
+        Reg::X9 => "x9",
+        Reg::X10 => "x10",
+        Reg::X11 => "x11",
+        Reg::X12 => "x12",
+        Reg::X13 => "x13",
+        Reg::X14 => "x14",
+        Reg::X15 => "x15",
+        Reg::X16 => "x16",
+        Reg::X17 => "x17",
+        Reg::X18 => "x18",
+        Reg::X19 => "x19",
+        Reg::X20 => "x20",
+        Reg::X21 => "x21",
+        Reg::X22 => "x22",
+        Reg::X23 => "x23",
+        Reg::X24 => "x24",
+        Reg::X25 => "x25",
+        Reg::X26 => "x26",
+        Reg::X27 => "x27",
+        Reg::X28 => "x28",
+        Reg::X29 => "x29",
+        Reg::X30 => "x30",
+        Reg::Sp => "sp",
     }
 }
 
@@ -344,6 +376,7 @@ mod tests {
 
     fn import(name: &str) -> CallTarget {
         CallTarget::Import {
+            macho_import: None,
             symbol: t(name),
             via: ImportVia::Plt,
         }
@@ -352,6 +385,7 @@ mod tests {
     /// A call in `kernel` at `addr`, with the ID `cs:<addr>`.
     fn call(addr: u64, target: CallTarget, args: Vec<ArgValue>) -> CallSite {
         CallSite {
+            args_layout: None,
             id: CallId::new(format!("cs:{addr:#x}")).unwrap(),
             caller: FnId::new("fn:0x40").unwrap(),
             addr,

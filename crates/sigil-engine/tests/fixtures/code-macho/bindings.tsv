@@ -1,0 +1,14 @@
+fixture	slice	stub	slot	symbol	library	ordinal	mode
+arm64-cases	arm64	0x624	0x8000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+arm64-chained	arm64	0x420	0x4000	_connect	/usr/lib/libSystem.B.dylib	1	chained
+arm64-classic	arm64	0x568	0x8000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+duplicate-name-dylibs	arm64	0x5bc	0x8000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+duplicate-name-dylibs	arm64	0x5c8	0x8008	_connect	/sigil/libfoo.dylib	2	classic-lazy
+no-unwind	arm64	0x4b8	0x8000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+universal	arm64	0x420	0x4000	_connect	/usr/lib/libSystem.B.dylib	1	chained
+universal	x86_64	0x558	0x3000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+universal-mixed	arm64	0x420	0x4000	_connect	/usr/lib/libSystem.B.dylib	1	chained
+unwind-folded	arm64	0x508	0x8000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+x86-cases	x86_64	0x5c4	0x3000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy
+x86-chained	x86_64	0x418	0x2000	_connect	/usr/lib/libSystem.B.dylib	1	chained
+x86-classic	x86_64	0x558	0x3000	_connect	/usr/lib/libSystem.B.dylib	1	classic-lazy

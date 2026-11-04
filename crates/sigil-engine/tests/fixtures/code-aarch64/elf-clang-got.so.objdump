@@ -1,0 +1,30 @@
+
+elf-clang-got.so:	file format elf64-littleaarch64
+
+Disassembly of section .text:
+
+0000000000010354 <zero>:
+   10354: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   10358: 910003fd     	mov	x29, sp
+   1035c: 90000088     	adrp	x8, 0x20000 <one+0xfc80>
+   10360: 2a1f03e0     	mov	w0, wzr
+   10364: aa1f03e1     	mov	x1, xzr
+   10368: f9422908     	ldr	x8, [x8, #0x450]
+   1036c: 2a1f03e2     	mov	w2, wzr
+   10370: d63f0100     	blr	x8
+   10374: 11000400     	add	w0, w0, #0x1
+   10378: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   1037c: d65f03c0     	ret
+
+0000000000010380 <one>:
+   10380: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   10384: 910003fd     	mov	x29, sp
+   10388: 90000088     	adrp	x8, 0x20000 <one+0xfc80>
+   1038c: 52800020     	mov	w0, #0x1                // =1
+   10390: aa1f03e1     	mov	x1, xzr
+   10394: f9422908     	ldr	x8, [x8, #0x450]
+   10398: 2a1f03e2     	mov	w2, wzr
+   1039c: d63f0100     	blr	x8
+   103a0: 11000400     	add	w0, w0, #0x1
+   103a4: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   103a8: d65f03c0     	ret

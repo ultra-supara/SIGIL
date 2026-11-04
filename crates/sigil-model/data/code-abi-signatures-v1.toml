@@ -1,0 +1,94 @@
+# Immutable code ABI signatures, version 1. Do not edit after release: archive new versions.
+# Locations only: no stack recovery, inferred optional arguments, aggregate or C++ prototypes.
+# All parameter kinds below are integer/pointer scalars <= 64 bits.
+version = "1"
+
+[[signature]]
+abi = "elf-aarch64"
+symbol = "connect"
+library = "elf"
+registers = ["x0", "x1", "x2"]
+complete = true
+prototype = "int connect(int, const struct sockaddr *, socklen_t)"
+prototype_source = "https://github.com/bminor/glibc/blob/glibc-2.40/socket/sys/socket.h#L117"
+abi_source = "https://github.com/ARM-software/abi-aa/blob/2025Q1/aapcs64/aapcs64.rst#parameter-passing"
+
+[[signature]]
+abi = "elf-aarch64"
+symbol = "open"
+library = "elf"
+registers = ["x0", "x1"]
+complete = false
+prototype = "int open(const char *, int, ...)"
+prototype_source = "https://github.com/bminor/glibc/blob/glibc-2.40/io/fcntl.h#L190-L213"
+abi_source = "https://github.com/ARM-software/abi-aa/blob/2025Q1/aapcs64/aapcs64.rst#parameter-passing"
+
+[[signature]]
+abi = "elf-aarch64"
+symbol = "openat"
+library = "elf"
+registers = ["x0", "x1", "x2"]
+complete = false
+prototype = "int openat(int, const char *, int, ...)"
+prototype_source = "https://github.com/bminor/glibc/blob/glibc-2.40/io/fcntl.h#L190-L213"
+abi_source = "https://github.com/ARM-software/abi-aa/blob/2025Q1/aapcs64/aapcs64.rst#parameter-passing"
+
+[[signature]]
+abi = "darwin-arm64"
+symbol = "_connect"
+library = "libsystem"
+registers = ["x0", "x1", "x2"]
+complete = true
+prototype = "int connect(int, const struct sockaddr *, socklen_t)"
+prototype_source = "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/sys/socket.h#L738"
+abi_source = "https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms"
+
+[[signature]]
+abi = "darwin-arm64"
+symbol = "_open"
+library = "libsystem"
+registers = ["x0", "x1"]
+complete = false
+prototype = "int open(const char *, int, ...)"
+prototype_source = "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/sys/fcntl.h#L750-L752"
+abi_source = "https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms"
+
+[[signature]]
+abi = "darwin-arm64"
+symbol = "_openat"
+library = "libsystem"
+registers = ["x0", "x1", "x2"]
+complete = false
+prototype = "int openat(int, const char *, int, ...)"
+prototype_source = "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/sys/fcntl.h#L750-L752"
+abi_source = "https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms"
+
+[[signature]]
+abi = "darwin-x86-64"
+symbol = "_connect"
+library = "libsystem"
+registers = ["rdi", "rsi", "rdx"]
+complete = true
+prototype = "int connect(int, const struct sockaddr *, socklen_t)"
+prototype_source = "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/sys/socket.h#L738"
+abi_source = "https://developer.apple.com/library/archive/documentation/DeveloperTools/Conceptual/LowLevelABI/140-x86-64_Function_Calling_Conventions/x86_64.html"
+
+[[signature]]
+abi = "darwin-x86-64"
+symbol = "_open"
+library = "libsystem"
+registers = ["rdi", "rsi"]
+complete = false
+prototype = "int open(const char *, int, ...)"
+prototype_source = "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/sys/fcntl.h#L750-L752"
+abi_source = "https://developer.apple.com/library/archive/documentation/DeveloperTools/Conceptual/LowLevelABI/140-x86-64_Function_Calling_Conventions/x86_64.html"
+
+[[signature]]
+abi = "darwin-x86-64"
+symbol = "_openat"
+library = "libsystem"
+registers = ["rdi", "rsi", "rdx"]
+complete = false
+prototype = "int openat(int, const char *, int, ...)"
+prototype_source = "https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/sys/fcntl.h#L750-L752"
+abi_source = "https://developer.apple.com/library/archive/documentation/DeveloperTools/Conceptual/LowLevelABI/140-x86-64_Function_Calling_Conventions/x86_64.html"

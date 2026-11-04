@@ -1,0 +1,221 @@
+$ /usr/bin/clang-21 -target arm64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o arm64-object.o
+
+$ /usr/bin/llvm-objdump-21 -dr arm64-object.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations arm64-object.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame arm64-object.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size arm64-object.o
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info arm64-object.o
+
+$ /usr/bin/clang-21 -target arm64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.S -o arm64-cases.o
+
+$ /usr/bin/llvm-objdump-21 -dr arm64-cases.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations arm64-cases.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame arm64-cases.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size arm64-cases.o
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info arm64-cases.o
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains arm64-object.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o arm64-classic
+
+$ /usr/bin/llvm-objdump-21 -dr arm64-classic
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations arm64-classic
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame arm64-classic
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size arm64-classic
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info arm64-classic
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -fixup_chains arm64-object.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o arm64-chained
+
+$ /usr/bin/llvm-objdump-21 -dr arm64-chained
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations arm64-chained
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame arm64-chained
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size arm64-chained
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info arm64-chained
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains arm64-cases.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o arm64-cases
+
+$ /usr/bin/llvm-objdump-21 -dr arm64-cases
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations arm64-cases
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame arm64-cases
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size arm64-cases
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info arm64-cases
+
+$ /usr/bin/clang-21 -target x86_64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o x86-object.o
+
+$ /usr/bin/llvm-objdump-21 -dr x86-object.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations x86-object.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame x86-object.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size x86-object.o
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info x86-object.o
+
+$ /usr/bin/clang-21 -target x86_64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.S -o x86-cases.o
+
+$ /usr/bin/llvm-objdump-21 -dr x86-cases.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations x86-cases.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame x86-cases.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size x86-cases.o
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info x86-cases.o
+
+$ /usr/bin/ld64.lld-21 -arch x86_64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains x86-object.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o x86-classic
+
+$ /usr/bin/llvm-objdump-21 -dr x86-classic
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations x86-classic
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame x86-classic
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size x86-classic
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info x86-classic
+
+$ /usr/bin/ld64.lld-21 -arch x86_64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -fixup_chains x86-object.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o x86-chained
+
+$ /usr/bin/llvm-objdump-21 -dr x86-chained
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations x86-chained
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame x86-chained
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size x86-chained
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info x86-chained
+
+$ /usr/bin/ld64.lld-21 -arch x86_64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains x86-cases.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o x86-cases
+
+$ /usr/bin/llvm-objdump-21 -dr x86-cases
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations x86-cases
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame x86-cases
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size x86-cases
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info x86-cases
+
+$ /usr/bin/clang-21 -target arm64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o compact-object.o
+
+$ /usr/bin/llvm-objdump-21 -dr compact-object.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations compact-object.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame compact-object.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size compact-object.o
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info compact-object.o
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains -no_function_starts compact-object.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o unwind-folded
+
+$ /usr/bin/llvm-objdump-21 -dr unwind-folded
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations unwind-folded
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame unwind-folded
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size unwind-folded
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info unwind-folded
+
+$ /usr/bin/clang-21 -target arm64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fno-unwind-tables -fno-asynchronous-unwind-tables -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o no-unwind.o
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains -no_function_starts no-unwind.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o no-unwind
+
+$ /usr/bin/llvm-objdump-21 -dr no-unwind
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations no-unwind
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame no-unwind
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size no-unwind
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info no-unwind
+
+$ /usr/bin/clang-21 -target arm64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -DDUPLICATE_NAMES -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o duplicate-names.o
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -dylib -no_uuid -no_adhoc_codesign -install_name /sigil/fixture.dylib -no_fixup_chains duplicate-names.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd <repo>/crates/sigil-engine/tests/fixtures/code-macho/libfoo.tbd -o duplicate-name-dylibs.before
+
+$ /usr/bin/llvm-objdump-21 -dr duplicate-name-dylibs.before
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations duplicate-name-dylibs.before
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame duplicate-name-dylibs.before
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size duplicate-name-dylibs.before
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info duplicate-name-dylibs.before
+
+$ /usr/bin/llvm-objdump-21 -dr duplicate-name-dylibs
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations duplicate-name-dylibs
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame duplicate-name-dylibs
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size duplicate-name-dylibs
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info duplicate-name-dylibs
+
+$ /usr/bin/clang-21 -target i386-apple-macos10.13 -O2 -fno-ident -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o i386-unsupported.o
+
+$ /usr/bin/llvm-objdump-21 -dr i386-unsupported.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations i386-unsupported.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame i386-unsupported.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size i386-unsupported.o
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info i386-unsupported.o
+
+$ /usr/bin/llvm-lipo-21 -create arm64-chained x86-classic -output universal
+
+$ /usr/bin/llvm-objdump-21 --arch=all -dr universal
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations universal
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame universal
+
+$ /usr/bin/llvm-nm-21 --arch=all --numeric-sort --print-size universal
+
+$ /usr/bin/llvm-objdump-21 --arch=all --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info universal
+
+$ /usr/bin/llvm-lipo-21 -info universal
+
+$ /usr/bin/llvm-lipo-21 -create arm64-chained i386-unsupported.o -output universal-mixed
+
+$ /usr/bin/llvm-objdump-21 --arch=all -dr universal-mixed
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations universal-mixed
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame universal-mixed
+
+$ /usr/bin/llvm-nm-21 --arch=all --numeric-sort --print-size universal-mixed
+
+$ /usr/bin/llvm-objdump-21 --arch=all --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info universal-mixed
+
+$ /usr/bin/llvm-lipo-21 -info universal-mixed

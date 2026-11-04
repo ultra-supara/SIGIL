@@ -1,0 +1,37 @@
+
+i386-unsupported.o:	file format mach-o 32-bit i386
+
+Disassembly of section __TEXT,__text:
+
+00000000 <_zero>:
+       0: 55                           	pushl	%ebp
+       1: 89 e5                        	movl	%esp, %ebp
+       3: 83 ec 08                     	subl	$0x8, %esp
+       6: 83 ec 04                     	subl	$0x4, %esp
+       9: 6a 00                        	pushl	$0x0
+       b: 6a 00                        	pushl	$0x0
+       d: 6a 00                        	pushl	$0x0
+       f: e8 ec ff ff ff               	calll	0x0 <_zero>
+			00000010:  GENERIC_RELOC_VANILLA	_connect
+      14: 83 c4 10                     	addl	$0x10, %esp
+      17: 40                           	incl	%eax
+      18: 83 c4 08                     	addl	$0x8, %esp
+      1b: 5d                           	popl	%ebp
+      1c: c3                           	retl
+      1d: 0f 1f 00                     	nopl	(%eax)
+
+00000020 <_one>:
+      20: 55                           	pushl	%ebp
+      21: 89 e5                        	movl	%esp, %ebp
+      23: 83 ec 08                     	subl	$0x8, %esp
+      26: 83 ec 04                     	subl	$0x4, %esp
+      29: 6a 00                        	pushl	$0x0
+      2b: 6a 00                        	pushl	$0x0
+      2d: 6a 01                        	pushl	$0x1
+      2f: e8 cc ff ff ff               	calll	0x0 <_zero>
+			00000030:  GENERIC_RELOC_VANILLA	_connect
+      34: 83 c4 10                     	addl	$0x10, %esp
+      37: 40                           	incl	%eax
+      38: 83 c4 08                     	addl	$0x8, %esp
+      3b: 5d                           	popl	%ebp
+      3c: c3                           	retl

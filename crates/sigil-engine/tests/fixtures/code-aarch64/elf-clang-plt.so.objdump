@@ -1,0 +1,44 @@
+
+elf-clang-plt.so:	file format elf64-littleaarch64
+
+Disassembly of section .text:
+
+000000000001038c <zero>:
+   1038c: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   10390: 910003fd     	mov	x29, sp
+   10394: 2a1f03e0     	mov	w0, wzr
+   10398: aa1f03e1     	mov	x1, xzr
+   1039c: 2a1f03e2     	mov	w2, wzr
+   103a0: 94000018     	bl	0x10400 <connect@plt>
+   103a4: 11000400     	add	w0, w0, #0x1
+   103a8: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   103ac: d65f03c0     	ret
+
+00000000000103b0 <one>:
+   103b0: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+   103b4: 910003fd     	mov	x29, sp
+   103b8: 52800020     	mov	w0, #0x1                // =1
+   103bc: aa1f03e1     	mov	x1, xzr
+   103c0: 2a1f03e2     	mov	w2, wzr
+   103c4: 9400000f     	bl	0x10400 <connect@plt>
+   103c8: 11000400     	add	w0, w0, #0x1
+   103cc: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+   103d0: d65f03c0     	ret
+
+Disassembly of section .plt:
+
+00000000000103e0 <.plt>:
+   103e0: a9bf7bf0     	stp	x16, x30, [sp, #-0x10]!
+   103e4: 90000110     	adrp	x16, 0x30000 <connect+0x30000>
+   103e8: f9426a11     	ldr	x17, [x16, #0x4d0]
+   103ec: 91134210     	add	x16, x16, #0x4d0
+   103f0: d61f0220     	br	x17
+   103f4: d503201f     	nop
+   103f8: d503201f     	nop
+   103fc: d503201f     	nop
+
+0000000000010400 <connect@plt>:
+   10400: 90000110     	adrp	x16, 0x30000 <connect+0x30000>
+   10404: f9426e11     	ldr	x17, [x16, #0x4d8]
+   10408: 91136210     	add	x16, x16, #0x4d8
+   1040c: d61f0220     	br	x17

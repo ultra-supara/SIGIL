@@ -1,0 +1,10 @@
+
+Relocation section '.rela.text' at offset 0x220 contains 2 entries:
+    Offset             Info             Type               Symbol's Value  Symbol's Name + Addend
+0000000000000014  0000000a0000011b R_AARCH64_CALL26       0000000000000000 connect + 0
+0000000000000038  0000000a0000011b R_AARCH64_CALL26       0000000000000000 connect + 0
+
+Relocation section '.rela.eh_frame' at offset 0x250 contains 2 entries:
+    Offset             Info             Type               Symbol's Value  Symbol's Name + Addend
+000000000000001c  0000000200000105 R_AARCH64_PREL32       0000000000000000 .text + 0
+000000000000003c  0000000200000105 R_AARCH64_PREL32       0000000000000000 .text + 24

@@ -1,0 +1,61 @@
+universal-mixed (architecture i386):
+(__TEXT,__text) section
+_zero:
+       0:	55	pushl	%ebp
+       1:	89 e5	movl	%esp, %ebp
+       3:	83 ec 08	subl	$0x8, %esp
+       6:	83 ec 04	subl	$0x4, %esp
+       9:	6a 00	pushl	$0x0
+       b:	6a 00	pushl	$0x0
+       d:	6a 00	pushl	$0x0
+       f:	e8 ec ff ff ff	calll	_connect
+      14:	83 c4 10	addl	$0x10, %esp
+      17:	40	incl	%eax
+      18:	83 c4 08	addl	$0x8, %esp
+      1b:	5d	popl	%ebp
+      1c:	c3	retl
+      1d:	0f 1f 00	nopl	_zero(%eax)
+_one:
+      20:	55	pushl	%ebp
+      21:	89 e5	movl	%esp, %ebp
+      23:	83 ec 08	subl	$0x8, %esp
+      26:	83 ec 04	subl	$0x4, %esp
+      29:	6a 00	pushl	$0x0
+      2b:	6a 00	pushl	$0x0
+      2d:	6a 01	pushl	$0x1
+      2f:	e8 cc ff ff ff	calll	_connect
+      34:	83 c4 10	addl	$0x10, %esp
+      37:	40	incl	%eax
+      38:	83 c4 08	addl	$0x8, %esp
+      3b:	5d	popl	%ebp
+      3c:	c3	retl
+Relocation information (__TEXT,__text) 2 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000030 True  long   True   VANILLA False     _connect
+00000010 True  long   True   VANILLA False     _connect
+Relocation information (__LD,__compact_unwind) 2 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000014 False long   False  VANILLA False     1 (__TEXT,__text)
+00000000 False long   False  VANILLA False     1 (__TEXT,__text)
+universal-mixed (architecture arm64):
+(__TEXT,__text) section
+_zero:
+     3d8:	fd 7b bf a9	stp	x29, x30, [sp, #-0x10]!
+     3dc:	fd 03 00 91	mov	x29, sp
+     3e0:	00 00 80 52	mov	w0, #0x0
+     3e4:	01 00 80 d2	mov	x1, #0x0
+     3e8:	02 00 80 52	mov	w2, #0x0
+     3ec:	0d 00 00 94	bl	0x420 ; symbol stub for: _connect
+     3f0:	00 04 00 11	add	w0, w0, #0x1
+     3f4:	fd 7b c1 a8	ldp	x29, x30, [sp], #0x10
+     3f8:	c0 03 5f d6	ret
+_one:
+     3fc:	fd 7b bf a9	stp	x29, x30, [sp, #-0x10]!
+     400:	fd 03 00 91	mov	x29, sp
+     404:	20 00 80 52	mov	w0, #0x1
+     408:	01 00 80 d2	mov	x1, #0x0
+     40c:	02 00 80 52	mov	w2, #0x0
+     410:	04 00 00 94	bl	0x420 ; symbol stub for: _connect
+     414:	00 04 00 11	add	w0, w0, #0x1
+     418:	fd 7b c1 a8	ldp	x29, x30, [sp], #0x10
+     41c:	c0 03 5f d6	ret

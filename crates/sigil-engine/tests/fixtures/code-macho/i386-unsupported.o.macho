@@ -1,0 +1,105 @@
+i386-unsupported.o:
+dyld information:
+segment section address pointer    type   addend dylib symbol/vm address
+Contents of __compact_unwind section:
+  Entry at offset 0x0:
+    start:                0x0 _zero
+    length:               0x1d
+    compact encoding:     0x01000000
+  Entry at offset 0x14:
+    start:                0x20 _one
+    length:               0x1d
+    compact encoding:     0x01000000
+Mach header
+      magic cputype cpusubtype  caps    filetype ncmds sizeofcmds      flags
+   MH_MAGIC    I386        ALL  0x00      OBJECT     4        380 SUBSECTIONS_VIA_SYMBOLS
+Load command 0
+      cmd LC_SEGMENT
+  cmdsize 260
+  segname 
+   vmaddr 0x00000000
+   vmsize 0x000000b8
+  fileoff 408
+ filesize 184
+  maxprot rwx
+ initprot rwx
+   nsects 3
+    flags (none)
+Section
+  sectname __text
+   segname __TEXT
+      addr 0x00000000
+      size 0x0000003d
+    offset 408
+     align 2^4 (16)
+    reloff 592
+    nreloc 2
+      type S_REGULAR
+attributes PURE_INSTRUCTIONS SOME_INSTRUCTIONS
+ reserved1 0
+ reserved2 0
+Section
+  sectname __compact_unwind
+   segname __LD
+      addr 0x00000040
+      size 0x00000028
+    offset 472
+     align 2^2 (4)
+    reloff 608
+    nreloc 2
+      type S_REGULAR
+attributes DEBUG
+ reserved1 0
+ reserved2 0
+Section
+  sectname __eh_frame
+   segname __TEXT
+      addr 0x00000068
+      size 0x00000050
+    offset 512
+     align 2^2 (4)
+    reloff 0
+    nreloc 0
+      type S_COALESCED
+attributes NO_TOC STRIP_STATIC_SYMS LIVE_SUPPORT
+ reserved1 0
+ reserved2 0
+Load command 1
+      cmd LC_VERSION_MIN_MACOSX
+  cmdsize 16
+  version 10.13
+      sdk n/a
+Load command 2
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 624
+   nsyms 3
+  stroff 660
+ strsize 24
+Load command 3
+            cmd LC_DYSYMTAB
+        cmdsize 80
+      ilocalsym 0
+      nlocalsym 0
+     iextdefsym 0
+     nextdefsym 2
+      iundefsym 2
+      nundefsym 1
+         tocoff 0
+           ntoc 0
+      modtaboff 0
+        nmodtab 0
+   extrefsymoff 0
+    nextrefsyms 0
+ indirectsymoff 0
+  nindirectsyms 0
+      extreloff 0
+        nextrel 0
+      locreloff 0
+        nlocrel 0
+
+Bind table:
+segment  section            address    type       addend dylib            symbol
+
+Lazy bind table:
+segment  section            address     dylib            symbol

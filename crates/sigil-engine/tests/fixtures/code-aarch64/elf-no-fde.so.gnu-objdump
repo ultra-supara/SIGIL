@@ -1,0 +1,45 @@
+
+elf-no-fde.so:     file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+00000000000102d8 <zero>:
+   102d8:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
+   102dc:	2a1f03e0 	mov	w0, wzr
+   102e0:	aa1f03e1 	mov	x1, xzr
+   102e4:	2a1f03e2 	mov	w2, wzr
+   102e8:	910003fd 	mov	x29, sp
+   102ec:	94000015 	bl	10340 <connect@plt>
+   102f0:	11000400 	add	w0, w0, #0x1
+   102f4:	a8c17bfd 	ldp	x29, x30, [sp], #16
+   102f8:	d65f03c0 	ret
+
+00000000000102fc <one>:
+   102fc:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
+   10300:	52800020 	mov	w0, #0x1                   	// #1
+   10304:	aa1f03e1 	mov	x1, xzr
+   10308:	2a1f03e2 	mov	w2, wzr
+   1030c:	910003fd 	mov	x29, sp
+   10310:	9400000c 	bl	10340 <connect@plt>
+   10314:	11000400 	add	w0, w0, #0x1
+   10318:	a8c17bfd 	ldp	x29, x30, [sp], #16
+   1031c:	d65f03c0 	ret
+
+Disassembly of section .plt:
+
+0000000000010320 <connect@plt-0x20>:
+   10320:	a9bf7bf0 	stp	x16, x30, [sp, #-16]!
+   10324:	90000110 	adrp	x16, 30000 <_DYNAMIC+0xfcb0>
+   10328:	f9420a11 	ldr	x17, [x16, #1040]
+   1032c:	91104210 	add	x16, x16, #0x410
+   10330:	d61f0220 	br	x17
+   10334:	d503201f 	nop
+   10338:	d503201f 	nop
+   1033c:	d503201f 	nop
+
+0000000000010340 <connect@plt>:
+   10340:	90000110 	adrp	x16, 30000 <_DYNAMIC+0xfcb0>
+   10344:	f9420e11 	ldr	x17, [x16, #1048]
+   10348:	91106210 	add	x16, x16, #0x418
+   1034c:	d61f0220 	br	x17

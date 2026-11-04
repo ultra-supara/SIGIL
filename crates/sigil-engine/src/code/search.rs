@@ -951,6 +951,7 @@ mod tests {
         assert_eq!(
             rec.call_sites[0].target,
             sigil_model::CallTarget::Import {
+                macho_import: None,
                 symbol: sigil_model::UntrustedText::from_bytes(b"connect".to_vec()),
                 via: ImportVia::Plt
             }
@@ -1247,6 +1248,7 @@ mod tests {
         assert_eq!(
             rec.call_sites[0].target,
             sigil_model::CallTarget::Import {
+                macho_import: None,
                 symbol: sigil_model::UntrustedText::from_bytes(b"connect".to_vec()),
                 via: ImportVia::Reloc
             }

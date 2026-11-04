@@ -59,6 +59,8 @@ pub enum PolicyWarning {
 /// with this build. `ComponentDatabase`, `CapabilityId`, and `Signatures` are internal errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluateError {
+    /// Multiarch capability evaluation awaits slice-aware reasons and library-aware matching.
+    MultiarchCapabilitiesNotEnabled,
     /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
     /// resting on one of them could become settled or unsettled.
     AssumptionsChanged(Vec<AssumptionId>),
@@ -96,6 +98,9 @@ impl fmt::Display for EvaluateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let list = |items: Vec<&str>| items.join(", ");
         match self {
+            EvaluateError::MultiarchCapabilitiesNotEnabled => {
+                write!(f, "multiarch capability policy is not enabled")
+            }
             EvaluateError::AssumptionsChanged(ids) => write!(
                 f,
                 "the policy changes the acceptance of {}; analyze again with this policy",
@@ -300,6 +305,9 @@ fn capabilities(
     let id_error = |e: sigil_model::IdError| EvaluateError::CapabilityId(e.to_string());
     let mut violations = vec![];
     let mut questions = vec![];
+    if session.request.code_analysis.is_some() && !policy.capabilities.is_empty() {
+        return Err(EvaluateError::MultiarchCapabilitiesNotEnabled);
+    }
     if policy.capabilities.is_empty() || session.binaries.is_empty() {
         return Ok((violations, questions));
     }

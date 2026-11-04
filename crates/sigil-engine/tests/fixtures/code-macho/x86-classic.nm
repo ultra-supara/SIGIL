@@ -1,0 +1,6 @@
+                                  U _connect
+                                  U dyld_stub_binder
+0000000000000520 0000000000000000 T _zero
+0000000000000540 0000000000000000 T _one
+0000000000003008 0000000000000000 d __dyld_private
+/usr/bin/llvm-nm-21: warning: sizes with --print-size for Mach-O files are always zero.

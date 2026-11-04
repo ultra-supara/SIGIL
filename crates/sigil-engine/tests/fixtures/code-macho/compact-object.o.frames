@@ -1,0 +1,7 @@
+compact-object.o:	file format Mach-O arm64
+
+.debug_frame contents:
+
+
+.eh_frame contents:
+

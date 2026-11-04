@@ -1,0 +1,4 @@
+
+Relocation section '.rela.dyn' at offset 0x2b0 contains 1 entry:
+    Offset             Info             Type               Symbol's Value  Symbol's Name + Addend
+0000000000020450  0000000100000401 R_AARCH64_GLOB_DAT     0000000000000000 connect + 0

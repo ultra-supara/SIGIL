@@ -743,6 +743,7 @@ fn installation_code_scope_defaults_to_required_and_can_be_opted_out() {
 #[test]
 fn scope_input_of_finds_binary_roots() {
     let mut request = sigil_model::RunRequest {
+        code_analysis: None,
         mode: Mode::Static,
         roots: vec![sigil_model::ScanRoot {
             id: sigil_model::binary_root(1).unwrap(),

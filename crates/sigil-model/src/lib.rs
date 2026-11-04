@@ -28,6 +28,8 @@ pub mod binary;
 pub mod binary_input;
 pub mod canonical;
 pub mod code;
+pub mod code_abi;
+pub mod code_coverage;
 pub mod coverage;
 pub mod dependency_path;
 pub mod dependency_search;
@@ -53,10 +55,10 @@ pub use access::{
     PrincipalClaim, WriteAccess, WriteCapability,
 };
 pub use artifact::{
-    Arch, Artifact, DiscoverySource, ElfType, FileInstance, Format, InstanceContent, LinkHop,
-    MappingObs, MapsRead, NotReadReason, NsInode, ProcessExe, ProcessObs, ProcessRef,
-    RecordedDirectory, RecordedPathProof, Slice, Stability, StatInfo, PROCESSES_OBSERVED,
-    RUNTIME_ROLE,
+    Arch, Artifact, CodeSliceInventory, DiscoverySource, ElfType, FileInstance, Format,
+    InstanceContent, LinkHop, MappingObs, MapsRead, NotReadReason, NsInode, ProcessExe, ProcessObs,
+    ProcessRef, RecordedDirectory, RecordedPathProof, Slice, Stability, StatInfo,
+    PROCESSES_OBSERVED, RUNTIME_ROLE,
 };
 pub use binary::{
     imports_over_gap, macho_architecture, BinaryFacts, ContainerFacts, DataSymbol, DataValue,
@@ -77,8 +79,8 @@ pub use binary_input::{
     SCAN_NO_SECTIONS, SCAN_READ_FAILED,
 };
 pub use code::{
-    ArgValue, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite, CallTarget,
-    CheckResult, CheckUnknown, CloseCheck, CmpOp, CodeFacts, ExitKind, FnRef, Function,
+    ArgValue, ArgumentLayout, Atom, BinaryParam, BoundsSource, CallKind, CallRef, CallSite,
+    CallTarget, CheckResult, CheckUnknown, CloseCheck, CmpOp, CodeFacts, ExitKind, FnRef, Function,
     GuardBranch, GuardCond, GuardRegion, ImportVia, ObligationRef, ParamMapping, PredicateCheck,
     Reg, RegionKind, SourceParamRef, ValueUnknown,
 };
@@ -127,8 +129,8 @@ pub use relation::{
 };
 pub use render::aibom::AiBom;
 pub use session::{
-    KnowledgeKind, KnowledgeRef, Mode, ObservationMeta, RunRequest, ScanRoot, SchemaVersion,
-    Session, ToolInfo,
+    CodeAnalysis, KnowledgeKind, KnowledgeRef, Mode, ObservationMeta, RunRequest, ScanRoot,
+    SchemaVersion, Session, ToolInfo,
 };
 pub use text::UntrustedText;
 pub use validate::{ValidatedSession, ValidationError};

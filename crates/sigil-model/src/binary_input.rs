@@ -261,7 +261,10 @@ pub(crate) fn container(
 /// the state of its one `binary.container` entry, which B9 must admit, since its `used` is the
 /// engine's count. `Err` for an input [`expected_binary_container`] cannot judge, or one over
 /// `binary_bytes` without exactly such an entry.
-fn container_state(lookup: &SessionLookup<'_>, i: &FileInstance) -> Result<CoverageState, String> {
+pub(crate) fn container_state(
+    lookup: &SessionLookup<'_>,
+    i: &FileInstance,
+) -> Result<CoverageState, String> {
     match container(lookup, i)? {
         expected @ ExpectedContainer::OverBytes { .. } => {
             match lookup.container_entry(&i.id) {

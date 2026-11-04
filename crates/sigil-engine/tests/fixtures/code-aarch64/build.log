@@ -1,0 +1,190 @@
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -O0 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o elf-clang-o0.o
+clang-21: warning: argument unused during compilation: '--ld-path=/usr/bin/ld.lld-21' [-Wunused-command-line-argument]
+
+$ /usr/bin/llvm-objdump-21 -dr elf-clang-o0.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-clang-o0.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-clang-o0.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-clang-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-clang-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-clang-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-clang-o0.o
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -O2 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o elf-clang-o2.o
+clang-21: warning: argument unused during compilation: '--ld-path=/usr/bin/ld.lld-21' [-Wunused-command-line-argument]
+
+$ /usr/bin/llvm-objdump-21 -dr elf-clang-o2.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-clang-o2.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-clang-o2.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-clang-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-clang-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-clang-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-clang-o2.o
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -O2 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o clang-plt.o
+clang-21: warning: argument unused during compilation: '--ld-path=/usr/bin/ld.lld-21' [-Wunused-command-line-argument]
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -nostdlib -shared -Wl,--build-id=none -Wl,-soname,libsigil-fixture.so clang-plt.o -o elf-clang-plt.so
+
+$ /usr/bin/llvm-objdump-21 -dr elf-clang-plt.so
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-clang-plt.so
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-clang-plt.so
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-clang-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-clang-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-clang-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-clang-plt.so
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -fno-plt -O2 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o clang-got.o
+clang-21: warning: argument unused during compilation: '--ld-path=/usr/bin/ld.lld-21' [-Wunused-command-line-argument]
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -nostdlib -shared -Wl,--build-id=none -Wl,-soname,libsigil-fixture.so clang-got.o -o elf-clang-got.so
+
+$ /usr/bin/llvm-objdump-21 -dr elf-clang-got.so
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-clang-got.so
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-clang-got.so
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-clang-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-clang-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-clang-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-clang-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -B <repo>/target/tmp/issue48/toolchains/binutils-driver/bin/ -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -O0 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o elf-gcc-o0.o
+
+$ /usr/bin/llvm-objdump-21 -dr elf-gcc-o0.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-gcc-o0.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-gcc-o0.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-gcc-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-gcc-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-gcc-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-gcc-o0.o
+
+$ <repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -B <repo>/target/tmp/issue48/toolchains/binutils-driver/bin/ -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -O2 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o elf-gcc-o2.o
+
+$ /usr/bin/llvm-objdump-21 -dr elf-gcc-o2.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-gcc-o2.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-gcc-o2.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-gcc-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-gcc-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-gcc-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-gcc-o2.o
+
+$ <repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -B <repo>/target/tmp/issue48/toolchains/binutils-driver/bin/ -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -O2 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o gcc-plt.o
+
+$ <repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -B <repo>/target/tmp/issue48/toolchains/binutils-driver/bin/ -nostdlib -shared -Wl,--build-id=none -Wl,-soname,libsigil-fixture.so gcc-plt.o -o elf-gcc-plt.so
+
+$ /usr/bin/llvm-objdump-21 -dr elf-gcc-plt.so
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-gcc-plt.so
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-gcc-plt.so
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-gcc-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-gcc-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-gcc-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-gcc-plt.so
+
+$ <repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -B <repo>/target/tmp/issue48/toolchains/binutils-driver/bin/ -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -fno-plt -O2 -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o gcc-got.o
+
+$ <repo>/target/tmp/issue48/toolchains/gcc-15.3/gcc-15.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -B <repo>/target/tmp/issue48/toolchains/binutils-driver/bin/ -nostdlib -shared -Wl,--build-id=none -Wl,-soname,libsigil-fixture.so gcc-got.o -o elf-gcc-got.so
+
+$ /usr/bin/llvm-objdump-21 -dr elf-gcc-got.so
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-gcc-got.so
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-gcc-got.so
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-gcc-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-gcc-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-gcc-got.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-gcc-got.so
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu -fPIC -fno-ident -fno-optimize-sibling-calls -fasynchronous-unwind-tables -ffile-prefix-map=<repo>=. -fdebug-prefix-map=<repo>=. -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.S -o elf-cases.o
+
+$ /usr/bin/llvm-objdump-21 -dr elf-cases.o
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-cases.o
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-cases.o
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-cases.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-cases.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-cases.o
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-cases.o
+
+$ /usr/bin/ld.lld-21 -shared --build-id=none -soname libsigil-fixture.so elf-cases.o -o elf-cases.so
+
+$ /usr/bin/llvm-objdump-21 -dr elf-cases.so
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-cases.so
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-cases.so
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-cases.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-cases.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-cases.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-cases.so
+
+$ /usr/bin/clang-21 -target aarch64-linux-gnu --ld-path=/usr/bin/ld.lld-21 -fPIC -fno-ident -O2 -fno-optimize-sibling-calls -fno-unwind-tables -fno-asynchronous-unwind-tables -c <repo>/crates/sigil-engine/tests/fixtures/code-aarch64/calls.c -o no-fde.o
+clang-21: warning: argument unused during compilation: '--ld-path=/usr/bin/ld.lld-21' [-Wunused-command-line-argument]
+
+$ /usr/bin/ld.lld-21 -shared --build-id=none no-fde.o -o elf-no-fde.so
+
+$ /usr/bin/llvm-objdump-21 -dr elf-no-fde.so
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations elf-no-fde.so
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame elf-no-fde.so
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size elf-no-fde.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-objdump -dr elf-no-fde.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf --debug-dump=frames elf-no-fde.so
+
+$ <repo>/target/tmp/issue48/toolchains/binutils-2.46/usr/bin/aarch64-linux-gnu-readelf -rW elf-no-fde.so

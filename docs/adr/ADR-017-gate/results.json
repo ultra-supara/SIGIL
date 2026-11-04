@@ -1,0 +1,841 @@
+{
+  "date": "2026-11-02",
+  "baseline": "f1ea809b3a8f9e86b36092f5580b9777f206c4c1",
+  "status": "corrected technical subset gate passed; independent rereview pending; product integration deferred",
+  "sources": {
+    "yaxpeax-arm": {
+      "version": "0.5.0",
+      "archive_sha256": "79f8d9808ad0b7e434882c66e50704138e7c0bdf3408a9f3159c50603dc3168c",
+      "files": {
+        "src/armv8/a64.rs": "58ffca1c27c5c4f0f12c2afb1253e4a6f735891746c0d7fa63e997c7262ba0d9"
+      }
+    },
+    "yaxpeax-arch": {
+      "version": "0.3.3",
+      "archive_sha256": "fb869f86d5a365bf741d9df773f7a5347757b1c466b7383b74989324785ef36b",
+      "files": {
+        "src/reader.rs": "fcb39966386ae199c214a8f6cd505e6a1d51a1fdac849c0f137aee03d635e648",
+        "src/lib.rs": "29021a863e3484661f096724b8397145e79985e114e11a69219b30bba7204da5"
+      }
+    },
+    "disarm64": {
+      "version": "0.2.0",
+      "archive_sha256": "b40cb278f87c9a57ef6bc51a7b04d4b6097fea24ef50921e8de4a51f06304be0",
+      "files": {
+        "src/decoder_full.rs": "6115df768d82c33bbd3f53781292f95d6c9e0e0ac7fd2abaa77aac9523213644"
+      },
+      "decode_index": {
+        "literal_returns": 3774,
+        "min": 0,
+        "max": 3773,
+        "table_lengths": [
+          3774,
+          3774
+        ],
+        "acyclic": true
+      }
+    },
+    "lock_sha256": "2f89a254c7187466ba58ab20f550b7d4404c320702c25805d1d98e7a47527018"
+  },
+  "oracle": {
+    "fixture_inventory": [
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "b5f45b314bf09cce98a35d9654f0823fb906e0ffb8655828be123951e91152f1",
+        "action": "compare",
+        "instruction_rows": 65
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.so.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.so",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "6786637b52d14e5846bd720736ba829db05611f0cae24eb1e38a7de18314966f",
+        "action": "compare",
+        "instruction_rows": 81
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-got.so.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-got.so",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "8c2255e3122686e89964bd85c1173747aed3fd9cac1cd9e81b6e521a724eac63",
+        "action": "compare",
+        "instruction_rows": 22
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o0.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o0.o",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "df1d22a4f86e6fb623a097a85f66b7464d55f95149cc5d0f5d2cca48e2648e8f",
+        "action": "compare",
+        "instruction_rows": 18
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o2.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o2.o",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "75f980f85f344fe0b5f5e1ca55f6511e58227259e7773775b8ecd1e49a60d58b",
+        "action": "compare",
+        "instruction_rows": 18
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "84274051d79bf8bc303bfa9874e8f554c6bacc9c30f6f1593401d29ed11d652c",
+        "action": "compare",
+        "instruction_rows": 30
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-got.so.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-got.so",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "8c5587bfcea76772bb4a0d44675f8c86aa03a4f81f4e46eaeccd0bc2f8b213db",
+        "action": "compare",
+        "instruction_rows": 22
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o0.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o0.o",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "d58d16719a7829fac6e2db35c6b8b94c61ff3b46351b3490c54f542e8274e78f",
+        "action": "compare",
+        "instruction_rows": 18
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o2.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o2.o",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "79717aeb04bc93a6fecf1b222c0209307720391164743d01ab57e4a81ecf05e4",
+        "action": "compare",
+        "instruction_rows": 18
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-plt.so.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-plt.so",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "082a12dac8a9efe85e668a4f68a07744b3cdd9c7c6c85b2da97a4bfee3707b00",
+        "action": "compare",
+        "instruction_rows": 30
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-no-fde.so.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-no-fde.so",
+        "format": "elf",
+        "architecture": "aarch64",
+        "sha256": "c45a58205e1df4385be5b637f6f7721b75b2a9bb7551b8faa2c40fb5de302295",
+        "action": "compare",
+        "instruction_rows": 30
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/arm64-cases.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/arm64-cases.o",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "a6fd45c18c55de6bac5825f0d2dfa047ae80692967cb376b81ee916bf43748b3",
+        "action": "compare",
+        "instruction_rows": 65
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/arm64-cases.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/arm64-cases",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "5062261aef12c379a3be63945b237d51015d8c9eecccf88c88079ef01e732e29",
+        "action": "compare",
+        "instruction_rows": 77
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/arm64-chained.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/arm64-chained",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f",
+        "action": "compare",
+        "instruction_rows": 21
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/arm64-classic.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/arm64-classic",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "154d9bf8aaf028e6d5bc682634343018516586bcf787714d0456ed3f40eecbc5",
+        "action": "compare",
+        "instruction_rows": 30
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/arm64-object.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/arm64-object.o",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4",
+        "action": "compare",
+        "instruction_rows": 18
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/compact-object.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/compact-object.o",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "fc1ceb3aa6a6938c8ca4ca5af724c7e24495fd66ce91e319237b05015ccd8fad",
+        "action": "compare",
+        "instruction_rows": 18
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/duplicate-name-dylibs.before.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/duplicate-name-dylibs.before",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "5c09c764c1e4ea3b7889c602e56ddc73eab63c8c37138f98dcd3baa382388946",
+        "action": "compare",
+        "instruction_rows": 45
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/duplicate-name-dylibs.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/duplicate-name-dylibs",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123",
+        "action": "compare",
+        "instruction_rows": 45
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/i386-unsupported.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/i386-unsupported.o",
+        "format": "macho32",
+        "architecture": "other",
+        "sha256": "14335e412f3195ea143a179362a107faace9d0ed576cb9c1258a606847525a4a",
+        "action": "exclude-non-aarch64"
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/no-unwind.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/no-unwind",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "dc8fcc35e9785f2c46b2179a2f63dd15f6b58124733a7d2d89a161ae63f60ed7",
+        "action": "compare",
+        "instruction_rows": 30
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/universal-mixed.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/universal-mixed",
+        "format": "fat",
+        "architecture": "multiple",
+        "sha256": "294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6",
+        "action": "accounted-fat-slices",
+        "slices": [
+          {
+            "slice_index": 0,
+            "cpu": 7,
+            "offset": 4096,
+            "size": 684,
+            "sha256": "14335e412f3195ea143a179362a107faace9d0ed576cb9c1258a606847525a4a",
+            "architecture": "other",
+            "action": "exclude-non-aarch64"
+          },
+          {
+            "slice_index": 1,
+            "cpu": 16777228,
+            "offset": 16384,
+            "size": 33008,
+            "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f",
+            "architecture": "aarch64",
+            "action": "deduplicate-identical-thin",
+            "source": "crates/sigil-engine/tests/fixtures/code-macho/arm64-chained"
+          }
+        ]
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/universal.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/universal",
+        "format": "fat",
+        "architecture": "multiple",
+        "sha256": "bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1",
+        "action": "accounted-fat-slices",
+        "slices": [
+          {
+            "slice_index": 0,
+            "cpu": 16777223,
+            "offset": 4096,
+            "size": 16624,
+            "sha256": "a347b198c4a20dd4f83ab6d063f8e55c3a1c24063f2ba951cd06c41d6179017f",
+            "architecture": "other",
+            "action": "exclude-non-aarch64"
+          },
+          {
+            "slice_index": 1,
+            "cpu": 16777228,
+            "offset": 32768,
+            "size": 33008,
+            "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f",
+            "architecture": "aarch64",
+            "action": "deduplicate-identical-thin",
+            "source": "crates/sigil-engine/tests/fixtures/code-macho/arm64-chained"
+          }
+        ]
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/unwind-folded.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/unwind-folded",
+        "format": "macho",
+        "architecture": "aarch64",
+        "sha256": "4ad95ce548779164928f4d111a6f7f121a48297c39d460256fbaa0b1d4ceae85",
+        "action": "compare",
+        "instruction_rows": 30
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/x86-cases.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/x86-cases.o",
+        "format": "macho",
+        "architecture": "other",
+        "sha256": "fc9e3f734c92515638e4324685dd4b53b90c9dde27250887691b54a6edfff0aa",
+        "action": "exclude-non-aarch64"
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/x86-cases.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/x86-cases",
+        "format": "macho",
+        "architecture": "other",
+        "sha256": "b5792374a9579a80c9f1071cbbc2799cae136a6b78161b9012dcd7975c0603c0",
+        "action": "exclude-non-aarch64"
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/x86-chained.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/x86-chained",
+        "format": "macho",
+        "architecture": "other",
+        "sha256": "424e2f6450db6303b69796f422fdb6485f64a9540d1e83bda4952b195d20d189",
+        "action": "exclude-non-aarch64"
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/x86-classic.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/x86-classic",
+        "format": "macho",
+        "architecture": "other",
+        "sha256": "a347b198c4a20dd4f83ab6d063f8e55c3a1c24063f2ba951cd06c41d6179017f",
+        "action": "exclude-non-aarch64"
+      },
+      {
+        "dump": "crates/sigil-engine/tests/fixtures/code-macho/x86-object.o.objdump",
+        "image": "crates/sigil-engine/tests/fixtures/code-macho/x86-object.o",
+        "format": "macho",
+        "architecture": "other",
+        "sha256": "c594e3535e58f4c02d88bc24619c35b6ee9cd5ae75dea0c24ae419e524ef3379",
+        "action": "exclude-non-aarch64"
+      }
+    ],
+    "gnu_relocation_rendering_differences": {
+      "count": 15,
+      "records": [
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x64",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0x90",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0xb8",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\tcc <helper>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0xc0",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-cases.o.gnu-objdump",
+          "pc": "0xec",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o0.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o0.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o2.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-clang-o2.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o0.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o0.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o2.o.gnu-objdump",
+          "pc": "0x14",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        },
+        {
+          "file": "crates/sigil-engine/tests/fixtures/code-aarch64/elf-gcc-o2.o.gnu-objdump",
+          "pc": "0x38",
+          "word": "94000000",
+          "gnu_relocated_rendering": "bl\t0 <connect>",
+          "raw_semantics": [
+            "bl",
+            0
+          ]
+        }
+      ]
+    },
+    "original_fixture_address_checks": {
+      "llvm": 707,
+      "gnu": 348,
+      "unsupported": 28
+    },
+    "fixture_rows": 731,
+    "unique_total_words": 178921,
+    "unique_eligible": 178917,
+    "rejected_fixture_words": [
+      "00000000",
+      "0000000f",
+      "18000050",
+      "d503233f"
+    ],
+    "input_sha256": "37a831f52888fdfb38cdf32f0def5adf46fd38cb91fa96a41edeafcae384ad0c",
+    "llvm": {
+      "count": 178917,
+      "errors": 0,
+      "first": []
+    },
+    "gnu": {
+      "count": 178917,
+      "errors": 0,
+      "first": []
+    }
+  },
+  "unwind": {
+    "folded_entries": [
+      [
+        1216,
+        67108864
+      ]
+    ],
+    "folded_lookup_end": 1288,
+    "regular_and_compressed_equivalent": true,
+    "compressed_local_encoding": true,
+    "malformed_rejected": [
+      "version",
+      "common extent",
+      "index count",
+      "page kind",
+      "page count",
+      "entry offset",
+      "encoding index",
+      "delta escapes range",
+      "local count",
+      "zero encoding",
+      "truncate 0",
+      "truncate 27",
+      "truncate 63",
+      "truncate 67",
+      "truncate 71"
+    ],
+    "fde_exact_intervals": [
+      [
+        1312,
+        1348
+      ],
+      [
+        1348,
+        1384
+      ]
+    ],
+    "compact_object_text_offsets": [
+      [
+        0,
+        36
+      ],
+      [
+        36,
+        72
+      ]
+    ],
+    "compact_object_file_intervals": [
+      [
+        392,
+        428
+      ],
+      [
+        428,
+        464
+      ]
+    ],
+    "native_linked_exact_intervals": [],
+    "note": "regular page is a synthetic derivative; native compact linked remains a missing-exact-bounds gap"
+  },
+  "runs": {
+    "run-193": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 126,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    },
+    "run-199": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 122,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    },
+    "measure-193-yax": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 84,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    },
+    "measure-193-disarm": {
+      "total": 1103289,
+      "eligible": 179358,
+      "yax_errors": 0,
+      "disarm_errors": 0,
+      "allocations": 0,
+      "duration_ms": 87,
+      "seed": "0x48c0ffee",
+      "panic": "abort",
+      "first_error": null
+    }
+  },
+  "checks": {
+    "native_1.93": true,
+    "native_1.99": true,
+    "wasm32_1.93_compile": true,
+    "wasm32_1.99_compile": true,
+    "clippy_1.93_warnings_denied": true,
+    "rustfmt_1.93": true,
+    "fixture_oracles": "10 originals accepted, 17 binary mutations rejected, publication/refresh guards passed",
+    "product_bans": "deferred to M3-B actual product graph; product dependencies unchanged",
+    "oracle_shift_and_inventory_regressions": true
+  },
+  "compiler_versions": {
+    "1.93.0": [
+      "rustc 1.93.0 (254b59607 2026-01-19)",
+      "binary: rustc",
+      "commit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c",
+      "commit-date: 2026-01-19",
+      "host: x86_64-unknown-linux-gnu",
+      "release: 1.93.0",
+      "LLVM version: 21.1.8"
+    ],
+    "1.99.0": [
+      "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "binary: rustc",
+      "commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
+      "commit-date: 2026-09-28",
+      "host: x86_64-unknown-linux-gnu",
+      "release: 1.99.0",
+      "LLVM version: 23.1.1"
+    ]
+  },
+  "tools": {
+    "clang-21": {
+      "sha256": "3a0f9481c3c29fce75adcb7f6c989e0db14b422c431659cf346bb9efdfcb1f04"
+    },
+    "llvm-objdump-21": {
+      "sha256": "eba9e4cfdc55997c8cd67825c47c2076820aa0ba1d8cfb3372c150ed3ee0b766"
+    },
+    "llvm-objcopy-21": {
+      "sha256": "50793a4a12b68f3d4adb0cc7eaeeed50a16f4a29ecbabae916c5b4e1ed48e8a6"
+    },
+    "aarch64-linux-gnu-objdump": {
+      "sha256": "f169f3bd85dd3c44f640cdb0980cae98ca0bd585e755e909bdc146e019c0fe33"
+    }
+  },
+  "llvm_source_sha256": {
+    "compact_unwind_encoding.h": "06f58e9d0058583b6da91ca2328fa663f80d089496a4979754ee7608fe9bd877",
+    "UnwindInfoSection.cpp": "6878f7e98aed118613370ceadb8cb73fd0021af60defb1cadc5a966f85ad6365"
+  },
+  "harness_sha256": {
+    "Cargo.lock": "2f89a254c7187466ba58ab20f550b7d4404c320702c25805d1d98e7a47527018",
+    "Cargo.toml": "6fd04efc0c318b89cf2f684a57d1ebcc9e62e45ca5e1b2717f1da85225fbfbb5",
+    "audit_sources.py": "c0f06843f941cae65b1e4239043a6c2e86fe1630c54414162e5181af8f499688",
+    "check_oracle_regressions.py": "790b5f740e65d310be57af02992dc7a11df5d2c868c93c0e5c5f796772aa86b0",
+    "check_oracles.py": "d1b7bce17f7d0d88ffd4bf044260a411bffea6de1bfce33d4a7572185316a903",
+    "check_unwind.py": "ccec0b243cb0ee80590bc5189f92f060faf06af7b9c142b6510b02da8da2fb15",
+    "src/main.rs": "b2d8e4d2b1e0dec683239f5660c22f9afcce29b17a627c798ca6bec9fb2ffe5a"
+  },
+  "oracle_compilers": {
+    "1.93.0": {
+      "unique_eligible": 178917,
+      "input_sha256": "37a831f52888fdfb38cdf32f0def5adf46fd38cb91fa96a41edeafcae384ad0c",
+      "llvm_errors": 0,
+      "gnu_errors": 0
+    },
+    "1.99.0": {
+      "unique_eligible": 178917,
+      "input_sha256": "37a831f52888fdfb38cdf32f0def5adf46fd38cb91fa96a41edeafcae384ad0c",
+      "llvm_errors": 0,
+      "gnu_errors": 0
+    },
+    "summaries_identical": true
+  },
+  "review_corrections": {
+    "reviewed_commit": "1323d1434d51064bb5d7974bb75ba3d22c9f3041",
+    "F1": "all 29 dump inventories accounted for by image header; 21 thin AArch64 inputs selected; two universal arm64 payloads byte/hash-verified against arm64-chained before deduplication",
+    "F2_before": {
+      "shift_projection": {
+        "exit_code": 1,
+        "expected_before_fix": 1
+      },
+      "full_register_shift": {
+        "exit_code": 0,
+        "expected_before_fix": 0
+      },
+      "coverage": {
+        "exit_code": 0,
+        "expected_before_fix": 0
+      }
+    },
+    "F2_before_projection": {
+      "word": "2a0103e0",
+      "correct_lsl_0_accepted": true,
+      "mutations": [
+        {
+          "label": "wrong_style",
+          "value": "RegShift(LSR, 0, W, 1)",
+          "incorrectly_matches_both_oracles": true
+        },
+        {
+          "label": "wrong_amount",
+          "value": "RegShift(LSL, 1, W, 1)",
+          "incorrectly_matches_both_oracles": true
+        },
+        {
+          "label": "wrong_style_and_amount",
+          "value": "RegShift(LSR, 1, W, 1)",
+          "incorrectly_matches_both_oracles": true
+        }
+      ]
+    },
+    "F2_after_full_seeded_mutation": {
+      "exit_code": 1,
+      "llvm_errors": 1,
+      "gnu_errors": 1,
+      "rejected_word": "2a0103e0"
+    },
+    "permanent_regressions": {
+      "shift_projection": [
+        {
+          "candidate": "yaxpeax",
+          "word": "2a0103e0",
+          "correct_lsl_0_accepted": true,
+          "mutations": [
+            {
+              "style": "LSR",
+              "amount": 0,
+              "rejected_by": {
+                "llvm": true,
+                "gnu": true
+              }
+            },
+            {
+              "style": "LSL",
+              "amount": 1,
+              "rejected_by": {
+                "llvm": true,
+                "gnu": true
+              }
+            },
+            {
+              "style": "LSR",
+              "amount": 1,
+              "rejected_by": {
+                "llvm": true,
+                "gnu": true
+              }
+            }
+          ]
+        },
+        {
+          "candidate": "disarm64",
+          "word": "2a0103e0",
+          "correct_lsl_0_accepted": true,
+          "mutations": [
+            {
+              "style": "LSR",
+              "amount": 0,
+              "rejected_by": {
+                "llvm": true,
+                "gnu": true
+              }
+            },
+            {
+              "style": "LSL",
+              "amount": 1,
+              "rejected_by": {
+                "llvm": true,
+                "gnu": true
+              }
+            },
+            {
+              "style": "LSR",
+              "amount": 1,
+              "rejected_by": {
+                "llvm": true,
+                "gnu": true
+              }
+            }
+          ]
+        }
+      ],
+      "explicit_text_shift_fields_retained": true,
+      "fixture_inventory_regressions": true,
+      "complete_checker_mutations": [
+        {
+          "style": "LSL",
+          "amount": 0,
+          "accepted": true,
+          "llvm_errors": 0,
+          "gnu_errors": 0
+        },
+        {
+          "style": "LSR",
+          "amount": 0,
+          "accepted": false,
+          "llvm_errors": 1,
+          "gnu_errors": 1
+        },
+        {
+          "style": "LSL",
+          "amount": 1,
+          "accepted": false,
+          "llvm_errors": 1,
+          "gnu_errors": 1
+        },
+        {
+          "style": "LSR",
+          "amount": 1,
+          "accepted": false,
+          "llvm_errors": 1,
+          "gnu_errors": 1
+        }
+      ]
+    }
+  }
+}

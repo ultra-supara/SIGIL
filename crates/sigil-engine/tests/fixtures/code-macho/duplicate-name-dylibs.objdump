@@ -1,0 +1,63 @@
+
+duplicate-name-dylibs:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000550 <_zero>:
+     550: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     554: 910003fd     	mov	x29, sp
+     558: 52800000     	mov	w0, #0x0                ; =0
+     55c: d2800001     	mov	x1, #0x0                ; =0
+     560: 52800002     	mov	w2, #0x0                ; =0
+     564: 94000016     	bl	0x5bc <dyld_stub_binder+0x5bc>
+     568: 11000400     	add	w0, w0, #0x1
+     56c: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     570: d65f03c0     	ret
+
+0000000000000574 <_one>:
+     574: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     578: 910003fd     	mov	x29, sp
+     57c: 52800020     	mov	w0, #0x1                ; =1
+     580: d2800001     	mov	x1, #0x0                ; =0
+     584: 52800002     	mov	w2, #0x0                ; =0
+     588: 9400000d     	bl	0x5bc <dyld_stub_binder+0x5bc>
+     58c: 11000400     	add	w0, w0, #0x1
+     590: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     594: d65f03c0     	ret
+
+0000000000000598 <_from_foo>:
+     598: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+     59c: 910003fd     	mov	x29, sp
+     5a0: 52800040     	mov	w0, #0x2                ; =2
+     5a4: d2800001     	mov	x1, #0x0                ; =0
+     5a8: 52800002     	mov	w2, #0x0                ; =0
+     5ac: 94000007     	bl	0x5c8 <dyld_stub_binder+0x5c8>
+     5b0: 11000400     	add	w0, w0, #0x1
+     5b4: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+     5b8: d65f03c0     	ret
+
+Disassembly of section __TEXT,__stubs:
+
+00000000000005bc <__stubs>:
+     5bc: 90000050     	adrp	x16, 0x8000 <dyld_stub_binder+0x8000>
+     5c0: f9400210     	ldr	x16, [x16]
+     5c4: d61f0200     	br	x16
+     5c8: 90000050     	adrp	x16, 0x8000 <dyld_stub_binder+0x8000>
+     5cc: f9400610     	ldr	x16, [x16, #0x8]
+     5d0: d61f0200     	br	x16
+
+Disassembly of section __TEXT,__stub_helper:
+
+00000000000005d4 <__stub_helper>:
+     5d4: 90000051     	adrp	x17, 0x8000 <dyld_stub_binder+0x8000>
+     5d8: 91004231     	add	x17, x17, #0x10
+     5dc: a9bf47f0     	stp	x16, x17, [sp, #-0x10]!
+     5e0: 90000030     	adrp	x16, 0x4000 <dyld_stub_binder+0x4000>
+     5e4: f9400210     	ldr	x16, [x16]
+     5e8: d61f0200     	br	x16
+     5ec: 18000050     	ldr	w16, 0x5f4 <__stub_helper+0x20>
+     5f0: 17fffff9     	b	0x5d4 <__stub_helper>
+     5f4: 00000000     	udf	#0x0
+     5f8: 18000050     	ldr	w16, 0x600 <__stub_helper+0x2c>
+     5fc: 17fffff6     	b	0x5d4 <__stub_helper>
+     600: 0000000f     	udf	#0xf

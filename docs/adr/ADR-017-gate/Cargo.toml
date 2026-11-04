@@ -1,0 +1,17 @@
+[package]
+name = "sigil-adr017-decoder-gate"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Deliberately independent: never linked into the SIGIL product/workspace.
+[workspace]
+
+[dependencies]
+yaxpeax-arm = { version = "=0.5.0", default-features = false, features = ["std", "non-exhaustive-enums"] }
+yaxpeax-arch = { version = "=0.3.3", default-features = false, features = ["std"] }
+disarm64 = { version = "=0.2.0", default-features = false, features = ["full"] }
+
+[profile.dev]
+debug = 0
+panic = "abort"

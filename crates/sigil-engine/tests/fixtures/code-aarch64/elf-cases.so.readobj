@@ -1,0 +1,413 @@
+
+File: elf-cases.so
+Format: elf64-littleaarch64
+Arch: aarch64
+AddressSize: 64bit
+LoadName: libsigil-fixture.so
+ElfHeader {
+  Ident {
+    Magic: (7F 45 4C 46)
+    Class: 64-bit (0x2)
+    DataEncoding: LittleEndian (0x1)
+    FileVersion: 1
+    OS/ABI: SystemV (0x0)
+    ABIVersion: 0
+    Unused: (00 00 00 00 00 00 00)
+  }
+  Type: SharedObject (0x3)
+  Machine: EM_AARCH64 (0xB7)
+  Version: 1
+  Entry: 0x0
+  ProgramHeaderOffset: 0x40
+  SectionHeaderOffset: 0xA60
+  Flags [ (0x0)
+  ]
+  HeaderSize: 64
+  ProgramHeaderEntrySize: 56
+  ProgramHeaderCount: 8
+  SectionHeaderEntrySize: 64
+  SectionHeaderCount: 16
+  StringTableSectionIndex: 14
+}
+Sections [
+  Section {
+    Index: 0
+    Name:  (0)
+    Type: SHT_NULL (0x0)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x0
+    Size: 0
+    Link: 0
+    Info: 0
+    AddressAlignment: 0
+    EntrySize: 0
+  }
+  Section {
+    Index: 1
+    Name: .dynsym (1)
+    Type: SHT_DYNSYM (0xB)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x200
+    Offset: 0x200
+    Size: 264
+    Link: 4
+    Info: 1
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 2
+    Name: .gnu.hash (9)
+    Type: SHT_GNU_HASH (0x6FFFFFF6)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x308
+    Offset: 0x308
+    Size: 76
+    Link: 1
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 0
+  }
+  Section {
+    Index: 3
+    Name: .hash (19)
+    Type: SHT_HASH (0x5)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x354
+    Offset: 0x354
+    Size: 96
+    Link: 1
+    Info: 0
+    AddressAlignment: 4
+    EntrySize: 4
+  }
+  Section {
+    Index: 4
+    Name: .dynstr (25)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x3B4
+    Offset: 0x3B4
+    Size: 146
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 5
+    Name: .rela.plt (33)
+    Type: SHT_RELA (0x4)
+    Flags [ (0x42)
+      SHF_ALLOC (0x2)
+      SHF_INFO_LINK (0x40)
+    ]
+    Address: 0x448
+    Offset: 0x448
+    Size: 48
+    Link: 1
+    Info: 11
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 6
+    Name: .eh_frame (43)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x2)
+      SHF_ALLOC (0x2)
+    ]
+    Address: 0x478
+    Offset: 0x478
+    Size: 300
+    Link: 0
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 0
+  }
+  Section {
+    Index: 7
+    Name: .text (53)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x6)
+      SHF_ALLOC (0x2)
+      SHF_EXECINSTR (0x4)
+    ]
+    Address: 0x105A4
+    Offset: 0x5A4
+    Size: 260
+    Link: 0
+    Info: 0
+    AddressAlignment: 4
+    EntrySize: 0
+  }
+  Section {
+    Index: 8
+    Name: .plt (59)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x20000006)
+      SHF_AARCH64_PURECODE (0x20000000)
+      SHF_ALLOC (0x2)
+      SHF_EXECINSTR (0x4)
+    ]
+    Address: 0x106B0
+    Offset: 0x6B0
+    Size: 64
+    Link: 0
+    Info: 0
+    AddressAlignment: 16
+    EntrySize: 0
+  }
+  Section {
+    Index: 9
+    Name: .dynamic (64)
+    Type: SHT_DYNAMIC (0x6)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x206F0
+    Offset: 0x6F0
+    Size: 192
+    Link: 4
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 16
+  }
+  Section {
+    Index: 10
+    Name: .relro_padding (73)
+    Type: SHT_NOBITS (0x8)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x207B0
+    Offset: 0x7B0
+    Size: 2128
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 11
+    Name: .got.plt (88)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x3)
+      SHF_ALLOC (0x2)
+      SHF_WRITE (0x1)
+    ]
+    Address: 0x307B0
+    Offset: 0x7B0
+    Size: 40
+    Link: 0
+    Info: 0
+    AddressAlignment: 8
+    EntrySize: 0
+  }
+  Section {
+    Index: 12
+    Name: .comment (97)
+    Type: SHT_PROGBITS (0x1)
+    Flags [ (0x30)
+      SHF_MERGE (0x10)
+      SHF_STRINGS (0x20)
+    ]
+    Address: 0x0
+    Offset: 0x7D8
+    Size: 26
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 1
+  }
+  Section {
+    Index: 13
+    Name: .symtab (106)
+    Type: SHT_SYMTAB (0x2)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x7F8
+    Size: 336
+    Link: 15
+    Info: 4
+    AddressAlignment: 8
+    EntrySize: 24
+  }
+  Section {
+    Index: 14
+    Name: .shstrtab (114)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x948
+    Size: 132
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+  Section {
+    Index: 15
+    Name: .strtab (124)
+    Type: SHT_STRTAB (0x3)
+    Flags [ (0x0)
+    ]
+    Address: 0x0
+    Offset: 0x9CC
+    Size: 141
+    Link: 0
+    Info: 0
+    AddressAlignment: 1
+    EntrySize: 0
+  }
+]
+Relocations [
+  Section (5) .rela.plt {
+    0x307C8 R_AARCH64_JUMP_SLOT connect 0x0
+    0x307D0 R_AARCH64_JUMP_SLOT helper 0x0
+  }
+]
+Symbols [
+  Symbol {
+    Name:  (0)
+    Value: 0x0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: Undefined (0x0)
+  }
+  Symbol {
+    Name: $x (1)
+    Value: 0x105A4
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: $d (4)
+    Value: 0x478
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other: 0
+    Section: .eh_frame (0x6)
+  }
+  Symbol {
+    Name: _DYNAMIC (132)
+    Value: 0x206F0
+    Size: 0
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Other [ (0x2)
+      STV_HIDDEN (0x2)
+    ]
+    Section: .dynamic (0x9)
+  }
+  Symbol {
+    Name: asm_zero (7)
+    Value: 0x105A4
+    Size: 32
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: connect (16)
+    Value: 0x0
+    Size: 0
+    Binding: Global (0x1)
+    Type: None (0x0)
+    Other: 0
+    Section: Undefined (0x0)
+  }
+  Symbol {
+    Name: copy (24)
+    Value: 0x105C4
+    Size: 36
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: join_agree (29)
+    Value: 0x105E8
+    Size: 44
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: join_disagree (40)
+    Value: 0x10614
+    Size: 44
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: caller_clobber (54)
+    Value: 0x10640
+    Size: 48
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: helper (69)
+    Value: 0x10670
+    Size: 8
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: malformed_reserved (76)
+    Value: 0x10678
+    Size: 36
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: unsupported_indirect (95)
+    Value: 0x1069C
+    Size: 4
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+  Symbol {
+    Name: unsupported_pac (116)
+    Value: 0x106A0
+    Size: 8
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Other: 0
+    Section: .text (0x7)
+  }
+]

@@ -1,0 +1,4 @@
+# Raw LLVM output has empty-segment trailing spaces and final blank lines.
+*.frames -whitespace
+*.macho -whitespace
+*.lipo -whitespace

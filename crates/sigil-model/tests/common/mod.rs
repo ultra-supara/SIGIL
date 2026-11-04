@@ -100,6 +100,7 @@ pub fn base(required: &[&str]) -> Session {
             sha256: id(&hex(0xa3)),
         }],
         request: RunRequest {
+            code_analysis: None,
             mode: Mode::Static,
             roots: vec![ScanRoot {
                 id: id("install"),
@@ -169,6 +170,7 @@ pub fn add_binary(s: &mut Session, sha_hex: &str, rel_path: &str, arch: Arch, in
     let slice = SliceId::from_parts(&artifact, arch, 0);
     let inst: InstanceId = id(&format!("inst:{rel_path}"));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: artifact.clone(),
         size: 1_048_576,
         format: Format::Elf { kind: ElfType::Dyn },
@@ -344,6 +346,7 @@ fn loc_cs(c: &str) -> Loc {
 
 fn call(cid: &str, caller: &str, addr: u64, target: CallTarget, args: Vec<ArgValue>) -> CallSite {
     CallSite {
+        args_layout: None,
         id: id(cid),
         caller: id(caller),
         addr,
@@ -355,6 +358,7 @@ fn call(cid: &str, caller: &str, addr: u64, target: CallTarget, args: Vec<ArgVal
 
 fn import(symbol: &str) -> CallTarget {
     CallTarget::Import {
+        macho_import: None,
         symbol: t(symbol),
         via: ImportVia::Plt,
     }
@@ -603,6 +607,7 @@ pub fn add_runtime_user(s: &mut Session) -> ValueId {
     });
     let unit_artifact: ArtifactId = id(&format!("sha256:{}", hex(0x55)));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: unit_artifact.clone(),
         size: 512,
         format: Format::Other,
@@ -1496,6 +1501,7 @@ pub fn add_blob(s: &mut Session, byte: u8, ino: u64) -> (String, InstanceId, Art
     let artifact: ArtifactId = id(&format!("sha256:{h}"));
     let inst: InstanceId = id(&format!("inst:models/blobs/sha256-{h}"));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: artifact.clone(),
         size: 5,
         format: Format::Other,
@@ -1531,6 +1537,7 @@ pub fn with_model() -> Session {
     });
     let manifest_art: ArtifactId = id(&format!("sha256:{}", hex(0x10)));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: manifest_art.clone(),
         size: 400,
         format: Format::Other,
@@ -1681,6 +1688,7 @@ pub fn binary_inspect() -> Session {
     let elf: ArtifactId = id(&format!("sha256:{}", hex(0xb1)));
     let slice = SliceId::from_parts(&elf, Arch::X86_64, 0);
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: elf.clone(),
         size: 1_048_576,
         format: Format::Elf { kind: ElfType::Dyn },
@@ -1782,6 +1790,7 @@ pub fn binary_inspect() -> Session {
     // The text file.
     let text: ArtifactId = id(&format!("sha256:{}", hex(0xb2)));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: text.clone(),
         size: 2048,
         format: Format::Other,
@@ -1935,6 +1944,7 @@ pub fn binary_code() -> Session {
     let artifact: ArtifactId = id(&format!("sha256:{KERNEL_HEX}"));
     let slice = SliceId::from_parts(&artifact, Arch::X86_64, 0);
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: artifact.clone(),
         size: 1248,
         format: Format::Elf { kind: ElfType::Rel },
@@ -1995,6 +2005,7 @@ pub fn binary_code() -> Session {
             "fn:0x40",
             0x4d,
             CallTarget::Import {
+                macho_import: None,
                 symbol: t("connect"),
                 via: ImportVia::Reloc,
             },
@@ -2134,6 +2145,7 @@ pub fn service_unit() -> Session {
         .insert("service_unit_bytes".to_string(), 1 << 20);
     let unit_artifact: ArtifactId = id(&format!("sha256:{}", hex(0x19)));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: unit_artifact.clone(),
         size: 312,
         format: Format::Other,
@@ -2146,6 +2158,7 @@ pub fn service_unit() -> Session {
     s.instances.push(placed);
     let exe_artifact: ArtifactId = id(&format!("sha256:{}", hex(0x1a)));
     s.artifacts.push(Artifact {
+        code_slice_inventory: None,
         id: exe_artifact.clone(),
         size: 1_048_576,
         format: Format::Elf {
@@ -2219,6 +2232,7 @@ pub fn observed_processes() -> Session {
     let elf = |s: &mut Session, byte: u8, kind: ElfType| -> ArtifactId {
         let artifact: ArtifactId = id(&format!("sha256:{}", hex(byte)));
         s.artifacts.push(Artifact {
+            code_slice_inventory: None,
             id: artifact.clone(),
             size: 1_048_576,
             format: Format::Elf { kind },

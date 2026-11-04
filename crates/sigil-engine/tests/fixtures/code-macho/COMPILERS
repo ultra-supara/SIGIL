@@ -1,0 +1,42 @@
+{
+  "clang": {
+    "path": "/usr/bin/clang-21",
+    "sha256": "3a0f9481c3c29fce75adcb7f6c989e0db14b422c431659cf346bb9efdfcb1f04",
+    "version": "Debian clang version 21.1.8 (7+b3)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-21/bin\n"
+  },
+  "llvm-objdump": {
+    "path": "/usr/bin/llvm-objdump-21",
+    "sha256": "eba9e4cfdc55997c8cd67825c47c2076820aa0ba1d8cfb3372c150ed3ee0b766",
+    "version": "Debian LLVM version 21.1.8\n  Optimized build.\n\n\n  Registered Targets:\n    aarch64     - AArch64 (little endian)\n    aarch64_32  - AArch64 (little endian ILP32)\n    aarch64_be  - AArch64 (big endian)\n    amdgcn      - AMD GCN GPUs\n    arm         - ARM\n    arm64       - ARM64 (little endian)\n    arm64_32    - ARM64 (little endian ILP32)\n    armeb       - ARM (big endian)\n    avr         - Atmel AVR Microcontroller\n    bpf         - BPF (host endian)\n    bpfeb       - BPF (big endian)\n    bpfel       - BPF (little endian)\n    hexagon     - Hexagon\n    lanai       - Lanai\n    loongarch32 - 32-bit LoongArch\n    loongarch64 - 64-bit LoongArch\n    m68k        - Motorola 68000 family\n    mips        - MIPS (32-bit big endian)\n    mips64      - MIPS (64-bit big endian)\n    mips64el    - MIPS (64-bit little endian)\n    mipsel      - MIPS (32-bit little endian)\n    msp430      - MSP430 [experimental]\n    nvptx       - NVIDIA PTX 32-bit\n    nvptx64     - NVIDIA PTX 64-bit\n    ppc32       - PowerPC 32\n    ppc32le     - PowerPC 32 LE\n    ppc64       - PowerPC 64\n    ppc64le     - PowerPC 64 LE\n    r600        - AMD GPUs HD2XXX-HD6XXX\n    riscv32     - 32-bit RISC-V\n    riscv64     - 64-bit RISC-V\n    sparc       - Sparc\n    sparcel     - Sparc LE\n    sparcv9     - Sparc V9\n    spirv       - SPIR-V Logical\n    spirv32     - SPIR-V 32-bit\n    spirv64     - SPIR-V 64-bit\n    systemz     - SystemZ\n    thumb       - Thumb\n    thumbeb     - Thumb (big endian)\n    ve          - VE\n    wasm32      - WebAssembly 32-bit\n    wasm64      - WebAssembly 64-bit\n    x86         - 32-bit X86: Pentium-Pro and above\n    x86-64      - 64-bit X86: EM64T and AMD64\n    xcore       - XCore\n    xtensa      - Xtensa 32\n"
+  },
+  "llvm-dwarfdump": {
+    "path": "/usr/bin/llvm-dwarfdump-21",
+    "sha256": "342ada2875bbe9da947b365620c0ddb4d5e7ecb4a03cf66d67d7cb38997c48f2",
+    "version": "Debian LLVM version 21.1.8\n  Optimized build.\n"
+  },
+  "llvm-readobj": {
+    "path": "/usr/bin/llvm-readobj-21",
+    "sha256": "4632d19d530a8d771fc8c969fca78936948ab046a7614b899d9c1d7a52b9e07c",
+    "version": "Debian LLVM version 21.1.8\n  Optimized build.\n"
+  },
+  "llvm-nm": {
+    "path": "/usr/bin/llvm-nm-21",
+    "sha256": "b36352cc53681daf65abe698bb3c319fe01d1d0dbaa7dbcf4fb2f6fea20167ad",
+    "version": "llvm-nm, compatible with GNU nm\nDebian LLVM version 21.1.8\n  Optimized build.\n"
+  },
+  "python": {
+    "path": "/usr/bin/python3.12",
+    "sha256": "618955e1fba269d4194e4ecd64f5ee231b7a2dc0152a01c5b8376236f87d1903",
+    "version": "Python 3.12.8\n"
+  },
+  "ld64.lld": {
+    "path": "/usr/bin/ld64.lld-21",
+    "sha256": "6d4782d096e907aed6d2b1f0708889f99729e51f2256d1a938801976342b7689",
+    "version": "Debian LLD 21.1.8\n"
+  },
+  "llvm-lipo": {
+    "path": "/usr/bin/llvm-lipo-21",
+    "sha256": "f8f1a9dcd85d0e8acfb05c7050664ba23997f07279fa6e6634e61a7c05dc87bf",
+    "version": "llvm-lipo\nDebian LLVM version 21.1.8\n  Optimized build.\n"
+  }
+}

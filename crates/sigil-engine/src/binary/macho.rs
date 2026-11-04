@@ -268,6 +268,7 @@ fn parse_header<R: object::read::ReadCacheOps>(
 
 fn empty_facts() -> MachOFacts {
     MachOFacts {
+        little_endian: None,
         is_64: false,
         cpu_type: 0,
         cpu_subtype: 0,
@@ -375,6 +376,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
     header: &Header,
 ) -> (MachOFacts, Vec<String>, imports::Commands) {
     let mut facts = MachOFacts {
+        little_endian: None,
         is_64: header.is_64,
         cpu_type: header.cpu_type,
         cpu_subtype: header.cpu_subtype,

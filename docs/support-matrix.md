@@ -16,6 +16,11 @@ ELF identity evidence and component claims. Code analysis is available through
 | Fat Mach-O | [Supported per slice](binary-inspect.md#what-is-recorded) | [Partial: per-slice imports](binary-inspect.md#mach-o-imports) | Unsupported | Unsupported; [planned](https://github.com/ultra-supara/SIGIL/issues/48) | Planned | [Declared dependencies only](dependencies-and-values.md#dependency-candidates) |
 | Other formats | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported | Unsupported |
 
+The #48 M3-A [multiarchitecture evidence reader](session-model.md#multiarchitecture-evidence-reader-m3-a)
+adds schema and validation for future slice-specific code evidence. Inspection writers
+still omit its optional marker. This milestone enables no AArch64 or Mach-O direct-call
+analyzer and leaves #48 open; the support entries above continue to describe collected evidence.
+
 ELF candidates describe possible matches within collected placements, not the library actually
 loaded or a symbol binding. The modeled ABIs and loader gaps are described in
 [dependency candidates](dependencies-and-values.md#dependency-candidates).

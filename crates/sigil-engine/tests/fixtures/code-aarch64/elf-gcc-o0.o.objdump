@@ -1,0 +1,28 @@
+
+elf-gcc-o0.o:	file format elf64-littleaarch64
+
+Disassembly of section .text:
+
+0000000000000000 <zero>:
+       0: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+       4: 910003fd     	mov	x29, sp
+       8: 52800002     	mov	w2, #0x0                // =0
+       c: d2800001     	mov	x1, #0x0                // =0
+      10: 52800000     	mov	w0, #0x0                // =0
+      14: 94000000     	bl	0x14 <zero+0x14>
+		0000000000000014:  R_AARCH64_CALL26	connect
+      18: 11000400     	add	w0, w0, #0x1
+      1c: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      20: d65f03c0     	ret
+
+0000000000000024 <one>:
+      24: a9bf7bfd     	stp	x29, x30, [sp, #-0x10]!
+      28: 910003fd     	mov	x29, sp
+      2c: 52800002     	mov	w2, #0x0                // =0
+      30: d2800001     	mov	x1, #0x0                // =0
+      34: 52800020     	mov	w0, #0x1                // =1
+      38: 94000000     	bl	0x38 <one+0x14>
+		0000000000000038:  R_AARCH64_CALL26	connect
+      3c: 11000400     	add	w0, w0, #0x1
+      40: a8c17bfd     	ldp	x29, x30, [sp], #0x10
+      44: d65f03c0     	ret

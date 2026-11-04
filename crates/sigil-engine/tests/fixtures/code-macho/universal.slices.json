@@ -1,0 +1,20 @@
+[
+  {
+    "source": "x86-classic",
+    "cpu": 16777223,
+    "subtype": 3,
+    "offset": 4096,
+    "size": 16624,
+    "align": 12,
+    "sha256": "a347b198c4a20dd4f83ab6d063f8e55c3a1c24063f2ba951cd06c41d6179017f"
+  },
+  {
+    "source": "arm64-chained",
+    "cpu": 16777228,
+    "subtype": 0,
+    "offset": 32768,
+    "size": 33008,
+    "align": 14,
+    "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f"
+  }
+]

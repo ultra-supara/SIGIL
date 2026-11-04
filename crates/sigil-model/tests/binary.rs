@@ -343,6 +343,7 @@ const AARCH64: i32 = 0x0100_000c;
 
 fn macho_facts(cpu_type: i32, cpu_subtype: i32, fat: (i32, i32)) -> ContainerFacts {
     ContainerFacts::MachO(sigil_model::MachOFacts {
+        little_endian: None,
         is_64: true,
         cpu_type,
         cpu_subtype,
