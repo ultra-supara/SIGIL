@@ -1349,6 +1349,7 @@ fn aarch64_producers_share_same_fd_and_target_reads() {
         args.extend(os(&[&"--code", &"--out", &output]));
         let r = run(&format!("aarch64-{mode}"), &fx, &refs(&args));
         assert!(r.status.unwrap().success(), "{mode}: {}", r.stderr);
+        assert_read_under(&r, &install);
         let reads = input_reads(&r, &input)
             .into_iter()
             .filter(|e| matches!(e.name.as_str(), "read" | "pread64"))

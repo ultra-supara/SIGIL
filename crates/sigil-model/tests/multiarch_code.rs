@@ -53,6 +53,9 @@ fn legacy_json_is_byte_identical() {
         let raw = std::fs::read(&path).unwrap();
         let session: Session = serde_json::from_slice(&raw).unwrap();
         session.validate().unwrap();
+        if session.request.code_analysis.is_some() {
+            continue;
+        }
         let canonical = session.to_canonical_json().unwrap();
         rows.push(format!(
             "{:x}  {}",

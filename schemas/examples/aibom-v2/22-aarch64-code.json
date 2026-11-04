@@ -1,0 +1,141 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "fe354167734aa6132deb0af3934c1b2cd54103032c9a43d0b09d0c19125bbedf",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "deny-capabilities",
+      "version": "1",
+      "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+    }
+  },
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.code"
+        ],
+        "gaps": [
+          "capability:posix.network@sha256:2323232323232323232323232323232323232323232323232323232323232323#aarch64@0"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 1248,
+      "format": {
+        "Elf": {
+          "kind": "Rel"
+        }
+      },
+      "paths": [
+        "/examples/aarch64-call.o"
+      ],
+      "slices": [
+        {
+          "id": "sha256:2222222222222222222222222222222222222222222222222222222222222222#aarch64@0",
+          "arch": "aarch64",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "components": []
+        }
+      ]
+    },
+    {
+      "id": "sha256:2323232323232323232323232323232323232323232323232323232323232323",
+      "size": 1248,
+      "format": {
+        "Elf": {
+          "kind": "Rel"
+        }
+      },
+      "paths": [
+        "/examples/aarch64-partial.o"
+      ],
+      "slices": [
+        {
+          "id": "sha256:2323232323232323232323232323232323232323232323232323232323232323#aarch64@0",
+          "arch": "aarch64",
+          "sha256": "2323232323232323232323232323232323232323232323232323232323232323",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:2222222222222222222222222222222222222222222222222222222222222222#aarch64@0"
+      },
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "The runtime must not open connections",
+        "expires": null
+      }
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "capability:posix.network@sha256:2323232323232323232323232323232323232323232323232323232323232323#aarch64@0",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:2323232323232323232323232323232323232323232323232323232323232323#aarch64@0"
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Complete": 2,
+        "Partial": 2
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 2
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 2
+      }
+    }
+  ]
+}

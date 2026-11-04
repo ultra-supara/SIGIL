@@ -4972,9 +4972,13 @@ impl<'a> Validator<'a> {
                     .get(slice.as_str())
                     .is_some_and(|b| matches!(b.container, ContainerFacts::Elf(_)))
             {
+                let Ok(check) = CheckId::new(applicable) else {
+                    self.capability_error(&at, "invalid code check identifier");
+                    continue;
+                };
                 let expected = crate::code_coverage::unknown_capability_call(
                     slice_states.get(slice).copied(),
-                    CheckId::new(applicable).expect("fixed code check"),
+                    check,
                 );
                 if !matches!(&q.conditions[0].state, CondState::Unknown { reason, .. } if *reason == expected)
                 {

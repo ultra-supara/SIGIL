@@ -320,7 +320,7 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
     let shnum = u16le(&h, 60) as usize;
     let raw = read(reader, window, u64le(&h, 40), shnum as u64 * 64, run)?;
     let mut sections = Vec::with_capacity(shnum);
-    for s in raw.chunks_exact(64) {
+    for s in raw.as_chunks::<64>().0 {
         let row = Section {
             name: vec![],
             ty: u32le(s, 4),
@@ -350,7 +350,7 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
         .get(u16le(&h, 62) as usize)
         .ok_or("invalid section names")?
         .clone();
-    for (s, raw) in sections.iter_mut().zip(raw.chunks_exact(64)) {
+    for (s, raw) in sections.iter_mut().zip(raw.as_chunks::<64>().0) {
         s.name = text(reader, window, &strings, u32le(raw, 0), run)?;
     }
     let mut segments = vec![];
@@ -361,7 +361,7 @@ fn build_inner(reader: &mut Reader<'_>, window: SliceWindow, run: &mut Run) -> R
             return Err("missing or extended program headers");
         }
         let raw = read(reader, window, u64le(&h, 32), u64::from(count) * 56, run)?;
-        for p in raw.chunks_exact(56) {
+        for p in raw.as_chunks::<56>().0 {
             let seg = Segment {
                 flags: u32le(p, 4),
                 off: u64le(p, 8),
@@ -1003,7 +1003,7 @@ fn dynamic_tables(
     let bytes = read(reader, window, d.off, d.filesz, run)?;
     let mut tags = BTreeMap::new();
     let mut terminated = false;
-    for row in bytes.chunks_exact(16) {
+    for row in bytes.as_chunks::<16>().0 {
         let tag = u64le(row, 0);
         if !matches!(tag,0..=33|0x6ffffef5|0x6ffffff0|0x6ffffff9|0x6ffffffb..=0x6fffffff) {
             return Err("unsupported dynamic tag/fixup extension");
@@ -1181,7 +1181,7 @@ fn plt_slot(bytes: &[u8], pc: u64, run: &mut Run) -> Result<Option<u64>> {
     let mut words = [0u32; 4];
     let mut first = None;
     let mut valid = true;
-    for (i, b) in bytes.chunks_exact(4).enumerate() {
+    for (i, b) in bytes.as_chunks::<4>().0.iter().enumerate() {
         charge(run, Work::Instructions, 1)?;
         words[i] = u32le(b, 0);
         let decoded = decode_a64(words[i], end(pc, i as u64 * 4)?);

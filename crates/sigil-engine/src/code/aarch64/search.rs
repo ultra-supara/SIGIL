@@ -66,7 +66,7 @@ impl Candidates {
                 let Some(bytes) = image.read_code(pc, n, reader, run) else {
                     return false;
                 };
-                for raw in bytes.chunks_exact(4) {
+                for raw in bytes.as_chunks::<4>().0 {
                     // Each skipped instruction belongs to byte-validated ABI machinery.
                     // Section names and unproved PLT headers/stubs never grant an exclusion.
                     if image.verified_plt_instruction(pc) {

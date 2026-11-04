@@ -718,6 +718,10 @@ engine's `BinaryRequest`, with code budgets).
 - Under the default policy, the audit gains `binary_code`, and the required checks gain
   `binary.code` ([`docs/policy.md`](policy.md)).
 
+The following input-summary rules describe marker-absent legacy sessions. The
+[marked multiarchitecture contract](#multiarchitecture-evidence-reader-m3-a) adds
+slice diagnostics and its own aggregation rules.
+
 **`binary.code`.** Each input has exactly one entry, scope `Instance` (C2). Its state is the one
 the input implies (C3, `expected_binary_code`):
 - **the container's state, copied, with no budget**, when the input has no container to analyze:
@@ -1064,18 +1068,22 @@ per artifact. A healthy slice cannot make an unsupported or missing sibling comp
 Marked Mach-O coverage also requires an explicit little-endian observation for a
 supported parsed slice; an absent byte-order field does not establish little endian.
 
-Current inspection writers omit the marker and these optional fields. M3-A enables
-no new analyzer or decoder: direct-call analysis remains limited to the existing
-x86-64 ELF path. Marked Mach-O call facts and recorded capability decisions remain
-rejected pending library-aware and slice-aware policy validation, and capability-denial
-evaluation of a marked session is refused before changing it. Coverage-only synthetic
-marked sessions exercise the reader contract without claiming product analysis support.
+Code requests that recognize AArch64 ELF or Mach-O emit the marker, ABI knowledge,
+typed inventory and per-slice diagnostics after a stable read. x86-only requests retain
+the marker-absent contract. AArch64 ELF direct-call facts include proved argument
+locations and conservative values. Marked ELF capability decisions use the slice's own
+applicable code diagnostic; saved-session validation rejects inconsistent question
+reasons and invalid evidence. Marked Mach-O call facts and capability decisions remain
+rejected pending library-aware policy validation in Task 16.
 
-Older strict readers can reject the marker, new fields or enum variants. This reader
-continues to accept supported legacy sessions without adding evidence to them. The
-committed browser viewer uses the same model validator as the native reader. M3-A
-does not close [#48](https://github.com/ultra-supara/SIGIL/issues/48) or claim AArch64
-or Mach-O direct-call support; later analyzer and policy milestones remain required.
+The committed viewer uses the same model validator as the native reader. Schema and
+internal-consistency checks do not authenticate observation facts against target bytes.
+The M3-B release gate remains open because mixed marked x86 aggregate work accounting
+and alias reuse are unresolved; see the [support matrix](support-matrix.md). These
+changes do not close [#48](https://github.com/ultra-supara/SIGIL/issues/48).
+
+Older strict readers can reject the marker, new fields or enum variants. Supported
+legacy sessions retain their serialization and validation contract.
 
 ## Not in the model yet
 

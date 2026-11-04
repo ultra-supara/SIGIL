@@ -2524,7 +2524,7 @@ fn binary_code_help_documents_the_flag_and_its_budget() {
         "--code",
         "With --code, the direct call sites of capability imports are recorded too",
         "direct call sites of capability imports",
-        "x86-64 ELF only",
+        "AArch64 ELF64 little-endian",
         "never run",
         "binary_code_bytes, which needs --code",
         "binary_code_audit with --code",
@@ -3297,6 +3297,14 @@ fn aarch64_code_binary_install_service_and_observe_share_the_same_facts() {
     assert_eq!(standalone.code, 0, "{}", standalone.stderr);
     let expected = session_of(&standalone);
     assert_eq!(expected.code[0].call_sites.len(), 2);
+    assert!(
+        standalone.stderr.contains(&format!(
+            "slice: {}  aarch64  code: complete",
+            expected.code[0].slice
+        )),
+        "{}",
+        standalone.stderr
+    );
     assert_eq!(
         expected.request.code_analysis,
         Some(sigil_model::CodeAnalysis::MultiarchV1)
@@ -3321,6 +3329,14 @@ fn aarch64_code_binary_install_service_and_observe_share_the_same_facts() {
         assert_eq!(result.code, 0, "{}", result.stderr);
         let s = session_of(&result);
         assert_eq!(s.code, expected.code);
+        assert!(
+            result.stderr.contains(&format!(
+                "slice: {}  aarch64  code: complete",
+                expected.code[0].slice
+            )),
+            "{}",
+            result.stderr
+        );
         assert_eq!(s.request.code_analysis, expected.request.code_analysis);
         assert_eq!(
             s.coverage
@@ -3340,6 +3356,14 @@ fn aarch64_code_binary_install_service_and_observe_share_the_same_facts() {
     ]);
     assert_eq!(limited.code, 4, "{}", limited.stderr);
     assert!(session_of(&limited).code.is_empty());
+    assert!(
+        limited.stderr.contains(&format!(
+            "slice: {}  aarch64  code: partial",
+            expected.code[0].slice
+        )),
+        "{}",
+        limited.stderr
+    );
     let limited = inspect(
         models.path(),
         &[
@@ -3369,4 +3393,49 @@ fn aarch64_required_layout_gap_exhaustion_is_a_valid_partial_report() {
     let r = binary(&[&"--code", &path, &"--fail-on-incomplete"]);
     assert_eq!(r.code, 4, "{}", r.stderr);
     assert_eq!(session_of(&r).code, s.code);
+}
+
+#[test]
+fn aarch64_capability_policy_round_trips_through_session_verify() {
+    let d = TempDir::new().unwrap();
+    let policy = d.path().join("deny-network.toml");
+    fs::write(&policy, "schema = \"sigil-policy/1\"\nname = \"no-network\"\n[scope]\nbinary_audit = []\n[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"no connections\"\n").unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so");
+    for limited in [false, true] {
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = vec![
+            &"--code",
+            &fixture,
+            &"--policy",
+            &policy,
+            &"--fail-on",
+            &"fail",
+            &"--fail-on-incomplete",
+        ];
+        if limited {
+            args.extend([
+                &"--budget" as &dyn AsRef<std::ffi::OsStr>,
+                &"binary_code_bytes=0",
+            ]);
+        }
+        let r = binary(&args);
+        assert_eq!(r.code, if limited { 4 } else { 3 }, "{}", r.stderr);
+        let s = session_of(&r);
+        assert_eq!(s.policy_violations.len(), usize::from(!limited));
+        assert_eq!(s.open_questions.len(), usize::from(limited));
+        let saved = d.path().join("session.json");
+        fs::write(&saved, &r.stdout).unwrap();
+        let verified = run(&[&"session", &"verify", &saved, &"--policy", &policy]);
+        assert_eq!(verified.code, 0, "{}", verified.stderr);
+        let rendered = run(&[&"session", &"render", &saved]);
+        assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+        assert_eq!(rendered.stdout, render_session(&s));
+        if !limited {
+            assert!(
+                rendered.stdout.contains(&esc_md("x0=0, x1=0, x2=0")),
+                "{}",
+                rendered.stdout
+            );
+        }
+    }
 }
