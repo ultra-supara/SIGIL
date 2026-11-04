@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use sigil_model::{macho_architecture, Arch, SliceId};
+use sigil_model::{macho_architecture, Arch, MachOImport, SliceId};
 
 use crate::code::reader::{read_slice, Reader, Refusal, SliceWindow};
 
@@ -49,6 +49,10 @@ pub(crate) struct MachCodeView {
     /// Slice-relative file ranges, as recorded by LC_DATA_IN_CODE.
     pub data_in_code: Vec<Range<u64>>,
     pub sections: Vec<Section>,
+    /// Exact bounded import inventory of this slice, supplied by the artifact owner.
+    pub imports: Vec<MachOImport>,
+    /// Load-command order is significant for dyld segment ordinals.
+    pub segments: Vec<Mapping>,
 }
 
 #[derive(Debug)]
@@ -63,6 +67,13 @@ pub(crate) struct Section {
     pub relocations: u32,
     pub reserved1: u32,
     pub reserved2: u32,
+    pub reserved3: u32,
+}
+
+#[derive(Debug)]
+pub(crate) struct Mapping {
+    pub vm: Range<u64>,
+    pub relative: Range<u64>,
 }
 
 #[derive(Debug)]
@@ -192,6 +203,14 @@ pub(crate) fn build(
         readonly: vec![],
         data_in_code: vec![],
         sections: vec![],
+        imports: vec![],
+        segments: segments
+            .iter()
+            .map(|s| Mapping {
+                vm: s.vm.clone(),
+                relative: s.relative.clone(),
+            })
+            .collect(),
     };
     for segment in segments {
         for section in segment.sections {
@@ -342,6 +361,7 @@ fn segment(c: &[u8], window: SliceWindow, object: bool) -> Result<Segment, Error
             relocations: u32le(s, 60),
             reserved1: u32le(s, 68),
             reserved2: u32le(s, 72),
+            reserved3: u32le(s, 76),
         });
     }
     Ok(Segment {
