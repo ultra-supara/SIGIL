@@ -12,20 +12,237 @@ fn policy(deny: bool) -> Policy {
     Policy::load(&text).unwrap()
 }
 
-#[test]
-fn marked_capability_evaluation_fails_without_mutating_the_session() {
-    let mut s = support::named();
+fn evaluate_denied(s: &mut Session, install: bool, opt_out: bool) -> Policy {
     s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
+    let scope = if install {
+        "install_code_audit"
+    } else {
+        "binary_code_audit"
+    };
+    let audit = if install {
+        "installation_code"
+    } else {
+        "binary_code"
+    };
+    let selected = if opt_out {
+        String::new()
+    } else {
+        format!("\"{audit}\"")
+    };
+    let p = Policy::load(&format!(
+        r#"schema = "sigil-policy/1"
+name = "coverage"
+[scope]
+audit = []
+install_audit = []
+binary_audit = []
+{scope} = [{selected}]
+[[capabilities.deny]]
+feature = "posix.network"
+action = "fail"
+reason = "test"
+"#
+    ))
+    .unwrap();
+    let (audit, checks) = p.scope(&ScopeInput::of(&s.request));
+    s.request.audit = audit;
+    s.request.required_checks = checks;
+    evaluate(s, &p, Timestamp::new("2026-11-03T00:00:00Z").unwrap()).unwrap();
+    p
+}
+
+#[test]
+fn marked_elf_capability_questions_use_the_slice_search_state() {
+    for install in [false, true] {
+        for opt_out in [false, true] {
+            for partial in [false, true] {
+                let mut s = support::named();
+                if partial {
+                    support::child(&mut s, 0).state = CoverageState::Partial {
+                        missing: vec!["code: budget gap".into()],
+                    };
+                    let state = support::incomplete(&s, &[0], false);
+                    support::parent(&mut s, state, Some(4));
+                } else {
+                    // A partial content inventory must not override a complete local search.
+                    support::inventory_partial(&mut s);
+                    let state = support::incomplete(&s, &[], true);
+                    support::parent(&mut s, state, Some(4));
+                }
+                if install {
+                    s = support::installation(s);
+                }
+                let p = evaluate_denied(&mut s, install, opt_out);
+                assert!(s.policy_violations.is_empty());
+                let q = &s.open_questions[0];
+                let CondState::Unknown { reason, .. } = &q.conditions[0].state else {
+                    panic!()
+                };
+                assert_eq!(
+                    matches!(reason, UnknownReason::CheckIncomplete { .. }),
+                    partial
+                );
+                s.validate().unwrap();
+                let round: Session = serde_json::from_str(&s.to_canonical_json().unwrap()).unwrap();
+                sigil_engine::policy::verify(&round, &p).unwrap();
+                let mut forged = round;
+                let wrong_check = if install { BINARY_CODE } else { ARTIFACTS_CODE };
+                forged.open_questions[0].conditions[0].state = CondState::Unknown {
+                    reason: UnknownReason::CheckIncomplete {
+                        check: CheckId::new(wrong_check).unwrap(),
+                    },
+                    evidence: None,
+                };
+                assert!(
+                    forged.validate().is_err(),
+                    "wrong slice check reason accepted"
+                );
+                if partial {
+                    forged.open_questions[0].conditions[0].state = CondState::Unknown {
+                        reason: UnknownReason::NotModeled { what: "calls that are not direct (through a function pointer, or from data)".into() }, evidence: None,
+                    };
+                    assert!(
+                        forged.validate().is_err(),
+                        "partial slice described as complete"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn marked_aarch64_call_confirms_denial_even_with_partial_search() {
+    for install in [false, true] {
+        for partial in [false, true] {
+            for has_call in [false, true] {
+                let mut s = inspect_paths(
+                    vec![a64_fixture("elf-clang-plt.so")],
+                    Some(Default::default()),
+                );
+                let slice = s.code[0].slice.clone();
+                if partial {
+                    for c in &mut s.coverage {
+                        if c.check.as_str() == BINARY_CODE {
+                            c.state = CoverageState::Partial {
+                                missing: vec![match &c.scope {
+                                    Ref::Slice(_) => "code: budget gap".into(),
+                                    _ => format!("code: incomplete slice {slice}"),
+                                }],
+                            };
+                        }
+                    }
+                }
+                if !has_call {
+                    s.code.clear();
+                }
+                if install {
+                    s = support::installation(s);
+                }
+                let p = evaluate_denied(&mut s, install, false);
+                assert_eq!(s.policy_violations.len(), usize::from(has_call));
+                assert_eq!(s.open_questions.len(), usize::from(!has_call));
+                if has_call {
+                    assert!(s.policy_violations[0].evidence.iter().all(|e| matches!(e, EvidenceRef::Code { slice: of, loc: Loc::CallSite(_) } if *of == slice)));
+                }
+                s.validate().unwrap();
+                let round: Session = serde_json::from_str(&s.to_canonical_json().unwrap()).unwrap();
+                sigil_engine::policy::verify(&round, &p).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn marked_elf_markdown_uses_local_search_and_escapes_call_text() {
+    let mut s = support::named();
+    support::inventory_partial(&mut s);
+    let state = support::incomplete(&s, &[], true);
+    support::parent(&mut s, state, Some(4));
+    evaluate_denied(&mut s, false, false);
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(sigil_model::render::html::from_markdown(&md).contains("none found (see binary.code)"));
+    assert!(!md.contains("none found in the code searched"));
+    let mut s = inspect_paths(
+        vec![a64_fixture("elf-clang-plt.so")],
+        Some(Default::default()),
+    );
+    s.code[0].functions[0].names = vec![UntrustedText::new("<script>\x1b[31m|bad")];
+    let md = sigil_model::render::markdown::render_session(&s);
+    assert!(
+        sigil_model::render::html::from_markdown(&md).contains("x0=0, x1=0, x2=0"),
+        "{md}"
+    );
+    assert!(!md.contains("<script>"));
+    assert!(!md.contains('\x1b'));
+    let html = sigil_model::render::html::from_markdown(&md);
+    assert!(!html.contains("<script>"));
+    assert!(html.contains("&lt;script&gt;"));
+    assert!(!html.contains('\x1b'));
+    let mut partial = support::named();
+    support::child(&mut partial, 0).state = CoverageState::Partial {
+        missing: vec!["code: budget gap".into()],
+    };
+    let state = support::incomplete(&partial, &[0], false);
+    support::parent(&mut partial, state, Some(4));
+    let mut partial = support::installation(partial);
+    evaluate_denied(&mut partial, true, false);
+    let md = sigil_model::render::markdown::render_session(&partial);
+    assert!(md.contains("none found in searched code"), "{md}");
+}
+
+#[test]
+fn marked_unsupported_elf_does_not_confirm_a_call() {
+    let mut s = support::named();
+    support::child(&mut s, 0).state = CoverageState::Unsupported {
+        what: "code: unsupported ELF ABI".into(),
+    };
+    support::child(&mut s, 0).budget = None;
+    if let ContainerFacts::Elf(e) = &mut s.binaries[0].container {
+        e.abi.as_mut().unwrap().little_endian = false;
+    }
+    support::parent(
+        &mut s,
+        CoverageState::Unsupported {
+            what: "code: no supported slice".into(),
+        },
+        None,
+    );
+    let p = evaluate_denied(&mut s, false, false);
+    assert!(s.policy_violations.is_empty());
+    assert!(matches!(
+        s.open_questions[0].conditions[0].state,
+        CondState::Unknown {
+            reason: UnknownReason::CheckIncomplete { .. },
+            ..
+        }
+    ));
+    sigil_engine::policy::verify(&s, &p).unwrap();
+}
+
+#[test]
+fn marked_macho_capability_evaluation_remains_gated_without_mutation() {
+    let mut s = support::fat();
+    if let ContainerFacts::MachO(m) = &mut s.binaries[0].container {
+        m.imports.push(MachOImport {
+            name: UntrustedText::new("_connect"),
+            library: MachOLibrary::Unbound,
+            weak: false,
+        });
+    }
+    s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
+    assert!(!s.hints.is_empty());
     let p = policy(true);
     let (audit, checks) = p.scope(&ScopeInput::of(&s.request));
     s.request.audit = audit;
     s.request.required_checks = checks;
     let before = s.clone();
-    let result = evaluate(&mut s, &p, Timestamp::new("2026-11-03T00:00:00Z").unwrap());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("multiarch capability policy is not enabled"));
+    assert!(
+        evaluate(&mut s, &p, Timestamp::new("2026-11-03T00:00:00Z").unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("multiarch capability policy is not enabled")
+    );
     assert_eq!(s, before);
 }
 

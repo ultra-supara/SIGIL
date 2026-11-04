@@ -4913,6 +4913,24 @@ impl<'a> Validator<'a> {
                 }
             }
         }
+        let applicable = if crate::is_binary_inspection(&s.request) {
+            crate::BINARY_CODE
+        } else {
+            crate::ARTIFACTS_CODE
+        };
+        let slice_states: HashMap<_, _> = s
+            .coverage
+            .iter()
+            .filter_map(|c| {
+                if c.check.as_str() != applicable {
+                    return None;
+                }
+                let Ref::Slice(slice) = &c.scope else {
+                    return None;
+                };
+                Some((slice, &c.state))
+            })
+            .collect();
         let mut asked: HashSet<(&SliceId, &str)> = HashSet::with_capacity(s.open_questions.len());
         for q in s
             .open_questions
@@ -4947,6 +4965,25 @@ impl<'a> Validator<'a> {
                     continue;
                 }
             };
+            if s.request.code_analysis.is_some()
+                && self
+                    .index
+                    .binaries
+                    .get(slice.as_str())
+                    .is_some_and(|b| matches!(b.container, ContainerFacts::Elf(_)))
+            {
+                let expected = crate::code_coverage::unknown_capability_call(
+                    slice_states.get(slice).copied(),
+                    CheckId::new(applicable).expect("fixed code check"),
+                );
+                if !matches!(&q.conditions[0].state, CondState::Unknown { reason, .. } if *reason == expected)
+                {
+                    self.capability_error(
+                        &at,
+                        "capability question reason must match its slice code coverage",
+                    );
+                }
+            }
             if !asked.insert((slice, feature)) {
                 self.capability_error(
                     &at,

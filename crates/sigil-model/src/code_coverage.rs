@@ -12,6 +12,21 @@ pub const CODE_SLICE_NOT_STARTED: &str = "code: artifact budget exhausted before
 /// The shared reader's descriptor bound, applied independently to each marked artifact.
 pub const MAX_CODE_SLICES: usize = 64;
 
+/// Why a marked slice with capability imports has no confirmed direct call.
+/// Only the slice's own applicable code check can establish a complete local search.
+pub fn unknown_capability_call(
+    state: Option<&CoverageState>,
+    check: crate::CheckId,
+) -> crate::UnknownReason {
+    if matches!(state, Some(CoverageState::Complete)) {
+        crate::UnknownReason::NotModeled {
+            what: "calls that are not direct (through a function pointer, or from data)".into(),
+        }
+    } else {
+        crate::UnknownReason::CheckIncomplete { check }
+    }
+}
+
 pub(crate) fn valid_gaps(missing: &[String]) -> bool {
     !missing.is_empty()
         && missing.iter().all(|s| !s.trim().is_empty())
