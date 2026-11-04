@@ -36,7 +36,7 @@ fn supported(a: &Artifact, slice: &Slice, binary: &BinaryFacts) -> bool {
                     } else {
                         0x0100_000c
                     }
-                && (slice.arch != Arch::Aarch64 || m.cpu_subtype & 0x00ff_ffff != 2)
+                && (slice.arch != Arch::Aarch64 || matches!(m.cpu_subtype & 0x00ff_ffff, 0 | 1))
         }
         _ => false,
     }
@@ -248,6 +248,16 @@ impl Validator<'_> {
                             CoverageState::Complete | CoverageState::Partial { .. }
                         ) =>
                     {
+                        if c.state == CoverageState::Complete
+                            && b.gaps.iter().any(|g| {
+                                g.starts_with("imports:") || g.starts_with("binary_parse_bytes:")
+                            })
+                        {
+                            self.code_error(
+                                &slice.id,
+                                "incomplete import evidence cannot have complete code coverage",
+                            );
+                        }
                         let unparsed = matches!(&c.state, CoverageState::Partial { missing } if missing.iter().any(|g| g == CODE_SLICE_NOT_PARSED));
                         let unstarted = matches!(&c.state, CoverageState::Partial { missing } if missing.iter().any(|g| g == CODE_SLICE_NOT_STARTED));
                         if !supported(a, slice, b) {
