@@ -39,7 +39,22 @@ impl Candidates {
         }
         true
     }
+    #[cfg(test)]
     pub fn scan(&mut self, image: &A64ElfImage, reader: &mut Reader<'_>, run: &mut Run) -> bool {
+        self.scan_with(image, reader, run, &mut |_, _, _, _| {})
+    }
+    /// Confirm a function after every candidate in its interval has been reserved, before
+    /// searching later functions. A later shared limit cannot erase committed siblings.
+    pub fn scan_with<F>(
+        &mut self,
+        image: &A64ElfImage,
+        reader: &mut Reader<'_>,
+        run: &mut Run,
+        confirm: &mut F,
+    ) -> bool
+    where
+        F: FnMut((u64, u64), &[u64], &mut Reader<'_>, &mut Run),
+    {
         if let Some(complete) = self.scanned {
             return complete && !run.stopped();
         }
@@ -80,6 +95,16 @@ impl Candidates {
                         return false;
                     }
                     pc += 4;
+                    if let FdeAt::One(range) = image.function(pc - 4) {
+                        if pc == range.1 {
+                            if let Some(candidates) = self.functions.get(&range) {
+                                confirm(range, candidates, reader, run);
+                                if run.stopped() {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -169,6 +194,7 @@ pub(crate) fn resolve_cfg(
                         ));
                     })?)
                 }
+                Flow::JumpDirect(t) if cfg.entry <= t && t < cfg.end => None,
                 Flow::CallDirect(t) | Flow::JumpDirect(t) => {
                     image.stubs.get(&t).cloned().map(Branch::Import)
                 }

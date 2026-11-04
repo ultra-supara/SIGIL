@@ -26,9 +26,7 @@ use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
 use crate::code::{self, CodeOutcome};
 
-/// Private Task 9 adapter. The collector's opened fd remains in the artifact Reader; this
-/// bridge deliberately adds no production dispatch, marker, policy or evidence emission.
-#[allow(dead_code)]
+/// Bounded ELF adapter on the collector's original artifact reader and slice window.
 pub(crate) fn aarch64_image(
     reader: &mut code::reader::Reader<'_>,
     window: code::reader::SliceWindow,
@@ -317,7 +315,30 @@ fn parse_as<R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         e.gaps
             .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
     }
-    let code = analysis.map(|a| code::analyze(&mut e, &sections, &dynamic, a));
+    let code = analysis.map(|a| {
+        if e.header.e_machine(e.endian) == elf::EM_AARCH64 {
+            a.multiarch();
+            let window = code::reader::SliceWindow {
+                base: 0,
+                len: a.size(),
+            };
+            a.slice(
+                e.header.is_class_64() && e.endian.is_little_endian(),
+                |reader, run| {
+                    let Some(image) = aarch64_image(reader, window, run) else {
+                        return (vec![], vec![]);
+                    };
+                    let Ok(sig) = code::data::signatures() else {
+                        run.gap("code: invalid capability signatures".into());
+                        return (vec![], vec![]);
+                    };
+                    code::aarch64::record::analyze(&image, &facts.imports, sig, reader, run)
+                },
+            )
+        } else {
+            code::analyze(&mut e, &sections, &dynamic, a)
+        }
+    });
     // PR-4c-2a: last, so that neither the container nor the code step sees its reads. The
     // returned strings it reads are facts of the container (PR-4c-2b).
     let scan = match (sought, file) {

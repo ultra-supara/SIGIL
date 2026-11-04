@@ -763,11 +763,13 @@ fn a_limit_reached_while_the_image_is_built_searches_nothing() {
 }
 
 #[test]
-fn non_x86_64_is_unsupported() {
+fn aarch64_without_exact_bounds_is_partial() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata-aarch64.so");
     let slice = slice_at(&path, with_code(CodeBudgets::default()));
-    assert_eq!(slice.code, Some(CodeOutcome::Unsupported));
+    assert!(
+        matches!(slice.code, Some(CodeOutcome::Analyzed { call_sites, gaps, .. }) if call_sites.is_empty() && gaps.iter().any(|g| g.contains("missing .eh_frame")))
+    );
 }
 
 #[test]

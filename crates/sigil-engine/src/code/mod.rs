@@ -1,5 +1,5 @@
 //! Level C for the capability imports (PR-5a spec): where each is called directly, with the
-//! argument values, in x86-64 ELF64 little-endian files. Nothing is executed or mapped: every
+//! argument values, in the bounded x86-64 and AArch64 ELF64 little-endian profiles. Nothing is executed or mapped: every
 //! byte is read with `pread` and charged to `binary_code_bytes` first, and every collection that
 //! grows with the input has a limit (spec §4.10).
 
@@ -14,8 +14,6 @@ use sigil_model::{BudgetUse, CallSite, Function, BINARY_CODE_BYTES};
 
 use crate::binary::elf::{Dynamic, Elf, Sections};
 
-// Private staged implementation; producer integration belongs to Task 10.
-#[allow(dead_code)]
 pub(crate) mod aarch64;
 pub mod data;
 pub(crate) mod decode;
@@ -104,7 +102,7 @@ pub enum CodeOutcome {
         gaps: Vec<String>,
         budget: BudgetUse,
     },
-    /// Not an x86-64 ELF64 little-endian slice.
+    /// Not an admitted architecture/container ABI.
     Unsupported,
 }
 
@@ -130,11 +128,20 @@ impl<'f> ArtifactAnalysis<'f> {
     }
 
     /// Preserve the historical independent text-relocation/search caps for x86-only ELF.
-    /// New multiarchitecture dispatch must use `new`, whose reference cap is combined.
+    /// New multiarchitecture dispatch uses `new` or switches before work. Session-wide
+    /// mixed x86 selection remains unresolved because recognition follows collection.
     pub fn legacy(file: &'f File, size: u64, budgets: CodeBudgets) -> Self {
         let mut artifact = Self::new(file, size, budgets);
         artifact.run.legacy_x86 = true;
         artifact
+    }
+
+    pub fn multiarch(&mut self) {
+        self.run.legacy_x86 = false;
+    }
+
+    pub fn size(&self) -> u64 {
+        self.reader.size()
     }
 
     pub fn slice(

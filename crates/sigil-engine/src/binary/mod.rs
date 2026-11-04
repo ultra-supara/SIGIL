@@ -78,6 +78,8 @@ pub struct ParsedSlice {
 pub struct ParsedArtifact {
     pub format: Format,
     pub slices: Vec<ParsedSlice>,
+    /// Descriptor enumeration, kept separate from individual container diagnostics.
+    pub code_inventory: sigil_model::CodeSliceInventory,
 }
 
 /// Parses the ELF content of `file` (of `size` bytes, from the read's `fstat`), and analyzes its
@@ -117,6 +119,14 @@ pub fn parse_artifact(
         let parsed = parse_elf(file, size, budgets, sought);
         return Some(ParsedArtifact {
             format: Format::Elf { kind },
+            code_inventory: if matches!(&parsed.container, ContainerFacts::Elf(e) if e.abi.is_none())
+            {
+                sigil_model::CodeSliceInventory::Partial {
+                    missing: vec![sigil_model::code_coverage::CODE_INVENTORY_INCOMPLETE.into()],
+                }
+            } else {
+                sigil_model::CodeSliceInventory::Complete
+            },
             slices: vec![ParsedSlice {
                 offset: 0,
                 size,

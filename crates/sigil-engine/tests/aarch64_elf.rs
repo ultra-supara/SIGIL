@@ -1,4 +1,4 @@
-//! Task 9's public boundary is intentionally undispatched. Actual private image/Reader/Run
+//! Task 10 dispatches ELF AArch64 through the bounded image/Reader/Run. Private
 //! regressions are code::image::aarch64::tests (including independent oracle.tsv comparisons).
 use object::{Object, ObjectSection};
 use sigil_engine::{
@@ -9,7 +9,7 @@ use sigil_model::Sha256Hex;
 use std::{fs::File, os::unix::fs::FileExt, path::PathBuf};
 
 #[test]
-fn aarch64_foundation_does_not_enable_production_dispatch() {
+fn aarch64_elf_dispatch_reaches_bounded_analysis() {
     for name in [
         "elf-clang-plt.so",
         "elf-gcc-plt.so",
@@ -43,9 +43,8 @@ fn aarch64_foundation_does_not_enable_production_dispatch() {
         )
         .unwrap();
         assert_eq!(parsed.slices.len(), 1, "{name}");
-        assert_eq!(
-            parsed.slices[0].code,
-            Some(CodeOutcome::Unsupported),
+        assert!(
+            matches!(parsed.slices[0].code, Some(CodeOutcome::Analyzed { .. })),
             "{name}"
         );
     }

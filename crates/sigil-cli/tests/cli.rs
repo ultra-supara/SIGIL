@@ -3280,3 +3280,77 @@ fn session_verify_checks_a_session_against_its_policy() {
         r.stderr
     );
 }
+
+#[test]
+fn aarch64_code_binary_install_service_and_observe_share_the_same_facts() {
+    let models = store(true);
+    let install = TempDir::new().unwrap();
+    fs::create_dir_all(install.path().join("bin")).unwrap();
+    fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so");
+    let exe = install.path().join("bin/ollama");
+    fs::copy(&fixture, &exe).unwrap();
+    let units = unit_for(install.path());
+    let unit = units.path().join("ollama.service");
+    let standalone = binary(&[&"--code", &exe]);
+    assert_eq!(standalone.code, 0, "{}", standalone.stderr);
+    let expected = session_of(&standalone);
+    assert_eq!(expected.code[0].call_sites.len(), 2);
+    assert_eq!(
+        expected.request.code_analysis,
+        Some(sigil_model::CodeAnalysis::MultiarchV1)
+    );
+    for result in [
+        inspect(
+            models.path(),
+            &[&"--code", &"--install-dir", &install.path()],
+        ),
+        inspect(models.path(), &[&"--code", &"--service-unit", &unit]),
+        inspect(
+            models.path(),
+            &[
+                &"--code",
+                &"--install-dir",
+                &install.path(),
+                &"--mode",
+                &"observe",
+            ],
+        ),
+    ] {
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        let s = session_of(&result);
+        assert_eq!(s.code, expected.code);
+        assert_eq!(s.request.code_analysis, expected.request.code_analysis);
+        assert_eq!(
+            s.coverage
+                .iter()
+                .filter(|c| c.check.as_str() == "artifacts.code"
+                    && matches!(c.scope, sigil_model::Ref::Slice(_)))
+                .count(),
+            1
+        );
+    }
+    let limited = binary(&[
+        &"--code",
+        &exe,
+        &"--budget",
+        &"binary_code_bytes=0",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(limited.code, 4, "{}", limited.stderr);
+    assert!(session_of(&limited).code.is_empty());
+    let limited = inspect(
+        models.path(),
+        &[
+            &"--code",
+            &"--service-unit",
+            &unit,
+            &"--budget",
+            &"binary_code_bytes=0",
+            &"--fail-on-incomplete",
+        ],
+    );
+    assert_eq!(limited.code, 4, "{}", limited.stderr);
+    assert!(session_of(&limited).code.is_empty());
+}

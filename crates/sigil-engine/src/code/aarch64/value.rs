@@ -610,6 +610,7 @@ pub(crate) struct Values {
 
 /// `cfg` is a successful Task 7 CFG, still subject to later relocation/target proofs. Its
 /// candidate reservations remain owned by the artifact; this solver does not repeat them.
+#[cfg(test)]
 pub(crate) fn solve(
     cfg: &Cfg,
     abi: CodeAbi,
@@ -752,7 +753,11 @@ fn propagate_unapplied(
             return Err(Failure::InvalidCfg);
         };
         for (pc, ins) in cfg.block_insns(at, block) {
-            if matches!(ins.flow, Flow::CallDirect(_) | Flow::CallRegister(_)) {
+            if matches!(ins.flow, Flow::CallDirect(_) | Flow::CallRegister(_))
+                || (matches!(ins.flow, Flow::JumpDirect(_) | Flow::JumpRegister(_))
+                    && block.last == pc
+                    && block.successors == [None, None])
+            {
                 charge(run, s.weight())?;
                 calls.insert(pc, s.clone());
             }

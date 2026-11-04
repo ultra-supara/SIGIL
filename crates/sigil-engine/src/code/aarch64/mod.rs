@@ -1,5 +1,6 @@
-//! Bounded AArch64 decoding; no architecture dispatch or evidence emission.
+//! Bounded AArch64 decoding, symbolic control flow and transactional ELF recording.
 pub(crate) mod decode;
+pub(crate) mod record;
 pub(crate) mod search;
 pub(crate) mod value;
 
@@ -16,6 +17,7 @@ pub(crate) struct Cfg {
 }
 
 impl Cfg {
+    #[cfg(test)]
     pub fn calls(&self) -> impl Iterator<Item = (u64, Flow)> + '_ {
         self.insns.iter().filter_map(|(pc, ins)| {
             matches!(ins.flow, Flow::CallDirect(_) | Flow::CallRegister(_))
@@ -97,8 +99,8 @@ impl Failure {
 /// the FDE/explicit object length. A result is transactional: no CFG or call list escapes on
 /// failure; attempted instruction charges and the bounded gap remain. No model facts are made.
 /// The caller must also discard this CFG if later relocation/value/recording proofs fail.
-/// This stage uses encoded branch destinations. Object relocation resolution and proved
-/// import-tail exits must be integrated before enabling a producer (Tasks 9–10).
+/// The encoded-only entry point is retained for focused decoder tests; ELF recording uses
+/// `decode_cfg_with` and commits only after symbolic branch and import-tail proofs.
 ///
 /// The caller must satisfy the shared reservation, deduplication and single-function ownership
 /// contract on [`Proofs::candidates`]. The list-length check below is only a defensive local
@@ -106,6 +108,7 @@ impl Failure {
 /// Tasks 9–10 integration tests must exercise multiple functions, duplicate/repeated candidates,
 /// multiple artifact slices and the exact reference-budget boundary, including refusal gaps,
 /// stopped work and preservation of earlier independently proved facts.
+#[cfg(test)]
 pub(crate) fn decode_cfg(
     bytes: &[u8],
     entry: u64,
@@ -113,7 +116,27 @@ pub(crate) fn decode_cfg(
     proofs: &Proofs<'_>,
     run: &mut Run,
 ) -> Result<Cfg, Failure> {
-    let result = build_cfg(bytes, entry, end, proofs, run);
+    decode_cfg_with(bytes, entry, end, proofs, &|_, _| Ok(Control::Encoded), run)
+}
+
+/// A provisional indirect exit must subsequently be proved by the target fixpoint.
+#[derive(Clone, Copy)]
+pub(crate) enum Control {
+    Encoded,
+    Internal(u64),
+    Import,
+    ProvisionalExit,
+}
+
+pub(crate) fn decode_cfg_with(
+    bytes: &[u8],
+    entry: u64,
+    end: u64,
+    proofs: &Proofs<'_>,
+    control: &dyn Fn(u64, &A64Insn) -> Result<Control, Failure>,
+    run: &mut Run,
+) -> Result<Cfg, Failure> {
+    let result = build_cfg(bytes, entry, end, proofs, control, run);
     if let Err(why) = result {
         run.gap(why.reason(entry));
     }
@@ -147,6 +170,7 @@ fn build_cfg(
     entry: u64,
     end: u64,
     p: &Proofs<'_>,
+    control: &dyn Fn(u64, &A64Insn) -> Result<Control, Failure>,
     run: &mut Run,
 ) -> Result<Cfg, Failure> {
     if run.stopped() {
@@ -206,14 +230,24 @@ fn build_cfg(
                     Err(Failure::Fallthrough(next))
                 }
             };
-            let targets = match ins.flow {
+            let resolved = control(pc, &ins)?;
+            let flow = match (resolved, ins.flow) {
+                (Control::Internal(t), Flow::CallDirect(_)) => Flow::CallDirect(t),
+                (Control::Internal(t), Flow::JumpDirect(_)) => Flow::JumpDirect(t),
+                _ => ins.flow,
+            };
+            let targets = match flow {
                 Flow::Next => {
                     insns.insert(pc, ins);
                     pc = fall()?;
                     continue;
                 }
                 Flow::Return => [None, None],
+                Flow::JumpRegister(_) if matches!(resolved, Control::ProvisionalExit) => {
+                    [None, None]
+                }
                 Flow::JumpRegister(_) => return Err(Failure::IndirectJump(pc)),
+                Flow::JumpDirect(_) if matches!(resolved, Control::Import) => [None, None],
                 Flow::JumpDirect(t) | Flow::Conditional(t) => {
                     code_at(t, p)?;
                     if !inside(t) {
@@ -229,7 +263,9 @@ fn build_cfg(
                     )
                 }
                 Flow::CallDirect(t) => {
-                    code_at(t, p)?;
+                    if !matches!(resolved, Control::Import) {
+                        code_at(t, p)?;
+                    }
                     successors(
                         if (p.noreturn)(pc, &ins) {
                             None
