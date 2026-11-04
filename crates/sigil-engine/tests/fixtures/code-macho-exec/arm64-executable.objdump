@@ -1,0 +1,46 @@
+
+arm64-executable:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000100000570 <_zero>:
+100000570: a9bf7bfd    	stp	x29, x30, [sp, #-0x10]!
+100000574: 910003fd    	mov	x29, sp
+100000578: 52800000    	mov	w0, #0x0                ; =0
+10000057c: d2800001    	mov	x1, #0x0                ; =0
+100000580: 52800002    	mov	w2, #0x0                ; =0
+100000584: 9400000d    	bl	0x1000005b8 <dyld_stub_binder+0x1000005b8>
+100000588: 11000400    	add	w0, w0, #0x1
+10000058c: a8c17bfd    	ldp	x29, x30, [sp], #0x10
+100000590: d65f03c0    	ret
+
+0000000100000594 <_one>:
+100000594: a9bf7bfd    	stp	x29, x30, [sp, #-0x10]!
+100000598: 910003fd    	mov	x29, sp
+10000059c: 52800020    	mov	w0, #0x1                ; =1
+1000005a0: d2800001    	mov	x1, #0x0                ; =0
+1000005a4: 52800002    	mov	w2, #0x0                ; =0
+1000005a8: 94000004    	bl	0x1000005b8 <dyld_stub_binder+0x1000005b8>
+1000005ac: 11000400    	add	w0, w0, #0x1
+1000005b0: a8c17bfd    	ldp	x29, x30, [sp], #0x10
+1000005b4: d65f03c0    	ret
+
+Disassembly of section __TEXT,__stubs:
+
+00000001000005b8 <__stubs>:
+1000005b8: 90000050    	adrp	x16, 0x100008000 <dyld_stub_binder+0x100008000>
+1000005bc: f9400210    	ldr	x16, [x16]
+1000005c0: d61f0200    	br	x16
+
+Disassembly of section __TEXT,__stub_helper:
+
+00000001000005c4 <__stub_helper>:
+1000005c4: 90000051    	adrp	x17, 0x100008000 <dyld_stub_binder+0x100008000>
+1000005c8: 91002231    	add	x17, x17, #0x8
+1000005cc: a9bf47f0    	stp	x16, x17, [sp, #-0x10]!
+1000005d0: 90000030    	adrp	x16, 0x100004000 <dyld_stub_binder+0x100004000>
+1000005d4: f9400210    	ldr	x16, [x16]
+1000005d8: d61f0200    	br	x16
+1000005dc: 18000050    	ldr	w16, 0x1000005e4 <__stub_helper+0x20>
+1000005e0: 17fffff9    	b	0x1000005c4 <__stub_helper>
+1000005e4: 00000000    	udf	#0x0

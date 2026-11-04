@@ -142,7 +142,7 @@ These references identify existing evidence, not commands rerun in Task18.
 | Spec §8 requirement | Exact evidence and command reference | Status / limit |
 |---|---|---|
 | 1: clang/GCC -O0/-O2 ET_REL, PLT, real `-fno-plt`; intervals, call address, raw symbol, route, x0/x1/x2 | `E multiarch_code::real_aarch64_elf_calls_match_independent_oracle`; `E aarch64_elf::retained_oracle_rows_have_executable_bytes_and_independent_dump_evidence`; `E-lib code::image::aarch64::tests::every_clang_gcc_fixture_matches_independent_oracle_ranges_and_calls` | Eight positive C configurations, two expected source calls each; oracle `-` fields make no value claim. Stack-dependent O0 values remain unknown. Task1 build/oracle evidence and Task9/10 integration evidence; no targets executed. |
-| 2: Mach-O arm64/x86 classic/chained, thin/fat/object and exact bounds | `E macho_code_calls::real_thin_stubs_join_exact_import_witnesses` (four thin configurations/eight calls); `object_branches_keep_unbound_identity_without_guessed_prototype` in the same target; `E macho_code_unwind::native_object_explicit_lengths_and_linked_dwarf_offsets_are_separate_proofs`; `x86_linked_dwarf_mode_uses_its_own_architecture_encoding` in that target | Actual linked call positives are dylibs; MH_OBJECT has exact file-offset identities but Unbound/unknown prototypes keep partial argument layouts. Executable container coverage exists in `E macho_facts::a_linked_universal_executable_is_read_in_full`; equivalent end-to-end executable **call** coverage is not established by these dylib tests. |
+| 2: Mach-O arm64/x86 classic/chained, thin/fat/object and exact bounds | `E macho_code_calls::real_thin_stubs_join_exact_import_witnesses` (four thin configurations/eight calls); `object_branches_keep_unbound_identity_without_guessed_prototype` in the same target; `E macho_code_unwind::native_object_explicit_lengths_and_linked_dwarf_offsets_are_separate_proofs`; `x86_linked_dwarf_mode_uses_its_own_architecture_encoding` in that target | Dylib call positives plus Task18 supplement `E macho_code_calls::real_mh_execute_calls_match_independent_oracle_and_public_session`: real arm64/x86 MH_EXECUTE, four oracle-checked calls, exact library witness and Complete child/input coverage. MH_OBJECT has exact file-offset identities but Unbound/unknown prototypes keep partial argument layouts. This is not exhaustive executable/fixup/fat combination coverage. |
 | 2: folded/missing/overlapping bounds, same-name libraries, authenticated/malformed chains | `E macho_code_calls::absent_or_folded_native_bounds_never_invent_functions`; `E macho_code_unwind::folded_native_regular_compressed_local_and_function_starts_never_supply_ends`; `malformed_indirect_overlapping_and_wrapping_fdes_never_create_bounds` in that target; `E macho_code_bind::malformed_chains_headers_starts_formats_ordinals_and_addends_are_transactional`; `E multiarch_policy::real_same_name_slots_do_not_inherit_another_dylibs_capability` | Negative outcomes stay gaps. Task13/14/15/16 reviewed evidence. No authenticated pointer support. |
 | 3: healthy dual-architecture fat, supported+unsupported, actual per-slice `binary.code`, policy and artifact byte sum | `E macho_code_calls::named_universal_session_accepts_exact_witnesses_and_library_aware_policy`; `unsupported_fat_child_preserves_proved_sibling_and_shared_budget` in that target; `E multiarch_policy::fat_questions_use_each_slice_and_reject_missing_duplicate_or_complete_parent`; `C cli::macho_thin_fat_install_service_observe_and_shared_budget` | Task17 cap7094 retains one complete child and partial sibling/parents. This proves the fat artifact case, not Task10's unresolved mixed named-x86 work accounting. |
 | 3: healthy arm64 + recorded unparsed x86 child / omitted invalid descriptor; named and install, saved roundtrip and reevaluation | `E macho_code_calls::real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor` | Task18 extends the real two-call sibling case through both public session producers, partial parents, canonical roundtrip, validation and `policy::verify`; both mutations pass. |
@@ -231,6 +231,34 @@ Logs are `target/tmp/issue48/task18/`.
 | `cargo clippy --locked -p sigil-cli --test cli -p sigil-engine --test code_session --test macho_code_calls -- -D warnings`; `cargo fmt --all -- --check`; `git diff --check` | All exit 0. |
 
 Task18 does not establish historic-byte coverage for the variants absent from
-Task0, exhaustive metadata truncation, executable Mach-O call parity, a measured
+Task0, exhaustive metadata truncation, every executable/fixup/fat combination, a measured
 old strict reader on marked examples, Task10's mixed-x86 bound/alias fix, Task19's
 final gate, or PR-5b. No M3-B/M3-C release, merge, or issue closure is claimed.
+
+
+### Task18 supplement: real MH_EXECUTE calls
+
+The earlier executable-call gap now has a focused static proof for both arm64
+and x86-64. `tests/fixtures/code-macho-exec/build.py` reuses Task1's source,
+libSystem stub, exact clang/LLVM/LLD21.1.8 pins, builder and independent oracle.
+Two fresh sequential builds under `target/tmp/issue48/task18/exec-one` and
+`exec-two` were byte-identical. Both manifests and the committed fixture
+manifest pass **15/15** checksums. No inspected executable was run.
+
+The supplemental two binaries have real MH_EXECUTE headers, LC_MAIN and
+LC_LOAD_DYLINKER. The four call rows prove exact FDE intervals, instruction
+addresses, arguments and decoded stub/slot/libSystem ordinal1 nonweak binding:
+arm64 calls `0x100000584`/`0x1000005a8`; x86 calls
+`0x10000057a`/`0x10000059d`. Full raw LLVM dumps and link commands are committed
+alongside the binaries, independently of SIGIL's output. Their SHA-256 values:
+
+- arm64: `6fd8ac6877e9afb183a484dbc0c7fdbff842ee3a3caa79e94cf09981775c5170`
+- x86: `77fe8f46b1ca95f912cbdf67930ce119c35cadcb72d76df98c62933267cbeefa`
+
+`cargo test --locked -p sigil-engine --test macho_code_calls real_mh_execute_calls_match_independent_oracle_and_public_session -- --exact --nocapture`
+passes **1 test**, both architectures: public binary_session yields the exact
+oracle calls/witnesses/arguments and Complete child/input summaries; saved JSON
+validates and verifies the one denied-network violation with two call witnesses.
+This supplement adds no runtime claim and does not exhaust all executable,
+fixup and fat combinations. Task10/P5b/Task19 and the other unmet gates above
+remain open. The original Task1 corpus and all old goldens are unchanged.

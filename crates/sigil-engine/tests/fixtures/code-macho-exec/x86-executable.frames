@@ -1,0 +1,59 @@
+x86-executable:	file format Mach-O 64-bit x86-64
+
+.debug_frame contents:
+
+
+.eh_frame contents:
+
+00000000 00000014 00000000 CIE
+  Format:                DWARF32
+  Version:               1
+  Augmentation:          "zR"
+  Code alignment factor: 1
+  Data alignment factor: -8
+  Return address column: 16
+  Augmentation data:     10
+
+  DW_CFA_def_cfa: RSP +8
+  DW_CFA_offset: RIP -8
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  CFA=RSP+8: RIP=[CFA-8]
+
+00000018 00000024 0000001c FDE cie=00000000 pc=100000570...100000583
+  Format:       DWARF32
+  DW_CFA_advance_loc: 1 to 0x100000571
+  DW_CFA_def_cfa_offset: +16
+  DW_CFA_offset: RBP -16
+  DW_CFA_advance_loc: 3 to 0x100000574
+  DW_CFA_def_cfa_register: RBP
+  DW_CFA_GNU_args_size: +0
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x100000570: CFA=RSP+8: RIP=[CFA-8]
+  0x100000571: CFA=RSP+16: RBP=[CFA-16], RIP=[CFA-8]
+  0x100000574: CFA=RBP+16: RBP=[CFA-16], RIP=[CFA-8]
+
+00000040 00000024 00000044 FDE cie=00000000 pc=100000590...1000005a6
+  Format:       DWARF32
+  DW_CFA_advance_loc: 1 to 0x100000591
+  DW_CFA_def_cfa_offset: +16
+  DW_CFA_offset: RBP -16
+  DW_CFA_advance_loc: 3 to 0x100000594
+  DW_CFA_def_cfa_register: RBP
+  DW_CFA_GNU_args_size: +0
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+  DW_CFA_nop:
+
+  0x100000590: CFA=RSP+8: RIP=[CFA-8]
+  0x100000591: CFA=RSP+16: RBP=[CFA-16], RIP=[CFA-8]
+  0x100000594: CFA=RBP+16: RBP=[CFA-16], RIP=[CFA-8]
+

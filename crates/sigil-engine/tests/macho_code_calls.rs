@@ -72,6 +72,98 @@ fn real_thin_stubs_join_exact_import_witnesses() {
     }
 }
 
+#[test]
+fn real_mh_execute_calls_match_independent_oracle_and_public_session() {
+    use sigil_model::{ArgumentLayout, CallTarget, ContainerFacts, CoverageState, MachOLibrary};
+    let policy = sigil_engine::policy::Policy::load(
+        "schema = \"sigil-policy/1\"\nname = \"exec-network\"\n\
+         [[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"test\"\n",
+    )
+    .unwrap();
+    for name in ["arm64-executable", "x86-executable"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/code-macho-exec")
+            .join(name);
+        let session = sigil_engine::inspect::binary_session(
+            &sigil_engine::inspect::BinaryRequest {
+                paths: vec![path],
+                deps_budgets: Default::default(),
+                budgets: sigil_engine::collect::named::NamedBudgets {
+                    binary: BinaryBudgets {
+                        code: Some(Default::default()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+            &policy,
+            common::tool(),
+            common::observation(),
+            common::policy_time(),
+        )
+        .unwrap();
+        let ContainerFacts::MachO(macho) = &session.binaries[0].container else {
+            panic!("expected Mach-O executable")
+        };
+        assert_eq!(macho.file_type, 2, "MH_EXECUTE, not a dylib mutation");
+        assert_eq!(
+            session.artifacts[0].slices[0].arch,
+            if name == "arm64-executable" {
+                sigil_model::Arch::Aarch64
+            } else {
+                sigil_model::Arch::X86_64
+            }
+        );
+        assert_eq!(session.code.len(), 1);
+        let code = &session.code[0];
+        assert_eq!(code.call_sites.len(), 2);
+        let rows: Vec<_> = include_str!("fixtures/code-macho-exec/oracle.tsv")
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .filter(|row| row[0] == name)
+            .collect();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            let addr =
+                |value: &str| u64::from_str_radix(value.trim_start_matches("0x"), 16).unwrap();
+            let call = code
+                .call_sites
+                .iter()
+                .find(|c| c.addr == addr(row[5]))
+                .unwrap();
+            let function = code.functions.iter().find(|f| f.id == call.caller).unwrap();
+            assert_eq!((function.entry, function.end), (addr(row[3]), addr(row[4])));
+            assert!(matches!(&call.target,
+                CallTarget::Import { symbol, via: ImportVia::MachOStub, macho_import: Some(w) }
+                if symbol.as_bytes() == row[6].as_bytes() && w.name == *symbol && !w.weak
+                    && matches!(&w.library, MachOLibrary::Dylib { ordinal: 1, name: Some(lib) }
+                        if lib.as_bytes() == row[7].as_bytes())));
+            assert_eq!(call.args_layout, Some(ArgumentLayout::Complete));
+            assert_eq!(call.args.len(), 3);
+            for (arg, expected) in call.args.iter().zip(&row[8..11]) {
+                assert!(matches!(arg, sigil_model::ArgValue::ConstInt { value, .. }
+                    if *value == expected.parse::<i64>().unwrap()));
+            }
+        }
+        let coverage: Vec<_> = session
+            .coverage
+            .iter()
+            .filter(|c| c.check.as_str() == "binary.code")
+            .collect();
+        assert_eq!(coverage.len(), 2, "one child and one input summary");
+        assert!(coverage.iter().all(|c| c.state == CoverageState::Complete));
+        assert_eq!(coverage[0].budget, coverage[1].budget);
+        assert_eq!(session.policy_violations.len(), 1);
+        assert_eq!(session.policy_violations[0].evidence.len(), 2);
+        session.validate().unwrap();
+        let saved: sigil_model::Session =
+            serde_json::from_str(&session.to_canonical_json().unwrap()).unwrap();
+        saved.validate().unwrap();
+        sigil_engine::policy::verify(&saved, &policy).unwrap();
+    }
+}
+
 fn code(
     p: &sigil_engine::binary::ParsedArtifact,
     index: usize,
