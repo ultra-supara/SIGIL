@@ -86,8 +86,7 @@ pub struct ParsedArtifact {
 /// analysis or retaining container facts. `prefix` must contain the first 64 bytes, or the whole
 /// file when shorter. Mach-O recognition uses the supplied parser allocation budget.
 ///
-/// This probe is not yet wired into collection; callers must separately bound and account for
-/// its I/O before using it as a discovery pass.
+/// Code collection uses [`probe_multiarch`] instead, to account for and limit discovery I/O.
 pub fn recognizes_multiarch(file: &File, size: u64, prefix: &[u8], parse_bytes: u64) -> bool {
     if let Some((_, arch)) = header::read(prefix) {
         return arch == Arch::Aarch64;
@@ -126,15 +125,25 @@ pub fn probe_multiarch(
 /// code on the same fd when `budgets.code` asks for it. Never fails: what cannot be read is a gap.
 /// No signature scan: [`parse_artifact`] scans with the needles it is given.
 pub fn parse(file: &File, size: u64, budgets: BinaryBudgets) -> Parsed {
-    parse_elf(file, size, budgets, None)
+    parse_elf(file, size, budgets, None, false)
 }
 
 /// [`parse`], and with `sought` the signature scan on the same fd (PR-4c-2a, PR-4c-2b).
-fn parse_elf(file: &File, size: u64, budgets: BinaryBudgets, sought: Option<Sought<'_>>) -> Parsed {
+fn parse_elf(
+    file: &File,
+    size: u64,
+    budgets: BinaryBudgets,
+    sought: Option<Sought<'_>>,
+    multiarch: bool,
+) -> Parsed {
     let data = read::Bounded::new(read::Budgeted::new(file, size), size, budgets.parse_bytes);
-    let mut analysis = budgets
-        .code
-        .map(|b| ArtifactAnalysis::legacy(file, size, b));
+    let mut analysis = budgets.code.map(|b| {
+        if multiarch {
+            ArtifactAnalysis::new(file, size, b)
+        } else {
+            ArtifactAnalysis::legacy(file, size, b)
+        }
+    });
     elf::parse_with_analysis(
         &data,
         budgets,
@@ -155,8 +164,21 @@ pub fn parse_artifact(
     budgets: BinaryBudgets,
     sought: Option<Sought<'_>>,
 ) -> Option<ParsedArtifact> {
+    parse_artifact_mode(file, size, artifact_sha256, prefix, budgets, sought, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_artifact_mode(
+    file: &File,
+    size: u64,
+    artifact_sha256: &Sha256Hex,
+    prefix: &[u8],
+    budgets: BinaryBudgets,
+    sought: Option<Sought<'_>>,
+    multiarch: bool,
+) -> Option<ParsedArtifact> {
     if let Some((kind, arch)) = header::read(prefix) {
-        let parsed = parse_elf(file, size, budgets, sought);
+        let parsed = parse_elf(file, size, budgets, sought, multiarch);
         return Some(ParsedArtifact {
             format: Format::Elf { kind },
             code_inventory: if matches!(&parsed.container, ContainerFacts::Elf(e) if e.abi.is_none())

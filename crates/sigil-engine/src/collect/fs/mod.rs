@@ -32,7 +32,7 @@ mod resolve;
 mod walk;
 
 pub use path::{link_target, recorded, LinkTarget, PathError, RelPath};
-pub(crate) use read::instance_id;
+pub(crate) use read::{instance_id, stat_info};
 pub use read::{FileRead, ParseInput, ReadOutcome, ReadSpec};
 pub use walk::{Entry, EntryType, Skip, Walk, WalkError};
 

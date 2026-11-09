@@ -162,8 +162,13 @@ pub fn installation(mut s: Session) -> Session {
     s.instances[0].discovered_by = vec![DiscoverySource::Walk];
     s.instances[0].id = InstanceId::new("inst:install/bin/ollama").unwrap();
     s.instances[0].path = UntrustedText::new("/installation/bin/ollama");
-    s.coverage.retain(|c| c.check.as_str() == BINARY_CODE);
+    s.coverage.retain(|c| {
+        c.check.as_str() == BINARY_CODE || c.check.as_str().starts_with("binary.collection.")
+    });
     for c in &mut s.coverage {
+        if c.check.as_str() != BINARY_CODE {
+            continue;
+        }
         c.check = CheckId::new(ARTIFACTS_CODE).unwrap();
         if matches!(c.scope, Ref::Instance(_)) {
             c.scope = Ref::Artifact(s.artifacts[0].id.clone());

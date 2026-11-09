@@ -26,6 +26,12 @@ Those are the spec's reading (§4.2, §4.7) of the checked instructions and relo
 
 Two runs of `build.sh` give the same `SHA256SUMS` (verified by hand, not by the script).
 
+`shared-refs.so` additionally exercises PR #129's collection limits: one `R_X86_64_64`
+text relocation and one `connect@PLT` call in a single FDE. It is built by
+`clang -shared -nostdlib -Wl,-z,notext -o shared-refs.so shared-refs.S` with the pinned
+toolchain. Collection tests measure both reference counters directly; at limit 1 the legacy
+path admits one of each, while a marked request admits one combined reference.
+
 ## Built files
 
 The **Shape** column is what the compilers gave. Where it differs from the PR-5a spec (§8.1) or

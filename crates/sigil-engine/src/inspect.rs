@@ -259,6 +259,13 @@ fn assemble(
             code_request.is_some(),
             facts.recognized_multiarch,
         );
+        if multiarch {
+            if let Some(usage) = &facts.collection_usage {
+                usage
+                    .record(&mut budgets, &mut coverage)
+                    .map_err(InspectError::BadId)?;
+            }
+        }
         if let Some(unit) = unit {
             service_unit::attach(unit, &mut facts).map_err(InspectError::Input)?;
         }
@@ -647,6 +654,13 @@ pub fn binary_session(
         CodeCoverageError::Undecided(e) => InspectError::Internal(e),
     })?;
     session.coverage.extend(code_coverage);
+    if multiarch {
+        if let Some(usage) = &facts.collection_usage {
+            usage
+                .record(&mut session.request.budgets, &mut session.coverage)
+                .map_err(InspectError::BadId)?;
+        }
+    }
     session.code = code_facts(facts.code);
     let dependencies = deps::analyze(
         &session.request.roots,

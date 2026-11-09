@@ -989,6 +989,44 @@ fn newly_scannable_alias_preserves_the_original_code_outcome() {
 }
 
 #[test]
+fn marked_collection_io_usage_round_trips_and_rejects_forged_limits() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("arm.so");
+    std::fs::copy(a64_fixture("elf-clang-plt.so"), &path).unwrap();
+    let size = std::fs::metadata(&path).unwrap().len();
+    let s = inspect_paths(vec![path], Some(Default::default()));
+    for (check, used) in [
+        ("binary.collection.hash", size),
+        ("binary.collection.probe", 0),
+        ("binary.collection.revalidation", size),
+    ] {
+        let c = s
+            .coverage
+            .iter()
+            .find(|c| c.check.as_str() == check)
+            .unwrap();
+        assert_eq!(c.budget.as_ref().unwrap().used, used);
+        assert!(c.budget.as_ref().unwrap().used <= c.budget.as_ref().unwrap().limit);
+    }
+    let json = s.to_canonical_json().unwrap();
+    let reread: Session = serde_json::from_str(&json).unwrap();
+    reread.validate().unwrap();
+    let mut forged = s.clone();
+    let c = forged
+        .coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == "binary.collection.revalidation")
+        .unwrap();
+    c.budget.as_mut().unwrap().used = c.budget.as_ref().unwrap().limit + 1;
+    assert!(forged.validate().is_err());
+    let mut missing = s;
+    missing
+        .coverage
+        .retain(|c| c.check.as_str() != "binary.collection.probe");
+    assert!(missing.validate().is_err());
+}
+
+#[test]
 fn macho_descriptor_loss_and_unparsed_children_stay_distinct_without_dispatch() {
     let original = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
