@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use sigil_engine::binary::BinaryBudgets;
@@ -16,8 +17,8 @@ use sigil_engine::inspect::{
 };
 use sigil_engine::policy::Policy;
 use sigil_model::{
-    Arch, Coverage, CoverageState, ElfType, Format, Ref, Session, BINARY_CODE, BINARY_CODE_BYTES,
-    BINARY_CONTAINER, CODE_UNSUPPORTED,
+    Arch, CodeAnalysis, ContainerFacts, Coverage, CoverageState, ElfType, Format, Ref, Session,
+    BINARY_CODE, BINARY_CODE_BYTES, BINARY_CONTAINER, CODE_UNSUPPORTED,
 };
 use tempfile::TempDir;
 
@@ -515,18 +516,34 @@ fn x32_and_big_endian_inputs_are_unsupported() {
 }
 
 #[test]
-fn a_mach_o_input_is_unsupported() {
+fn supported_mach_o_input_without_exact_bounds_is_partial() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/macho/hello-universal");
     let s = with_code(&[path]);
     assert_eq!(s.artifacts[0].format, Format::MachOFat);
-    assert_eq!(
-        code_state(&s, 0).state,
-        CoverageState::Unsupported {
-            what: sigil_model::code_coverage::CODE_NO_SUPPORTED_SLICE.to_string()
-        }
-    );
-    assert_eq!(code_state(&s, 0).budget, None);
+    assert_eq!(s.request.code_analysis, Some(CodeAnalysis::MultiarchV1));
+    assert_eq!(s.artifacts[0].slices.len(), 2);
+    let mut missing = vec![];
+    let mut used = 0;
+    for slice in &s.artifacts[0].slices {
+        assert!(matches!(slice.arch, Arch::X86_64 | Arch::Aarch64));
+        let child = s
+            .coverage
+            .iter()
+            .find(|c| c.check.as_str() == BINARY_CODE && c.scope == Ref::Slice(slice.id.clone()))
+            .unwrap();
+        assert!(matches!(&child.state, CoverageState::Partial { missing }
+            if missing.iter().any(|g| g == "code: Mach-O unwind: missing exact bounds")));
+        let budget = child.budget.as_ref().unwrap();
+        assert_eq!(budget.budget, BINARY_CODE_BYTES);
+        assert_eq!(budget.limit, CodeBudgets::default().bytes);
+        assert!(budget.used > 0 && budget.used <= budget.limit);
+        used += budget.used;
+        missing.push(format!("code: incomplete slice {}", slice.id));
+    }
+    missing.sort();
+    assert_eq!(code_state(&s, 0).state, CoverageState::Partial { missing });
+    assert_eq!(code_state(&s, 0).budget.as_ref().unwrap().used, used);
     assert!(s.code.is_empty());
     s.validate().unwrap();
 }
@@ -543,6 +560,44 @@ fn without_code_there_is_no_binary_code() {
     assert!(!s.coverage.iter().any(|c| c.check.as_str() == BINARY_CODE));
     assert!(!s.request.budgets.contains_key(BINARY_CODE_BYTES));
     assert!(s.code.is_empty());
+}
+
+#[test]
+#[ignore = "Task 0 frozen paths and filesystem metadata live outside git; run in the original worktree"]
+fn frozen_task0_x86_producers_are_byte_identical() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/issue48");
+    let policy = Policy::builtin_default().unwrap();
+    let standalone = with_code(&[fixture("net-plt-gcc.so")]);
+    let mut budgets = InstallBudgets::default();
+    budgets.binary.code = Some(CodeBudgets::default());
+    let installation = store_session(
+        &StoreRequest {
+            deps_budgets: Default::default(),
+            models_dir: root.join("baseline/inputs/models"),
+            model_filter: None,
+            budgets: FsBudgets::default(),
+            manifest_limit: DEFAULT_MANIFEST_LIMIT,
+            install: Some(InstallRequest {
+                source: InstallSource::Dir(root.join("baseline/inputs/install")),
+                budgets,
+            }),
+        },
+        &ActiveInput::default(),
+        &policy,
+        common::tool(),
+        common::observation(),
+        common::policy_time(),
+    )
+    .unwrap();
+    for (name, s) in [("x86-binary", standalone), ("x86-install", installation)] {
+        s.validate().unwrap();
+        sigil_engine::policy::verify(&s, &policy).unwrap();
+        assert_eq!(
+            s.to_canonical_json().unwrap().as_bytes(),
+            std::fs::read(root.join(format!("task3/old-canonical/{name}.session.json"))).unwrap(),
+            "{name}: current producer versus frozen Task 0 bytes"
+        );
+    }
 }
 
 #[test]
@@ -595,8 +650,8 @@ fn fixture_files(dir: &str) -> Vec<PathBuf> {
 #[test]
 fn a_code_request_never_changes_the_container_coverage() {
     // R-h at the session level: for every fixture, the `binary.container` entry is the same
-    // bytes, and the container facts and hints the same, with and without code; and the session
-    // with code validates (C1–C6 on real outputs).
+    // bytes, and container facts/hints remain the same apart from the marked observation of
+    // actual Mach-O header byte order. The session with code validates (C1–C6 on real outputs).
     let mut seen = 0;
     for path in fixture_files("tests/fixtures/code")
         .into_iter()
@@ -608,10 +663,45 @@ fn a_code_request_never_changes_the_container_coverage() {
         let with = with_code(std::slice::from_ref(&path));
         let container = |s: &Session| serde_json::to_vec(entry(s, BINARY_CONTAINER, 0)).unwrap();
         assert_eq!(container(&with), container(&without), "{shown}");
-        assert_eq!(with.binaries, without.binaries, "{shown}");
+        let mut observed = with.binaries.clone();
+        for (marked, legacy) in observed.iter_mut().zip(&without.binaries) {
+            if let (ContainerFacts::MachO(m), ContainerFacts::MachO(old)) =
+                (&mut marked.container, &legacy.container)
+            {
+                assert_eq!(with.request.code_analysis, Some(CodeAnalysis::MultiarchV1));
+                assert_eq!(without.request.code_analysis, None);
+                let slice = with
+                    .artifacts
+                    .iter()
+                    .flat_map(|a| &a.slices)
+                    .find(|s| s.id == marked.slice)
+                    .unwrap();
+                let mut magic = [0; 4];
+                std::fs::File::open(&path)
+                    .unwrap()
+                    .read_exact_at(&mut magic, slice.offset)
+                    .unwrap();
+                let endian = match magic {
+                    [0xcf, 0xfa, 0xed, 0xfe] => true,
+                    [0xfe, 0xed, 0xfa, 0xcf] => false,
+                    _ => panic!(
+                        "{shown}: expected a 64-bit Mach-O header at {}",
+                        slice.offset
+                    ),
+                };
+                assert!(m.is_64);
+                assert_eq!(m.little_endian, Some(endian));
+                assert_eq!(old.little_endian, None);
+                m.little_endian = None;
+            }
+        }
+        assert_eq!(observed, without.binaries, "{shown}");
         assert_eq!(with.hints, without.hints, "{shown}");
         let mut container_artifacts = with.artifacts.clone();
         for a in &mut container_artifacts {
+            if a.code_slice_inventory.is_some() {
+                assert_eq!(with.request.code_analysis, Some(CodeAnalysis::MultiarchV1));
+            }
             a.code_slice_inventory = None;
         }
         assert_eq!(container_artifacts, without.artifacts, "{shown}");

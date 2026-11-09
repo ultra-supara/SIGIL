@@ -1,0 +1,132 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "fcc43654a822a169b0f2a69a87e2db21c1d249ab77b08bedd0d1284fc5220ef7",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    }
+  },
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.code"
+        ],
+        "gaps": [
+          "capability:posix.network@sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6#other@4096"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6",
+      "size": 49392,
+      "format": "MachOFat",
+      "paths": [
+        "/examples/code-macho/universal-mixed"
+      ],
+      "slices": [
+        {
+          "id": "sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6#aarch64@16384",
+          "arch": "aarch64",
+          "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f",
+          "components": []
+        },
+        {
+          "id": "sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6#other@4096",
+          "arch": "other",
+          "sha256": "14335e412f3195ea143a179362a107faace9d0ed576cb9c1258a606847525a4a",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6#aarch64@16384"
+      },
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "capability:posix.network@sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6#other@4096",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:294fef41faed113f217d987f2b45ebb20360ef9a0df34eeef6f45895316689d6#other@4096"
+      },
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Complete": 1,
+        "Partial": 1,
+        "Unsupported": 1
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": false,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.dependencies",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    }
+  ]
+}

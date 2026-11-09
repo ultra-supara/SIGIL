@@ -812,6 +812,7 @@
         "fat_cpu_type": {"anyOf": [{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, {"type": "null"}]},
         "fat_cpu_subtype": {"anyOf": [{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, {"type": "null"}]},
         "fat_alignment": {"anyOf": [{"type": "integer", "minimum": 0, "maximum": 4294967295}, {"type": "null"}]},
+        "fat_gaps": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
         "file_type": {"type": "integer", "minimum": 0, "maximum": 4294967295},
         "flags": {"type": "integer", "minimum": 0, "maximum": 4294967295},
         "uuid": {"anyOf": [{"type": "string", "pattern": "^([0-9a-f][0-9a-f])+$"}, {"type": "null"}]},

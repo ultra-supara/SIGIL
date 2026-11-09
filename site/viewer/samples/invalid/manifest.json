@@ -34,5 +34,33 @@
   {
     "file": "multiarch-complete-reason.json",
     "expect": "capability question reason must match its slice code coverage"
+  },
+  {
+    "file": "macho-missing-marker.json",
+    "expect": "Mach-O import witness needs multiarch-v1"
+  },
+  {
+    "file": "macho-wrong-register.json",
+    "expect": "register architecture differs from owning slice"
+  },
+  {
+    "file": "macho-forged-slice.json",
+    "expect": "code facts require relevant stable parsed analyzed slice coverage"
+  },
+  {
+    "file": "macho-forged-library.json",
+    "expect": "Mach-O import witness must exactly match name/library/weak"
+  },
+  {
+    "file": "macho-forged-parent.json",
+    "expect": "code parent disagrees with inventory"
+  },
+  {
+    "file": "macho-oversized-budget.json",
+    "expect": "invalid code child byte budget"
+  },
+  {
+    "file": "macho-unknown-capability-archive.json",
+    "expect": "marked Mach-O capability decisions require an archived capability table hash"
   }
 ]

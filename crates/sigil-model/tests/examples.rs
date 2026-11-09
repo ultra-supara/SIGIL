@@ -1,6 +1,7 @@
 //! The golden examples under `schemas/examples/session-v1/` are exactly what the builders in
 //! `tests/common` produce (in canonical order), validate against the schema, and pass
-//! `Session::validate`. They are specification examples, not SIGIL measurements.
+//! `Session::validate`. Examples 23–27 retain normalized static fixture observations;
+//! example 28 is a coherent saved-session mutation. Other examples are synthetic.
 //!
 //! To regenerate after an intended model change:
 //! `SIGIL_BLESS=1 cargo test -p sigil-model --test examples`.

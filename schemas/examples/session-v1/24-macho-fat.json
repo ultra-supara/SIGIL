@@ -1,0 +1,442 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "capabilities",
+      "version": "0.1.0",
+      "sha256": "2620e766e87f4ecc97f2bc24d3cd0e10cb538ca8c0ece532d69afaaf0ac7215c"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "code-abi-signatures",
+      "version": "1",
+      "sha256": "af6afceff3bd76c9e18ae0321cd8260ccc79c96354f4e35bfe09fca61efca735"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [{"id": "binary-1", "path": "/examples/code-macho/universal"}],
+    "audit": ["binary_code"],
+    "required_checks": ["binary.code"],
+    "budgets": {
+      "binary_bytes": 68719476736,
+      "binary_code_bytes": 268435456,
+      "binary_imports": 4096,
+      "binary_parse_bytes": 67108864,
+      "binary_scan_bytes": 67108864,
+      "dependency_candidates": 65536,
+      "dependency_contexts": 8192,
+      "dependency_search_paths": 65536
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": true,
+    "code_analysis": "multiarch-v1"
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1",
+      "size": 65776,
+      "format": "MachOFat",
+      "slices": [
+        {
+          "id": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+          "arch": "aarch64",
+          "offset": 32768,
+          "size": 33008,
+          "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f"
+        },
+        {
+          "id": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+          "arch": "x86_64",
+          "offset": 4096,
+          "size": 16624,
+          "sha256": "a347b198c4a20dd4f83ab6d063f8e55c3a1c24063f2ba951cd06c41d6179017f"
+        }
+      ],
+      "code_slice_inventory": "Complete"
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:binary-1/universal",
+      "root": "binary-1",
+      "path": "/examples/code-macho/universal",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 21,
+        "mode": 33204,
+        "uid": 1000,
+        "gid": 1000,
+        "size": 65776,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Argument"]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "binaries": [
+    {
+      "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+      "container": {
+        "MachO": {
+          "is_64": true,
+          "little_endian": true,
+          "cpu_type": 16777228,
+          "cpu_subtype": 0,
+          "fat_cpu_type": 16777228,
+          "fat_cpu_subtype": 0,
+          "fat_alignment": 14,
+          "file_type": 6,
+          "flags": 1048709,
+          "uuid": null,
+          "id_dylib": "/sigil/fixture.dylib",
+          "load_dylibs": ["/usr/lib/libSystem.B.dylib"],
+          "rpaths": [],
+          "dylinker": null,
+          "imports": [
+            {
+              "name": "_connect",
+              "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+              "weak": false
+            }
+          ]
+        }
+      },
+      "go": null,
+      "gaps": []
+    },
+    {
+      "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+      "container": {
+        "MachO": {
+          "is_64": true,
+          "little_endian": true,
+          "cpu_type": 16777223,
+          "cpu_subtype": 3,
+          "fat_cpu_type": 16777223,
+          "fat_cpu_subtype": 3,
+          "fat_alignment": 12,
+          "file_type": 6,
+          "flags": 1048709,
+          "uuid": null,
+          "id_dylib": "/sigil/fixture.dylib",
+          "load_dylibs": ["/usr/lib/libSystem.B.dylib"],
+          "rpaths": [],
+          "dylinker": null,
+          "imports": [
+            {
+              "name": "_connect",
+              "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+              "weak": false
+            },
+            {
+              "name": "dyld_stub_binder",
+              "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+              "weak": false
+            }
+          ]
+        }
+      },
+      "go": null,
+      "gaps": []
+    }
+  ],
+  "hints": [
+    {
+      "subject": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+      "feature": "posix.network",
+      "signal": "Import",
+      "value": "_connect",
+      "at": {"Symbol": "_connect"}
+    },
+    {
+      "subject": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+      "feature": "posix.network",
+      "signal": "Import",
+      "value": "_connect",
+      "at": {"Symbol": "_connect"}
+    }
+  ],
+  "code": [
+    {
+      "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+      "functions": [
+        {"id": "fn:0x3d8", "entry": 984, "end": 1020, "bounds": "EhFrameFde", "names": []},
+        {"id": "fn:0x3fc", "entry": 1020, "end": 1056, "bounds": "EhFrameFde", "names": []}
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0x3ec",
+          "caller": "fn:0x3d8",
+          "addr": 1004,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+                "weak": false
+              }
+            }
+          },
+          "args": [
+            {"ConstInt": {"reg": "x0", "value": 0}},
+            {"ConstInt": {"reg": "x1", "value": 0}},
+            {"ConstInt": {"reg": "x2", "value": 0}}
+          ],
+          "args_layout": "Complete"
+        },
+        {
+          "id": "cs:0x410",
+          "caller": "fn:0x3fc",
+          "addr": 1040,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+                "weak": false
+              }
+            }
+          },
+          "args": [
+            {"ConstInt": {"reg": "x0", "value": 1}},
+            {"ConstInt": {"reg": "x1", "value": 0}},
+            {"ConstInt": {"reg": "x2", "value": 0}}
+          ],
+          "args_layout": "Complete"
+        }
+      ],
+      "predicate_checks": [],
+      "close_checks": [],
+      "guard_regions": [],
+      "param_mappings": []
+    },
+    {
+      "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+      "functions": [
+        {"id": "fn:0x520", "entry": 1312, "end": 1331, "bounds": "EhFrameFde", "names": []},
+        {"id": "fn:0x540", "entry": 1344, "end": 1366, "bounds": "EhFrameFde", "names": []}
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0x52a",
+          "caller": "fn:0x520",
+          "addr": 1322,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+                "weak": false
+              }
+            }
+          },
+          "args": [
+            {"ConstInt": {"reg": "rdi", "value": 0}},
+            {"ConstInt": {"reg": "rsi", "value": 0}},
+            {"ConstInt": {"reg": "rdx", "value": 0}}
+          ],
+          "args_layout": "Complete"
+        },
+        {
+          "id": "cs:0x54d",
+          "caller": "fn:0x540",
+          "addr": 1357,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOStub",
+              "macho_import": {
+                "name": "_connect",
+                "library": {"Dylib": {"ordinal": 1, "name": "/usr/lib/libSystem.B.dylib"}},
+                "weak": false
+              }
+            }
+          },
+          "args": [
+            {"ConstInt": {"reg": "rdi", "value": 1}},
+            {"ConstInt": {"reg": "rsi", "value": 0}},
+            {"ConstInt": {"reg": "rdx", "value": 0}}
+          ],
+          "args_layout": "Complete"
+        }
+      ],
+      "predicate_checks": [],
+      "close_checks": [],
+      "guard_regions": [],
+      "param_mappings": []
+    }
+  ],
+  "relations": [
+    {
+      "Declares": {
+        "from": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+        "needed": "/usr/lib/libSystem.B.dylib",
+        "kind": "MachOLoadDylib"
+      }
+    },
+    {
+      "Declares": {
+        "from": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+        "needed": "/usr/lib/libSystem.B.dylib",
+        "kind": "MachOLoadDylib"
+      }
+    }
+  ],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "scope": {"Instance": "inst:binary-1/universal"},
+      "state": "Complete",
+      "budget": {"budget": "binary_code_bytes", "used": 13566, "limit": 268435456}
+    },
+    {
+      "check": "binary.code",
+      "scope": {
+        "Slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768"
+      },
+      "state": "Complete",
+      "budget": {"budget": "binary_code_bytes", "used": 6472, "limit": 268435456}
+    },
+    {
+      "check": "binary.code",
+      "scope": {
+        "Slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096"
+      },
+      "state": "Complete",
+      "budget": {"budget": "binary_code_bytes", "used": 7094, "limit": 268435456}
+    },
+    {
+      "check": "binary.container",
+      "scope": {"Instance": "inst:binary-1/universal"},
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "binary.dependencies",
+      "scope": {"Instance": "inst:binary-1/universal"},
+      "state": {"Unsupported": {"what": "Mach-O dependencies: declared only"}},
+      "budget": null
+    },
+    {
+      "check": "binary.identity",
+      "scope": {"Instance": "inst:binary-1/universal"},
+      "state": {"Unsupported": {"what": "string scan: ELF only"}},
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768"
+      },
+      "evidence": [
+        {
+          "Code": {
+            "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+            "loc": {"CallSite": "cs:0x3ec"}
+          }
+        },
+        {
+          "Code": {
+            "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+            "loc": {"CallSite": "cs:0x410"}
+          }
+        }
+      ],
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    },
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096"
+      },
+      "evidence": [
+        {
+          "Code": {
+            "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+            "loc": {"CallSite": "cs:0x52a"}
+          }
+        },
+        {
+          "Code": {
+            "slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+            "loc": {"CallSite": "cs:0x54d"}
+          }
+        }
+      ],
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    }
+  ],
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  }
+}

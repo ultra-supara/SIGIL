@@ -1346,6 +1346,21 @@ fn aarch64_producers_share_same_fd_and_target_reads() {
     if !require_tracer(case) {
         return;
     }
+    code_producer_paths(case, "code-aarch64/elf-clang-plt.so", 1);
+}
+
+#[test]
+fn macho_producers_share_same_fd_and_target_reads() {
+    let case = "macho_producers_share_same_fd_and_target_reads";
+    if !require_tracer(case) {
+        return;
+    }
+    for (name, slices) in [("arm64-classic", 1), ("x86-classic", 1), ("universal", 2)] {
+        code_producer_paths(case, &format!("code-macho/{name}"), slices);
+    }
+}
+
+fn code_producer_paths(case: &str, name: &str, slices: usize) {
     let fx = fixture();
     let models = fixtures::ollama_store(&fx.target);
     let install = fx.target.join("install");
@@ -1354,7 +1369,8 @@ fn aarch64_producers_share_same_fd_and_target_reads() {
     let input = install.join("bin/ollama");
     std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so"),
+            .join("../sigil-engine/tests/fixtures")
+            .join(name),
         &input,
     )
     .unwrap();
@@ -1362,6 +1378,14 @@ fn aarch64_producers_share_same_fd_and_target_reads() {
     std::fs::write(
         &unit,
         format!("[Service]\nExecStart={} serve\n", input.display()),
+    )
+    .unwrap();
+    let private = install.join("private");
+    std::fs::create_dir(&private).unwrap();
+    std::fs::copy(&input, private.join("escaped.dylib")).unwrap();
+    std::os::unix::fs::symlink(
+        "../../private/escaped.dylib",
+        install.join("lib/ollama/escape.dylib"),
     )
     .unwrap();
     let mut expected_reads = None;
@@ -1383,9 +1407,10 @@ fn aarch64_producers_share_same_fd_and_target_reads() {
             args
         };
         args.extend(os(&[&"--code", &"--out", &output]));
-        let r = run(&format!("aarch64-{mode}"), &fx, &refs(&args));
+        let r = run(&format!("{case}-{mode}"), &fx, &refs(&args));
         assert!(r.status.unwrap().success(), "{mode}: {}", r.stderr);
         assert_read_under(&r, &install);
+        assert_never_opened_under(&r, &private);
         let reads = input_reads_in_phases(&r, &input, 2)
             .into_iter()
             .filter(|e| matches!(e.name.as_str(), "read" | "pread64"))
@@ -1404,7 +1429,8 @@ fn aarch64_producers_share_same_fd_and_target_reads() {
             s.request.code_analysis,
             Some(sigil_model::CodeAnalysis::MultiarchV1)
         );
-        assert_eq!(s.code[0].call_sites.len(), 2);
+        assert_eq!(s.code.len(), slices);
+        assert!(s.code.iter().all(|c| c.call_sites.len() == 2));
         if let Some(expected) = &expected_code {
             assert_eq!(&s.code, expected);
         } else {

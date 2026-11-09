@@ -1,0 +1,3 @@
+# Preserve raw LLVM output, including blank EOF lines and empty segment fields.
+*.frames -whitespace
+*.macho -whitespace

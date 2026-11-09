@@ -244,7 +244,7 @@ pub(crate) fn container(
     }
     for slice in &a.slices {
         match lookup.binary(&slice.id) {
-            Some(b) => missing.extend(b.gaps.iter().cloned()),
+            Some(b) => missing.extend(b.container_gaps().cloned()),
             None => missing.push(BINARY_NOT_PARSED.to_string()),
         }
     }

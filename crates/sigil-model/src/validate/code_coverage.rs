@@ -176,17 +176,27 @@ impl Validator<'_> {
                     }
                     scopes.insert(Ref::Slice(slice.id.clone()));
                     if a.format == Format::MachOFat
-                        && self
-                            .index
-                            .binaries
-                            .get(slice.id.as_str())
-                            .is_some_and(|b| b.gaps.iter().any(|gap| fat_descriptor_lost(gap)))
                         && matches!(a.code_slice_inventory, Some(CodeSliceInventory::Complete))
                     {
-                        self.code_error(
-                            &a.id,
-                            "discarded fat descriptor requires partial code inventory",
-                        );
+                        if let Some(b) = self.index.binaries.get(slice.id.as_str()) {
+                            let parent = match &b.container {
+                                ContainerFacts::MachO(m) => m.fat_gaps.as_slice(),
+                                _ => &[],
+                            };
+                            let lost = b.gaps.iter().chain(parent).any(|g| fat_descriptor_lost(g));
+                            let shared = parent.iter().any(|g| {
+                                g.starts_with("binary_parse_bytes:")
+                                    || g == FAT_DUPLICATE_ARCH_GAP
+                                    || g == FAT_CPU_MISMATCH_GAP
+                            });
+                            if lost || shared {
+                                self.code_error(&a.id, if lost {
+                                    "discarded fat descriptor requires partial code inventory"
+                                } else {
+                                    "fat shared parse-budget or architecture failure requires partial code inventory"
+                                });
+                            }
+                        }
                     }
                     if let Some(BinaryFacts {
                         container: ContainerFacts::MachO(m),
