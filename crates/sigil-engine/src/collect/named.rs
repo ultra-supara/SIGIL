@@ -254,6 +254,25 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn scannable_x86_alias_does_not_run_code_twice() {
+        let (_dir, root) = dir();
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/spawn.so"),
+        )
+        .unwrap();
+        let hidden = root.join("libcudart.so.12");
+        let scanned = root.join("ordinary.so");
+        std::fs::write(&hidden, &bytes).unwrap();
+        std::fs::write(&scanned, &bytes).unwrap();
+        let mut budgets = NamedBudgets::default();
+        budgets.binary.code = Some(Default::default());
+        crate::code::CODE_ANALYSES.with(|n| n.set(0));
+        let result = super::collect(&[hidden, scanned], budgets).unwrap();
+        assert_eq!(result.artifacts.len(), 1);
+        assert_eq!(crate::code::CODE_ANALYSES.with(|n| n.get()), 1);
+    }
+
     /// A file swapped for a symlink after it was resolved: the symlink is not followed.
     #[test]
     fn a_file_swapped_for_a_symlink_is_fatal() {

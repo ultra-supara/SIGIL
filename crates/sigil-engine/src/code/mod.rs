@@ -476,6 +476,8 @@ pub(crate) fn analyze<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         && e.header.is_class_64()
         && endian.is_little_endian();
     analysis.slice(supported, |reader, run| {
+        #[cfg(test)]
+        CODE_ANALYSES.with(|n| n.set(n.get() + 1));
         let container = std::mem::take(&mut e.gaps);
         let mut rec = Recorder::default();
         let refusals = e.data.refusals();
@@ -510,6 +512,11 @@ pub(crate) fn analyze<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         }
         (rec.functions, rec.call_sites)
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CODE_ANALYSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The integration tests' ELF builder (`tests/common/elf.rs`), for the unit tests' synthetic files.
