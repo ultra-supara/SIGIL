@@ -472,6 +472,7 @@ done
 
 for f in *.o *.so net-pie net-nopie net-nopie-addr; do
   case "$f" in
+    shared-refs.so) objdump -dr --no-show-raw-insn "$f" > "$f.objdump" || fail "objdump -dr $f" ;;
     many*) objdump -dr "$f" > "$T/$f.full" || fail "objdump -dr $f"
            head -60 "$T/$f.full" > "$f.objdump" ;;
     *) objdump -dr "$f" > "$f.objdump" || fail "objdump -dr $f" ;;
