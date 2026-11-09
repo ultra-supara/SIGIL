@@ -175,6 +175,26 @@ pub fn binary_inputs(s: &crate::session::Session) -> Vec<BinaryInput<'_>> {
         .collect()
 }
 
+/// The local code diagnostic used by a slice's capability report. Legacy reports retain
+/// their input/content summary; marked reports use only the applicable slice entry.
+pub fn code_coverage_for_slice<'s>(
+    s: &'s crate::Session,
+    slice: &crate::SliceId,
+    legacy: Option<&'s crate::Coverage>,
+) -> Option<&'s crate::Coverage> {
+    if s.request.code_analysis.is_none() {
+        return legacy;
+    }
+    let check = if crate::is_binary_inspection(&s.request) {
+        crate::BINARY_CODE
+    } else {
+        crate::ARTIFACTS_CODE
+    };
+    s.coverage
+        .iter()
+        .find(|c| c.check.as_str() == check && matches!(&c.scope, Ref::Slice(of) if of == slice))
+}
+
 /// The open release claim the reports show, with its commits (PR-4c-2c): none beside a claim
 /// by reference matches of any product, otherwise the first claim by self-reported commits.
 pub fn open_claim(

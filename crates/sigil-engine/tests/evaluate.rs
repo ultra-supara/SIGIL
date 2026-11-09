@@ -110,9 +110,10 @@ fn goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
             ""
         };
         let added: &[&str] = match path.file_name().unwrap().to_str().unwrap() {
-            "15-binary-inspect.json" | "16-binary-code.json" | "18-capability-policy.json" => {
-                &[BINARY_DEPENDENCIES]
-            }
+            "15-binary-inspect.json"
+            | "16-binary-code.json"
+            | "18-capability-policy.json"
+            | "22-aarch64-code.json" => &[BINARY_DEPENDENCIES],
             "17-open-release.json" => &[
                 ARTIFACTS_CONTAINER,
                 ARTIFACTS_DEPENDENCIES,
@@ -180,8 +181,8 @@ fn goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
         assert_eq!(s, expected, "{}", path.display());
         reproduced += 1;
     }
-    assert_eq!((reproduced, refused), (14, 7));
-    assert_eq!(reproduced + refused, 21);
+    assert_eq!((reproduced, refused), (14, 8));
+    assert_eq!(reproduced + refused, 22);
 }
 
 /// The policy example 18 was evaluated under: it denies `posix.network` and

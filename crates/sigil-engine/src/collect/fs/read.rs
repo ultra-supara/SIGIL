@@ -29,6 +29,43 @@ pub struct ParseInput<'a> {
 /// A parse run inside a read.
 type Hook<'h> = Option<&'h mut dyn FnMut(ParseInput<'_>)>;
 
+enum HashFailure {
+    Io(std::io::Error, u64),
+    Limit(u64),
+}
+
+/// Count bytes as they arrive, including the last byte used to detect growth and bytes read
+/// before an error. Callback reads are deliberately excluded.
+fn hash_stream(
+    reader: &mut impl Read,
+    spec: ReadSpec,
+) -> Result<(Sha256, Vec<u8>, u64), HashFailure> {
+    let mut hasher = Sha256::new();
+    let mut prefix = Vec::new();
+    let mut total: u64 = 0;
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let want = spec.limit.map_or(buffer.len(), |limit| {
+            let left = limit.saturating_sub(total).saturating_add(1);
+            usize::try_from(left).map_or(buffer.len(), |left| left.min(buffer.len()))
+        });
+        let n = match reader.read(&mut buffer[..want]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(HashFailure::Io(e, total)),
+        };
+        total = total.saturating_add(n as u64);
+        if spec.limit.is_some_and(|limit| total > limit) {
+            return Err(HashFailure::Limit(total));
+        }
+        hasher.update(&buffer[..n]);
+        let room = spec.keep.saturating_sub(prefix.len()).min(n);
+        prefix.extend_from_slice(&buffer[..room]);
+    }
+    Ok((hasher, prefix, total))
+}
+
 /// What to keep and how much to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadSpec {
@@ -51,6 +88,9 @@ pub struct FileRead {
     /// At most [`ReadSpec::keep`] bytes from the start.
     pub prefix: Vec<u8>,
     pub outcome: ReadOutcome,
+    /// Bytes actually consumed by the streaming hash, including on failed or oversized reads.
+    /// Reads performed by a parsing callback are accounted for separately.
+    pub hash_bytes_read: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -371,33 +411,20 @@ impl SafeFs {
         }
         let before = Snapshot::of(&st);
         let mut file = std::fs::File::from(fd);
-        let mut hasher = Sha256::new();
-        let mut prefix = Vec::new();
-        let mut total: u64 = 0;
-        let mut buffer = vec![0u8; 1 << 20];
-        loop {
-            // With a limit, read at most one byte past it: that byte shows the file is over it.
-            let want = spec.limit.map_or(buffer.len(), |limit| {
-                let left = limit.saturating_sub(total).saturating_add(1);
-                usize::try_from(left).map_or(buffer.len(), |left| left.min(buffer.len()))
-            });
-            let n = match file.read(&mut buffer[..want]) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return FileRead::failed(e.to_string()),
-            };
-            total = total.saturating_add(n as u64);
-            if spec.limit.is_some_and(|limit| total > limit) {
-                return place.over_limit(&st, exceeded(total.max(size)));
+        let (hasher, prefix, total) = match hash_stream(&mut file, spec) {
+            Ok(result) => result,
+            Err(HashFailure::Io(e, total)) => {
+                return FileRead::failed_after_read(e.to_string(), total);
             }
-            hasher.update(&buffer[..n]);
-            let room = spec.keep.saturating_sub(prefix.len()).min(n);
-            prefix.extend_from_slice(&buffer[..room]);
-        }
+            Err(HashFailure::Limit(total)) => {
+                let mut read = place.over_limit(&st, exceeded(total.max(size)));
+                read.hash_bytes_read = total;
+                return read;
+            }
+        };
         let artifact_id = match ArtifactId::new(format!("sha256:{:x}", hasher.finalize())) {
             Ok(id) => id,
-            Err(e) => return FileRead::failed(e.to_string()),
+            Err(e) => return FileRead::failed_after_read(e.to_string(), total),
         };
         if let Some(hook) = hook {
             hook(ParseInput {
@@ -409,7 +436,7 @@ impl SafeFs {
         }
         let after = match rustix::fs::fstat(file.as_fd()) {
             Ok(st) => Snapshot::of(&st),
-            Err(e) => return FileRead::failed(e.to_string()),
+            Err(e) => return FileRead::failed_after_read(e.to_string(), total),
         };
         let (now, after_trace) = if strict {
             match self.resolve_strict(index, rel) {
@@ -459,6 +486,7 @@ impl SafeFs {
             artifact: Some(artifact),
             prefix,
             outcome: ReadOutcome::Complete,
+            hash_bytes_read: total,
         }
     }
 }
@@ -513,6 +541,7 @@ impl Placement {
             artifact: None,
             prefix: vec![],
             outcome: ReadOutcome::NotRead(why),
+            hash_bytes_read: 0,
         }
     }
 
@@ -530,17 +559,57 @@ impl FileRead {
             artifact: None,
             prefix: vec![],
             outcome,
+            hash_bytes_read: 0,
         }
     }
 
     fn failed(message: String) -> FileRead {
         FileRead::without_instance(ReadOutcome::Failed(message))
     }
+
+    fn failed_after_read(message: String, bytes: u64) -> FileRead {
+        let mut read = Self::failed(message);
+        read.hash_bytes_read = bytes;
+        read
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hash_failure_retains_bytes_read_before_io_error() {
+        struct Broken(u8);
+        impl Read for Broken {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                match self.0 {
+                    1 => {
+                        buf[..3].copy_from_slice(b"abc");
+                        Ok(3)
+                    }
+                    2 => Err(std::io::ErrorKind::Interrupted.into()),
+                    _ => Err(std::io::ErrorKind::Other.into()),
+                }
+            }
+        }
+        let error = match hash_stream(
+            &mut Broken(0),
+            ReadSpec {
+                keep: 2,
+                limit: Some(8),
+            },
+        ) {
+            Err(HashFailure::Io(error, bytes)) => (error, bytes),
+            _ => panic!("expected an I/O error after a partial read"),
+        };
+        assert_eq!(error.0.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.1, 3);
+        let result = FileRead::failed_after_read(error.0.to_string(), error.1);
+        assert_eq!(result.hash_bytes_read, 3);
+        assert!(result.artifact.is_none());
+    }
 
     fn snap(ino: u64, size: i64, mtime: i64) -> Snapshot {
         Snapshot {

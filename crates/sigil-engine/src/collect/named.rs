@@ -43,6 +43,9 @@ impl Default for NamedBudgets {
 /// What the inputs gave, in argument order.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NamedFacts {
+    pub collection_usage: Option<super::code_collection::CollectionUsage>,
+    /// Recognition only; does not authorize retaining evidence from an unstable read.
+    pub recognized_multiarch: bool,
     /// `binary-<n>`, each at its file's canonical path.
     pub roots: Vec<ScanRoot>,
     pub instances: Vec<FileInstance>,
@@ -90,6 +93,16 @@ fn collect_with(
     before_open: &dyn Fn(&Path),
     during_read: &dyn Fn(&RelPath),
 ) -> Result<NamedFacts, String> {
+    collect_strategy(paths, budgets, before_open, during_read, true)
+}
+
+fn collect_strategy(
+    paths: &[PathBuf],
+    budgets: NamedBudgets,
+    before_open: &dyn Fn(&Path),
+    during_read: &dyn Fn(&RelPath),
+    deferred: bool,
+) -> Result<NamedFacts, String> {
     if paths.is_empty() {
         return Err("no input: name at least one file".to_string());
     }
@@ -123,6 +136,11 @@ fn collect_with(
     let mut facts = NamedFacts::default();
     let mut artifacts = BTreeSet::new();
     let mut parsed = BTreeMap::new();
+    let mut collection = budgets
+        .binary
+        .code
+        .filter(|_| deferred)
+        .map(|_| super::code_collection::Collection::new(budgets.bytes));
     for (k, (path, resolved)) in inputs.iter().enumerate() {
         let n = u32::try_from(k + 1).map_err(|_| "too many inputs".to_string())?;
         let root = binary_root(n).ok_or_else(|| format!("binary-{n} is not a root ID"))?;
@@ -151,17 +169,31 @@ fn collect_with(
             return Err(fatal(path, "its directory changed after it was resolved"));
         }
         let left = budgets.bytes.saturating_sub(facts.bytes_read);
-        let read = binread::read(
-            &fs,
-            &root,
-            &rel,
-            left,
-            vec![DiscoverySource::Argument],
-            budgets.binary,
-            scanning,
-            &mut parsed,
-            during_read,
-        );
+        let read = if let Some(collection) = collection.as_mut() {
+            collection.discover(
+                &fs,
+                &root,
+                &rel,
+                left,
+                vec![DiscoverySource::Argument],
+                budgets.binary,
+                scanning,
+                during_read,
+            )
+        } else {
+            binread::read(
+                &fs,
+                &root,
+                &rel,
+                left,
+                vec![DiscoverySource::Argument],
+                budgets.binary,
+                scanning,
+                &mut parsed,
+                during_read,
+                &mut facts.recognized_multiarch,
+            )
+        };
         let Some(mut instance) = read.instance else {
             return Err(fatal(path, &outcome(&read.outcome)));
         };
@@ -218,7 +250,12 @@ fn collect_with(
         instance.path_proof = None;
         facts.instances.push(instance);
     }
-    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &facts.artifacts);
+    if let Some(mut collection) = collection {
+        collection.analyze(budgets.binary, scanning, &mut facts.instances, &mut parsed);
+        facts.recognized_multiarch = collection.multiarch;
+        facts.collection_usage = Some(collection.usage);
+    }
+    (facts.binaries, facts.code, facts.scans) = binread::binaries(parsed, &mut facts.artifacts);
     Ok(facts)
 }
 
@@ -249,6 +286,139 @@ mod tests {
     fn libdata() -> Vec<u8> {
         std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elf/libdata.so"))
             .unwrap()
+    }
+
+    #[test]
+    fn scannable_x86_alias_does_not_run_code_twice() {
+        let (_dir, root) = dir();
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/spawn.so"),
+        )
+        .unwrap();
+        let hidden = root.join("libcudart.so.12");
+        let scanned = root.join("ordinary.so");
+        std::fs::write(&hidden, &bytes).unwrap();
+        std::fs::write(&scanned, &bytes).unwrap();
+        let mut budgets = NamedBudgets::default();
+        budgets.binary.code = Some(Default::default());
+        crate::code::CODE_ANALYSES.with(|n| n.set(0));
+        let result = super::collect(&[hidden, scanned], budgets).unwrap();
+        assert_eq!(result.artifacts.len(), 1);
+        assert_eq!(crate::code::CODE_ANALYSES.with(|n| n.get()), 1);
+    }
+
+    #[test]
+    fn alias_aggregation_keeps_positive_identity_evidence_with_one_code_analysis() {
+        let (_dir, root) = dir();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/returns/version-gcc-O2.so");
+        let hidden = root.join("libcudart.so.12");
+        let scanned = root.join("libggml-base.so.0.13.1");
+        std::fs::copy(&source, &hidden).unwrap();
+        std::fs::copy(&source, &scanned).unwrap();
+        let mut budgets = NamedBudgets::default();
+        budgets.binary.code = Some(Default::default());
+        for paths in [
+            vec![hidden.clone(), scanned.clone()],
+            vec![scanned.clone(), hidden.clone()],
+        ] {
+            crate::code::CODE_ANALYSES.with(|n| n.set(0));
+            let result = super::collect(&paths, budgets).unwrap();
+            assert_eq!(crate::code::CODE_ANALYSES.with(|n| n.get()), 1);
+            assert!(result.binaries.iter().any(|b| matches!(&b.container, sigil_model::ContainerFacts::Elf(e) if !e.returns.is_empty())));
+            assert!(result
+                .scans
+                .iter()
+                .all(|(_, s)| *s != crate::binary::scan::ScanOutcome::NameAndHashOnly));
+        }
+    }
+
+    #[test]
+    fn discovery_selects_shared_x86_work_limits_in_both_input_orders() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let x86 = manifest.join("tests/fixtures/code/shared-refs.so");
+        let a64 = manifest.join("tests/fixtures/code-aarch64/elf-clang-plt.so");
+        let macho = manifest.join("tests/fixtures/macho/hello-universal");
+        let mut budgets = NamedBudgets::default();
+        budgets.binary.code = Some(crate::code::CodeBudgets {
+            references: 1,
+            ..Default::default()
+        });
+        crate::code::CODE_RUNS.with(|r| r.borrow_mut().clear());
+        super::collect(std::slice::from_ref(&x86), budgets).unwrap();
+        let baseline = crate::code::CODE_RUNS.with(|r| r.borrow().clone());
+        assert_eq!(baseline.len(), 1);
+        assert!(baseline[0].0);
+        assert_eq!(
+            baseline[0].1, 1,
+            "fixture must also exercise candidate-reference work"
+        );
+        assert!(
+            baseline[0].2 > 0,
+            "fixture must exercise text relocation accounting"
+        );
+        for other in [a64, macho] {
+            for paths in [
+                vec![x86.clone(), other.clone()],
+                vec![other.clone(), x86.clone()],
+            ] {
+                crate::code::CODE_RUNS.with(|r| r.borrow_mut().clear());
+                let result = super::collect(&paths, budgets).unwrap();
+                assert!(result.recognized_multiarch);
+                let runs = crate::code::CODE_RUNS.with(|r| r.borrow().clone());
+                assert_eq!(runs.len(), 1);
+                assert!(!runs[0].0, "legacy x86 work began before mode selection");
+                assert!(runs[0].1 > 0 && runs[0].1 <= 1);
+                assert_eq!(
+                    runs[0].2, 0,
+                    "marked work must use the combined reference counter"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_x86_collection_matches_all_legacy_facts_and_budget_edges() {
+        let (_dir, root) = dir();
+        for fixture in ["spawn.so", "values.so"] {
+            let bytes = std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/code")
+                    .join(fixture),
+            )
+            .unwrap();
+            let hidden = root.join("libcudart.so.12");
+            let scanned = root.join("ordinary.so");
+            std::fs::write(&hidden, &bytes).unwrap();
+            std::fs::write(&scanned, &bytes).unwrap();
+            for parse in [0, 512, 4096, 64 << 20] {
+                for code in [0, 128, 256 << 20] {
+                    let mut budgets = NamedBudgets::default();
+                    budgets.binary.parse_bytes = parse;
+                    budgets.binary.code = Some(crate::code::CodeBudgets {
+                        bytes: code,
+                        ..Default::default()
+                    });
+                    for paths in [
+                        vec![hidden.clone()],
+                        vec![scanned.clone()],
+                        vec![hidden.clone(), scanned.clone()],
+                        vec![scanned.clone(), hidden.clone()],
+                    ] {
+                        let legacy =
+                            super::collect_strategy(&paths, budgets, &|_| {}, &|_| {}, false)
+                                .unwrap();
+                        let mut actual = super::collect(&paths, budgets).unwrap();
+                        assert!(!actual.recognized_multiarch);
+                        actual.collection_usage = None;
+                        assert_eq!(
+                            actual, legacy,
+                            "{fixture}: parse={parse}, code={code}, paths={paths:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A file swapped for a symlink after it was resolved: the symlink is not followed.

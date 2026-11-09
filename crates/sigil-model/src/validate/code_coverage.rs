@@ -2,7 +2,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::Validator;
-use crate::code_coverage::{aggregate_code_slices, CODE_SLICE_NOT_PARSED, CODE_SLICE_NOT_STARTED};
+use crate::code_coverage::{
+    aggregate_code_slices, imports_incomplete, CODE_SLICE_NOT_PARSED, CODE_SLICE_NOT_STARTED,
+};
 use crate::index::SessionLookup;
 use crate::*;
 
@@ -27,30 +29,6 @@ fn fat_descriptor_lost(gap: &str) -> bool {
     gap.strip_prefix("fat slice ")
         .and_then(|rest| rest.split_once(": "))
         .is_some_and(|(index, _)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
-}
-
-fn imports_incomplete(binary: &BinaryFacts) -> bool {
-    binary.gaps.iter().any(|gap| {
-        gap.starts_with("imports:")
-            || gap.starts_with("binary_parse_bytes:")
-            || match &binary.container {
-                ContainerFacts::Elf(_) => [
-                    "dynamic:",
-                    "symbols:",
-                    "malformed: symbols:",
-                    "sections:",
-                    "malformed: section names:",
-                    "malformed: program headers:",
-                ]
-                .iter()
-                .any(|prefix| gap.starts_with(prefix)),
-                ContainerFacts::MachO(_) => {
-                    ["load commands:", "load dylib:", "LC_DYLD_CHAINED_FIXUPS:"]
-                        .iter()
-                        .any(|prefix| gap.starts_with(prefix))
-                }
-            }
-    })
 }
 
 fn supported(a: &Artifact, slice: &Slice, binary: &BinaryFacts) -> bool {
@@ -85,6 +63,32 @@ fn supported(a: &Artifact, slice: &Slice, binary: &BinaryFacts) -> bool {
 impl Validator<'_> {
     pub(super) fn multiarch_coverage(&mut self) {
         let s = self.s;
+        let collection = [
+            ("binary.collection.hash", "binary_discovery_hash_bytes"),
+            ("binary.collection.probe", "binary_discovery_probe_bytes"),
+            (
+                "binary.collection.revalidation",
+                "binary_revalidation_bytes",
+            ),
+        ];
+        // Optional as a group for compatibility with earlier multiarch-v1 sessions.
+        if collection.iter().any(|(check, budget)| {
+            s.request.budgets.contains_key(*budget)
+                || s.coverage.iter().any(|c| c.check.as_str() == *check)
+        }) {
+            for (check, budget) in collection {
+                let entry = s
+                    .coverage
+                    .iter()
+                    .find(|c| c.check.as_str() == check && c.scope == Ref::Audit);
+                if !matches!(entry, Some(c) if c.state == CoverageState::Complete
+                    && c.budget.as_ref().is_some_and(|b| b.budget == budget && b.used <= b.limit
+                        && s.request.budgets.get(budget) == Some(&b.limit)))
+                {
+                    self.code_error("coverage", "collection I/O diagnostic missing, over budget or inconsistent with request");
+                }
+            }
+        }
         let binary = is_binary_inspection(&s.request);
         let check = if binary { BINARY_CODE } else { ARTIFACTS_CODE };
         let install_root = self

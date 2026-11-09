@@ -58,6 +58,7 @@ pub(crate) fn read(
     scanning: Scanning<'_>,
     parsed: &mut BTreeMap<ArtifactId, ParsedArtifact>,
     during: &dyn Fn(&RelPath),
+    recognized_multiarch: &mut bool,
 ) -> FileRead {
     let scanned = rel
         .name()
@@ -89,14 +90,42 @@ pub(crate) fn read(
                     needles: scanning.needles,
                     functions: scanning.components.functions(),
                 });
+                // A newly scannable alias may need identity/container work, but stable
+                // A64 content's code has already used its artifact budget exactly once.
+                // Preserve legacy x86 code-before-scan cache consumption and outcomes.
+                // Code-enabled production collection groups aliases before entering its
+                // parser; this historical path also remains the compatibility-test oracle.
+                let cached = before.get(input.artifact).filter(|p| {
+                    p.slices
+                        .iter()
+                        .any(|s| s.arch == sigil_model::Arch::Aarch64)
+                });
+                let mut parse_budgets = budgets;
+                if cached.is_some() {
+                    parse_budgets.code = None;
+                }
                 let mut p = binary::parse_artifact(
                     input.file,
                     input.size,
                     &digest,
                     input.prefix,
-                    budgets,
+                    parse_budgets,
                     sought,
                 )?;
+                if let Some(cached) = cached {
+                    for slice in &mut p.slices {
+                        slice.code = cached
+                            .slices
+                            .iter()
+                            .find(|old| {
+                                old.offset == slice.offset
+                                    && old.size == slice.size
+                                    && old.arch == slice.arch
+                                    && old.sha256 == slice.sha256
+                            })
+                            .and_then(|old| old.code.clone());
+                    }
+                }
                 // Parsed without needles: its ELF slices were not scanned (ADR-010).
                 if !scanned && matches!(p.format, Format::Elf { .. }) {
                     for slice in &mut p.slices {
@@ -112,12 +141,29 @@ pub(crate) fn read(
         .as_ref()
         .is_some_and(|i| i.stability == Stability::NoChangeDetected);
     let fresh = facts.flatten();
+    if budgets.code.is_some() {
+        *recognized_multiarch |= fresh.as_ref().is_some_and(|p| {
+            matches!(p.format, Format::MachO | Format::MachOFat)
+                || p.slices
+                    .iter()
+                    .any(|s| s.arch == sigil_model::Arch::Aarch64)
+        });
+    }
     if let (Some(p), Some(a), true) = (fresh.as_ref(), read.artifact.as_ref(), stable) {
         parsed.insert(a.id.clone(), p.clone());
     }
     if let Some(artifact) = read.artifact.as_mut() {
-        if let Some(parsed_artifact) = parsed.get(&artifact.id).or(fresh.as_ref()) {
+        // Preserve recognition for the existing non-closing `not parsed` content summary.
+        // This format tag is not a slice/container witness: only stable cached reads below
+        // may establish slice hashes, BinaryFacts, code outcomes, or inventory.
+        if let Some(fresh) = fresh.as_ref() {
+            artifact.format = fresh.format;
+        }
+        if let Some(parsed_artifact) = parsed.get(&artifact.id) {
             artifact.format = parsed_artifact.format;
+            if budgets.code.is_some() {
+                artifact.code_slice_inventory = Some(parsed_artifact.code_inventory.clone());
+            }
             artifact.slices = parsed_artifact
                 .slices
                 .iter()
@@ -154,13 +200,32 @@ pub(crate) type Slices = (
 /// ([`read`]), so no part comes from a read that saw one.
 pub(crate) fn binaries(
     parsed: BTreeMap<ArtifactId, ParsedArtifact>,
-    artifacts: &[Artifact],
+    artifacts: &mut [Artifact],
 ) -> Slices {
     let (mut out, mut code, mut scans) = (vec![], vec![], vec![]);
     for (id, parsed_artifact) in parsed {
-        let Some(artifact) = artifacts.iter().find(|a| a.id == id) else {
+        let Some(artifact) = artifacts.iter_mut().find(|a| a.id == id) else {
             continue;
         };
+        // The first placement may have been unstable. Only the shared stable cache can
+        // establish content witnesses, including for a later identical placement.
+        artifact.format = parsed_artifact.format;
+        if parsed_artifact.slices.iter().any(|s| s.code.is_some())
+            || artifact.code_slice_inventory.is_some()
+        {
+            artifact.code_slice_inventory = Some(parsed_artifact.code_inventory.clone());
+        }
+        artifact.slices = parsed_artifact
+            .slices
+            .iter()
+            .map(|slice| Slice {
+                id: SliceId::from_parts(&id, slice.arch, slice.offset),
+                arch: slice.arch,
+                offset: slice.offset,
+                size: slice.size,
+                sha256: slice.sha256.clone(),
+            })
+            .collect();
         for parsed_slice in parsed_artifact.slices {
             let slice_id = SliceId::from_parts(&id, parsed_slice.arch, parsed_slice.offset);
             if !artifact.slices.iter().any(|slice| slice.id == slice_id) {

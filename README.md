@@ -16,7 +16,7 @@ Inspection is local and read-only. SIGIL never executes the files it inspects, s
 | **Ollama installation** | Files under `bin/ollama` and `lib/ollama`, their matches against embedded official release manifests, and missing installation members. |
 | **Runtime components** | ELF component claims from file names, SONAMEs, embedded versions and commits, and reference hashes. Conflicting evidence stays visible. |
 | **Standalone binaries** | Digests and container facts for ELF executables, shared libraries, and object files, plus thin and universal Mach-O files. No model store or running runtime is needed. |
-| **Capabilities and code** | POSIX, libstdc++, and libc++ capability imports, Go function-name and export hints in ELF files, and—with `binary inspect --code`—direct call sites and argument values in x86-64 ELF code. |
+| **Capabilities and code** | POSIX, libstdc++, and libc++ capability imports, Go function-name and export hints in ELF files, and—with `binary inspect --code`—direct call sites and argument values in x86-64 and AArch64 ELF64 little-endian code. |
 | **Runtime exposure** | In observe mode, listening sockets attributed to `ollama serve` through `/proc` file descriptors, and the executable and mapped files of `ollama serve` and its descendants, linked to the installation's files by `dev:ino`. The optional API probe records the response from one requested endpoint. |
 
 Use SIGIL to collect evidence for a security review, check a local deployment in CI, or inspect a native library before including it in an AI environment. Each finding links back to the facts and evidence that support it.
@@ -124,9 +124,10 @@ Component identification also reads supported `ggml_version()` and `ggml_commit(
 
 Current analysis boundaries:
 
-- **Code analysis is x86-64 ELF only**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
-- **`--code` analyzes x86-64 ELF on both `binary inspect` and `inspect ollama --install-dir` or `--service-unit`.** The installation scan reports coverage for each binary content and a summary for the walk.
+- **Code analysis covers x86-64 and AArch64 ELF64 little-endian**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
+- **`--code` analyzes these ELF targets on both `binary inspect` and `inspect ollama --install-dir` or `--service-unit`.** The installation scan reports coverage for each binary content and a summary for the walk.
 - **Mach-O support covers containers and imports**, including per-architecture slices in universal files. Identity scans and code analysis remain unsupported, so these required checks leave the default result incomplete.
+- **The #48 M3-B release gate remains open.** Mixed marked x86 work-budget accounting and alias reuse are unresolved; see the [support matrix](docs/support-matrix.md).
 - **Capability mappings cover specific names.** POSIX, libstdc++, and libc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
 
 ## Apply a policy

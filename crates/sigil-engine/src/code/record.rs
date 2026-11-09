@@ -447,8 +447,6 @@ pub(crate) struct Recorder {
     /// (review I1).
     calls: BTreeSet<u64>,
     entries: BTreeSet<u64>,
-    /// The bytes of the names copied into the facts so far (`CodeBudgets.name_bytes`).
-    name_bytes: u64,
 }
 
 impl Recorder {
@@ -553,9 +551,7 @@ impl Recorder {
             run.gap(format!("code: call site at {ip:#x} is in two functions"));
             return None;
         }
-        let limit = run.budgets.call_sites;
-        if self.call_sites.len().saturating_add(keep.len()) > limit {
-            run.limit("call-site", limit as u64);
+        if !run.fits(super::Work::Calls, keep.len() as u64) {
             return None;
         }
         let names = keep
@@ -565,9 +561,7 @@ impl Recorder {
                 _ => None,
             })
             .fold(0, u64::saturating_add);
-        let name_limit = run.budgets.name_bytes;
-        if self.name_bytes.saturating_add(names) > name_limit {
-            run.limit("name-byte", name_limit);
+        if !run.fits(super::Work::Names, names) {
             return None;
         }
         // Every kept call forms a site: `keep` holds only resolved, recordable calls, each
@@ -639,7 +633,8 @@ impl Recorder {
             ));
             return None;
         };
-        self.name_bytes = self.name_bytes.saturating_add(names);
+        run.charge(super::Work::Calls, keep.len() as u64);
+        run.charge(super::Work::Names, names);
         self.calls.extend(keep.iter().copied());
         self.entries.insert(cfg.entry);
         self.call_sites.extend(formed);
@@ -673,10 +668,10 @@ impl Recorder {
         e: &Elf<'d, R, H>,
         sections: &Sections<'d, R, H>,
         img: &Image,
-        run: &Run,
+        run: &mut Run,
     ) {
         let limit = run.budgets.name_bytes;
-        if self.name_bytes >= limit {
+        if run.name_bytes >= limit {
             return;
         }
         let mut found = Found {
@@ -719,7 +714,7 @@ impl Recorder {
             }
         }
         let mut spend = Spend {
-            used: self.name_bytes,
+            used: run.name_bytes,
             limit,
             spent: false,
         };
@@ -746,7 +741,7 @@ impl Recorder {
                 }
             }
         }
-        self.name_bytes = spend.used;
+        run.name_bytes = spend.used;
     }
 }
 
@@ -1934,6 +1929,46 @@ mod tests {
         assert_eq!(run.into_gaps(), ["code: call-site limit 4 reached"]);
     }
 
+    #[test]
+    fn fresh_slice_recorders_share_call_and_name_limits() {
+        for budgets in [
+            CodeBudgets {
+                call_sites: 3,
+                ..CodeBudgets::default()
+            },
+            CodeBudgets {
+                name_bytes: 21,
+                ..CodeBudgets::default()
+            },
+        ] {
+            let img = linked(Kind::Shared);
+            let mut run = Run::new(budgets);
+            let mut first = Recorder::default();
+            let mut second = Recorder::default();
+            assert!(record_into(
+                &mut first,
+                &two_connects(0x1000),
+                0x1000,
+                &img,
+                &mut run,
+                &[]
+            )
+            .is_some());
+            assert!(record_into(
+                &mut second,
+                &two_connects(0x1000),
+                0x1000,
+                &img,
+                &mut run,
+                &[]
+            )
+            .is_none());
+            assert_eq!(first.call_sites.len(), 2);
+            assert!(second.call_sites.is_empty());
+            assert!(run.stopped());
+        }
+    }
+
     /// I1: FDEs at 0x1000 and 0x1005 both decode the call at 0x1005. One `cs:0x1005` only: the
     /// second function is not recorded, with a gap, and the run goes on.
     #[test]
@@ -2233,11 +2268,11 @@ mod tests {
         if let Some(agree) = agree {
             p.sections.dynamic_symbols_agree = agree;
         }
-        let run = Run::new(CodeBudgets {
+        let mut run = Run::new(CodeBudgets {
             name_bytes,
             ..CodeBudgets::default()
         });
-        rec.fill_names(&p.elf, &p.sections, &Image::empty(kind), &run);
+        rec.fill_names(&p.elf, &p.sections, &Image::empty(kind), &mut run);
         assert!(!data.refused());
     }
 

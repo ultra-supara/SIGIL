@@ -11,6 +11,7 @@ pub mod hints;
 pub mod identity;
 pub mod install_code;
 pub mod model_store;
+pub(crate) mod multiarch_code;
 pub mod release;
 pub mod runtime_api;
 pub mod runtime_processes;

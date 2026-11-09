@@ -20,6 +20,78 @@ type Slice<'a> = EndianSlice<'a, LittleEndian>;
 /// - A zero length (the terminator) ends the walk; non-zero bytes after it are a gap.
 /// - Every FDE read counts against `run.budgets.fdes`, empty and failing ones included.
 pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
+    parse_inner(bytes, base, run, true, true)
+}
+
+/// AArch64 objects initially support only exact PREL32 initial-address fields, with one
+/// relocation per FDE. Never patch CIEs, lengths, ranges or arbitrary metadata. The first pass
+/// reserves every FDE before parsing; the second pass uses those same reservations.
+#[allow(dead_code)]
+pub(crate) fn parse_a64_object(
+    bytes: &mut [u8],
+    base: u64,
+    patches: &BTreeMap<u64, i32>,
+    run: &mut Run,
+) -> Vec<(u64, u64)> {
+    let valid = (|| -> gimli::Result<bool> {
+        let mut frame = EhFrame::new(bytes, LittleEndian);
+        frame.set_address_size(8);
+        let bases = BaseAddresses::default().set_eh_frame(base);
+        let mut entries = frame.entries(&bases);
+        let mut cies = BTreeMap::new();
+        let mut fields = 0;
+        while let Some(entry) = entries.next()? {
+            if let CieOrFde::Fde(partial) = entry {
+                if !run.charge(super::Work::Fdes, 1) {
+                    return Ok(false);
+                }
+                let at = partial.offset();
+                if bytes.get(at..at.saturating_add(4)) == Some(&[0xff; 4][..]) {
+                    return Ok(false);
+                }
+                let fde =
+                    partial.parse(|frame, bases, offset| cie(&mut cies, frame, bases, offset))?;
+                if fde.cie().fde_address_encoding() != Some(gimli::constants::DwEhPe(0x1b))
+                    || !patches.contains_key(&(at as u64 + 8))
+                {
+                    return Ok(false);
+                }
+                fields += 1;
+            }
+        }
+        Ok(fields == patches.len())
+    })();
+    if valid != Ok(true) {
+        run.gap(
+            "code: AArch64 .eh_frame has invalid or unresolved initial-address relocations".into(),
+        );
+        return vec![];
+    }
+    for (&at, value) in patches {
+        let Some(field) = usize::try_from(at)
+            .ok()
+            .and_then(|at| at.checked_add(4).and_then(|end| bytes.get_mut(at..end)))
+        else {
+            run.gap("code: AArch64 .eh_frame relocation outside section".into());
+            return vec![];
+        };
+        field.copy_from_slice(&value.to_le_bytes());
+    }
+    parse_inner(bytes, base, run, false, false)
+}
+
+#[allow(dead_code)]
+pub(crate) fn parse_a64_linked(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
+    parse_inner(bytes, base, run, true, false)
+}
+
+fn parse_inner(
+    bytes: &[u8],
+    base: u64,
+    run: &mut Run,
+    charge_fdes: bool,
+    dedup: bool,
+) -> Vec<(u64, u64)> {
     let mut frame = EhFrame::new(bytes, LittleEndian);
     // ELF64: an address is 8 bytes, whatever the host's word (gimli's default).
     frame.set_address_size(8);
@@ -31,7 +103,6 @@ pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
     // worst about 184 MiB at the default limit of 2^20, dropped when this returns. Real files
     // have one or two CIEs.
     let mut cies = BTreeMap::new();
-    let mut seen = 0;
     // Where the next entry starts: after the last one walked.
     let mut next: usize = 0;
     let mut out = vec![];
@@ -63,11 +134,9 @@ pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
                 break;
             }
         };
-        if seen >= run.budgets.fdes {
-            run.limit("FDE", seen as u64);
+        if charge_fdes && !run.charge(super::Work::Fdes, 1) {
             break;
         }
-        seen += 1;
         let fde = match partial.parse(|frame, bases, offset| cie(&mut cies, frame, bases, offset)) {
             Ok(fde) => fde,
             Err(e) => {
@@ -99,7 +168,9 @@ pub(crate) fn parse(bytes: &[u8], base: u64, run: &mut Run) -> Vec<(u64, u64)> {
         }
     }
     out.sort_unstable();
-    out.dedup();
+    if dedup {
+        out.dedup();
+    }
     out
 }
 
@@ -157,6 +228,18 @@ mod tests {
         (0x10d8, 0x10ef),
         (0x10ef, 0x1110),
     ];
+
+    #[test]
+    fn fde_work_is_shared_between_slices() {
+        let (bytes, base) = eh_frame("values.so");
+        let mut run = Run::new(CodeBudgets {
+            fdes: 10,
+            ..CodeBudgets::default()
+        });
+        assert_eq!(parse(&bytes, base, &mut run), VALUES);
+        assert_eq!(parse(&bytes, base, &mut run), VALUES[1..2]);
+        assert!(run.stopped());
+    }
 
     #[test]
     fn the_fdes_of_a_linked_file() {

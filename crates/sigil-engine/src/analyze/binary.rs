@@ -65,6 +65,9 @@ pub fn code_coverage(
     if !s.request.code {
         return Ok(vec![]);
     }
+    if s.request.code_analysis.is_some() {
+        return super::multiarch_code::named(s, code).map_err(CodeCoverageError::Undecided);
+    }
     let check = CheckId::new(BINARY_CODE).map_err(|e| CodeCoverageError::BadId(e.to_string()))?;
     s.instances
         .iter()

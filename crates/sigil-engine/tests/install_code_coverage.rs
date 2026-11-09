@@ -52,7 +52,7 @@ fn other_architectures_are_explicitly_unsupported() {
     std::fs::create_dir_all(tree.path().join("bin")).unwrap();
     std::fs::create_dir_all(tree.path().join("lib/ollama")).unwrap();
     let mut bytes = std::fs::read(fixture()).unwrap();
-    bytes[18..20].copy_from_slice(&183u16.to_le_bytes());
+    bytes[18..20].copy_from_slice(&40u16.to_le_bytes());
     std::fs::write(tree.path().join("bin/ollama"), bytes).unwrap();
     let mut budgets = InstallBudgets::default();
     budgets.binary.code = Some(CodeBudgets::default());

@@ -59,7 +59,7 @@ pub enum PolicyWarning {
 /// with this build. `ComponentDatabase`, `CapabilityId`, and `Signatures` are internal errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluateError {
-    /// Multiarch capability evaluation awaits slice-aware reasons and library-aware matching.
+    /// Marked Mach-O capability evaluation awaits library-aware matching.
     MultiarchCapabilitiesNotEnabled,
     /// The policy accepts, or no longer accepts, these assumptions (in session order). A condition
     /// resting on one of them could become settled or unsettled.
@@ -305,11 +305,23 @@ fn capabilities(
     let id_error = |e: sigil_model::IdError| EvaluateError::CapabilityId(e.to_string());
     let mut violations = vec![];
     let mut questions = vec![];
-    if session.request.code_analysis.is_some() && !policy.capabilities.is_empty() {
-        return Err(EvaluateError::MultiarchCapabilitiesNotEnabled);
-    }
     if policy.capabilities.is_empty() || session.binaries.is_empty() {
         return Ok((violations, questions));
+    }
+    if session.request.code_analysis.is_some() {
+        let macho: BTreeSet<_> = session
+            .binaries
+            .iter()
+            .filter_map(|b| {
+                matches!(b.container, sigil_model::ContainerFacts::MachO(_)).then_some(&b.slice)
+            })
+            .collect();
+        let denied: BTreeSet<_> = policy.capabilities.iter().map(|d| &d.feature).collect();
+        if session.hints.iter().any(|h| {
+            h.signal == Signal::Import && macho.contains(&h.subject) && denied.contains(&h.feature)
+        }) {
+            return Err(EvaluateError::MultiarchCapabilitiesNotEnabled);
+        }
     }
     pinned(session)?;
     let rule = RuleId::new(CAPABILITY_RULE).map_err(id_error)?;
@@ -332,6 +344,24 @@ fn capabilities(
         }
     }
     let states = code_states(session);
+    let check = if sigil_model::is_binary_inspection(&session.request) {
+        BINARY_CODE
+    } else {
+        ARTIFACTS_CODE
+    };
+    let slice_states: BTreeMap<_, _> = session
+        .coverage
+        .iter()
+        .filter_map(|c| {
+            if c.check.as_str() != check {
+                return None;
+            }
+            let Ref::Slice(slice) = &c.scope else {
+                return None;
+            };
+            Some((slice, &c.state))
+        })
+        .collect();
     for slice in session.binaries.iter().map(|b| &b.slice) {
         for deny in &policy.capabilities {
             let Some(imports) = imported.get(&(slice, &deny.feature)) else {
@@ -364,15 +394,18 @@ fn capabilities(
                     id: CondId::new(format!("{CAPABILITY_CONDITION_PREFIX}{}", deny.feature))
                         .map_err(id_error)?,
                     state: CondState::Unknown {
-                        reason: unknown_call(
-                            states.get(&slice.artifact()).map_or(&[], Vec::as_slice),
-                            if sigil_model::is_binary_inspection(&session.request) {
-                                BINARY_CODE
-                            } else {
-                                ARTIFACTS_CODE
-                            },
-                        )
-                        .map_err(id_error)?,
+                        reason: if session.request.code_analysis.is_some() {
+                            sigil_model::code_coverage::unknown_capability_call(
+                                slice_states.get(slice).copied(),
+                                CheckId::new(check).map_err(id_error)?,
+                            )
+                        } else {
+                            unknown_call(
+                                states.get(&slice.artifact()).map_or(&[], Vec::as_slice),
+                                check,
+                            )
+                            .map_err(id_error)?
+                        },
                         evidence: None,
                     },
                     unresolved: vec![],

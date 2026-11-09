@@ -53,6 +53,9 @@ impl Default for InstallBudgets {
 /// What the install scan found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallFacts {
+    pub collection_usage: Option<super::code_collection::CollectionUsage>,
+    /// Recognition only; unstable reads still supply no code or inventory witnesses.
+    pub recognized_multiarch: bool,
     /// The canonical path SafeFs opened, or the path as given when it could not be opened.
     pub root_path: UntrustedText,
     /// The `dev:ino` of the directory the walk opened as its root (`SafeFs::root_id`), or `None`
@@ -107,6 +110,15 @@ fn collect_with(
     budgets: InstallBudgets,
     during_read: &dyn Fn(&RelPath),
 ) -> Result<InstallFacts, String> {
+    collect_strategy(dir, budgets, during_read, true)
+}
+
+fn collect_strategy(
+    dir: &Path,
+    budgets: InstallBudgets,
+    during_read: &dyn Fn(&RelPath),
+    deferred: bool,
+) -> Result<InstallFacts, String> {
     let root = RootId::new(INSTALL_ROOT).map_err(|e| e.to_string())?;
     let check = CheckId::new(ARTIFACTS_DISCOVERY).map_err(|e| e.to_string())?;
     let scanning = Scanning::embedded().map_err(|e| format!("internal error: {e}"))?;
@@ -136,6 +148,12 @@ fn collect_with(
         binary: budgets.binary,
         scanning,
         parsed: BTreeMap::new(),
+        recognized_multiarch: false,
+        collection: budgets
+            .binary
+            .code
+            .filter(|_| deferred)
+            .map(|_| super::code_collection::Collection::new(budgets.bytes)),
     };
     let state = match opened {
         Err(RootError::NotFound) => CoverageState::Unavailable {
@@ -149,11 +167,17 @@ fn collect_with(
         },
         Ok(()) => {
             c.places()?;
+            if let Some(collection) = c.collection.as_mut() {
+                collection.analyze(c.binary, c.scanning, &mut c.instances, &mut c.parsed);
+                c.recognized_multiarch = collection.multiarch;
+            }
             c.state()
         }
     };
-    let (binaries, code, scans) = super::binread::binaries(c.parsed, &c.artifacts);
+    let (binaries, code, scans) = super::binread::binaries(c.parsed, &mut c.artifacts);
     Ok(InstallFacts {
+        collection_usage: c.collection.map(|c| c.usage),
+        recognized_multiarch: c.recognized_multiarch,
         root_path,
         root_id,
         instances: c.instances,
@@ -173,6 +197,8 @@ fn collect_with(
 }
 
 struct Collector<'a> {
+    collection: Option<super::code_collection::Collection>,
+    recognized_multiarch: bool,
     fs: &'a SafeFs,
     root: RootId,
     root_path: UntrustedText,
@@ -438,17 +464,31 @@ impl Collector<'_> {
                 },
             );
         }
-        let read = super::binread::read(
-            self.fs,
-            &self.root,
-            &entry.rel,
-            left,
-            vec![DiscoverySource::Walk],
-            self.binary,
-            self.scanning,
-            &mut self.parsed,
-            self.during_read,
-        );
+        let read = if let Some(collection) = self.collection.as_mut() {
+            collection.discover(
+                self.fs,
+                &self.root,
+                &entry.rel,
+                left,
+                vec![DiscoverySource::Walk],
+                self.binary,
+                self.scanning,
+                self.during_read,
+            )
+        } else {
+            super::binread::read(
+                self.fs,
+                &self.root,
+                &entry.rel,
+                left,
+                vec![DiscoverySource::Walk],
+                self.binary,
+                self.scanning,
+                &mut self.parsed,
+                self.during_read,
+                &mut self.recognized_multiarch,
+            )
+        };
         let Some(instance) = read.instance else {
             self.errors
                 .push(format!("{}: {:?}", entry.rel.display(), read.outcome));
@@ -485,11 +525,63 @@ impl Collector<'_> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
+    use std::path::Path;
 
     use sigil_model::{CoverageState, Stability};
 
     use super::{collect_with, InstallBudgets};
     use crate::collect::fs::RelPath;
+
+    #[test]
+    fn deferred_install_alias_preserves_legacy_facts_without_repeating_code() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = d.path().join("lib/ollama");
+        std::fs::create_dir_all(&lib).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/values.so");
+        std::fs::copy(&source, lib.join("libcudart.so.12")).unwrap();
+        std::fs::copy(&source, lib.join("ordinary.so")).unwrap();
+        for parse in [0, 512, 4096, 64 << 20] {
+            for code in [0, 128, 256 << 20] {
+                let mut budgets = InstallBudgets::default();
+                budgets.binary.parse_bytes = parse;
+                budgets.binary.code = Some(crate::code::CodeBudgets {
+                    bytes: code,
+                    ..Default::default()
+                });
+                let legacy = super::collect_strategy(d.path(), budgets, &|_| {}, false).unwrap();
+                crate::code::CODE_ANALYSES.with(|n| n.set(0));
+                let mut actual = super::collect_with_code(d.path(), budgets).unwrap();
+                assert!(crate::code::CODE_ANALYSES.with(|n| n.get()) <= 1);
+                actual.collection_usage = None;
+                assert_eq!(actual, legacy, "parse={parse}, code={code}");
+            }
+        }
+    }
+
+    #[test]
+    fn installation_selects_mixed_work_mode_before_either_input_order() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let x86 = manifest.join("tests/fixtures/code/shared-refs.so");
+        let a64 = manifest.join("tests/fixtures/code-aarch64/elf-clang-plt.so");
+        for reverse in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(d.path().join("bin")).unwrap();
+            std::fs::create_dir_all(d.path().join("lib/ollama")).unwrap();
+            let (first, second) = if reverse { (&a64, &x86) } else { (&x86, &a64) };
+            std::fs::copy(first, d.path().join("bin/ollama")).unwrap();
+            std::fs::copy(second, d.path().join("lib/ollama/next.so")).unwrap();
+            let mut budgets = InstallBudgets::default();
+            budgets.binary.code = Some(crate::code::CodeBudgets {
+                references: 1,
+                ..Default::default()
+            });
+            crate::code::CODE_RUNS.with(|r| r.borrow_mut().clear());
+            let facts = super::collect_with_code(d.path(), budgets).unwrap();
+            assert!(facts.recognized_multiarch);
+            let runs = crate::code::CODE_RUNS.with(|r| r.borrow().clone());
+            assert_eq!(runs, [(false, 1, 0)]);
+        }
+    }
 
     /// A link retargeted between its two `readlinkat`: its target is never read, so only the
     /// second `readlinkat` can see the change.
@@ -603,6 +695,194 @@ mod tests {
         assert!(changed.binaries.is_empty());
         assert!(super::collect(d.path(), budgets).unwrap().code.is_empty());
     }
+    #[test]
+    fn unstable_reads_discard_slice_witnesses_and_stable_duplicates_restore_content() {
+        use crate::code::{CodeBudgets, CodeOutcome};
+        use std::io::Write;
+
+        for change in ["grow", "replace", "vanish"] {
+            for duplicate in [false, true] {
+                let d = tempfile::TempDir::new().unwrap();
+                let lib = d.path().join("lib/ollama");
+                std::fs::create_dir_all(&lib).unwrap();
+                let bytes = std::fs::read(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/code/spawn.so"),
+                )
+                .unwrap();
+                let path = lib.join("a.so");
+                std::fs::write(&path, &bytes).unwrap();
+                if duplicate {
+                    std::fs::write(lib.join("z.so"), &bytes).unwrap();
+                }
+                let mut budgets = InstallBudgets::default();
+                budgets.binary.code = Some(CodeBudgets::default());
+                let mut facts = collect_with(d.path(), budgets, &|rel| {
+                    if rel.display() != "lib/ollama/a.so" {
+                        return;
+                    }
+                    match change {
+                        "grow" => std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .unwrap()
+                            .write_all(b"!")
+                            .unwrap(),
+                        "replace" => {
+                            let replacement = d.path().join("replacement");
+                            std::fs::write(&replacement, &bytes).unwrap();
+                            std::fs::rename(replacement, &path).unwrap();
+                        }
+                        "vanish" => std::fs::remove_file(&path).unwrap(),
+                        _ => unreachable!(),
+                    }
+                })
+                .unwrap();
+                assert!(!facts.recognized_multiarch);
+                assert!(!crate::analyze::multiarch_code::prepare(
+                    &mut facts.artifacts,
+                    &facts.instances,
+                    true,
+                    facts.recognized_multiarch,
+                ));
+                assert!(facts
+                    .artifacts
+                    .iter()
+                    .all(|a| a.code_slice_inventory.is_none()));
+                let unstable = facts
+                    .instances
+                    .iter()
+                    .find(|i| i.path.as_bytes().ends_with(b"/a.so"))
+                    .unwrap();
+                assert_ne!(unstable.stability, Stability::NoChangeDetected);
+                assert_eq!(facts.artifacts.len(), 1);
+                if duplicate {
+                    assert_eq!(facts.binaries.len(), 1, "{change}: stable duplicate");
+                    assert_eq!(facts.code.len(), 1);
+                    assert_eq!(facts.artifacts[0].slices.len(), 1);
+                    assert!(matches!(&facts.code[0].1,
+                        CodeOutcome::Analyzed { call_sites, .. } if !call_sites.is_empty()));
+                } else {
+                    assert!(facts.binaries.is_empty(), "{change}");
+                    assert!(facts.code.is_empty(), "{change}");
+                    assert!(
+                        facts.artifacts[0].slices.is_empty(),
+                        "{change}: unstable reads must not retain slice witnesses"
+                    );
+                    assert!(facts.artifacts[0].code_slice_inventory.is_none());
+                    let coverage = crate::analyze::install_code::coverage(
+                        &facts,
+                        budgets.binary.code.unwrap().bytes,
+                    )
+                    .unwrap();
+                    let content = coverage
+                        .iter()
+                        .find(|c| matches!(c.scope, sigil_model::Ref::Artifact(_)))
+                        .expect("recognized unstable content retains its not-parsed summary");
+                    assert_eq!(
+                        content.state,
+                        CoverageState::Partial {
+                            missing: vec![sigil_model::BINARY_NOT_PARSED.to_string()],
+                        }
+                    );
+                    assert_eq!(content.budget.as_ref().unwrap().used, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aarch64_unstable_recognition_is_separate_from_stable_evidence() {
+        use crate::code::{CodeBudgets, CodeOutcome};
+        use std::io::Write;
+
+        for change in ["grow", "replace", "vanish"] {
+            for duplicate in [false, true] {
+                let d = tempfile::TempDir::new().unwrap();
+                let lib = d.path().join("lib/ollama");
+                std::fs::create_dir_all(&lib).unwrap();
+                let bytes = std::fs::read(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/code-aarch64/elf-clang-plt.so"),
+                )
+                .unwrap();
+                let path = lib.join("a.so");
+                std::fs::write(&path, &bytes).unwrap();
+                if duplicate {
+                    std::fs::write(lib.join("z.so"), &bytes).unwrap();
+                }
+                let mut budgets = InstallBudgets::default();
+                budgets.binary.code = Some(CodeBudgets::default());
+                let mut facts = collect_with(d.path(), budgets, &|rel| {
+                    if rel.display() != "lib/ollama/a.so" {
+                        return;
+                    }
+                    match change {
+                        "grow" => std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .unwrap()
+                            .write_all(b"!")
+                            .unwrap(),
+                        "replace" => {
+                            let replacement = d.path().join("replacement");
+                            std::fs::write(&replacement, &bytes).unwrap();
+                            std::fs::rename(replacement, &path).unwrap();
+                        }
+                        "vanish" => std::fs::remove_file(&path).unwrap(),
+                        _ => unreachable!(),
+                    }
+                })
+                .unwrap();
+                assert!(facts.recognized_multiarch);
+                assert!(crate::analyze::multiarch_code::prepare(
+                    &mut facts.artifacts,
+                    &facts.instances,
+                    true,
+                    facts.recognized_multiarch
+                ));
+                let unstable = facts
+                    .instances
+                    .iter()
+                    .find(|i| i.path.as_bytes().ends_with(b"/a.so"))
+                    .unwrap();
+                assert_ne!(unstable.stability, Stability::NoChangeDetected);
+                assert_eq!(facts.artifacts.len(), 1);
+                if duplicate {
+                    assert_eq!(facts.binaries.len(), 1, "{change}: stable duplicate");
+                    assert_eq!(facts.code.len(), 1);
+                    assert_eq!(facts.artifacts[0].slices.len(), 1);
+                    assert!(matches!(&facts.code[0].1,
+                        CodeOutcome::Analyzed { call_sites, .. } if !call_sites.is_empty()));
+                } else {
+                    assert!(facts.binaries.is_empty(), "{change}");
+                    assert!(facts.code.is_empty(), "{change}");
+                    assert!(
+                        facts.artifacts[0].slices.is_empty(),
+                        "{change}: unstable reads must not retain slice witnesses"
+                    );
+                    assert!(facts.artifacts[0].code_slice_inventory.is_none());
+                    let coverage = crate::analyze::install_code::coverage(
+                        &facts,
+                        budgets.binary.code.unwrap().bytes,
+                    )
+                    .unwrap();
+                    let content = coverage
+                        .iter()
+                        .find(|c| matches!(c.scope, sigil_model::Ref::Artifact(_)))
+                        .expect("recognized unstable content retains its not-parsed summary");
+                    assert_eq!(
+                        content.state,
+                        CoverageState::Partial {
+                            missing: vec![sigil_model::BINARY_NOT_PARSED.to_string()],
+                        }
+                    );
+                    assert_eq!(content.budget.as_ref().unwrap().used, 0);
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_parent_swap_preserving_the_leaf_inode_cannot_mint_a_path_proof() {
         use std::cell::Cell;

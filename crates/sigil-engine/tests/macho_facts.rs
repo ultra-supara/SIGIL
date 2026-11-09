@@ -231,6 +231,94 @@ fn an_invalid_java_constant_pool_does_not_hide_malformed_fat_macho() {
 }
 
 #[test]
+fn recognition_probe_matches_parser_across_magic_collisions_and_budgets() {
+    let arm = common::macho::thin(true, false, common::macho::AARCH64, 0, &[]);
+    let fat = common::macho::fat32(&[(arm.clone(), common::macho::AARCH64, 0)]);
+    let valid_java = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 1, 0, 0, 0, 0, 0, 0];
+    let mut invalid_java = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 2, 5];
+    invalid_java.extend_from_slice(&[0; 14]);
+    let inputs = [
+        arm,
+        fat,
+        valid_java,
+        invalid_java,
+        vec![0xca, 0xfe, 0xba, 0xbe],
+        vec![],
+    ];
+    let directory = TempDir::new().unwrap();
+    for (i, bytes) in inputs.iter().enumerate() {
+        let path = directory.path().join(i.to_string());
+        std::fs::write(&path, bytes).unwrap();
+        let file = File::open(path).unwrap();
+        for limit in [0, 64, 1024, 64 << 20] {
+            let budgets = BinaryBudgets {
+                parse_bytes: limit,
+                ..Default::default()
+            };
+            let expected = parse_with(bytes, budgets).is_some();
+            let actual = sigil_engine::binary::recognizes_multiarch(
+                &file,
+                bytes.len() as u64,
+                &bytes[..bytes.len().min(64)],
+                limit,
+            );
+            assert_eq!(actual, expected, "input {i}, parse limit {limit}");
+        }
+    }
+}
+
+#[test]
+fn recognition_probe_selects_only_aarch64_from_elf_headers() {
+    for (path, expected) in [
+        ("tests/fixtures/code-aarch64/elf-clang-plt.so", true),
+        ("tests/fixtures/code/spawn.so", false),
+    ] {
+        let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap();
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("input");
+        std::fs::write(&path, &bytes).unwrap();
+        let file = File::open(path).unwrap();
+        assert_eq!(
+            sigil_engine::binary::recognizes_multiarch(&file, bytes.len() as u64, &bytes[..64], 0,),
+            expected
+        );
+    }
+}
+
+#[test]
+fn probe_accounts_io_and_does_not_guess_when_its_limit_is_exhausted() {
+    let arm = common::macho::thin(true, false, common::macho::AARCH64, 0, &[]);
+    let bytes = common::macho::fat32(&[(arm, common::macho::AARCH64, 0)]);
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("input");
+    std::fs::write(&path, &bytes).unwrap();
+    let file = File::open(path).unwrap();
+    let prefix = &bytes[..bytes.len().min(64)];
+    let blocked =
+        sigil_engine::binary::probe_multiarch(&file, bytes.len() as u64, prefix, 1 << 20, 0);
+    assert_eq!(blocked.recognized, None);
+    assert_eq!(blocked.bytes_read, 0);
+    let complete =
+        sigil_engine::binary::probe_multiarch(&file, bytes.len() as u64, prefix, 1 << 20, 4096);
+    assert_eq!(complete.recognized, Some(true));
+    assert!(complete.bytes_read > 0 && complete.bytes_read <= 4096);
+    let short = sigil_engine::binary::probe_multiarch(
+        &file,
+        bytes.len() as u64 + 1024,
+        prefix,
+        1 << 20,
+        4096,
+    );
+    // The extra reported length alone does not force an EOF; a truncated file below does.
+    assert!(short.bytes_read <= 4096);
+    std::fs::write(directory.path().join("input"), &bytes[..8]).unwrap();
+    let failed =
+        sigil_engine::binary::probe_multiarch(&file, bytes.len() as u64, prefix, 1 << 20, 4096);
+    assert_eq!(failed.recognized, None);
+    assert!(failed.bytes_read <= 4096);
+}
+
+#[test]
 fn malformed_command_sizes_string_offsets_and_required_commands_leave_gaps() {
     let misaligned = common::macho::command(0x1b, 25, false);
     let bytes = common::macho::thin(true, false, common::macho::X86_64, 3, &[misaligned]);

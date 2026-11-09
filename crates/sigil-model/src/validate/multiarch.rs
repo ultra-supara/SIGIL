@@ -59,20 +59,24 @@ impl Validator<'_> {
         if !s.request.code {
             self.code_error("request", "marker needs request.code");
         }
-        // Task 11/16 must enable slice-aware reasons and library-aware matching together
-        // in the evaluator and saved-result validator. Legacy capability results stay intact.
+        // Task 16 owns library-aware Mach-O decisions; ELF uses slice-aware validation.
+        let macho_slices: BTreeSet<_> = s
+            .binaries
+            .iter()
+            .filter_map(|b| matches!(b.container, ContainerFacts::MachO(_)).then_some(&b.slice))
+            .collect();
         if s.policy_violations.iter().any(|v| {
             v.policy_rule
                 .as_str()
                 .starts_with(crate::CAPABILITY_DENY_PREFIX)
-        }) || s
-            .open_questions
-            .iter()
-            .any(|q| q.rule.as_str() == crate::CAPABILITY_RULE)
-        {
+                && matches!(&v.subject, Ref::Slice(slice) if macho_slices.contains(slice))
+        }) || s.open_questions.iter().any(|q| {
+            q.rule.as_str() == crate::CAPABILITY_RULE
+                && matches!(&q.subject, Ref::Slice(slice) if macho_slices.contains(slice))
+        }) {
             self.code_error(
                 "policy",
-                "marked capability decisions await slice-aware policy validation",
+                "marked Mach-O capability decisions await library-aware policy validation",
             );
         }
         if !s

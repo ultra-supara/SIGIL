@@ -53,6 +53,9 @@ fn legacy_json_is_byte_identical() {
         let raw = std::fs::read(&path).unwrap();
         let session: Session = serde_json::from_slice(&raw).unwrap();
         session.validate().unwrap();
+        if session.request.code_analysis.is_some() {
+            continue;
+        }
         let canonical = session.to_canonical_json().unwrap();
         rows.push(format!(
             "{:x}  {}",
@@ -1493,14 +1496,17 @@ fn marked_macho_calls_remain_gated_until_library_aware_policy() {
 }
 
 #[test]
-fn marked_capability_decisions_remain_gated_until_slice_aware_policy() {
-    let mut s: Session = serde_json::from_str(include_str!(
+fn marked_macho_capability_decisions_remain_gated_until_library_aware_policy() {
+    let legacy: Session = serde_json::from_str(include_str!(
         "../../../schemas/examples/session-v1/18-capability-policy.json"
     ))
     .unwrap();
-    s.request.code_analysis = Some(CodeAnalysis::MultiarchV1);
+    let mut s = coverage_support::fat();
+    let mut violation = legacy.policy_violations[0].clone();
+    violation.subject = Ref::Slice(s.binaries[0].slice.clone());
+    s.policy_violations.push(violation);
     rejects(
         &s,
-        "marked capability decisions await slice-aware policy validation",
+        "marked Mach-O capability decisions await library-aware policy validation",
     );
 }

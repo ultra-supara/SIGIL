@@ -222,22 +222,24 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let walk = e.for_each_rela(dynamic, symbols, |r: Rela| {
         if r.r_type == rtype::JUMP_SLOT || r.r_type == rtype::GLOB_DAT {
             // A slot listed again is checked, never added: only new slots count.
-            let full = slot_syms.len() >= slot_limit;
             match slot_syms.entry(r.at) {
                 Entry::Occupied(mut s) => {
                     if *s.get() != Some(r.sym) {
                         s.insert(None);
                     }
                 }
-                Entry::Vacant(_) if full => slots_over = true,
                 Entry::Vacant(s) => {
-                    s.insert(Some(r.sym));
+                    if run.try_charge(crate::code::Work::Slots, 1) {
+                        s.insert(Some(r.sym));
+                    } else {
+                        slots_over = true;
+                    }
                 }
             }
         }
         let (at, end) = textrel_range(&r);
         if meets(code, at, end) {
-            if textrel.len() >= limit {
+            if !run.try_charge(crate::code::Work::TextReferences, 1) {
                 over = true;
             } else {
                 textrel.push((at, end, Some(r.sym)));
@@ -255,7 +257,7 @@ pub(crate) fn linked<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
         }
         for (at, end) in entry.words(word) {
             if meets(code, at, end) {
-                if textrel.len() >= limit {
+                if !run.try_charge(crate::code::Work::TextReferences, 1) {
                     over = true;
                     return ControlFlow::Break(());
                 }

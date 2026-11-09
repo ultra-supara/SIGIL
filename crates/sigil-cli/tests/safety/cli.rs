@@ -514,19 +514,25 @@ fn binary_signature_scan_reads_with_pread_only() {
 /// fd that hashed it (the filter matches by path, which a second open would also satisfy); and
 /// no `sendfile` has it as its source.
 fn input_reads<'r>(r: &'r TracedRun, input: &Path) -> Vec<&'r Event> {
+    input_reads_in_phases(r, input, 1)
+}
+
+fn input_reads_in_phases<'r>(r: &'r TracedRun, input: &Path, phases: usize) -> Vec<&'r Event> {
     let path = std::fs::canonicalize(input).unwrap();
     let opens = r
         .events
         .iter()
-        .filter(|e| {
+        .enumerate()
+        .filter(|(_, e)| {
             matches!(e.name.as_str(), "open" | "openat" | "openat2")
                 && fd_path(&e.ret).as_ref() == Some(&path)
         })
-        .count();
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
     assert_eq!(
-        opens,
-        1,
-        "case `{}`: the input is opened {opens} times (trace: {})",
+        opens.len(),
+        phases,
+        "case `{}`: unexpected input open count (trace: {})",
         r.case,
         r.trace_dir.display()
     );
@@ -565,17 +571,47 @@ fn input_reads<'r>(r: &'r TracedRun, input: &Path) -> Vec<&'r Event> {
         r.case,
         r.trace_dir.display()
     );
-    let first_pread = on_input
-        .iter()
-        .position(|e| e.name == "pread64")
-        .unwrap_or_else(|| panic!("case `{}`: no pread64 of the input", r.case));
-    for e in &on_input[first_pread..] {
-        assert!(
-            e.name != "read",
-            "case `{}`: a read after the first pread64: {}",
-            r.case,
-            e.raw
+    for (phase, start) in opens.iter().copied().enumerate() {
+        let end = opens.get(phase + 1).copied().unwrap_or(r.events.len());
+        let fd = r.events[start].ret.split('<').next().unwrap().trim();
+        let events = r.events[start + 1..end]
+            .iter()
+            .filter(|e| {
+                e.args.first().and_then(|a| fd_path(a)).as_ref() == Some(&path)
+                    && matches!(e.name.as_str(), "read" | "pread64")
+            })
+            .collect::<Vec<_>>();
+        assert!(events
+            .iter()
+            .all(|e| e.args[0].split('<').next().unwrap().trim() == fd));
+        assert_eq!(
+            events.first().map(|e| e.name.as_str()),
+            Some("read"),
+            "phase must hash before parsing"
         );
+        if phases > 1 {
+            let hashed: u64 = events
+                .iter()
+                .filter(|e| e.name == "read")
+                .map(|e| e.ret.parse::<u64>().unwrap())
+                .sum();
+            assert_eq!(
+                hashed,
+                std::fs::metadata(&path).unwrap().len(),
+                "phase {phase} must rehash the whole input"
+            );
+        }
+        if let Some(first_pread) = events.iter().position(|e| e.name == "pread64") {
+            assert!(
+                events[first_pread..].iter().all(|e| e.name != "read"),
+                "read after parsing started in phase {phase}"
+            );
+        } else {
+            assert!(
+                phases > 1 && phase == 0,
+                "analysis must use pread on the hashing fd"
+            );
+        }
     }
     on_input
 }
@@ -1300,4 +1336,85 @@ fn active_api_probe_refused() {
         .local_addr()
         .unwrap();
     probe_case("inspect-active-api-probe-refused", dest, "→ refused");
+}
+
+/// All four producers use discovery and verified analysis; both phases hash the whole input
+/// and parsing uses the respective hashing fd. Assembly adds no target code reads.
+#[test]
+fn aarch64_producers_share_same_fd_and_target_reads() {
+    let case = "aarch64_producers_share_same_fd_and_target_reads";
+    if !require_tracer(case) {
+        return;
+    }
+    let fx = fixture();
+    let models = fixtures::ollama_store(&fx.target);
+    let install = fx.target.join("install");
+    std::fs::create_dir_all(install.join("bin")).unwrap();
+    std::fs::create_dir_all(install.join("lib/ollama")).unwrap();
+    let input = install.join("bin/ollama");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sigil-engine/tests/fixtures/code-aarch64/elf-clang-plt.so"),
+        &input,
+    )
+    .unwrap();
+    let unit = fx.target.join("ollama.service");
+    std::fs::write(
+        &unit,
+        format!("[Service]\nExecStart={} serve\n", input.display()),
+    )
+    .unwrap();
+    let mut expected_reads = None;
+    let mut expected_code = None;
+    for mode in ["binary", "install", "service", "observe"] {
+        let output = fx.out.join(format!("{mode}.json"));
+        let mut args = if mode == "binary" {
+            os(&[&"binary", &"inspect", &input])
+        } else {
+            let mut args = os(&[&"inspect", &"ollama", &"--models-dir", &models]);
+            if mode == "service" {
+                args.extend(os(&[&"--service-unit", &unit]));
+            } else {
+                args.extend(os(&[&"--install-dir", &install]));
+            }
+            if mode == "observe" {
+                args.extend(os(&[&"--mode", &"observe"]));
+            }
+            args
+        };
+        args.extend(os(&[&"--code", &"--out", &output]));
+        let r = run(&format!("aarch64-{mode}"), &fx, &refs(&args));
+        assert!(r.status.unwrap().success(), "{mode}: {}", r.stderr);
+        assert_read_under(&r, &install);
+        let reads = input_reads_in_phases(&r, &input, 2)
+            .into_iter()
+            .filter(|e| matches!(e.name.as_str(), "read" | "pread64"))
+            .map(|e| (e.name.clone(), e.args[2..].to_vec(), e.ret.clone()))
+            .collect::<Vec<_>>();
+        assert!(!reads.is_empty());
+        if let Some(expected) = &expected_reads {
+            assert_eq!(&reads, expected, "{mode}: {}", r.trace_dir.display());
+        } else {
+            expected_reads = Some(reads);
+        }
+        let s: sigil_model::Session =
+            serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        s.validate().unwrap();
+        assert_eq!(
+            s.request.code_analysis,
+            Some(sigil_model::CodeAnalysis::MultiarchV1)
+        );
+        assert_eq!(s.code[0].call_sites.len(), 2);
+        if let Some(expected) = &expected_code {
+            assert_eq!(&s.code, expected);
+        } else {
+            expected_code = Some(s.code);
+        }
+        let scopes: &[&str] = if mode == "observe" {
+            &["runtime", "observe"]
+        } else {
+            &["runtime"]
+        };
+        assert_clean(&r, &policy(&fx, &[&output], scopes));
+    }
 }

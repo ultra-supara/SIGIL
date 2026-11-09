@@ -1,0 +1,23 @@
+
+shared-refs.so:     file format elf64-x86-64
+
+
+Disassembly of section .plt:
+
+0000000000001000 <connect@plt-0x10>:
+    1000:	push   0x2fea(%rip)        # 3ff0 <_GLOBAL_OFFSET_TABLE_+0x8>
+    1006:	jmp    *0x2fec(%rip)        # 3ff8 <_GLOBAL_OFFSET_TABLE_+0x10>
+    100c:	nopl   0x0(%rax)
+
+0000000000001010 <connect@plt>:
+    1010:	jmp    *0x2fea(%rip)        # 4000 <connect>
+    1016:	push   $0x0
+    101b:	jmp    1000 <connect@plt-0x10>
+
+Disassembly of section .text:
+
+0000000000001020 <shared_refs>:
+    1020:	movabs $0x0,%rax
+    102a:	call   *%rax
+    102c:	call   1010 <connect@plt>
+    1031:	ret

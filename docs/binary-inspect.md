@@ -3,7 +3,7 @@
 `sigil binary inspect` reads one or more files and writes one session (or its Markdown) for all
 of them. For each file the session holds its digest, size, format, container facts, and, for ELF,
 the capability imports it asks for (`connect`, `dlopen`, …) and the signatures found in it. With
-`--code`, it also records where an x86-64 ELF file calls those imports directly. It needs no
+`--code`, it also records where an x86-64 or AArch64 ELF64 little-endian file calls those imports directly. It needs no
 model store, installation, or running runtime, and it never executes or loads what it reads.
 
 ```bash
@@ -244,7 +244,7 @@ once rendered:
   (with a small `binary_code_bytes`, most of the code), and a call site may be there.
 - `not analyzed (use --code)`: the run had no `--code`.
 - `not analyzed (see binary.code)`: the run had `--code`, but the input's code was not searched
-  (its `binary.code` is neither complete nor partial, e.g. unsupported for an AArch64 ELF). It is
+  (its `binary.code` is neither complete nor partial, e.g. unsupported for an ELF32 input). It is
   never `none found`.
 - `No capability imports.` replaces the table for an ELF file without capability imports.
 - When the file's import list was cut short at `binary_imports`, the imports past the cut, and
@@ -268,7 +268,7 @@ once rendered:
 - Only executable sections and the ranges of FDEs in `.eh_frame` are searched, and only code with
   an FDE is analyzed. Only the functions that hold a reference to a capability import are
   decoded, each from its FDE start.
-- x86-64 ELF only (64-bit, little-endian). A Mach-O, an ELF of another machine, an ELF32, or a
+- x86-64 and AArch64 ELF64 little-endian. A Mach-O, an ELF of another machine, an ELF32, or a
   big-endian ELF is `Unsupported`.
 - In a relocatable object (`.o`), addresses are file offsets.
 
@@ -279,12 +279,23 @@ Absence therefore means "no direct call site in the scanned code", never "not ca
 | The input | `binary.code` |
 |---|---|
 | Analyzed, and every reference to a capability import in the scanned code is a confirmed direct call (or part of another instruction) | `Complete`, with the code bytes read |
-| Analyzed with gaps (a reference not confirmed, a function not decoded or solved, a refused read, a limit reached), or an x86-64 ELF whose facts were not parsed | `Partial`, listing them (`not parsed` for the last); the confirmed calls are recorded all the same |
-| A Mach-O, an ELF of another machine, an ELF32 or big-endian ELF | `Unsupported` (`code analysis: x86-64 ELF64 little-endian only`) |
+| Analyzed with gaps (a reference not confirmed, a function not decoded or solved, a refused read, a limit reached), or a recognized ELF whose facts were not parsed | `Partial`, listing them (`not parsed` for the last); the confirmed calls are recorded all the same |
+| A Mach-O, an ELF of another machine, an ELF32 or big-endian ELF | `Unsupported`, naming the unsupported target |
 | Not a supported container, over `binary_bytes`, or changed or removed while read | the `binary.container` status |
 
 Under the default policy, `binary.code` is required, so any status other than `Complete` makes the
 result `INCOMPLETE` (exit 4 with `--fail-on-incomplete`).
+
+When a code request recognizes AArch64 ELF or Mach-O, it records
+`request.code_analysis: "multiarch-v1"`. Each retained slice has its own code diagnostic,
+while the named-input summary remains. Capability questions use that slice's diagnostic:
+a complete search leaves indirect calls unmodeled; an incomplete search gives
+`CheckIncomplete`. A confirmed direct call can support a denial even when other code
+was not searched. AArch64 calls show `x0`, `x1`, `x2`, and further proved argument locations;
+unknown values stay unknown. Mach-O calls remain unsupported.
+
+The [M3-B resource blocker](support-matrix.md) remains unresolved for mixed marked x86
+analysis; this is not a completed release milestone.
 
 **Budgets and limits.**
 - **`binary_code_bytes`** (default 256 MiB per artifact) bounds the bytes read for code: code,

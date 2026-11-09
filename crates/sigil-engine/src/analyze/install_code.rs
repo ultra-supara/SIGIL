@@ -21,6 +21,9 @@ pub fn coverage(facts: &InstallFacts, limit: u64) -> Result<Vec<Coverage>, Strin
         .map(|(id, outcome)| (id, outcome))
         .collect();
     let parsed: BTreeSet<&SliceId> = facts.binaries.iter().map(|binary| &binary.slice).collect();
+    let binary_facts = facts.binaries.iter().map(|b| (&b.slice, b)).collect();
+    let mut children = Vec::new();
+    let marked = facts.recognized_multiarch;
     let entries: Vec<_> = facts
         .artifacts
         .iter()
@@ -31,15 +34,43 @@ pub fn coverage(facts: &InstallFacts, limit: u64) -> Result<Vec<Coverage>, Strin
             )
         })
         .map(|artifact| {
-            let (state, budget) = content(artifact, &outcomes, &parsed, limit);
-            Coverage {
+            let (state, budget) = if marked && artifact.code_slice_inventory.is_some() {
+                let child = super::multiarch_code::children(
+                    artifact,
+                    &binary_facts,
+                    &outcomes,
+                    &check,
+                    limit,
+                );
+                let summary = sigil_model::code_coverage::aggregate_code_slices(
+                    artifact,
+                    &child.iter().collect::<Vec<_>>(),
+                    limit,
+                )?;
+                children.extend(child);
+                summary
+            } else if marked {
+                (
+                    CoverageState::Partial {
+                        missing: vec![BINARY_NOT_PARSED.into()],
+                    },
+                    Some(BudgetUse {
+                        budget: BINARY_CODE_BYTES.into(),
+                        used: 0,
+                        limit,
+                    }),
+                )
+            } else {
+                content(artifact, &outcomes, &parsed, limit)
+            };
+            Ok(Coverage {
                 check: check.clone(),
                 scope: Ref::Artifact(artifact.id.clone()),
                 state,
                 budget,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     let state = match &facts.discovery.state {
         s @ (CoverageState::Unavailable { .. }
         | CoverageState::BudgetExceeded { .. }
@@ -67,6 +98,7 @@ pub fn coverage(facts: &InstallFacts, limit: u64) -> Result<Vec<Coverage>, Strin
         budget: None,
     }];
     result.extend(entries);
+    result.extend(children);
     Ok(result)
 }
 

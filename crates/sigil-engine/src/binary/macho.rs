@@ -77,6 +77,8 @@ struct FatSlice {
     alignment: u32,
 }
 
+type FatParse = (Vec<FatSlice>, Vec<String>);
+
 fn thin_magic(bytes: &[u8]) -> Option<ThinMagic> {
     match bytes.get(..4)? {
         [0xfe, 0xed, 0xfa, 0xce] => Some(ThinMagic {
@@ -186,6 +188,53 @@ fn java_class<R: ReadCacheOps>(data: &Bounded<R>, size: u64) -> bool {
         index += 1;
     }
     range(data, 0, size, offset, 6).is_ok()
+}
+
+/// Resolve the fat Mach-O / Java magic collision using exactly the same bounded reads as parsing.
+fn recognize_with_data<R: ReadCacheOps>(
+    data: &Bounded<R>,
+    size: u64,
+    prefix: &[u8],
+) -> Option<(Format, Option<FatParse>)> {
+    let magic: [u8; 4] = prefix.get(..4)?.try_into().ok()?;
+    let format = recognized(&magic)?;
+    let fat_parsed = fat_magic(&magic).map(|fat| parse_fat(data, size, fat));
+    if let Some((descriptors, gaps)) = &fat_parsed {
+        if (!gaps.is_empty() || descriptors.is_empty()) && java_class(data, size) {
+            return None;
+        }
+    }
+    Some((format, fat_parsed))
+}
+
+pub(super) fn recognize_file(file: &File, size: u64, prefix: &[u8], parse_bytes: u64) -> bool {
+    let data = Bounded::new(Budgeted::new(file, size), size, parse_bytes);
+    recognize_with_data(&data, size, prefix).is_some()
+}
+
+pub(super) fn probe_file(
+    file: &File,
+    size: u64,
+    prefix: &[u8],
+    parse_bytes: u64,
+    io_limit: u64,
+) -> super::MultiarchProbe {
+    let used = std::cell::Cell::new(0);
+    let exhausted = std::cell::Cell::new(false);
+    let failed = std::cell::Cell::new(false);
+    let ops = super::read::Metered::new(
+        Budgeted::new(file, size),
+        io_limit,
+        &used,
+        &exhausted,
+        &failed,
+    );
+    let data = Bounded::new(ops, size, parse_bytes);
+    let recognized = recognize_with_data(&data, size, prefix).is_some();
+    super::MultiarchProbe {
+        recognized: (!exhausted.get() && !failed.get()).then_some(recognized),
+        bytes_read: used.get(),
+    }
 }
 
 fn u32_at<R: object::read::ReadCacheOps>(
@@ -905,16 +954,10 @@ pub(super) fn parse_artifact(
     prefix: &[u8],
     budgets: BinaryBudgets,
 ) -> Option<ParsedArtifact> {
-    let magic: [u8; 4] = prefix.get(..4)?.try_into().ok()?;
-    let format = recognized(&magic)?;
     let data = Bounded::new(Budgeted::new(file, size), size, budgets.parse_bytes);
+    let (format, fat_parsed) = recognize_with_data(&data, size, prefix)?;
     let mut slices = vec![];
-    let fat_parsed = fat_magic(&magic).map(|fat| parse_fat(&data, size, fat));
-    if let Some((descriptors, gaps)) = &fat_parsed {
-        if (!gaps.is_empty() || descriptors.is_empty()) && java_class(&data, size) {
-            return None;
-        }
-    }
+    let mut inventory_gaps = vec![];
     // The names' budget is the file's: every slice of a fat file draws on it.
     let mut names = imports::MAX_NAME_SCAN;
     match format {
@@ -934,24 +977,36 @@ pub(super) fn parse_artifact(
         }
         Format::MachOFat => {
             let (descriptors, mut gaps) = fat_parsed?;
+            inventory_gaps.extend(gaps.iter().cloned());
             for descriptor in descriptors {
                 let expected_arch = arch(descriptor.cpu_type);
                 let digest = match hash_range(file, descriptor.offset, descriptor.size) {
                     Ok(digest) => digest,
                     Err(why) => {
-                        gaps.push(format!("fat slice at {}: hash: {why}", descriptor.offset));
+                        let gap = format!("fat slice at {}: hash: {why}", descriptor.offset);
+                        inventory_gaps.push(gap.clone());
+                        gaps.push(gap);
                         continue;
                     }
                 };
                 match fat_slice_facts(&data, &descriptor, budgets.imports, &mut names) {
-                    Ok(parsed) => slices.push(parsed_slice(
-                        descriptor.offset,
-                        descriptor.size,
-                        expected_arch,
-                        digest,
-                        parsed,
-                        &[],
-                    )),
+                    Ok(parsed) => {
+                        if let ContainerFacts::MachO(m) = &parsed.container {
+                            if macho_architecture(m.cpu_type, m.cpu_subtype)
+                                != macho_architecture(descriptor.cpu_type, descriptor.cpu_subtype)
+                            {
+                                inventory_gaps.push(FAT_CPU_MISMATCH_GAP.into());
+                            }
+                        }
+                        slices.push(parsed_slice(
+                            descriptor.offset,
+                            descriptor.size,
+                            expected_arch,
+                            digest,
+                            parsed,
+                            &[],
+                        ));
+                    }
                     Err(why) => {
                         gaps.push(format!("fat slice at {}: {why}", descriptor.offset));
                         slices.push(unparsed_slice(
@@ -990,5 +1045,19 @@ pub(super) fn parse_artifact(
     for slice in &mut slices {
         slice.code = budgets.code.map(|_| CodeOutcome::Unsupported);
     }
-    Some(ParsedArtifact { format, slices })
+    let code_inventory = if inventory_gaps.is_empty() && !slices.is_empty() {
+        sigil_model::CodeSliceInventory::Complete
+    } else {
+        inventory_gaps.push(sigil_model::code_coverage::CODE_INVENTORY_INCOMPLETE.into());
+        inventory_gaps.sort();
+        inventory_gaps.dedup();
+        sigil_model::CodeSliceInventory::Partial {
+            missing: inventory_gaps,
+        }
+    };
+    Some(ParsedArtifact {
+        format,
+        slices,
+        code_inventory,
+    })
 }

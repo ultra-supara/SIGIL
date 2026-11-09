@@ -237,6 +237,7 @@ fn assemble(
     let mut process_values = vec![];
     let mut dependency_discovery = None;
     let mut code_outcomes = vec![];
+    let mut multiarch = false;
 
     let (mut relations, mut binaries, mut scans) = (vec![], vec![], vec![]);
     if let Some(r) = &req.install {
@@ -252,6 +253,19 @@ fn assemble(
             install::collect(&dir, r.budgets)
         }
         .map_err(InspectError::BadId)?;
+        multiarch = crate::analyze::multiarch_code::prepare(
+            &mut facts.artifacts,
+            &facts.instances,
+            code_request.is_some(),
+            facts.recognized_multiarch,
+        );
+        if multiarch {
+            if let Some(usage) = &facts.collection_usage {
+                usage
+                    .record(&mut budgets, &mut coverage)
+                    .map_err(InspectError::BadId)?;
+            }
+        }
         if let Some(unit) = unit {
             service_unit::attach(unit, &mut facts).map_err(InspectError::Input)?;
         }
@@ -437,12 +451,19 @@ fn assemble(
         Some(set) => release::claims(closed, &components, set).map_err(InspectError::Internal)?,
         None => vec![],
     };
+    if multiarch {
+        knowledge.push(
+            sigil_model::code_abi::V1
+                .knowledge()
+                .map_err(|e| InspectError::Internal(e.to_string()))?,
+        );
+    }
     let mut session = Session {
         schema: SchemaVersion::SessionV1,
         tool,
         knowledge,
         request: RunRequest {
-            code_analysis: None,
+            code_analysis: multiarch.then_some(sigil_model::CodeAnalysis::MultiarchV1),
             mode,
             roots,
             audit,
@@ -523,8 +544,14 @@ pub fn binary_session(
     observation: ObservationMeta,
     policy_time: Timestamp,
 ) -> Result<Session, InspectError> {
-    let facts = named::collect(&req.paths, req.budgets).map_err(InspectError::Input)?;
+    let mut facts = named::collect(&req.paths, req.budgets).map_err(InspectError::Input)?;
     let code_request = req.budgets.binary.code;
+    let multiarch = crate::analyze::multiarch_code::prepare(
+        &mut facts.artifacts,
+        &facts.instances,
+        code_request.is_some(),
+        facts.recognized_multiarch,
+    );
     // With code, `binary_code_audit` is added: what `evaluate` derives from `request.code`.
     let (audit, required_checks) = policy.scope(&ScopeInput {
         mode: Mode::Static,
@@ -563,7 +590,7 @@ pub fn binary_session(
             vec![capability_table()?]
         },
         request: RunRequest {
-            code_analysis: None,
+            code_analysis: multiarch.then_some(sigil_model::CodeAnalysis::MultiarchV1),
             mode: Mode::Static,
             roots: facts.roots,
             audit,
@@ -608,6 +635,13 @@ pub fn binary_session(
             policy_time: policy_time.clone(),
         },
     };
+    if multiarch {
+        session.knowledge.push(
+            sigil_model::code_abi::V1
+                .knowledge()
+                .map_err(|e| InspectError::Internal(e.to_string()))?,
+        );
+    }
     // The container's entries first: an input over `binary_bytes` copies its state to
     // `binary.code`.
     session.coverage = binary::analyze(&session, &facts.over).map_err(InspectError::BadId)?;
@@ -620,6 +654,13 @@ pub fn binary_session(
         CodeCoverageError::Undecided(e) => InspectError::Internal(e),
     })?;
     session.coverage.extend(code_coverage);
+    if multiarch {
+        if let Some(usage) = &facts.collection_usage {
+            usage
+                .record(&mut session.request.budgets, &mut session.coverage)
+                .map_err(InspectError::BadId)?;
+        }
+    }
     session.code = code_facts(facts.code);
     let dependencies = deps::analyze(
         &session.request.roots,
