@@ -76,6 +76,74 @@ impl ReadCacheOps for Budgeted<'_> {
     }
 }
 
+/// A strict physical-read cap for discovery probes. Refuse a whole request before I/O when it
+/// does not fit; `used` includes bytes returned before any later error. Allocation accounting
+/// remains the responsibility of the enclosing `Bounded` checkpoint.
+pub(crate) struct Metered<'a, R> {
+    inner: R,
+    limit: u64,
+    used: &'a Cell<u64>,
+    exhausted: &'a Cell<bool>,
+    failed: &'a Cell<bool>,
+}
+
+impl<'a, R> Metered<'a, R> {
+    pub(crate) fn new(
+        inner: R,
+        limit: u64,
+        used: &'a Cell<u64>,
+        exhausted: &'a Cell<bool>,
+        failed: &'a Cell<bool>,
+    ) -> Self {
+        Self {
+            inner,
+            limit,
+            used,
+            exhausted,
+            failed,
+        }
+    }
+}
+
+impl<R: ReadCacheOps> ReadCacheOps for Metered<'_, R> {
+    fn len(&mut self) -> Result<u64, ()> {
+        self.inner.len()
+    }
+
+    fn seek(&mut self, pos: u64) -> Result<u64, ()> {
+        self.inner.seek(pos)
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+        if (buf.len() as u64) > self.limit.saturating_sub(self.used.get()) {
+            self.exhausted.set(true);
+            return Err(());
+        }
+        let n = match self.inner.read(buf) {
+            Ok(n) => n,
+            Err(()) => {
+                self.failed.set(true);
+                return Err(());
+            }
+        };
+        self.used.set(self.used.get().saturating_add(n as u64));
+        Ok(n)
+    }
+
+    fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<(), ()> {
+        while !buf.is_empty() {
+            match self.read(buf)? {
+                0 => {
+                    self.failed.set(true);
+                    return Err(());
+                }
+                n => buf = &mut buf[n..],
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A key of a request ReadCache has served: `(kind, offset, size or delimiter)`.
 type Key = (u8, u64, u64);
 
@@ -194,5 +262,43 @@ impl<'a, R: ReadCacheOps> ReadRef<'a> for &'a Bounded<R> {
             return Err(());
         }
         Ok(found)
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::*;
+
+    struct FailsAfterThree;
+    impl ReadCacheOps for FailsAfterThree {
+        fn len(&mut self) -> Result<u64, ()> {
+            Ok(8)
+        }
+        fn seek(&mut self, pos: u64) -> Result<u64, ()> {
+            Ok(pos)
+        }
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+            if buf.len() == 8 {
+                buf[..3].copy_from_slice(b"abc");
+                Ok(3)
+            } else {
+                Err(())
+            }
+        }
+        fn read_exact(&mut self, _buf: &mut [u8]) -> Result<(), ()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn failed_exact_read_keeps_partial_io_charge() {
+        let used = Cell::new(0);
+        let exhausted = Cell::new(false);
+        let failed = Cell::new(false);
+        let mut ops = Metered::new(FailsAfterThree, 8, &used, &exhausted, &failed);
+        assert!(ops.read_exact(&mut [0; 8]).is_err());
+        assert_eq!(used.get(), 3);
+        assert!(failed.get());
+        assert!(!exhausted.get());
     }
 }

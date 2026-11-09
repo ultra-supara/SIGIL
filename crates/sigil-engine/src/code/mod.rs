@@ -131,7 +131,7 @@ impl<'f> ArtifactAnalysis<'f> {
 
     /// Preserve the historical independent text-relocation/search caps for x86-only ELF.
     /// New multiarchitecture dispatch uses `new` or switches before work. Session-wide
-    /// mixed x86 selection remains unresolved because recognition follows collection.
+    /// collection chooses this only after discovery established an x86-only request.
     pub fn legacy(file: &'f File, size: u64, budgets: CodeBudgets) -> Self {
         let mut artifact = Self::new(file, size, budgets);
         artifact.run.legacy_x86 = true;
@@ -220,7 +220,9 @@ pub(crate) fn analyze<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let supported = e.header.e_machine(endian) == elf::EM_X86_64
         && e.header.is_class_64()
         && endian.is_little_endian();
-    analysis.slice(supported, |reader, run| {
+    let outcome = analysis.slice(supported, |reader, run| {
+        #[cfg(test)]
+        CODE_ANALYSES.with(|n| n.set(n.get() + 1));
         let container = std::mem::take(&mut e.gaps);
         let mut rec = Recorder::default();
         let refusals = e.data.refusals();
@@ -254,7 +256,22 @@ pub(crate) fn analyze<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
             run.gap(format!("code: {gap}"));
         }
         (rec.functions, rec.call_sites)
-    })
+    });
+    #[cfg(test)]
+    CODE_RUNS.with(|runs| {
+        runs.borrow_mut().push((
+            analysis.run.legacy_x86,
+            analysis.run.references,
+            analysis.run.text_references,
+        ))
+    });
+    outcome
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CODE_ANALYSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static CODE_RUNS: std::cell::RefCell<Vec<(bool, u64, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The integration tests' ELF builder (`tests/common/elf.rs`), for the unit tests' synthetic files.

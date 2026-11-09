@@ -87,6 +87,7 @@ fn a_regular_file_is_hashed_in_one_pass() {
         vec![DiscoverySource::Walk],
     );
     assert_eq!(read.outcome, ReadOutcome::Complete);
+    assert_eq!(read.hash_bytes_read, body.len() as u64);
     let artifact = read.artifact.clone().unwrap();
     assert_eq!(artifact.id.as_str(), format!("sha256:{}", sha256(&body)));
     assert_eq!(artifact.size, body.len() as u64);
@@ -130,6 +131,7 @@ fn a_file_over_the_limit_is_not_hashed() {
         }
     );
     assert!(read.artifact.is_none());
+    assert_eq!(read.hash_bytes_read, 0);
     assert_eq!(
         read.instance.as_ref().unwrap().content,
         InstanceContent::NotRead {
@@ -148,6 +150,7 @@ fn a_file_over_the_limit_is_not_hashed() {
         vec![],
     );
     assert_eq!(exact.outcome, ReadOutcome::Complete);
+    assert_eq!(exact.hash_bytes_read, 4096);
 }
 
 #[test]
@@ -175,6 +178,7 @@ fn a_file_larger_than_its_stat_size_still_stops_at_the_limit() {
         }
     );
     assert!(read.artifact.is_none());
+    assert_eq!(read.hash_bytes_read, 17);
 }
 
 #[test]

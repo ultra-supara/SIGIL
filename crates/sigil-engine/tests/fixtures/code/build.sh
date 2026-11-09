@@ -72,6 +72,7 @@ as cfg.S -o "$T/cfg.o"
 gcc -shared -nostartfiles -o "$B/cfg.so" "$T/cfg.o"
 as textrel.S -o "$T/textrel.o"
 gcc -shared -nostartfiles -Wl,-z,notext -o "$B/textrel.so" "$T/textrel.o"
+clang -shared -nostdlib -Wl,-z,notext -o "$B/shared-refs.so" shared-refs.S
 
 # Aggregate limits (review P1-2): 70,000 direct calls, with and without CFI. The generated
 # sources live in $T only, and are deleted with it.
@@ -442,6 +443,12 @@ a=$(addr $f tr) || exit 1
 o=$(readelf -rW $f | awk '$3 == "R_X86_64_64" && $5 ~ /^connect@/ { print $1 }')
 [ -n "$o" ] && [ $((0x$o)) -eq $((0x$a + 2)) ] || fail "$f: no R_X86_64_64 connect at tr+2"
 pair "$f" tr 'movabs +\$0x0,%rax$' 'call +\*%rax$'
+# shared-refs.so: one text relocation and one PLT candidate share the marked allowance.
+f=shared-refs.so
+readelf -rW "$f" | grep -Eq 'R_X86_64_64.*connect' || fail "$f: no connect text relocation"
+expect "$f" shared_refs 1 "$CALL_CONNECT_PLT"
+a=$(addr "$f" shared_refs) || exit 1
+fde_end "$f" "$a" > /dev/null || fail "$f: no FDE starts at shared_refs"
 # many*.so: 70,000 calls of connect's stub, filling .text; many.so has an FDE at many and ld's
 # .plt FDE, many-noeh.so has no FDE.
 for f in many.so many-noeh.so; do
@@ -465,6 +472,7 @@ done
 
 for f in *.o *.so net-pie net-nopie net-nopie-addr; do
   case "$f" in
+    shared-refs.so) objdump -dr --no-show-raw-insn "$f" > "$f.objdump" || fail "objdump -dr $f" ;;
     many*) objdump -dr "$f" > "$T/$f.full" || fail "objdump -dr $f"
            head -60 "$T/$f.full" > "$f.objdump" ;;
     *) objdump -dr "$f" > "$f.objdump" || fail "objdump -dr $f" ;;

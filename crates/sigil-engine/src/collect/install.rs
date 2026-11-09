@@ -53,6 +53,7 @@ impl Default for InstallBudgets {
 /// What the install scan found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallFacts {
+    pub collection_usage: Option<super::code_collection::CollectionUsage>,
     /// Recognition only; unstable reads still supply no code or inventory witnesses.
     pub recognized_multiarch: bool,
     /// The canonical path SafeFs opened, or the path as given when it could not be opened.
@@ -109,6 +110,15 @@ fn collect_with(
     budgets: InstallBudgets,
     during_read: &dyn Fn(&RelPath),
 ) -> Result<InstallFacts, String> {
+    collect_strategy(dir, budgets, during_read, true)
+}
+
+fn collect_strategy(
+    dir: &Path,
+    budgets: InstallBudgets,
+    during_read: &dyn Fn(&RelPath),
+    deferred: bool,
+) -> Result<InstallFacts, String> {
     let root = RootId::new(INSTALL_ROOT).map_err(|e| e.to_string())?;
     let check = CheckId::new(ARTIFACTS_DISCOVERY).map_err(|e| e.to_string())?;
     let scanning = Scanning::embedded().map_err(|e| format!("internal error: {e}"))?;
@@ -139,6 +149,11 @@ fn collect_with(
         scanning,
         parsed: BTreeMap::new(),
         recognized_multiarch: false,
+        collection: budgets
+            .binary
+            .code
+            .filter(|_| deferred)
+            .map(|_| super::code_collection::Collection::new(budgets.bytes)),
     };
     let state = match opened {
         Err(RootError::NotFound) => CoverageState::Unavailable {
@@ -152,11 +167,16 @@ fn collect_with(
         },
         Ok(()) => {
             c.places()?;
+            if let Some(collection) = c.collection.as_mut() {
+                collection.analyze(c.binary, c.scanning, &mut c.instances, &mut c.parsed);
+                c.recognized_multiarch = collection.multiarch;
+            }
             c.state()
         }
     };
     let (binaries, code, scans) = super::binread::binaries(c.parsed, &mut c.artifacts);
     Ok(InstallFacts {
+        collection_usage: c.collection.map(|c| c.usage),
         recognized_multiarch: c.recognized_multiarch,
         root_path,
         root_id,
@@ -177,6 +197,7 @@ fn collect_with(
 }
 
 struct Collector<'a> {
+    collection: Option<super::code_collection::Collection>,
     recognized_multiarch: bool,
     fs: &'a SafeFs,
     root: RootId,
@@ -443,18 +464,31 @@ impl Collector<'_> {
                 },
             );
         }
-        let read = super::binread::read(
-            self.fs,
-            &self.root,
-            &entry.rel,
-            left,
-            vec![DiscoverySource::Walk],
-            self.binary,
-            self.scanning,
-            &mut self.parsed,
-            self.during_read,
-            &mut self.recognized_multiarch,
-        );
+        let read = if let Some(collection) = self.collection.as_mut() {
+            collection.discover(
+                self.fs,
+                &self.root,
+                &entry.rel,
+                left,
+                vec![DiscoverySource::Walk],
+                self.binary,
+                self.scanning,
+                self.during_read,
+            )
+        } else {
+            super::binread::read(
+                self.fs,
+                &self.root,
+                &entry.rel,
+                left,
+                vec![DiscoverySource::Walk],
+                self.binary,
+                self.scanning,
+                &mut self.parsed,
+                self.during_read,
+                &mut self.recognized_multiarch,
+            )
+        };
         let Some(instance) = read.instance else {
             self.errors
                 .push(format!("{}: {:?}", entry.rel.display(), read.outcome));
@@ -491,11 +525,63 @@ impl Collector<'_> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
+    use std::path::Path;
 
     use sigil_model::{CoverageState, Stability};
 
     use super::{collect_with, InstallBudgets};
     use crate::collect::fs::RelPath;
+
+    #[test]
+    fn deferred_install_alias_preserves_legacy_facts_without_repeating_code() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = d.path().join("lib/ollama");
+        std::fs::create_dir_all(&lib).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/values.so");
+        std::fs::copy(&source, lib.join("libcudart.so.12")).unwrap();
+        std::fs::copy(&source, lib.join("ordinary.so")).unwrap();
+        for parse in [0, 512, 4096, 64 << 20] {
+            for code in [0, 128, 256 << 20] {
+                let mut budgets = InstallBudgets::default();
+                budgets.binary.parse_bytes = parse;
+                budgets.binary.code = Some(crate::code::CodeBudgets {
+                    bytes: code,
+                    ..Default::default()
+                });
+                let legacy = super::collect_strategy(d.path(), budgets, &|_| {}, false).unwrap();
+                crate::code::CODE_ANALYSES.with(|n| n.set(0));
+                let mut actual = super::collect_with_code(d.path(), budgets).unwrap();
+                assert!(crate::code::CODE_ANALYSES.with(|n| n.get()) <= 1);
+                actual.collection_usage = None;
+                assert_eq!(actual, legacy, "parse={parse}, code={code}");
+            }
+        }
+    }
+
+    #[test]
+    fn installation_selects_mixed_work_mode_before_either_input_order() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let x86 = manifest.join("tests/fixtures/code/shared-refs.so");
+        let a64 = manifest.join("tests/fixtures/code-aarch64/elf-clang-plt.so");
+        for reverse in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(d.path().join("bin")).unwrap();
+            std::fs::create_dir_all(d.path().join("lib/ollama")).unwrap();
+            let (first, second) = if reverse { (&a64, &x86) } else { (&x86, &a64) };
+            std::fs::copy(first, d.path().join("bin/ollama")).unwrap();
+            std::fs::copy(second, d.path().join("lib/ollama/next.so")).unwrap();
+            let mut budgets = InstallBudgets::default();
+            budgets.binary.code = Some(crate::code::CodeBudgets {
+                references: 1,
+                ..Default::default()
+            });
+            crate::code::CODE_RUNS.with(|r| r.borrow_mut().clear());
+            let facts = super::collect_with_code(d.path(), budgets).unwrap();
+            assert!(facts.recognized_multiarch);
+            let runs = crate::code::CODE_RUNS.with(|r| r.borrow().clone());
+            assert_eq!(runs, [(false, 1, 0)]);
+        }
+    }
 
     /// A link retargeted between its two `readlinkat`: its target is never read, so only the
     /// second `readlinkat` can see the change.

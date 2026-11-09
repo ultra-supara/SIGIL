@@ -93,7 +93,8 @@ pub(crate) fn read(
                 // A newly scannable alias may need identity/container work, but stable
                 // A64 content's code has already used its artifact budget exactly once.
                 // Preserve legacy x86 code-before-scan cache consumption and outcomes.
-                // Mixed-session x86 budget selection remains an issue48 integration gap.
+                // Code-enabled production collection groups aliases before entering its
+                // parser; this historical path also remains the compatibility-test oracle.
                 let cached = before.get(input.artifact).filter(|p| {
                     p.slices
                         .iter()
