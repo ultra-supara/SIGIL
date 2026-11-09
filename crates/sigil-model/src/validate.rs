@@ -2793,6 +2793,12 @@ impl<'a> Validator<'a> {
                             "Mach-O CPU type disagrees with the slice architecture".to_string(),
                         );
                     }
+                    if !macho.fat_gaps.is_empty()
+                        && (artifact.format != crate::artifact::Format::MachOFat
+                            || !crate::code_coverage::valid_gaps(&macho.fat_gaps))
+                    {
+                        why.push("fat container gaps require a fat artifact and sorted unique nonempty diagnostics".into());
+                    }
                     // A fat slice's own header names its table entry's architecture, and no other
                     // slice of the table names it, or the slice has the parser's gap.
                     if let Some((fat_type, fat_subtype)) =
@@ -2942,7 +2948,10 @@ impl<'a> Validator<'a> {
                 && slices
                     .iter()
                     .all(|slice| self.index.binaries.contains_key(slice.as_str()));
-            let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
+            let clean = s
+                .binaries
+                .iter()
+                .all(|f| f.container_gaps().next().is_none());
             if !(discovery && covered && clean) {
                 self.errors.push(ValidationError::Binary {
                     slice: "*".to_string(),

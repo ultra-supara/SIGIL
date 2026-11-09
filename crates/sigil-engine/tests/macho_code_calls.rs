@@ -451,18 +451,56 @@ fn tail_calls_and_got_calls_require_actual_decoded_targets() {
     }
 }
 #[test]
-fn real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor() {
+fn real_healthy_fat_sibling_survives_unparsed_lost_or_budget_limited_sibling() {
     use common::macho::{fat32, AARCH64, X86_64};
     let thin = fixture("x86-classic");
-    for invalid in [false, true] {
-        let mut bytes = fat32(&[
-            (fixture("arm64-chained"), AARCH64, 0),
-            (thin[..8].to_vec(), X86_64, 3),
-        ]);
+    for failure in ["unparsed", "lost", "budget"] {
+        let invalid = failure == "lost";
+        let second = if failure == "budget" {
+            common::macho::thin(
+                true,
+                false,
+                X86_64,
+                3,
+                &[common::macho::command(0x777, 1 << 20, false)],
+            )
+        } else {
+            thin[..8].to_vec()
+        };
+        let mut bytes = fat32(&[(fixture("arm64-chained"), AARCH64, 0), (second, X86_64, 3)]);
         if invalid {
             bytes[40..44].copy_from_slice(&0u32.to_be_bytes());
         }
-        let p = analyze(&bytes, Default::default());
+        let parse_limit = if failure == "budget" {
+            64 << 10
+        } else {
+            64 << 20
+        };
+        let p = {
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            f.write_all(&bytes).unwrap();
+            parse_artifact(
+                f.as_file(),
+                bytes.len() as u64,
+                &Sha256Hex::new(format!("{:x}", Sha256::digest(&bytes))).unwrap(),
+                &bytes[..4],
+                BinaryBudgets {
+                    parse_bytes: parse_limit,
+                    code: Some(Default::default()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap()
+        };
+        assert!(
+            p.slices[0].gaps.is_empty(),
+            "{failure}: {:?}",
+            p.slices[0].gaps
+        );
+        assert!(
+            matches!(&p.slices[0].container, Some(sigil_model::ContainerFacts::MachO(m)) if !m.fat_gaps.is_empty())
+        );
         let (_, calls, gaps, _) = code(&p, 0);
         assert_eq!(calls.len(), 2, "{gaps:?}");
         assert!(
@@ -470,12 +508,13 @@ fn real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor() {
             "sibling gaps must not poison healthy code: {gaps:?}"
         );
         assert_eq!(p.slices.len(), if invalid { 1 } else { 2 });
-        if invalid {
+        if invalid || failure == "budget" {
             assert!(matches!(
                 p.code_inventory,
                 sigil_model::CodeSliceInventory::Partial { .. }
             ));
-        } else {
+        }
+        if failure == "unparsed" {
             let (_, c, g, used) = code(&p, 1);
             assert!(c.is_empty());
             assert_eq!(g, ["code: slice not parsed"]);
@@ -487,6 +526,7 @@ fn real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor() {
         std::fs::write(dir.path().join("bin/ollama"), bytes).unwrap();
         let mut budgets = sigil_engine::collect::install::InstallBudgets::default();
         budgets.binary.code = Some(Default::default());
+        budgets.binary.parse_bytes = parse_limit;
         let facts = sigil_engine::collect::install::collect_with_code(dir.path(), budgets).unwrap();
         assert!(facts.code.iter().any(
             |(_, c)| matches!(c,CodeOutcome::Analyzed {call_sites,..} if call_sites.len()==2)
@@ -540,6 +580,21 @@ fn real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor() {
         assert_eq!(named.code, install.code);
         for (session, check) in [(named, "binary.code"), (install, "artifacts.code")] {
             assert_eq!(session.code[0].call_sites.len(), 2);
+            let good = session.artifacts[0]
+                .slices
+                .iter()
+                .find(|s| s.arch == sigil_model::Arch::Aarch64)
+                .unwrap();
+            assert!(session
+                .binaries
+                .iter()
+                .find(|b| b.slice == good.id)
+                .unwrap()
+                .gaps
+                .is_empty());
+            assert!(session.coverage.iter().any(|c| c.check.as_str() == check
+                && c.scope == sigil_model::Ref::Slice(good.id.clone())
+                && c.state == sigil_model::CoverageState::Complete));
             assert!(session
                 .coverage
                 .iter()
@@ -548,6 +603,15 @@ fn real_healthy_fat_sibling_survives_unparsed_or_lost_descriptor() {
                 })
                 .all(|c| matches!(c.state, sigil_model::CoverageState::Partial { .. })));
             session.validate().unwrap();
+            if failure == "budget" {
+                let mut forged = session.clone();
+                forged.artifacts[0].code_slice_inventory =
+                    Some(sigil_model::CodeSliceInventory::Complete);
+                assert!(
+                    forged.validate().is_err(),
+                    "shared parse refusal requires Partial inventory"
+                );
+            }
             let json = session.to_canonical_json().unwrap();
             let saved: sigil_model::Session = serde_json::from_str(&json).unwrap();
             saved.validate().unwrap();

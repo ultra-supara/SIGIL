@@ -102,6 +102,7 @@ pub fn fat() -> Session {
             fat_cpu_type: Some(cpu),
             fat_cpu_subtype: Some(subtype),
             fat_alignment: Some(0),
+            fat_gaps: vec![],
             file_type: 2,
             flags: 0,
             uuid: None,

@@ -53,6 +53,91 @@ fn table_budget_exhaustion_is_partial_inventory_even_with_a_hashable_sibling() {
         CodeSliceInventory::Partial { missing } if !missing.is_empty()));
 }
 
+#[test]
+fn later_slice_parse_budget_failure_keeps_the_healthy_sibling_complete() {
+    use common::macho::*;
+    for code in [false, true] {
+        for (first, second) in [(AARCH64, X86_64), (X86_64, AARCH64)] {
+            let bytes = fat32(&[
+                (thin(true, false, first, 0, &[]), first, 0),
+                (thin(true, false, second, 0, &[]), second, 0),
+            ]);
+            // Shared cache charges: count 132 + table 176 + ten fields 132 each,
+            // then first slice's magic 132 and header 160. No allowance remains for slice 2.
+            let p = parse(&bytes, code, 1920);
+            assert!(p.slices[0].container.is_some());
+            assert!(
+                p.slices[0].gaps.is_empty(),
+                "healthy sibling: {:?}",
+                p.slices[0].gaps
+            );
+            assert!(p.slices[1].container.is_none());
+            assert!(matches!(
+                p.code_inventory,
+                CodeSliceInventory::Partial { .. }
+            ));
+        }
+    }
+}
+
+#[test]
+fn command_budget_refusal_is_local_even_when_both_headers_were_read() {
+    use common::macho::*;
+    let bytes = fat32(&[
+        (thin(true, false, AARCH64, 0, &[]), AARCH64, 0),
+        (
+            thin(true, false, X86_64, 3, &[uuid_command(false)]),
+            X86_64,
+            3,
+        ),
+    ]);
+    // The same table and first slice as above, plus the second magic/header (292 bytes).
+    let p = parse(&bytes, true, 2212);
+    assert!(p.slices.iter().all(|s| s.container.is_some()));
+    assert!(p.slices[0].gaps.is_empty());
+    assert!(p.slices[1]
+        .gaps
+        .iter()
+        .any(|g| g.starts_with("binary_parse_bytes:")));
+    assert!(
+        matches!(&p.slices[1].code, Some(sigil_engine::code::CodeOutcome::Analyzed { gaps, .. })
+        if gaps.iter().any(|g| g.contains("binary_parse_bytes:")))
+    );
+    assert!(matches!(
+        p.code_inventory,
+        CodeSliceInventory::Partial { .. }
+    ));
+}
+
+#[test]
+fn earlier_refusal_does_not_taint_a_later_slice_that_fits_the_remaining_budget() {
+    use common::macho::*;
+    let bytes = fat32(&[
+        (
+            thin(true, false, AARCH64, 0, &[command(0x777, 8192, false)]),
+            AARCH64,
+            0,
+        ),
+        (thin(true, false, X86_64, 3, &[]), X86_64, 3),
+    ]);
+    // The large first command is refused without charging its allocation. The remaining
+    // 292 bytes still cover the second header, despite an already nonzero refusal count.
+    let p = parse(&bytes, true, 2212);
+    assert!(p.slices[0]
+        .gaps
+        .iter()
+        .any(|g| g.starts_with("binary_parse_bytes:")));
+    assert!(p.slices[1].container.is_some());
+    assert!(p.slices[1].gaps.is_empty(), "{:?}", p.slices[1].gaps);
+    assert!(
+        matches!(&p.slices[1].container, Some(ContainerFacts::MachO(m)) if !m.fat_gaps.is_empty())
+    );
+    assert!(matches!(
+        p.code_inventory,
+        CodeSliceInventory::Partial { .. }
+    ));
+}
+
 // Compile the production private metadata reader, as the decoder adapter tests do.
 #[allow(dead_code)]
 #[path = "../src/code/reader.rs"]
@@ -317,9 +402,10 @@ fn invalid_and_unparsed_descriptors_keep_independent_sibling_and_typed_inventory
     assert_eq!(p.slices.len(), 2);
     assert!(p.slices[1].container.is_none());
     assert!(matches!(p.code_inventory, CodeSliceInventory::Complete));
+    assert!(p.slices[0].gaps.is_empty());
     assert!(
-        !p.slices[0].gaps.is_empty(),
-        "legacy sibling diagnostic retained"
+        matches!(&p.slices[0].container, Some(ContainerFacts::MachO(m)) if !m.fat_gaps.is_empty()),
+        "enclosing fat diagnostic is retained separately"
     );
     check_collection(&unparsed, 2, false);
     let mut invalid = good;

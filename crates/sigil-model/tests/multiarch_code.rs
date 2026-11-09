@@ -13,6 +13,58 @@ fn legacy() -> Session {
 }
 
 #[test]
+fn fat_scope_gaps_leave_children_complete_but_require_partial_parents() {
+    let mut s = coverage_support::fat();
+    let gap = "binary_parse_bytes: 1920 exceeded".to_string();
+    s.request.budgets.insert("binary_parse_bytes".into(), 1920);
+    for b in &mut s.binaries {
+        let ContainerFacts::MachO(m) = &mut b.container else {
+            panic!()
+        };
+        m.fat_gaps = vec![gap.clone()];
+        assert!(b.gaps.is_empty());
+        assert!(!sigil_model::code_coverage::imports_incomplete(b));
+    }
+    s.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Partial {
+        missing: vec![
+            gap.clone(),
+            sigil_model::code_coverage::CODE_INVENTORY_INCOMPLETE.into(),
+        ],
+    });
+    let children = s
+        .coverage
+        .iter()
+        .filter(|c| c.check.as_str() == BINARY_CODE && matches!(c.scope, Ref::Slice(_)))
+        .collect::<Vec<_>>();
+    assert!(children.iter().all(|c| c.state == CoverageState::Complete));
+    let (state, use_) =
+        sigil_model::code_coverage::aggregate_code_slices(&s.artifacts[0], &children, 10).unwrap();
+    coverage_support::parent(&mut s, state, use_.map(|b| b.used));
+    let expected = expected_binary_container(&s, &s.instances[0])
+        .unwrap()
+        .into_state(0);
+    assert!(matches!(expected, CoverageState::Partial { .. }));
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CONTAINER)
+        .unwrap()
+        .state = expected;
+    coverage_support::completeness(&mut s);
+    s.validate().unwrap();
+    let mut forged = s.clone();
+    forged.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Complete);
+    coverage_support::parent(&mut forged, CoverageState::Complete, Some(8));
+    assert!(forged.validate().is_err());
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CONTAINER)
+        .unwrap()
+        .state = CoverageState::Complete;
+    coverage_support::completeness(&mut s);
+    assert!(s.validate().is_err());
+}
+
+#[test]
 fn marker_and_new_register_spellings_are_readable() {
     let mut value = serde_json::to_value(legacy()).unwrap();
     value["request"]["code_analysis"] = json!("multiarch-v1");
@@ -147,6 +199,7 @@ fn macho(arch: Arch) -> Session {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 2,
         flags: 0,
         uuid: None,

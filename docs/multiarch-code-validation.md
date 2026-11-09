@@ -262,3 +262,33 @@ validates and verifies the one denied-network violation with two call witnesses.
 This supplement adds no runtime claim and does not exhaust all executable,
 fixup and fat combinations. Task10/P5b/Task19 and the other unmet gates above
 remain open. The original Task1 corpus and all old goldens are unchanged.
+
+### PR #130 review: slice attribution of shared parse failures (2026-11-09)
+
+The shared `Bounded` reader and artifact-wide parse limit are retained. Each thin/fat slice
+compares `refusals()` before and after its own metadata parsing. Only new refusals become its
+local `binary_parse_bytes` gap, including the private code metadata's local gaps. A later
+slice cannot retroactively change an earlier slice's metadata/import completeness.
+
+Fat descriptor, hashing, sibling-parse and shared-budget diagnostics are stored separately in
+the optional `MachOFacts.fat_gaps` array. Empty arrays are omitted, and older sessions default
+to empty. `BinaryFacts.gaps` now describes only that slice. Container summaries combine local
+and enclosing gaps, while import/code decisions use local gaps. Installation summaries label
+enclosing diagnostics `[fat]`. The parent code inventory retains descriptor loss and budget
+failure; validation rejects forged Complete inventory even when healthy children are Complete.
+Retained but unparsed descriptors remain distinct from lost descriptors.
+
+The new boundary test was RED at 1920 bytes: the first slice had both the later slice's failure
+and the artifact-wide budget error. It now passes in both architecture orders with code on and
+off. A 2212-byte case checks that an admitted second header receives its own command-read
+refusal. Real arm64-chained calls retain a Complete child, clean local container facts and two
+call witnesses when a later x86 slice exceeds a 64-KiB shared parse limit. Both named and
+installation producers keep the parent Partial, round-trip the scoped diagnostics, and reject
+inventory tampering. Schema/serde tests cover old absent fields and populated `fat_gaps`.
+
+Final local validation (2026-11-10): the workspace tests, workspace/all-targets Clippy with
+`-D warnings`, syscall safety, pinned wasm build, native/wasm samples and viewer state tests
+passed. The scoped real-fat JSON is accepted by the wasm renderer, and forged Complete
+inventory is rejected. The 27-case canonical x86 CLI/Markdown/AI-BOM comparison against
+`a021978` still matches after timestamp normalization. Builds and tests used one job/thread
+and disk-backed temporary files; no decoder corpus experiments were repeated.

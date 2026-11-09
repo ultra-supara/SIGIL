@@ -76,12 +76,21 @@ pub struct BinaryFacts {
     /// `None`: no Go build info was found after a full search, or the search did not finish
     /// (then `gaps` says so).
     pub go: Option<GoBuildInfo>,
-    /// What could not be read, one entry per gap (`"<what>: <why>"`). Empty: every fact is read
-    /// in full or confirmed absent.
+    /// What could not be read in this slice, one entry per gap (`"<what>: <why>"`). Empty: its
+    /// facts are read in full or confirmed absent. Enclosing Mach-O fat gaps are separate.
     pub gaps: Vec<String>,
 }
 
 impl BinaryFacts {
+    /// Container-summary diagnostics include the enclosing fat container's gaps. The slice's
+    /// own completeness and import provenance use `gaps` alone.
+    pub fn container_gaps(&self) -> impl Iterator<Item = &String> {
+        let parent = match &self.container {
+            ContainerFacts::MachO(m) => m.fat_gaps.as_slice(),
+            ContainerFacts::Elf(_) => &[],
+        };
+        self.gaps.iter().chain(parent)
+    }
     /// Whether its import list was cut short at `binary_imports`: a gap is [`imports_over_gap`]
     /// of some limit. Then the imports past the cut, and their capability hints, are not known.
     pub fn imports_cut_short(&self) -> bool {
@@ -120,6 +129,11 @@ pub struct MachOFacts {
     pub fat_cpu_type: Option<i32>,
     pub fat_cpu_subtype: Option<i32>,
     pub fat_alignment: Option<u32>,
+    /// Diagnostics of the enclosing fat container, not this slice's parsing. Retained
+    /// separately so inventory/container summaries remain incomplete without tainting a
+    /// healthy sibling's import or code evidence. Sorted and unique; absent on thin inputs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fat_gaps: Vec<String>,
     pub file_type: u32,
     pub flags: u32,
     pub uuid: Option<String>,

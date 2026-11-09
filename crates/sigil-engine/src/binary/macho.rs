@@ -324,6 +324,7 @@ fn empty_facts() -> MachOFacts {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 0,
         flags: 0,
         uuid: None,
@@ -432,6 +433,7 @@ fn parse_commands<R: object::read::ReadCacheOps>(
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: header.file_type,
         flags: header.flags,
         ..empty_facts()
@@ -901,16 +903,14 @@ fn parsed_slice(
     arch: Arch,
     sha256: Sha256Hex,
     parsed: Parsed,
-    extra_gaps: &[String],
 ) -> ParsedSlice {
-    let macho_code = Some(MachCodeMetadata {
-        local_gaps: parsed.gaps.clone(),
-        ambiguous: false,
-    });
     let mut gaps = parsed.gaps;
-    gaps.extend(extra_gaps.iter().cloned());
     gaps.sort();
     gaps.dedup();
+    let macho_code = Some(MachCodeMetadata {
+        local_gaps: gaps.clone(),
+        ambiguous: false,
+    });
     ParsedSlice {
         macho_code,
         offset,
@@ -979,11 +979,13 @@ pub(super) fn parse_artifact(
     let (format, fat_parsed) = recognize_with_data(&data, size, prefix)?;
     let mut slices = vec![];
     let mut inventory_gaps = vec![];
+    let mut fat_gaps = vec![];
     // The names' budget is the file's: every slice of a fat file draws on it.
     let mut names = imports::MAX_NAME_SCAN;
     match format {
         Format::MachO => {
-            if let Ok((slice_arch, parsed)) = parse_thin(
+            let before = data.refusals();
+            if let Ok((slice_arch, mut parsed)) = parse_thin(
                 &data,
                 0,
                 size,
@@ -991,13 +993,17 @@ pub(super) fn parse_artifact(
                 &mut names,
                 budgets.code.is_some(),
             ) {
+                if data.refusals() > before {
+                    parsed
+                        .gaps
+                        .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+                }
                 slices.push(parsed_slice(
                     0,
                     size,
                     slice_arch,
                     artifact_sha256.clone(),
                     parsed,
-                    &[],
                 ));
             }
         }
@@ -1015,6 +1021,7 @@ pub(super) fn parse_artifact(
                         continue;
                     }
                 };
+                let before = data.refusals();
                 match fat_slice_facts(
                     &data,
                     &descriptor,
@@ -1022,7 +1029,15 @@ pub(super) fn parse_artifact(
                     &mut names,
                     budgets.code.is_some(),
                 ) {
-                    Ok(parsed) => {
+                    Ok(mut parsed) => {
+                        if data.refusals() > before {
+                            parsed
+                                .gaps
+                                .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+                        }
+                        if descriptor.ambiguous {
+                            parsed.gaps.push(FAT_DUPLICATE_ARCH_GAP.into());
+                        }
                         let mismatch = matches!(&parsed.container, ContainerFacts::MachO(m)
                             if macho_architecture(m.cpu_type, m.cpu_subtype)
                                 != macho_architecture(descriptor.cpu_type, descriptor.cpu_subtype));
@@ -1035,7 +1050,6 @@ pub(super) fn parse_artifact(
                             expected_arch,
                             digest,
                             parsed,
-                            &[],
                         );
                         if let Some(local) = &mut slice.macho_code {
                             local.ambiguous = descriptor.ambiguous || mismatch;
@@ -1044,37 +1058,38 @@ pub(super) fn parse_artifact(
                     }
                     Err(why) => {
                         gaps.push(format!("fat slice at {}: {why}", descriptor.offset));
-                        slices.push(unparsed_slice(
+                        let mut slice = unparsed_slice(
                             descriptor.offset,
                             descriptor.size,
                             expected_arch,
                             digest,
-                        ));
+                        );
+                        if data.refusals() > before {
+                            slice
+                                .gaps
+                                .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+                        }
+                        slices.push(slice);
                     }
                 }
             }
+            if data.refused() {
+                gaps.push(format!("binary_parse_bytes: {} exceeded", data.budget()));
+            }
             gaps.sort();
             gaps.dedup();
-            for slice in &mut slices {
-                if slice.container.is_some() {
-                    slice.gaps.extend(gaps.iter().cloned());
-                    slice.gaps.sort();
-                    slice.gaps.dedup();
-                }
-            }
+            fat_gaps = gaps;
         }
         _ => return None,
     }
     if data.refused() {
         inventory_gaps.push(format!("binary_parse_bytes: {} exceeded", data.budget()));
-        for slice in &mut slices {
-            if slice.container.is_some() {
-                slice
-                    .gaps
-                    .push(format!("binary_parse_bytes: {} exceeded", data.budget()));
-                slice.gaps.sort();
-                slice.gaps.dedup();
-            }
+    }
+    for slice in &mut slices {
+        slice.gaps.sort();
+        slice.gaps.dedup();
+        if let Some(ContainerFacts::MachO(m)) = &mut slice.container {
+            m.fat_gaps = fat_gaps.clone();
         }
     }
     if let Some(code_budgets) = budgets.code {
@@ -1174,7 +1189,10 @@ mod code_metadata_tests {
             (thin(arm, 0), arm, 0),
             (vec![0xcf, 0xfa, 0xed, 0xfe], x86, 3),
         ]);
-        assert!(!p.slices[0].gaps.is_empty());
+        assert!(p.slices[0].gaps.is_empty());
+        assert!(
+            matches!(&p.slices[0].container, Some(ContainerFacts::MachO(m)) if !m.fat_gaps.is_empty())
+        );
         assert!(p.slices[0]
             .macho_code
             .as_ref()

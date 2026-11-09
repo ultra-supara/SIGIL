@@ -67,11 +67,18 @@ pub fn analyze(facts: &InstallFacts) -> Result<(Coverage, Vec<Relation>), String
                 for slice in &a.slices {
                     match facts.binaries.iter().find(|b| b.slice == slice.id) {
                         None => missing.push(format!("{path}: {}: not parsed", slice.arch.name())),
-                        Some(b) => missing.extend(
-                            b.gaps
-                                .iter()
-                                .map(|gap| format!("{path} [{}]: {gap}", slice.arch.name())),
-                        ),
+                        Some(b) => {
+                            missing.extend(
+                                b.gaps
+                                    .iter()
+                                    .map(|gap| format!("{path} [{}]: {gap}", slice.arch.name())),
+                            );
+                            if let ContainerFacts::MachO(m) = &b.container {
+                                missing.extend(
+                                    m.fat_gaps.iter().map(|gap| format!("{path} [fat]: {gap}")),
+                                );
+                            }
+                        }
                     }
                 }
             }
