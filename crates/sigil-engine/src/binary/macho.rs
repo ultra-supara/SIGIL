@@ -212,6 +212,31 @@ pub(super) fn recognize_file(file: &File, size: u64, prefix: &[u8], parse_bytes:
     recognize_with_data(&data, size, prefix).is_some()
 }
 
+pub(super) fn probe_file(
+    file: &File,
+    size: u64,
+    prefix: &[u8],
+    parse_bytes: u64,
+    io_limit: u64,
+) -> super::MultiarchProbe {
+    let used = std::cell::Cell::new(0);
+    let exhausted = std::cell::Cell::new(false);
+    let failed = std::cell::Cell::new(false);
+    let ops = super::read::Metered::new(
+        Budgeted::new(file, size),
+        io_limit,
+        &used,
+        &exhausted,
+        &failed,
+    );
+    let data = Bounded::new(ops, size, parse_bytes);
+    let recognized = recognize_with_data(&data, size, prefix).is_some();
+    super::MultiarchProbe {
+        recognized: (!exhausted.get() && !failed.get()).then_some(recognized),
+        bytes_read: used.get(),
+    }
+}
+
 fn u32_at<R: object::read::ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,

@@ -95,6 +95,33 @@ pub fn recognizes_multiarch(file: &File, size: u64, prefix: &[u8], parse_bytes: 
     macho::recognize_file(file, size, prefix, parse_bytes)
 }
 
+/// Result of a discovery probe. An absent recognition result means the I/O limit was reached
+/// or an I/O error prevented a reliable decision; it must not be treated as a legacy decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultiarchProbe {
+    pub recognized: Option<bool>,
+    /// Actual bytes returned by reads made by this probe, including reads before failure.
+    pub bytes_read: u64,
+}
+
+/// Probe using a strict additional I/O limit. The caller must also account for the prefix read.
+/// This function does not itself establish file stability.
+pub fn probe_multiarch(
+    file: &File,
+    size: u64,
+    prefix: &[u8],
+    parse_bytes: u64,
+    io_limit: u64,
+) -> MultiarchProbe {
+    if let Some((_, arch)) = header::read(prefix) {
+        return MultiarchProbe {
+            recognized: Some(arch == Arch::Aarch64),
+            bytes_read: 0,
+        };
+    }
+    macho::probe_file(file, size, prefix, parse_bytes, io_limit)
+}
+
 /// Parses the ELF content of `file` (of `size` bytes, from the read's `fstat`), and analyzes its
 /// code on the same fd when `budgets.code` asks for it. Never fails: what cannot be read is a gap.
 /// No signature scan: [`parse_artifact`] scans with the needles it is given.
