@@ -63,6 +63,45 @@ fn one_file_named_twice_is_one_input_and_one_content_is_parsed_once() {
 }
 
 #[test]
+fn x86_alias_order_matches_scannable_content_at_small_budgets() {
+    let (_d, p) = dir();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code/spawn.so");
+    let hidden = p.join("libcudart.so.12");
+    let scanned = p.join("ordinary.so");
+    std::fs::copy(&source, &hidden).unwrap();
+    std::fs::copy(&source, &scanned).unwrap();
+    for parse_bytes in [0, 512, 4096, 64 << 20] {
+        for code_bytes in [0, 128, 256 << 20] {
+            let mut budgets = NamedBudgets::default();
+            budgets.binary.parse_bytes = parse_bytes;
+            budgets.binary.code = Some(sigil_engine::code::CodeBudgets {
+                bytes: code_bytes,
+                ..Default::default()
+            });
+            let baseline = collect(std::slice::from_ref(&scanned), budgets).unwrap();
+            for paths in [
+                vec![hidden.clone(), scanned.clone()],
+                vec![scanned.clone(), hidden.clone()],
+            ] {
+                let actual = collect(&paths, budgets).unwrap();
+                assert_eq!(
+                    actual.binaries, baseline.binaries,
+                    "parse={parse_bytes}, code={code_bytes}, paths={paths:?}"
+                );
+                assert_eq!(
+                    actual.code, baseline.code,
+                    "parse={parse_bytes}, code={code_bytes}, paths={paths:?}"
+                );
+                assert_eq!(
+                    actual.scans, baseline.scans,
+                    "parse={parse_bytes}, code={code_bytes}, paths={paths:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn inputs_that_cannot_be_read_are_fatal() {
     let (_d, p) = dir();
     std::fs::create_dir(p.join("dir")).unwrap();
