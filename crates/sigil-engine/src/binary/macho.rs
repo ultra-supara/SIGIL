@@ -207,6 +207,11 @@ fn recognize_with_data<R: ReadCacheOps>(
     Some((format, fat_parsed))
 }
 
+pub(super) fn recognize_file(file: &File, size: u64, prefix: &[u8], parse_bytes: u64) -> bool {
+    let data = Bounded::new(Budgeted::new(file, size), size, parse_bytes);
+    recognize_with_data(&data, size, prefix).is_some()
+}
+
 fn u32_at<R: object::read::ReadCacheOps>(
     data: &Bounded<R>,
     base: u64,

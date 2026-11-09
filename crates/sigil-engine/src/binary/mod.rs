@@ -82,6 +82,19 @@ pub struct ParsedArtifact {
     pub code_inventory: sigil_model::CodeSliceInventory,
 }
 
+/// Probe the same ELF and Mach-O recognition rules used by [`parse_artifact`], without code
+/// analysis or retaining container facts. `prefix` must contain the first 64 bytes, or the whole
+/// file when shorter. Mach-O recognition uses the supplied parser allocation budget.
+///
+/// This probe is not yet wired into collection; callers must separately bound and account for
+/// its I/O before using it as a discovery pass.
+pub fn recognizes_multiarch(file: &File, size: u64, prefix: &[u8], parse_bytes: u64) -> bool {
+    if let Some((_, arch)) = header::read(prefix) {
+        return arch == Arch::Aarch64;
+    }
+    macho::recognize_file(file, size, prefix, parse_bytes)
+}
+
 /// Parses the ELF content of `file` (of `size` bytes, from the read's `fstat`), and analyzes its
 /// code on the same fd when `budgets.code` asks for it. Never fails: what cannot be read is a gap.
 /// No signature scan: [`parse_artifact`] scans with the needles it is given.
