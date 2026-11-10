@@ -13,6 +13,7 @@
 
 mod compare;
 mod files;
+mod judged;
 mod listeners;
 mod models;
 mod outcome;

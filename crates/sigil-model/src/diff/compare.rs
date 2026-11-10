@@ -26,6 +26,7 @@ pub fn compare(
     let c = canonical(current.as_session());
     let mut found = Found::default();
     super::outcome::compare(&b, &c, &mut found);
+    super::judged::compare(&b, &c, &mut found);
     super::models::compare(&b, &c, &mut found);
     super::files::compare(&b, &c, &mut found);
     super::listeners::compare(&b, &c, &mut found);

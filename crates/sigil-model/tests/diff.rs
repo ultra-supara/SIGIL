@@ -474,3 +474,71 @@ fn listeners_of_an_observe_run_are_not_comparable_with_a_static_run() {
         open_in: Side::Baseline,
     }));
 }
+
+#[test]
+fn a_new_finding_is_reported_beside_partial_current_coverage() {
+    let mut missing = compare_store();
+    blob_missing(&mut missing); // model m's integrity is Partial in the current run
+    let diff = diff_of(&compare_store(), &missing);
+    assert!(diff.changes.contains(&Change::FindingNew {
+        rule: id("model.blob_missing"),
+        subject: SubjectKey::Model(id(MODEL_M)),
+        at: "#1".to_string(),
+        current: vec![id(&format!("finding:model.blob_missing@{MODEL_M}#1"))],
+    }));
+}
+
+#[test]
+fn a_resolved_finding_needs_the_current_side_closed() {
+    let mut missing = compare_store();
+    blob_missing(&mut missing);
+    assert!(has(&diff_of(&missing, &compare_store()), "FindingResolved"));
+    let mut open = compare_store();
+    inventory_partial(&mut open);
+    let diff = diff_of(&missing, &open);
+    assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::Finding {
+            rule: id("model.blob_missing"),
+            subject: SubjectKey::Model(id(MODEL_M)),
+            at: "#1".to_string(),
+        },
+        checks: ids(&[INTEGRITY, INVENTORY, LICENSE]),
+        open_in: Side::Current,
+    }));
+}
+
+#[test]
+fn an_exposure_finding_on_a_new_socket_is_the_same_finding() {
+    let mut a = compare_store();
+    bind_wildcard(&mut a, 7002);
+    let mut b = compare_store();
+    bind_wildcard(&mut b, 7003);
+    let diff = diff_of(&a, &b);
+    assert!(diff.changes.is_empty(), "{:?}", diff.changes);
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+}
+
+#[test]
+fn a_violation_is_new_or_resolved_on_its_placement() {
+    let subject = SubjectKey::Component {
+        placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+        arch: Arch::X86_64,
+        component: id("ggml-base"),
+    };
+    let slice = binary_inspect().components[0].subject.clone();
+    let diff = diff_of(&binary_inspect(), &binary_denied());
+    assert!(diff.changes.contains(&Change::ViolationNew {
+        policy_rule: id("policy:components.deny.ggml-base"),
+        subject: subject.clone(),
+        current: vec![Ref::Component {
+            slice,
+            component: id("ggml-base"),
+        }],
+    }));
+    let back = diff_of(&binary_denied(), &binary_inspect());
+    assert!(back.changes.iter().any(|c| matches!(
+        c,
+        Change::ViolationResolved { subject: s, .. } if *s == subject
+    )));
+}
