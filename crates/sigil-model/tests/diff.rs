@@ -165,3 +165,119 @@ fn a_check_with_no_entries_is_open() {
     assert_eq!(current.states.get("Complete"), Some(&2));
     assert!(current.required);
 }
+
+fn store_with_n() -> Session {
+    let mut s = compare_store();
+    add_model_n(&mut s);
+    s
+}
+
+#[test]
+fn a_model_added_or_removed_is_reported_when_the_store_was_inventoried() {
+    let added = diff_of(&compare_store(), &store_with_n());
+    assert_eq!(kinds(&added), ["ModelAdded"]);
+    assert!(added.changes.contains(&Change::ModelAdded {
+        model: id(MODEL_N),
+        name: t("n:latest"),
+    }));
+    let removed = diff_of(&store_with_n(), &compare_store());
+    assert_eq!(kinds(&removed), ["ModelRemoved"]);
+}
+
+#[test]
+fn an_open_inventory_on_the_absent_side_is_not_comparable() {
+    let mut open = compare_store();
+    inventory_partial(&mut open);
+    let diff = diff_of(&store_with_n(), &open);
+    assert!(!has(&diff, "ModelRemoved"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::Model { model: id(MODEL_N) },
+        checks: ids(&[INVENTORY]),
+        open_in: Side::Current,
+    }));
+}
+
+#[test]
+fn models_inventoried_under_different_filters_are_not_comparable() {
+    let mut one = compare_store();
+    one.request.model_filter = Some("m:latest".to_string());
+    let diff = diff_of(&store_with_n(), &one);
+    assert!(!has(&diff, "ModelRemoved"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::Model { model: id(MODEL_N) },
+        checks: ids(&[INVENTORY]),
+        open_in: Side::Current,
+    }));
+}
+
+#[test]
+fn a_layer_is_matched_by_role_media_type_and_position() {
+    let mut replaced = compare_store();
+    weights_replaced(&mut replaced);
+    let diff = diff_of(&compare_store(), &replaced);
+    assert_eq!(
+        diff.changes,
+        [Change::LayerChanged {
+            model: id(MODEL_M),
+            role: LayerRole::Layer,
+            media_type: Some(t(MODEL_MEDIA)),
+            ordinal: 0,
+            baseline: Some(t(&format!("sha256:{}", hex(0x12)))),
+            current: Some(t(&format!("sha256:{}", hex(0x14)))),
+        }]
+    );
+}
+
+#[test]
+fn a_removed_license_layer_is_a_license_change() {
+    let mut removed = compare_store();
+    license_removed(&mut removed);
+    let diff = diff_of(&compare_store(), &removed);
+    assert!(diff.changes.contains(&Change::LicenseChanged {
+        model: id(MODEL_M),
+        baseline: LicenseState::Spdx {
+            id: "MIT".to_string()
+        },
+        current: LicenseState::NoLayer,
+    }));
+}
+
+#[test]
+fn a_partial_model_does_not_hide_a_change_of_another() {
+    let mut after = store_with_n();
+    license_unstable(&mut after); // model m's license check is open now
+    relicense(&mut after, MODEL_N, "Apache-2.0");
+    let diff = diff_of(&store_with_n(), &after);
+    assert!(diff.changes.contains(&Change::LicenseChanged {
+        model: id(MODEL_N),
+        baseline: LicenseState::Spdx {
+            id: "MIT".to_string()
+        },
+        current: LicenseState::Spdx {
+            id: "Apache-2.0".to_string()
+        },
+    }));
+    // m recorded the same license on both sides: nothing to judge.
+    assert!(
+        !diff
+            .not_comparable
+            .iter()
+            .any(|n| n.item == Item::License { model: id(MODEL_M) }),
+        "{:?}",
+        diff.not_comparable
+    );
+}
+
+#[test]
+fn an_open_license_check_with_another_recorded_license_is_not_comparable() {
+    let mut after = compare_store();
+    license_unstable(&mut after);
+    relicense(&mut after, MODEL_M, "Apache-2.0");
+    let diff = diff_of(&compare_store(), &after);
+    assert!(!has(&diff, "LicenseChanged"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::License { model: id(MODEL_M) },
+        checks: ids(&[LICENSE]),
+        open_in: Side::Current,
+    }));
+}

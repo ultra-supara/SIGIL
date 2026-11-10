@@ -1,7 +1,7 @@
 //! [`compare`]: the differences between two validated sessions.
 
-use crate::diff::{Change, Diff, DiffSchema, DiffSide, NotComparable};
-use crate::id::Sha256Hex;
+use crate::diff::{Change, Diff, DiffSchema, DiffSide, Item, NotComparable, Side};
+use crate::id::{CheckId, Sha256Hex};
 use crate::session::{KnowledgeKind, Session, ToolInfo};
 use crate::validate::ValidatedSession;
 
@@ -26,6 +26,7 @@ pub fn compare(
     let c = canonical(current.as_session());
     let mut found = Found::default();
     super::outcome::compare(&b, &c, &mut found);
+    super::models::compare(&b, &c, &mut found);
     let mut diff = Diff {
         schema: DiffSchema::V1,
         tool,
@@ -55,5 +56,30 @@ fn side(s: &Session, sha256: Sha256Hex) -> DiffSide {
             .iter()
             .find(|k| k.kind == KnowledgeKind::Policy)
             .cloned(),
+    }
+}
+
+impl Found {
+    /// A difference that cannot be judged: `checks` are not closed on `open_in`.
+    pub(super) fn unjudged(&mut self, item: Item, checks: Vec<CheckId>, open_in: Side) {
+        self.not_comparable.push(NotComparable {
+            item,
+            checks,
+            open_in,
+        });
+    }
+}
+
+/// Check IDs of names that are valid by construction.
+pub(super) fn checks(names: &[&str]) -> Vec<CheckId> {
+    names.iter().filter_map(|n| CheckId::new(*n).ok()).collect()
+}
+
+/// The side(s) where a check is open.
+pub(super) fn open_in(baseline_open: bool, current_open: bool) -> Side {
+    match (baseline_open, current_open) {
+        (true, true) => Side::Both,
+        (true, false) => Side::Baseline,
+        (false, _) => Side::Current,
     }
 }
