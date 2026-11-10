@@ -4008,6 +4008,35 @@ fn compare_never_writes_an_input() {
     assert_eq!(r.code, 2, "{}", r.stderr);
     assert!(r.stderr.contains("hard link"), "{}", r.stderr);
     assert_eq!(fs::read(&baseline).unwrap(), before);
+    // A symlink to an input, and the current input itself, are refused all the same.
+    let symlink = dir.path().join("symlink.json");
+    std::os::unix::fs::symlink(&baseline, &symlink).unwrap();
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--out",
+        &symlink,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert_eq!(fs::read(&baseline).unwrap(), before);
+    assert!(fs::symlink_metadata(&symlink).unwrap().is_symlink());
+    let current_copy = dir.path().join("current.json");
+    fs::copy(&current, &current_copy).unwrap();
+    let current_before = fs::read(&current_copy).unwrap();
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current_copy,
+        &"--out",
+        &current_copy,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert_eq!(fs::read(&current_copy).unwrap(), current_before);
     let out = dir.path().join("out/diff.md");
     let r = run(&[
         &"compare",
