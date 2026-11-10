@@ -74,21 +74,28 @@ fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
     }
 }
 
-/// What tells apart findings of one rule on one subject (a layer, `#1`): the rest of the ID
-/// after `finding:<rule>@<subject>`. An ID of another form is kept whole.
+/// What tells apart findings of one rule on one subject (a layer, `#1`): the ID after
+/// `finding:<rule>@` (an ID of another form whole), without the subject's own ID in front (a
+/// model, instance, root, listener or slice; a component's slice). Then every other occurrence
+/// of a run- or content-dependent ID of the subject (its listener or slice ID) is removed too,
+/// so a new socket or a new slice after an upgrade keeps the key.
 fn at(f: &Finding) -> String {
-    let on = match &f.subject {
-        Ref::Model(m) => m.as_str(),
-        Ref::Instance(i) => i.as_str(),
-        Ref::Root(r) => r.as_str(),
-        Ref::Listener(l) => l.as_str(),
-        _ => return f.id.as_str().to_string(),
+    let id = f.id.as_str();
+    let prefix = format!("finding:{}@", f.rule);
+    let rest = id.strip_prefix(prefix.as_str()).unwrap_or(id);
+    let (own, volatile) = match &f.subject {
+        Ref::Model(m) => (Some(m.as_str()), None),
+        Ref::Instance(i) => (Some(i.as_str()), None),
+        Ref::Root(r) => (Some(r.as_str()), None),
+        Ref::Listener(l) => (Some(l.as_str()), Some(l.as_str())),
+        Ref::Slice(s) | Ref::Component { slice: s, .. } => (Some(s.as_str()), Some(s.as_str())),
+        _ => (None, None),
     };
-    let prefix = format!("finding:{}@{on}", f.rule);
-    f.id.as_str()
-        .strip_prefix(prefix.as_str())
-        .unwrap_or(f.id.as_str())
-        .to_string()
+    let rest = own.and_then(|o| rest.strip_prefix(o)).unwrap_or(rest);
+    match volatile {
+        Some(v) => rest.replace(v, ""),
+        None => rest.to_string(),
+    }
 }
 
 /// One judged item on one side: what it is, the scope its absence is judged over and the root
@@ -395,5 +402,108 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         let root = j.root.as_ref();
         let absence = violation_recorded(b, same_policy, policy_rule, subject, root);
         judge(found, absence, &j.item, Side::Baseline, new);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifact::Arch;
+    use crate::finding::{Action, FindingKind, Severity};
+    use crate::id::{ArtifactId, ComponentKey, ListenerId, SliceId};
+
+    fn finding(rule: &str, subject: Ref, id: &str) -> Finding {
+        let (Ok(id), Ok(rule), Ok(source)) = (
+            FindingId::new(id),
+            RuleId::new(rule),
+            PolicyRuleRef::new(format!("default:{rule}")),
+        ) else {
+            panic!("valid IDs");
+        };
+        Finding {
+            id,
+            rule,
+            kind: FindingKind::Integrity,
+            subject,
+            summary: String::new(),
+            conditions: vec![],
+            evidence: vec![],
+            limits: vec![],
+            default_severity: Severity::Warn,
+            decision: PolicyDecision {
+                action: Action::Warn,
+                source,
+                reason: None,
+                expires: None,
+            },
+        }
+    }
+
+    /// The slice at offset 0 of the content `byte×32`, as an upgrade gives a file a new one.
+    fn slice(byte: u8) -> SliceId {
+        let artifact = ArtifactId::new(format!("sha256:{}", format!("{byte:02x}").repeat(32)));
+        SliceId::from_parts(&artifact.unwrap_or_else(|e| panic!("{e}")), Arch::X86_64, 0)
+    }
+
+    fn listener(inode: u64) -> ListenerId {
+        ListenerId::new(format!("listener:tcp/0.0.0.0:11434#{inode}"))
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn a_slice_s_new_id_after_an_upgrade_does_not_split_its_finding() {
+        let key = |s: SliceId| {
+            let id = format!("finding:binary.example@{s}#2");
+            at(&finding("binary.example", Ref::Slice(s), &id))
+        };
+        let (before, after) = (key(slice(0x11)), key(slice(0x22)));
+        assert_eq!(before, after);
+        // What tells apart findings of one rule on one slice remains.
+        assert_eq!(before, "#2");
+    }
+
+    #[test]
+    fn a_component_s_slice_id_does_not_reach_the_key() {
+        let key = |s: SliceId| {
+            let id = format!("finding:binary.example@{s}/ggml");
+            let subject = Ref::Component {
+                slice: s,
+                component: ComponentKey::new("ggml").unwrap_or_else(|e| panic!("{e}")),
+            };
+            at(&finding("binary.example", subject, &id))
+        };
+        assert_eq!(key(slice(0x11)), "/ggml");
+        assert_eq!(key(slice(0x11)), key(slice(0x22)));
+    }
+
+    #[test]
+    fn a_listener_s_inode_does_not_reach_the_key() {
+        let key =
+            |id: &str, l: ListenerId| at(&finding("exposure.bind_public", Ref::Listener(l), id));
+        // As the analyzers write it: the listener's ID right after the rule.
+        let plain = |inode| {
+            let l = listener(inode);
+            key(&format!("finding:exposure.bind_public@{l}"), l)
+        };
+        assert_eq!(plain(7002), "");
+        assert_eq!(plain(7002), plain(7003));
+        // The listener's ID elsewhere in the ID: removed wherever it occurs.
+        let inside = |inode| {
+            let l = listener(inode);
+            key(&format!("finding:exposure.bind_public@runtime/{l}#1"), l)
+        };
+        assert_eq!(inside(7002), "runtime/#1");
+        assert_eq!(inside(7002), inside(7003));
+    }
+
+    #[test]
+    fn a_model_s_layer_position_remains_in_the_key() {
+        let model = crate::id::ModelId::new("model:models/registry.ollama.ai/library/m/latest")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let id = format!("finding:model.blob_missing@{model}#1");
+        assert_eq!(
+            at(&finding("model.blob_missing", Ref::Model(model), &id)),
+            "#1"
+        );
     }
 }
