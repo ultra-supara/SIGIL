@@ -9,7 +9,6 @@ use common::macho::{
     chained_fixups, dyld_info_command, executable, linkedit_command, LC_DYLD_CHAINED_FIXUPS,
     LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LIBSYSTEM,
 };
-use sha2::{Digest, Sha256};
 use sigil_engine::binary::{parse_artifact, BinaryBudgets, ParsedArtifact};
 use sigil_engine::collect::fs::FsBudgets;
 use sigil_engine::collect::install::InstallBudgets;
@@ -35,7 +34,7 @@ fn parse_with(bytes: &[u8], budgets: BinaryBudgets) -> Option<ParsedArtifact> {
     let path = directory.path().join("input");
     std::fs::write(&path, bytes).unwrap();
     let file = File::open(path).unwrap();
-    let digest = Sha256Hex::new(format!("{:x}", Sha256::digest(bytes))).unwrap();
+    let digest = Sha256Hex::new(common::hex(bytes)).unwrap();
     parse_artifact(
         &file,
         bytes.len() as u64,
@@ -120,10 +119,7 @@ fn fat_slices_keep_hashes_and_mask_only_subtype_capabilities_for_comparison() {
     assert_eq!(parsed.slices.len(), 2);
     for (index, expected) in [x86, arm].iter().enumerate() {
         let slice = &parsed.slices[index];
-        assert_eq!(
-            slice.sha256.as_str(),
-            format!("{:x}", Sha256::digest(expected))
-        );
+        assert_eq!(slice.sha256.as_str(), common::hex(expected));
         assert_eq!(
             &bytes[slice.offset as usize..(slice.offset + slice.size) as usize],
             expected

@@ -115,7 +115,13 @@ fn with_private(d: &TempDir) {
 
 /// Nothing was read under `private/`: no placement there, and no artifact with its bytes.
 fn private_untouched(f: &InstallFacts) {
-    let secret = format!("sha256:{:x}", Sha256::digest(SECRET));
+    let secret = format!(
+        "sha256:{}",
+        Sha256::digest(SECRET)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
     assert!(f.artifacts.iter().all(|a| a.id.as_str() != secret));
     assert!(f
         .instances

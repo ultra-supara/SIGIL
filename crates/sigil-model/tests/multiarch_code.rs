@@ -1,6 +1,16 @@
 //! Additive multiarchitecture contracts; no producer or decoder is enabled here.
 use serde_json::{json, Value};
 use sigil_model::*;
+
+/// Lowercase hexadecimal SHA-256 of `bytes` (sha2 0.11 digests have no `LowerHex`).
+fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 #[allow(dead_code)]
 #[path = "support/multiarch.rs"]
 mod coverage_support;
@@ -94,7 +104,6 @@ fn legacy_optional_fields_stay_absent() {
 
 #[test]
 fn legacy_json_is_byte_identical() {
-    use sha2::{Digest, Sha256};
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut rows = Vec::new();
     for entry in std::fs::read_dir(root.join("schemas/examples/session-v1")).unwrap() {
@@ -110,8 +119,8 @@ fn legacy_json_is_byte_identical() {
         }
         let canonical = session.to_canonical_json().unwrap();
         rows.push(format!(
-            "{:x}  {}",
-            Sha256::digest(canonical.as_bytes()),
+            "{}  {}",
+            sha256_hex(&canonical),
             path.file_name().unwrap().to_str().unwrap()
         ));
     }
@@ -618,11 +627,7 @@ fn argument_prefix_is_honest() {
 
 #[test]
 fn abi_registry_hash_and_exact_lookup_are_archived() {
-    use sha2::{Digest, Sha256};
-    assert_eq!(
-        format!("{:x}", Sha256::digest(code_abi::V1_BYTES)),
-        code_abi::V1_SHA256
-    );
+    assert_eq!(sha256_hex(code_abi::V1_BYTES), code_abi::V1_SHA256);
     assert!(code_abi::archived("1", code_abi::V1_SHA256).is_some());
     assert!(code_abi::archived("2", code_abi::V1_SHA256).is_none());
     assert!(code_abi::archived("1", &"0".repeat(64)).is_none());
@@ -891,7 +896,6 @@ fn partial_reason_and_unproved_abi_cannot_claim_completeness() {
 #[ignore = "Task 0 frozen captures live outside git; run explicitly in the implementation worktree"]
 fn frozen_task0_canonical_bytes_and_reports_are_identical() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/issue48");
-    use sha2::{Digest, Sha256};
     let canonical_dir = root.join("task3/old-canonical");
     let mut count = 0;
     for entry in std::fs::read_dir(&canonical_dir).unwrap() {
@@ -921,7 +925,7 @@ fn frozen_task0_canonical_bytes_and_reports_are_identical() {
             canonical.as_bytes() == std::fs::read(canonical_dir.join(name)).unwrap(),
             "original input -> canonical {name}"
         );
-        let hash = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+        let hash = sha256_hex(&canonical);
         if name.starts_with("pre-127-") {
             assert_eq!(
                 hash,
@@ -1025,7 +1029,6 @@ fn marked_legacy_calls_still_respect_the_register_abi_limit() {
 
 #[test]
 fn review_legacy_install_formats_and_arches_keep_base_validation() {
-    use sha2::{Digest, Sha256};
     let original = include_str!("../../../schemas/examples/session-v1/10-target-verified.json");
     let mut rows = vec![];
     for arch in ["x86_64", "aarch64"] {
@@ -1047,8 +1050,8 @@ fn review_legacy_install_formats_and_arches_keep_base_validation() {
                     errors(&s)
                 );
                 rows.push(format!(
-                    "{:x}  {arch}-{format}-{}",
-                    Sha256::digest(s.to_canonical_json().unwrap().as_bytes()),
+                    "{}  {arch}-{format}-{}",
+                    sha256_hex(s.to_canonical_json().unwrap()),
                     if omitted { "absent" } else { "false" }
                 ));
                 // Legacy architecture exemption is not permission to add M3 fields.
@@ -1602,12 +1605,8 @@ fn marked_elf_retains_exclusive_results_and_symbol_only_questions() {
 
 #[test]
 fn capability_mapping_archive_pins_every_raw_symbol_feature_and_dylib() {
-    use sha2::{Digest, Sha256};
     let source = include_str!("../../sigil-engine/signatures/capabilities.toml");
-    assert_eq!(
-        format!("{:x}", Sha256::digest(source.as_bytes())),
-        capability_mapping::V1_SHA256
-    );
+    assert_eq!(sha256_hex(source), capability_mapping::V1_SHA256);
     let table: toml::Value = toml::from_str(source).unwrap();
     let mut expected = Vec::new();
     for group in table["capability"].as_array().unwrap() {

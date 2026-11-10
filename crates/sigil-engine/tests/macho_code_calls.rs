@@ -1,4 +1,3 @@
-use sha2::{Digest, Sha256};
 use sigil_engine::{
     binary::{parse_artifact, BinaryBudgets},
     code::{CodeBudgets, CodeOutcome},
@@ -18,7 +17,7 @@ fn analyze(bytes: &[u8], code: CodeBudgets) -> sigil_engine::binary::ParsedArtif
     parse_artifact(
         f.as_file(),
         bytes.len() as u64,
-        &Sha256Hex::new(format!("{:x}", Sha256::digest(bytes))).unwrap(),
+        &Sha256Hex::new(common::hex(bytes)).unwrap(),
         &bytes[..4],
         BinaryBudgets {
             code: Some(code),
@@ -482,7 +481,7 @@ fn real_healthy_fat_sibling_survives_unparsed_lost_or_budget_limited_sibling() {
             parse_artifact(
                 f.as_file(),
                 bytes.len() as u64,
-                &Sha256Hex::new(format!("{:x}", Sha256::digest(&bytes))).unwrap(),
+                &Sha256Hex::new(common::hex(&bytes)).unwrap(),
                 &bytes[..4],
                 BinaryBudgets {
                     parse_bytes: parse_limit,

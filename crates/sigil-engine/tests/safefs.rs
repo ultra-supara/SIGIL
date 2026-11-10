@@ -34,7 +34,10 @@ fn safefs(dir: &Path) -> SafeFs {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// True when the process can read a mode-000 file (it runs as root), so permission cases cannot

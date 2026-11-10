@@ -70,7 +70,7 @@ pub fn observed_role(process: &ProcessRef, roles: &[ProcessRole]) -> Result<Proc
     let bytes =
         serde_json::to_vec(process).map_err(|_| "cannot serialize process identity".to_string())?;
     let digest = Sha256::digest(bytes);
-    ProcessRole::new(format!("observed:{digest:x}"))
+    ProcessRole::new(format!("observed:{}", crate::hex::lower(&digest)))
         .map_err(|_| "invalid observation label".to_string())
 }
 
@@ -83,7 +83,8 @@ pub fn value_id(
     let bytes = serde_json::to_vec(&(origin, key, role))
         .map_err(|_| "cannot serialize value identity".to_string())?;
     let digest = Sha256::digest(bytes);
-    ValueId::new(format!("value:{digest:x}")).map_err(|_| "invalid value identity".to_string())
+    ValueId::new(format!("value:{}", crate::hex::lower(&digest)))
+        .map_err(|_| "invalid value identity".to_string())
 }
 
 /// Project minimized process facts into requested-read coverage without additional I/O.

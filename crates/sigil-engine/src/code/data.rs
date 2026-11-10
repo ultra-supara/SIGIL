@@ -126,7 +126,7 @@ fn parse(capabilities: &str, noreturn: &str) -> Result<Signatures, String> {
     if raw.prefixes.iter().chain(&raw.names).any(String::is_empty) {
         return Err("noreturn.toml: an empty prefix or name".to_string());
     }
-    let sha256 = Sha256Hex::new(format!("{:x}", Sha256::digest(capabilities.as_bytes())))
+    let sha256 = Sha256Hex::new(crate::hex::lower(&Sha256::digest(capabilities.as_bytes())))
         .map_err(|e| format!("capabilities.toml: {e}"))?;
     Ok(Signatures {
         capabilities: table,
@@ -771,7 +771,7 @@ mod tests {
         assert_eq!(k.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
             k.sha256.as_str(),
-            format!("{:x}", Sha256::digest(CAPABILITIES.as_bytes()))
+            crate::hex::lower(&Sha256::digest(CAPABILITIES.as_bytes()))
         );
         let other = parse(
             &CAPABILITIES.replace("POSIX.1-2024", "POSIX.1-2017"),
