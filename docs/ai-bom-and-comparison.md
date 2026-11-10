@@ -91,7 +91,7 @@ sigil compare --baseline baseline/session.json --current out/session.json --form
 
 Each input is loaded and re-verified as `session render` does; a failure names the input and exits
 1. A usage error exits 2. Otherwise the exit code is 0 whether or not the sessions differ. A
-one-line summary goes to stderr:
+one-line summary goes to stderr ("1 change" for one):
 `compare: {N} changes, {M} not comparable (baseline sha256:…, current sha256:…)`. `--out` may not
 name either input. The same file as both inputs gives no differences.
 
@@ -116,7 +116,8 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   - rules, with their subjects normalized the same way.
 
   Listener inodes, `binary-<n>` numbers and slice IDs are pointers, not keys. A restart, files
-  given in another order, or an upgrade of a file that keeps its claim are not changes.
+  given in another order are not changes. An upgraded file is one `FileContentChanged`; its claims keep
+  their key (placement, arch, component), so a new slice ID alone is no claim change.
 - **Comparability.** Saying that something is absent on one side needs the check that would
   have recorded it to be closed on that side. Otherwise the item is *not comparable*, never
   removed or resolved. The diff's `not_comparable` lists it with a `cause`, the checks, and the
