@@ -42,40 +42,7 @@ use crate::observe::proc::{ProcFacts, RUNTIME_ROLE};
 /// Whether the runtime's binds are known.
 pub const BINDS: &str = "exposure.binds";
 
-/// The class of a bind address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BindClass {
-    Loopback,
-    Wildcard,
-    /// RFC 1918, link-local, IPv6 unique-local and link-local.
-    Private,
-    Global,
-}
-
-/// The class of `address`, with IPv4-mapped IPv6 (`::ffff:a.b.c.d`) read as its IPv4 address.
-pub fn bind_class(address: IpAddr) -> BindClass {
-    let address = match address {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
-        v4 => v4,
-    };
-    match address {
-        IpAddr::V4(v4) if v4.is_loopback() => BindClass::Loopback,
-        IpAddr::V4(v4) if v4.is_unspecified() => BindClass::Wildcard,
-        IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() => BindClass::Private,
-        IpAddr::V4(_) => BindClass::Global,
-        IpAddr::V6(v6) if v6.is_loopback() => BindClass::Loopback,
-        IpAddr::V6(v6) if v6.is_unspecified() => BindClass::Wildcard,
-        IpAddr::V6(v6) => {
-            let first = v6.segments()[0];
-            // fc00::/7 (unique local) and fe80::/10 (link-local).
-            if first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80 {
-                BindClass::Private
-            } else {
-                BindClass::Global
-            }
-        }
-    }
-}
+pub use sigil_model::listener::{bind_class, BindClass};
 
 /// The findings and `exposure.binds` coverage of `facts`.
 pub fn analyze(facts: &ProcFacts) -> (Vec<Finding>, Vec<Coverage>) {

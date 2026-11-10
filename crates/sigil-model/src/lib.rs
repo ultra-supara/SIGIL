@@ -109,7 +109,7 @@ pub use identity::{
     is_commit, ComponentClaim, ExtractMethod, IdentityAssertion, IdentityStatus, NameKind,
     ReleaseBasis, ReleaseClaim, ReportedCommit, SigState, VersionAssertion, VersionSource,
 };
-pub use listener::{Listener, ListenerOwner, Protocol};
+pub use listener::{bind_class, BindClass, Listener, ListenerOwner, Protocol};
 pub use load::{
     allowlisted_env_name, CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase,
     ProcessValue, ProcessValueRead, TriValue, ValueKey, ValueOrigin, VALUES_CONFIGURED,
