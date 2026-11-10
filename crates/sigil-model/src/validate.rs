@@ -2793,6 +2793,12 @@ impl<'a> Validator<'a> {
                             "Mach-O CPU type disagrees with the slice architecture".to_string(),
                         );
                     }
+                    if !macho.fat_gaps.is_empty()
+                        && (artifact.format != crate::artifact::Format::MachOFat
+                            || !crate::code_coverage::valid_gaps(&macho.fat_gaps))
+                    {
+                        why.push("fat container gaps require a fat artifact and sorted unique nonempty diagnostics".into());
+                    }
                     // A fat slice's own header names its table entry's architecture, and no other
                     // slice of the table names it, or the slice has the parser's gap.
                     if let Some((fat_type, fat_subtype)) =
@@ -2942,7 +2948,10 @@ impl<'a> Validator<'a> {
                 && slices
                     .iter()
                     .all(|slice| self.index.binaries.contains_key(slice.as_str()));
-            let clean = s.binaries.iter().all(|f| f.gaps.is_empty());
+            let clean = s
+                .binaries
+                .iter()
+                .all(|f| f.container_gaps().next().is_none());
             if !(discovery && covered && clean) {
                 self.errors.push(ValidationError::Binary {
                     slice: "*".to_string(),
@@ -4790,8 +4799,9 @@ impl<'a> Validator<'a> {
     /// cites every direct call site of the imports that its slice's `Import` hints give that
     /// feature, each once, and nothing else; a capability open question (rule
     /// `binary.capability_call`) cites every such import, each once, of a slice that calls none of
-    /// them directly. Both are judged by the session's own hints and code facts, never by a
-    /// capability table, and need the session to record the table it was analyzed with. Whether
+    /// them directly. Legacy and ELF decisions use the session's hints and code facts; marked
+    /// Mach-O decisions also use the archived capability table's symbol and library mapping.
+    /// Both need the session to record the table it was analyzed with. Whether
     /// the policy gave exactly these results is not the model's to say: `policy::verify` in the
     /// engine re-evaluates the session under the policy.
     fn capabilities(&mut self) {
@@ -4826,6 +4836,7 @@ impl<'a> Validator<'a> {
                 ),
             );
         }
+        let macho_calls = crate::capability_calls::CapabilityCalls::new(s);
         // The imports that each slice's `Import` hints give a feature.
         let mut imports: HashMap<(&SliceId, &str), OrderedMap<&UntrustedText, ()>> =
             HashMap::with_capacity(s.hints.len());
@@ -4867,6 +4878,18 @@ impl<'a> Validator<'a> {
             let at = format_args!("policy_violations[{} on {slice}]", v.policy_rule);
             if !violated.insert((slice, feature)) {
                 self.capability_error(&at, format!("a second violation of {feature} on {slice}"));
+            }
+            if macho_calls.marked_macho(slice) {
+                if !macho_calls.mapping_supported() {
+                    self.capability_error(&at, "marked Mach-O capability decisions require an archived capability table hash");
+                }
+                let expected = macho_calls.evidence(slice, feature).admitted;
+                if expected.is_empty()
+                    || !crate::capability_calls::same_evidence(&expected, &v.evidence)
+                {
+                    self.capability_error(&at, "must cite every admitted direct call site of the feature's imports exactly once, and nothing else");
+                }
+                continue;
             }
             if v.evidence.is_empty() {
                 self.capability_error(&at, "cites no call site");
@@ -4965,6 +4988,47 @@ impl<'a> Validator<'a> {
                     continue;
                 }
             };
+            if macho_calls.marked_macho(slice) {
+                if !macho_calls.mapping_supported() {
+                    self.capability_error(&at, "marked Mach-O capability decisions require an archived capability table hash");
+                }
+                let evidence = macho_calls.evidence(slice, feature);
+                let Ok(check) = CheckId::new(applicable) else {
+                    continue;
+                };
+                let expected_reason =
+                    evidence.question_reason(slice_states.get(slice).copied(), check);
+                if !matches!(&q.conditions[0].state, CondState::Unknown { reason, .. } if *reason == expected_reason)
+                {
+                    self.capability_error(
+                        &at,
+                        "capability question reason must match its slice code coverage and binding",
+                    );
+                }
+                if !asked.insert((slice, feature)) {
+                    self.capability_error(
+                        &at,
+                        format!("a second open question of {feature} on {slice}"),
+                    );
+                }
+                if evidence.unresolved.is_empty()
+                    && (!evidence.admitted.is_empty() || violated.contains(&(slice, feature)))
+                {
+                    self.capability_error(
+                        &at,
+                        "slice calls a feature import: that is a violation, not a question",
+                    );
+                }
+                if evidence.symbols.is_empty()
+                    || !crate::capability_calls::same_evidence(
+                        &evidence.question_evidence(),
+                        &q.evidence,
+                    )
+                {
+                    self.capability_error(&at, "must cite every relevant import and unresolved direct call site exactly once, and nothing else");
+                }
+                continue;
+            }
             if s.request.code_analysis.is_some()
                 && self
                     .index

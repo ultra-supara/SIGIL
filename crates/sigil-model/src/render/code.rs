@@ -66,6 +66,19 @@ pub fn capability_cell(
     facts: Option<&CodeFacts>,
     import: &UntrustedText,
 ) -> Shown {
+    capability_cell_for_feature(analyzed, code, facts, import, None, None)
+}
+
+/// Marked Mach-O capability cells exclude named imports from unrelated libraries. Unresolved
+/// direct sites remain visible alongside their policy question.
+pub fn capability_cell_for_feature(
+    analyzed: bool,
+    code: Option<&Coverage>,
+    facts: Option<&CodeFacts>,
+    import: &UntrustedText,
+    feature: Option<&str>,
+    mapping: Option<&crate::capability_mapping::MachOCapabilityMap>,
+) -> Shown {
     if !analyzed {
         return Shown::own(NOT_ANALYZED);
     }
@@ -74,7 +87,14 @@ pub fn capability_cell(
         Some(CoverageState::Partial { .. }) => NONE_FOUND_PARTIAL,
         _ => return Shown::own(NOT_SEARCHED),
     };
-    call_sites_cell(facts, import).unwrap_or_else(|| Shown::own(none))
+    if feature.is_some() && mapping.is_none() {
+        return Shown::own("call eligibility unavailable (unrecognized capability table)");
+    }
+    let calls = calls_of(facts, import)
+        .into_iter()
+        .filter(|c| feature.is_none_or(|feature| relevant_macho_call(c, feature, mapping)))
+        .collect();
+    selected_call_sites_cell(facts, calls).unwrap_or_else(|| Shown::own(none))
 }
 
 /// The direct call sites of `import` in a slice's `facts`: those whose target is that import, in
@@ -94,7 +114,10 @@ pub fn calls_of<'f>(facts: Option<&'f CodeFacts>, import: &UntrustedText) -> Vec
 /// them, then the first [`CALL_SITES_SHOWN`] joined by `; `, then how many more the session JSON
 /// holds. `None` without one: [`capability_cell`] then says what was searched.
 pub fn call_sites_cell(facts: Option<&CodeFacts>, import: &UntrustedText) -> Option<Shown> {
-    let calls = calls_of(facts, import);
+    selected_call_sites_cell(facts, calls_of(facts, import))
+}
+
+fn selected_call_sites_cell(facts: Option<&CodeFacts>, calls: Vec<&CallSite>) -> Option<Shown> {
     let f = facts.filter(|_| !calls.is_empty())?;
     let mut shown = Shown::own(format!("{}: ", calls.len()));
     for (k, c) in calls.iter().take(CALL_SITES_SHOWN).enumerate() {
@@ -110,6 +133,19 @@ pub fn call_sites_cell(facts: Option<&CodeFacts>, import: &UntrustedText) -> Opt
         ));
     }
     Some(shown)
+}
+
+/// Same-name imports from another named dylib do not count as this capability's calls.
+pub fn relevant_macho_call(
+    call: &CallSite,
+    feature: &str,
+    mapping: Option<&crate::capability_mapping::MachOCapabilityMap>,
+) -> bool {
+    if mapping.is_none() {
+        return false;
+    }
+    matches!(&call.target, CallTarget::Import { macho_import: Some(w), .. }
+        if crate::capability_calls::classify(&w.library, &w.name, feature, mapping) != crate::capability_calls::DirectCallClass::OtherLibrary)
 }
 
 /// One call site: `<function> @ 0x<addr>: <callee>(<reg>=<value>, …)`, and ` (tail jump)` after
@@ -148,6 +184,23 @@ pub fn function(facts: &CodeFacts, id: &FnId) -> Shown {
 /// export name or `fn@0x<entry>`, or `indirect`.
 pub fn callee(t: &CallTarget) -> Shown {
     match t {
+        CallTarget::Import {
+            symbol,
+            macho_import: Some(w),
+            ..
+        } => {
+            let mut shown = Shown::input(symbol).and(" [");
+            shown = match &w.library {
+                crate::MachOLibrary::Dylib {
+                    name: Some(name), ..
+                } => shown.and_shown(Shown::input(name)),
+                library => shown.and(format!("{library:?}")),
+            };
+            if w.weak {
+                shown = shown.and("; weak");
+            }
+            shown.and("]")
+        }
         CallTarget::Import { symbol, .. } | CallTarget::OwnExportViaPlt { symbol, .. } => {
             Shown::input(symbol)
         }

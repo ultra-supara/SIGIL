@@ -1,0 +1,108 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "16d4077d30972813f82c5bf5004a35dd81461e5cd107105f44836052d969ba05",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    }
+  },
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": [
+          "binary.code"
+        ],
+        "gaps": []
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123",
+      "size": 49488,
+      "format": "MachO",
+      "paths": [
+        "/examples/code-macho/duplicate-name-dylibs"
+      ],
+      "slices": [
+        {
+          "id": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0",
+          "arch": "aarch64",
+          "sha256": "fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:fda211c11410d867c13e863865de8d183a2702fde0b3272cb61edd6bd5ebc123#aarch64@0"
+      },
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": false,
+      "states": {
+        "Partial": 2
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": false,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.dependencies",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    }
+  ]
+}

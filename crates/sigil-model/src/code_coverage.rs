@@ -13,7 +13,8 @@ pub const CODE_SLICE_NOT_STARTED: &str = "code: artifact budget exhausted before
 /// The shared reader's descriptor bound, applied independently to each marked artifact.
 pub const MAX_CODE_SLICES: usize = 64;
 
-/// Whether recorded parser gaps prevent proving that all capability imports were collected.
+/// Whether this slice's parser gaps prevent proving that all its capability imports were
+/// collected. Diagnostics in the enclosing Mach-O `fat_gaps` do not describe this slice.
 pub fn imports_incomplete(binary: &BinaryFacts) -> bool {
     binary.gaps.iter().any(|gap| {
         gap.starts_with("imports:")

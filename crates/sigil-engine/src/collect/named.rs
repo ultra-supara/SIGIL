@@ -633,4 +633,60 @@ mod tests {
         assert_eq!(f.binaries.len(), 1);
         assert!(f.code.is_empty());
     }
+
+    #[test]
+    fn macho_changed_or_vanished_reads_discard_all_slice_facts() {
+        use std::io::Write;
+        let budgets = NamedBudgets {
+            binary: crate::binary::BinaryBudgets {
+                code: Some(crate::code::CodeBudgets::default()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for (name, slices) in [("arm64-classic", 1), ("universal", 2)] {
+            for vanish in [false, true] {
+                let (_d, p) = dir();
+                let path = p.join("input");
+                std::fs::copy(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/code-macho")
+                        .join(name),
+                    &path,
+                )
+                .unwrap();
+                let stable =
+                    collect_with(std::slice::from_ref(&path), budgets, &|_| {}, &|_| {}).unwrap();
+                assert_eq!(stable.code.len(), slices);
+                let facts = collect_with(std::slice::from_ref(&path), budgets, &|_| {}, &|_| {
+                    if vanish {
+                        std::fs::remove_file(&path).unwrap();
+                    } else {
+                        std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .unwrap()
+                            .write_all(b"!")
+                            .unwrap();
+                    }
+                })
+                .unwrap();
+                assert!(facts.recognized_multiarch);
+                assert_eq!(
+                    facts.instances[0].stability,
+                    if vanish {
+                        Stability::Vanished
+                    } else {
+                        Stability::ChangedDuringRead
+                    }
+                );
+                assert!(facts.code.is_empty());
+                assert!(facts.binaries.is_empty());
+                assert!(facts
+                    .artifacts
+                    .iter()
+                    .all(|a| a.slices.is_empty() && a.code_slice_inventory.is_none()));
+            }
+        }
+    }
 }

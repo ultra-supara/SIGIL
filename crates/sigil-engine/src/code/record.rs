@@ -348,7 +348,6 @@ fn convert(
 
 /// `v` as recorded in `r`, without reading strings: every constant is a `ConstInt` (tests: the
 /// conversions without a file).
-#[cfg(test)]
 pub(crate) fn to_arg_plain(v: &Val, r: Reg, keep: &BTreeSet<u64>) -> ArgValue {
     convert(v, r, keep, &mut |value, _| ArgValue::ConstInt {
         reg: r,

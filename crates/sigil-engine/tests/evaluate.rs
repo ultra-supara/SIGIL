@@ -104,11 +104,53 @@ fn goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
         let mut expected: Session =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_valid(&expected);
-        let body = if path.ends_with("18-capability-policy.json") {
-            EXAMPLE_18_POLICY
-        } else {
-            ""
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let body = match name {
+            "18-capability-policy.json" | "22-aarch64-code.json" => EXAMPLE_18_POLICY,
+            "23-macho-same-name.json"
+            | "24-macho-fat.json"
+            | "25-macho-mixed.json"
+            | "26-macho-install.json"
+            | "27-macho-unsupported-chain.json" => EXAMPLE_MACHO_POLICY,
+            "28-macho-archived-library.json" => EXAMPLE_CXX_POLICY,
+            _ => "",
         };
+        // 23–28 were generated/verified with these policies; unlike synthetic older policy
+        // pins, their exact archived policy hash can be verified before normalizing to `test`.
+        let generated = match name {
+            "23-macho-same-name.json" | "24-macho-fat.json" | "25-macho-mixed.json"
+            | "26-macho-install.json" | "27-macho-unsupported-chain.json" => Some(
+                Policy::load(&format!("schema = \"sigil-policy/1\"\nname = \"macho-examples\"\n[scope]\nbinary_audit = []\n{body}")).unwrap()
+            ),
+            "28-macho-archived-library.json" => Some(
+                Policy::load(&format!("schema = \"sigil-policy/1\"\nname = \"cxx-pinned\"\n{body}")).unwrap()
+            ),
+            _ => None,
+        };
+        if let Some(p) = generated {
+            assert!(
+                expected.knowledge.contains(&p.knowledge()),
+                "{name}: generation policy pin"
+            );
+            sigil_engine::policy::verify(&expected, &p).unwrap();
+        }
+        if name == "27-macho-unsupported-chain.json" {
+            assert_eq!(expected.open_questions.len(), 1);
+            assert_eq!(
+                expected.open_questions[0].rule.as_str(),
+                "binary.capability_call"
+            );
+            assert!(expected.policy_violations.is_empty());
+            // An empty deny policy intentionally has no capability question. The former
+            // replay mismatch was a test-policy mismatch, not a failed producer/verifier.
+            let mut unrestricted = expected.clone();
+            run(&mut unrestricted, "");
+            assert!(unrestricted.open_questions.is_empty());
+            assert!(matches!(
+                unrestricted.outcome.completeness,
+                Completeness::Incomplete { .. }
+            ));
+        }
         let added: &[&str] = match path.file_name().unwrap().to_str().unwrap() {
             "15-binary-inspect.json"
             | "16-binary-code.json"
@@ -181,13 +223,18 @@ fn goldens_reproduce_unchanged_scopes_and_refuse_changed_catalogs() {
         assert_eq!(s, expected, "{}", path.display());
         reproduced += 1;
     }
-    assert_eq!((reproduced, refused), (14, 8));
-    assert_eq!(reproduced + refused, 22);
+    assert_eq!((reproduced, refused), (20, 8));
+    assert_eq!(reproduced + refused, 28);
 }
 
 /// The policy example 18 was evaluated under: it denies `posix.network` and
 /// `posix.process_spawn`.
 const EXAMPLE_18_POLICY: &str = "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"The runtime must not open connections\"\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\nreason = \"The runtime must not start processes\"\n";
+
+// Exact capability bodies used by the real Mach-O and saved-library example generators.
+const EXAMPLE_MACHO_POLICY: &str = "[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"example denies admitted network calls\"\n";
+const EXAMPLE_CXX_POLICY: &str =
+    "[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"fail\"\nreason = \"test\"\n";
 
 #[test]
 fn verdict_and_completeness_are_independent() {

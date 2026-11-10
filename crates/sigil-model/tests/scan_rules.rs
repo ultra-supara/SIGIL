@@ -70,6 +70,7 @@ fn macho() -> ContainerFacts {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 6,
         flags: 0,
         uuid: None,

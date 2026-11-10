@@ -59,26 +59,6 @@ impl Validator<'_> {
         if !s.request.code {
             self.code_error("request", "marker needs request.code");
         }
-        // Task 16 owns library-aware Mach-O decisions; ELF uses slice-aware validation.
-        let macho_slices: BTreeSet<_> = s
-            .binaries
-            .iter()
-            .filter_map(|b| matches!(b.container, ContainerFacts::MachO(_)).then_some(&b.slice))
-            .collect();
-        if s.policy_violations.iter().any(|v| {
-            v.policy_rule
-                .as_str()
-                .starts_with(crate::CAPABILITY_DENY_PREFIX)
-                && matches!(&v.subject, Ref::Slice(slice) if macho_slices.contains(slice))
-        }) || s.open_questions.iter().any(|q| {
-            q.rule.as_str() == crate::CAPABILITY_RULE
-                && matches!(&q.subject, Ref::Slice(slice) if macho_slices.contains(slice))
-        }) {
-            self.code_error(
-                "policy",
-                "marked Mach-O capability decisions await library-aware policy validation",
-            );
-        }
         if !s
             .request
             .roots
@@ -157,12 +137,6 @@ impl Validator<'_> {
                 continue;
             };
             let macho = matches!(binary.container, ContainerFacts::MachO(_));
-            if macho && !facts.call_sites.is_empty() {
-                self.code_error(
-                    &facts.slice,
-                    "marked Mach-O call facts await library-aware policy validation",
-                );
-            }
             if !matches!(slice.arch, Arch::X86_64 | Arch::Aarch64) {
                 self.code_error(&facts.slice, "unsupported code architecture");
             }

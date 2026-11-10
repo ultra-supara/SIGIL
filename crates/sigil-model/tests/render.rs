@@ -61,7 +61,7 @@ fn hostile() -> Session {
 #[test]
 fn every_golden_example_renders_the_same_way_twice() {
     let all = examples();
-    assert_eq!(all.len(), 22);
+    assert_eq!(all.len(), 28);
     for (name, session) in all {
         let md = render_session(&session);
         assert_eq!(md, render_session(&session), "{name}");
@@ -1043,6 +1043,7 @@ fn a_macho_content_with_imports_under_code_is_not_analyzed() {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 2,
         flags: 0,
         uuid: None,
@@ -1096,6 +1097,7 @@ fn a_macho_content_without_imports_gets_no_capabilities() {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 6,
         flags: 0,
         uuid: None,
@@ -1139,6 +1141,7 @@ fn a_macho_content_with_imports_lists_them_and_gets_capability_rows() {
             fat_cpu_type: None,
             fat_cpu_subtype: None,
             fat_alignment: None,
+            fat_gaps: vec![],
             file_type,
             flags: 0,
             uuid: None,
@@ -1621,6 +1624,7 @@ fn a_macho_content_has_the_identity_rows_too() {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 6,
         flags: 0,
         uuid: None,

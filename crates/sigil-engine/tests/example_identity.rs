@@ -1,6 +1,7 @@
 //! Every golden binary inspection carries exactly the component claims the engine derives from
-//! its facts (PR-4c-1 plan P-l), as `example_hints.rs` does for hints. The install examples'
-//! claims are specification examples: they have no binary facts to derive them from. Example 12's
+//! its facts (PR-4c-1 plan P-l), as `example_hints.rs` does for hints. Marked installation
+//! examples also carry measured binary facts; legacy installation claims are specification
+//! examples. Example 12's
 //! claim is checked against facts this file supplies (PR-4c-2b), and example 17's release claim
 //! against its component claim (PR-4c-2c).
 
@@ -15,7 +16,7 @@ use sigil_model::{
 };
 
 #[test]
-fn every_binary_inspection_example_carries_the_claims_the_engine_derives() {
+fn every_binary_and_marked_install_example_carries_the_claims_the_engine_derives() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/examples/session-v1");
     let mut names: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
@@ -27,7 +28,7 @@ fn every_binary_inspection_example_carries_the_claims_the_engine_derives() {
     for path in names {
         let session: Session =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        if !is_binary_inspection(&session.request) {
+        if !is_binary_inspection(&session.request) && session.request.code_analysis.is_none() {
             continue;
         }
         let mut derived = session.clone();
@@ -47,7 +48,13 @@ fn every_binary_inspection_example_carries_the_claims_the_engine_derives() {
             "15-binary-inspect",
             "16-binary-code",
             "18-capability-policy",
-            "22-aarch64-code"
+            "22-aarch64-code",
+            "23-macho-same-name",
+            "24-macho-fat",
+            "25-macho-mixed",
+            "26-macho-install",
+            "27-macho-unsupported-chain",
+            "28-macho-archived-library"
         ]
     );
 }

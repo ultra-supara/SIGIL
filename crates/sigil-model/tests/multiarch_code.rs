@@ -13,6 +13,58 @@ fn legacy() -> Session {
 }
 
 #[test]
+fn fat_scope_gaps_leave_children_complete_but_require_partial_parents() {
+    let mut s = coverage_support::fat();
+    let gap = "binary_parse_bytes: 1920 exceeded".to_string();
+    s.request.budgets.insert("binary_parse_bytes".into(), 1920);
+    for b in &mut s.binaries {
+        let ContainerFacts::MachO(m) = &mut b.container else {
+            panic!()
+        };
+        m.fat_gaps = vec![gap.clone()];
+        assert!(b.gaps.is_empty());
+        assert!(!sigil_model::code_coverage::imports_incomplete(b));
+    }
+    s.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Partial {
+        missing: vec![
+            gap.clone(),
+            sigil_model::code_coverage::CODE_INVENTORY_INCOMPLETE.into(),
+        ],
+    });
+    let children = s
+        .coverage
+        .iter()
+        .filter(|c| c.check.as_str() == BINARY_CODE && matches!(c.scope, Ref::Slice(_)))
+        .collect::<Vec<_>>();
+    assert!(children.iter().all(|c| c.state == CoverageState::Complete));
+    let (state, use_) =
+        sigil_model::code_coverage::aggregate_code_slices(&s.artifacts[0], &children, 10).unwrap();
+    coverage_support::parent(&mut s, state, use_.map(|b| b.used));
+    let expected = expected_binary_container(&s, &s.instances[0])
+        .unwrap()
+        .into_state(0);
+    assert!(matches!(expected, CoverageState::Partial { .. }));
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CONTAINER)
+        .unwrap()
+        .state = expected;
+    coverage_support::completeness(&mut s);
+    s.validate().unwrap();
+    let mut forged = s.clone();
+    forged.artifacts[0].code_slice_inventory = Some(CodeSliceInventory::Complete);
+    coverage_support::parent(&mut forged, CoverageState::Complete, Some(8));
+    assert!(forged.validate().is_err());
+    s.coverage
+        .iter_mut()
+        .find(|c| c.check.as_str() == BINARY_CONTAINER)
+        .unwrap()
+        .state = CoverageState::Complete;
+    coverage_support::completeness(&mut s);
+    assert!(s.validate().is_err());
+}
+
+#[test]
 fn marker_and_new_register_spellings_are_readable() {
     let mut value = serde_json::to_value(legacy()).unwrap();
     value["request"]["code_analysis"] = json!("multiarch-v1");
@@ -147,6 +199,7 @@ fn macho(arch: Arch) -> Session {
         fat_cpu_type: None,
         fat_cpu_subtype: None,
         fat_alignment: None,
+        fat_gaps: vec![],
         file_type: 2,
         flags: 0,
         uuid: None,
@@ -180,24 +233,7 @@ fn errors(s: &Session) -> Vec<String> {
         .collect()
 }
 fn assert_contract(s: &Session) {
-    let errors = errors(s);
-    let mut expected = vec![];
-    for facts in &s.code {
-        if !facts.call_sites.is_empty()
-            && s.binaries
-                .iter()
-                .any(|b| b.slice == facts.slice && matches!(b.container, ContainerFacts::MachO(_)))
-        {
-            expected.push(format!(
-                "{}: marked Mach-O call facts await library-aware policy validation",
-                facts.slice
-            ));
-        }
-    }
-    assert_eq!(
-        errors, expected,
-        "only explicit staged policy gates are permitted"
-    );
+    assert!(errors(s).is_empty(), "{:?}", errors(s));
 }
 fn rejects(s: &Session, needle: &str) {
     assert!(
@@ -208,7 +244,7 @@ fn rejects(s: &Session, needle: &str) {
 }
 
 #[test]
-fn marker_accepts_complete_elf_contract_and_keeps_macho_policy_gate() {
+fn marker_accepts_complete_elf_and_macho_contracts() {
     for s in [marked(), arm(), macho(Arch::Aarch64), macho(Arch::X86_64)] {
         assert_contract(&s);
     }
@@ -1486,17 +1522,39 @@ fn wrong_check_cannot_supply_an_argument_layout_gap() {
 }
 
 #[test]
-fn marked_macho_calls_remain_gated_until_library_aware_policy() {
+fn marked_macho_calls_accept_only_exact_witnesses() {
     for arch in [Arch::Aarch64, Arch::X86_64] {
-        rejects(
-            &macho(arch),
-            "marked Mach-O call facts await library-aware policy validation",
-        );
+        let good = macho(arch);
+        good.validate().unwrap();
+        for mutation in 0..5 {
+            let mut bad = good.clone();
+            let CallTarget::Import {
+                macho_import,
+                symbol,
+                ..
+            } = &mut bad.code[0].call_sites[0].target
+            else {
+                unreachable!()
+            };
+            match mutation {
+                0 => *macho_import = None,
+                1 => macho_import.as_mut().unwrap().weak = false,
+                2 => {
+                    macho_import.as_mut().unwrap().library = MachOLibrary::Dylib {
+                        ordinal: 2,
+                        name: Some(UntrustedText::new(LIBSYSTEM)),
+                    }
+                }
+                3 => macho_import.as_mut().unwrap().name = UntrustedText::new("_socket"),
+                _ => *symbol = UntrustedText::new("_socket"),
+            }
+            rejects(&bad, "Mach-O import witness must exactly match");
+        }
     }
 }
 
 #[test]
-fn marked_macho_capability_decisions_remain_gated_until_library_aware_policy() {
+fn marked_macho_forged_capability_decisions_are_rejected() {
     let legacy: Session = serde_json::from_str(include_str!(
         "../../../schemas/examples/session-v1/18-capability-policy.json"
     ))
@@ -1505,8 +1563,79 @@ fn marked_macho_capability_decisions_remain_gated_until_library_aware_policy() {
     let mut violation = legacy.policy_violations[0].clone();
     violation.subject = Ref::Slice(s.binaries[0].slice.clone());
     s.policy_violations.push(violation);
+    rejects(&s, "must cite every admitted direct call site");
+}
+
+#[test]
+fn marked_elf_retains_exclusive_results_and_symbol_only_questions() {
+    let template: Session = serde_json::from_str(include_str!(
+        "../../../schemas/examples/session-v1/18-capability-policy.json"
+    ))
+    .unwrap();
+    let mut s = marked();
+    let slice = s.code[0].slice.clone();
+    let site = EvidenceRef::Code {
+        slice: slice.clone(),
+        loc: Loc::CallSite(s.code[0].call_sites[0].id.clone()),
+    };
+    let mut v = template.policy_violations[0].clone();
+    v.subject = Ref::Slice(slice.clone());
+    v.evidence = vec![site.clone()];
+    s.policy_violations.push(v);
+    let mut q = template.open_questions[0].clone();
+    q.id = OpenQuestionId::new(format!("capability:posix.network@{slice}")).unwrap();
+    q.subject = Ref::Slice(slice.clone());
+    q.conditions[0].id = CondId::new("calls:posix.network").unwrap();
+    q.evidence = vec![EvidenceRef::Code {
+        slice,
+        loc: Loc::Symbol(UntrustedText::new("connect")),
+    }];
+    s.open_questions.push(q);
+    rejects(&s, "has a violation of posix.network too");
+    s.policy_violations.clear();
+    s.open_questions[0].evidence.push(site);
     rejects(
         &s,
-        "marked Mach-O capability decisions await library-aware policy validation",
+        "cites something other than a posix.network import of its slice",
     );
+}
+
+#[test]
+fn capability_mapping_archive_pins_every_raw_symbol_feature_and_dylib() {
+    use sha2::{Digest, Sha256};
+    let source = include_str!("../../sigil-engine/signatures/capabilities.toml");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(source.as_bytes())),
+        capability_mapping::V1_SHA256
+    );
+    let table: toml::Value = toml::from_str(source).unwrap();
+    let mut expected = Vec::new();
+    for group in table["capability"].as_array().unwrap() {
+        for symbol in group["symbols"].as_array().unwrap() {
+            expected.push((
+                symbol["name"].as_str().unwrap(),
+                group["feature"].as_str().unwrap(),
+                group["macho_dylib"].as_str().unwrap(),
+            ));
+        }
+    }
+    expected.sort();
+    assert_eq!(capability_mapping::V1.entries(), expected);
+    assert_eq!(expected.len(), 133);
+    assert!(capability_mapping::archived(capability_mapping::V1_SHA256).is_some());
+    assert!(capability_mapping::archived(&"0".repeat(64)).is_none());
+    let mut old = legacy();
+    old.knowledge
+        .iter_mut()
+        .find(|k| k.id == CAPABILITY_TABLE_ID)
+        .unwrap()
+        .sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+    old.validate().unwrap(); // Marker-absent table semantics have not changed.
+    let mut elf = marked();
+    elf.knowledge
+        .iter_mut()
+        .find(|k| k.id == CAPABILITY_TABLE_ID)
+        .unwrap()
+        .sha256 = Sha256Hex::new("0".repeat(64)).unwrap();
+    elf.validate().unwrap(); // Marked ELF also keeps its historical table semantics.
 }

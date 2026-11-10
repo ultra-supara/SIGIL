@@ -1,0 +1,5 @@
+fixture	slice	function	start	end	call	symbol	library	arg0	arg1	arg2	coverage
+arm64-executable	arm64	_one	0x100000594	0x1000005b8	0x1000005a8	_connect	/usr/lib/libSystem.B.dylib	1	0	0	complete
+arm64-executable	arm64	_zero	0x100000570	0x100000594	0x100000584	_connect	/usr/lib/libSystem.B.dylib	0	0	0	complete
+x86-executable	x86_64	_one	0x100000590	0x1000005a6	0x10000059d	_connect	/usr/lib/libSystem.B.dylib	1	0	0	complete
+x86-executable	x86_64	_zero	0x100000570	0x100000583	0x10000057a	_connect	/usr/lib/libSystem.B.dylib	0	0	0	complete

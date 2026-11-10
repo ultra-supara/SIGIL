@@ -38,7 +38,7 @@ fn samples() -> Vec<String> {
 #[test]
 fn every_sample_is_a_golden_example_and_renders() {
     let names = samples();
-    assert_eq!(names.len(), 8, "{names:?}");
+    assert_eq!(names.len(), 20, "{names:?}");
     for name in names {
         let sample = fs::read(root().join("site/viewer/samples").join(&name)).unwrap();
         let golden = fs::read(source(&name)).unwrap();
@@ -78,4 +78,44 @@ fn every_invalid_sample_gives_its_error() {
     files.sort();
     listed.sort();
     assert_eq!(files, listed);
+}
+
+#[test]
+fn macho_samples_preserve_library_and_slice_uncertainty() {
+    use sigil_model::{CoverageState, EvidenceRef, Loc, Session};
+    let read = |name: &str| -> Session {
+        serde_json::from_slice(&fs::read(root().join("site/viewer/samples").join(name)).unwrap())
+            .unwrap()
+    };
+    let same = read("session-23-macho-same-name.json");
+    assert_eq!(same.code[0].call_sites.len(), 3);
+    assert_eq!(same.policy_violations[0].evidence.len(), 2);
+    let mixed = read("session-25-macho-mixed.json");
+    assert!(mixed
+        .coverage
+        .iter()
+        .any(|c| matches!(c.state, CoverageState::Unsupported { .. })));
+    let install = read("session-26-macho-install.json");
+    assert!(install.policy_violations.is_empty());
+    assert!(install
+        .open_questions
+        .iter()
+        .flat_map(|q| &q.evidence)
+        .any(|e| matches!(
+            e,
+            EvidenceRef::Code {
+                loc: Loc::CallSite(_),
+                ..
+            }
+        )));
+    let chain = read("session-27-macho-unsupported-chain.json");
+    assert!(chain.code.is_empty());
+    let archived = read("session-28-macho-archived-library.json");
+    assert!(archived.policy_violations.is_empty());
+    let md = render_markdown_inner(&archived.to_canonical_json().unwrap()).unwrap();
+    let row = md
+        .lines()
+        .find(|line| line.starts_with("| cxx\\.file\\_write |"))
+        .unwrap();
+    assert!(row.contains("none found"), "{row}");
 }

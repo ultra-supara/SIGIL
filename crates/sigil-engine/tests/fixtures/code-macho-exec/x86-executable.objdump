@@ -1,0 +1,42 @@
+
+x86-executable:	file format mach-o 64-bit x86-64
+
+Disassembly of section __TEXT,__text:
+
+0000000100000570 <_zero>:
+100000570: 55                          	pushq	%rbp
+100000571: 48 89 e5                    	movq	%rsp, %rbp
+100000574: 31 ff                       	xorl	%edi, %edi
+100000576: 31 f6                       	xorl	%esi, %esi
+100000578: 31 d2                       	xorl	%edx, %edx
+10000057a: e8 29 00 00 00              	callq	0x1000005a8 <dyld_stub_binder+0x1000005a8>
+10000057f: ff c0                       	incl	%eax
+100000581: 5d                          	popq	%rbp
+100000582: c3                          	retq
+100000583: 66 66 66 66 2e 0f 1f 84 00 00 00 00 00      	nopw	%cs:(%rax,%rax)
+
+0000000100000590 <_one>:
+100000590: 55                          	pushq	%rbp
+100000591: 48 89 e5                    	movq	%rsp, %rbp
+100000594: bf 01 00 00 00              	movl	$0x1, %edi
+100000599: 31 f6                       	xorl	%esi, %esi
+10000059b: 31 d2                       	xorl	%edx, %edx
+10000059d: e8 06 00 00 00              	callq	0x1000005a8 <dyld_stub_binder+0x1000005a8>
+1000005a2: ff c0                       	incl	%eax
+1000005a4: 5d                          	popq	%rbp
+1000005a5: c3                          	retq
+
+Disassembly of section __TEXT,__stubs:
+
+00000001000005a8 <__stubs>:
+1000005a8: ff 25 52 2a 00 00           	jmpq	*0x2a52(%rip)           ## 0x100003000 <dyld_stub_binder+0x100003000>
+
+Disassembly of section __TEXT,__stub_helper:
+
+00000001000005b0 <__stub_helper>:
+1000005b0: 4c 8d 1d 51 2a 00 00        	leaq	0x2a51(%rip), %r11      ## 0x100003008 <__dyld_private>
+1000005b7: 41 53                       	pushq	%r11
+1000005b9: ff 25 41 1a 00 00           	jmpq	*0x1a41(%rip)           ## 0x100002000 <dyld_stub_binder+0x100002000>
+1000005bf: 90                          	nop
+1000005c0: 68 00 00 00 00              	pushq	$0x0
+1000005c5: e9 e6 ff ff ff              	jmp	0x1000005b0 <__stub_helper>

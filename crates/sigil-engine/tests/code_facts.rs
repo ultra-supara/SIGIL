@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use sigil_engine::binary::{parse_artifact, BinaryBudgets, ParsedSlice};
 use sigil_engine::code::{CodeBudgets, CodeOutcome};
 use sigil_model::{
-    ArgValue, BudgetUse, CallKind, CallSite, CallTarget, Function, ImportVia, Reg, Sha256Hex,
-    ValueUnknown,
+    Arch, ArgValue, BudgetUse, CallKind, CallSite, CallTarget, ContainerFacts, Function, ImportVia,
+    Reg, Sha256Hex, ValueUnknown,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -773,18 +773,49 @@ fn aarch64_without_exact_bounds_is_partial() {
 }
 
 #[test]
-fn a_mach_o_slice_is_unsupported_when_code_is_asked_for() {
+fn supported_mach_o_slices_without_exact_bounds_are_partial() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/macho/hello-universal");
     let slices = try_slices_at(&path, with_code(CodeBudgets::default())).unwrap();
     assert_eq!(slices.len(), 2);
-    for slice in slices {
-        assert_eq!(
-            slice.code,
-            Some(CodeOutcome::Unsupported),
-            "{}",
-            slice.offset
-        );
+    // The independent fixture dump has a _puts call in each supported executable slice.
+    // Neither has an exact FDE; arm64's native compact entry proves only a lookup span.
+    let mut previous_used = 0;
+    for (slice, (arch, offset, cpu, reference)) in slices.into_iter().zip([
+        (Arch::X86_64, 4096, 0x0100_0007, 0x10000056bu64),
+        (Arch::Aarch64, 32768, 0x0100_000c, 0x100000490),
+    ]) {
+        assert_eq!((slice.arch, slice.offset), (arch, offset));
+        let Some(ContainerFacts::MachO(facts)) = &slice.container else {
+            panic!("{arch:?}: missing Mach-O container");
+        };
+        assert!(facts.is_64);
+        assert_eq!(facts.little_endian, Some(true));
+        assert_eq!((facts.cpu_type, facts.file_type), (cpu, 2));
+        assert!(slice.gaps.is_empty(), "{arch:?}: {:?}", slice.gaps);
+        let Some(CodeOutcome::Analyzed {
+            functions,
+            call_sites,
+            gaps,
+            budget,
+        }) = slice.code
+        else {
+            panic!("{arch:?}: supported Mach-O slice was not analyzed");
+        };
+        assert!(functions.is_empty() && call_sites.is_empty(), "{arch:?}");
+        assert!(gaps.contains(&"code: Mach-O unwind: missing exact bounds".into()));
+        assert!(gaps.contains(&format!(
+            "code: Mach-O reference at {reference:#x} has no exact function bounds"
+        )));
+        if arch == Arch::Aarch64 {
+            assert!(gaps.iter().any(|g| g.contains(
+                "native linked compact entry lacks exact function bounds (possibly folded)"
+            )));
+        }
+        assert_eq!(budget.budget, "binary_code_bytes");
+        assert_eq!(budget.limit, CodeBudgets::default().bytes);
+        assert!(budget.used > previous_used && budget.used <= budget.limit);
+        previous_used = budget.used;
     }
     for slice in try_slices_at(&path, BinaryBudgets::default()).unwrap() {
         assert_eq!(slice.code, None);
@@ -1023,8 +1054,8 @@ fn binaries(dir: &str) -> Vec<PathBuf> {
 
 #[test]
 fn a_code_request_never_changes_the_container() {
-    // R-h: every slice of every fixture has the same container facts and gaps (and the rest of
-    // the slice) with and without a code request.
+    // R-h: every slice keeps its container facts/gaps and other metadata. Marked Mach-O
+    // additionally records observed header byte order; verify that field before normalizing it.
     let mut seen = 0;
     for path in binaries("tests/fixtures/code")
         .into_iter()
@@ -1037,10 +1068,32 @@ fn a_code_request_never_changes_the_container() {
         let with = try_slices_at(&path, with_code(CodeBudgets::default())).unwrap();
         assert_eq!(with.len(), without.len(), "{}", path.display());
         assert!(!with.is_empty(), "{}", path.display());
+        let file = File::open(&path).unwrap();
         for (mut w, wo) in with.into_iter().zip(without) {
             assert!(w.code.is_some(), "{}", path.display());
             assert!(wo.code.is_none());
             w.code = None;
+            if let (Some(ContainerFacts::MachO(marked)), Some(ContainerFacts::MachO(legacy))) =
+                (&mut w.container, &wo.container)
+            {
+                let mut magic = [0; 4];
+                file.read_exact_at(&mut magic, wo.offset).unwrap();
+                let (is_64, little_endian) = match magic {
+                    [0xcf, 0xfa, 0xed, 0xfe] => (true, true),
+                    [0xfe, 0xed, 0xfa, 0xcf] => (true, false),
+                    [0xce, 0xfa, 0xed, 0xfe] => (false, true),
+                    [0xfe, 0xed, 0xfa, 0xce] => (false, false),
+                    _ => panic!(
+                        "{} at {}: invalid Mach-O magic {magic:x?}",
+                        path.display(),
+                        wo.offset
+                    ),
+                };
+                assert_eq!(marked.is_64, is_64);
+                assert_eq!(marked.little_endian, Some(little_endian));
+                assert_eq!(legacy.little_endian, None);
+                marked.little_endian = None;
+            }
             assert_eq!(w, wo, "{} at {}", path.display(), wo.offset);
             seen += 1;
         }

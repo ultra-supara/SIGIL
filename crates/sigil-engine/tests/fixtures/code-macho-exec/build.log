@@ -1,0 +1,27 @@
+$ /usr/bin/clang-21 -target arm64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o arm64.o
+
+$ /usr/bin/ld64.lld-21 -arch arm64 -platform_version macos 11.0 11.0 -e _zero -no_uuid -no_adhoc_codesign -no_fixup_chains arm64.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o arm64-executable
+
+$ /usr/bin/llvm-objdump-21 -dr arm64-executable
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations arm64-executable
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame arm64-executable
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size arm64-executable
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info arm64-executable
+
+$ /usr/bin/clang-21 -target x86_64-apple-macos11 -O2 -fno-ident -fno-optimize-sibling-calls -ffile-prefix-map=<repo>=. -fasynchronous-unwind-tables -DFORCE_DWARF -femit-dwarf-unwind=always -c <repo>/crates/sigil-engine/tests/fixtures/code-macho/calls.c -o x86.o
+
+$ /usr/bin/ld64.lld-21 -arch x86_64 -platform_version macos 11.0 11.0 -e _zero -no_uuid -no_adhoc_codesign -no_fixup_chains x86.o <repo>/crates/sigil-engine/tests/fixtures/code-macho/libSystem.tbd -o x86-executable
+
+$ /usr/bin/llvm-objdump-21 -dr x86-executable
+
+$ /usr/bin/llvm-readobj-21 --file-headers --sections --symbols --relocations x86-executable
+
+$ /usr/bin/llvm-dwarfdump-21 --eh-frame x86-executable
+
+$ /usr/bin/llvm-nm-21 --numeric-sort --print-size x86-executable
+
+$ /usr/bin/llvm-objdump-21 --macho --bind --lazy-bind --chained-fixups --unwind-info --indirect-symbols --private-headers --dyld-info x86-executable

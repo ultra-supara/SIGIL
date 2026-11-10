@@ -4,6 +4,7 @@
 // Runs the CLI binary (assert_cmd), and serves the API probe on loopback from this process.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -2517,6 +2518,97 @@ fn binary_code_session_is_byte_identical_but_for_the_observation() {
 }
 
 #[test]
+fn legacy_x86_order_duplicates_observe_and_saved_sessions_keep_the_code_contract() {
+    let models = store(true);
+    let install = TempDir::new().unwrap();
+    let install_root = install.path();
+    fs::create_dir_all(install.path().join("bin")).unwrap();
+    fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+    let exe = install.path().join("bin/ollama");
+    fs::copy(code_fixture("net-plt-gcc.so"), &exe).unwrap();
+    let duplicate = install.path().join("lib/ollama/copy.so");
+    fs::copy(&exe, &duplicate).unwrap();
+    let other = code_fixture("spawn.so");
+    let empty = write(
+        install.path(),
+        "empty.toml",
+        "schema = \"sigil-policy/1\"\nname = \"empty\"\n[scope]\n\
+         binary_audit = []\nbinary_code_audit = []\n\
+         install_audit = []\ninstall_code_audit = []\n",
+    );
+    let saved = install.path().join("saved.json");
+    for policy in [None, Some(&empty)] {
+        for enabled in [false, true] {
+            let mut flags: Vec<&dyn AsRef<OsStr>> = vec![&"--policy-time", &"2026-10-18T00:00:00Z"];
+            if enabled {
+                flags.push(&"--code");
+            }
+            if let Some(path) = policy {
+                flags.extend([&"--policy" as &dyn AsRef<OsStr>, path]);
+            }
+            let check = |result: Run| {
+                assert_eq!(result.code, 0, "{}", result.stderr);
+                let s = session_of(&result);
+                assert_eq!(s.request.code, enabled);
+                assert!(s.request.code_analysis.is_none());
+                assert!(s.artifacts.iter().all(|a| a.code_slice_inventory.is_none()));
+                assert!(!result
+                    .stderr
+                    .lines()
+                    .any(|line| line.starts_with("slice: ")));
+                assert!(!s.knowledge.iter().any(|k| k.id == "code-abi-signatures"));
+                if !enabled {
+                    assert!(s.code.is_empty());
+                    assert!(!s.request.budgets.contains_key("binary_code_bytes"));
+                    assert!(!s
+                        .coverage
+                        .iter()
+                        .any(|c| matches!(c.check.as_str(), "binary.code" | "artifacts.code")));
+                }
+                fs::write(&saved, &result.stdout).unwrap();
+                let mut verify: Vec<&dyn AsRef<OsStr>> = vec![&"session", &"verify", &saved];
+                if let Some(path) = policy {
+                    verify.extend([&"--policy" as &dyn AsRef<OsStr>, path]);
+                }
+                let verified = run(&verify);
+                assert_eq!(verified.code, 0, "{}", verified.stderr);
+                let rendered = run(&[&"session", &"render", &saved]);
+                assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+                assert_eq!(rendered.stdout, render_session(&s));
+                s
+            };
+            let mut args = flags.clone();
+            args.extend([&exe as &dyn AsRef<OsStr>, &other, &duplicate]);
+            let forward = check(binary(&args));
+            let mut args = flags.clone();
+            args.extend([&other as &dyn AsRef<OsStr>, &duplicate, &exe]);
+            let reverse = check(binary(&args));
+            assert_eq!(forward.code, reverse.code);
+            assert_eq!(forward.artifacts.len(), 2);
+            assert_eq!(forward.code.len(), if enabled { 2 } else { 0 });
+            if enabled {
+                assert_eq!(
+                    code_entry(&forward, 0).budget,
+                    code_entry(&forward, 2).budget
+                );
+            }
+            let mut args = flags.clone();
+            args.push(&exe);
+            let standalone = check(binary(&args));
+            for observe in [false, true] {
+                let mut args = flags.clone();
+                args.extend([&"--install-dir" as &dyn AsRef<OsStr>, &install_root]);
+                if observe {
+                    args.extend([&"--mode" as &dyn AsRef<OsStr>, &"observe"]);
+                }
+                let s = check(inspect(models.path(), &args));
+                assert_eq!(s.code, standalone.code);
+            }
+        }
+    }
+}
+
+#[test]
 fn binary_code_help_documents_the_flag_and_its_budget() {
     let r = binary(&[&"--help"]);
     assert_eq!(r.code, 0);
@@ -3460,6 +3552,354 @@ fn aarch64_capability_policy_round_trips_through_session_verify() {
                 "{}",
                 rendered.stdout
             );
+        }
+    }
+}
+
+#[test]
+fn macho_library_policy_binary_installation_and_saved_verification() {
+    let d = TempDir::new().unwrap();
+    let policy = d.path().join("deny-network.toml");
+    fs::write(&policy, "schema = \"sigil-policy/1\"\nname = \"no-network\"\n[scope]\nbinary_audit = []\n[[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\nreason = \"test\"\n").unwrap();
+    let models = store(true);
+    for name in [
+        "arm64-classic",
+        "x86-classic",
+        "duplicate-name-dylibs",
+        "universal-mixed",
+        "arm64-object.o",
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sigil-engine/tests/fixtures/code-macho")
+            .join(name);
+        let r = binary(&[
+            &"--code",
+            &fixture,
+            &"--policy",
+            &policy,
+            &"--fail-on",
+            &"fail",
+            &"--fail-on-incomplete",
+        ]);
+        let unbound = name == "arm64-object.o";
+        assert_eq!(r.code, if unbound { 4 } else { 3 }, "{name}: {}", r.stderr);
+        let s = session_of(&r);
+        assert_eq!(s.policy_violations.len(), usize::from(!unbound), "{name}");
+        if unbound {
+            assert!(s
+                .open_questions
+                .iter()
+                .any(|q| q.rule.as_str() == sigil_model::CAPABILITY_RULE));
+        } else {
+            assert_eq!(s.policy_violations[0].evidence.len(), 2, "{name}");
+        }
+        assert!(r.stderr.contains("slice:"));
+        if name == "universal-mixed" {
+            assert!(matches!(
+                s.outcome.completeness,
+                sigil_model::Completeness::Incomplete { .. }
+            ));
+            let incomplete_only = binary(&[
+                &"--code",
+                &fixture,
+                &"--policy",
+                &policy,
+                &"--fail-on-incomplete",
+            ]);
+            assert_eq!(incomplete_only.code, 4, "{}", incomplete_only.stderr);
+        }
+        let saved = d.path().join("session.json");
+        fs::write(&saved, &r.stdout).unwrap();
+        let verified = run(&[&"session", &"verify", &saved, &"--policy", &policy]);
+        assert_eq!(verified.code, 0, "{name}: {}", verified.stderr);
+        let rendered = run(&[&"session", &"render", &saved]);
+        assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+        assert_eq!(rendered.stdout, render_session(&s));
+        let args = if name == "x86-classic" {
+            "rdi=0, rsi=0, rdx=0"
+        } else {
+            "x0=0, x1=0, x2=0"
+        };
+        if !unbound {
+            assert!(
+                rendered.stdout.contains(&esc_md(args)),
+                "{}",
+                rendered.stdout
+            );
+        }
+        if name == "duplicate-name-dylibs" || unbound {
+            let install = TempDir::new().unwrap();
+            fs::create_dir_all(install.path().join("bin")).unwrap();
+            fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+            fs::copy(&fixture, install.path().join("bin/ollama")).unwrap();
+            let installed = inspect(
+                models.path(),
+                &[
+                    &"--code",
+                    &"--install-dir",
+                    &install.path(),
+                    &"--policy",
+                    &policy,
+                ],
+            );
+            assert_eq!(installed.code, 0, "{}", installed.stderr);
+            let mut ins = session_of(&installed);
+            assert_eq!(ins.code, s.code);
+            if unbound {
+                let questions = |s: &Session| {
+                    s.open_questions
+                        .iter()
+                        .filter(|q| q.rule.as_str() == sigil_model::CAPABILITY_RULE)
+                        .map(|q| q.evidence.clone())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(questions(&ins), questions(&s));
+            } else {
+                assert_eq!(
+                    ins.policy_violations[0].evidence,
+                    s.policy_violations[0].evidence
+                );
+                let md = render_session(&ins);
+                assert!(md.contains(&esc_md("2 direct calls; partial")), "{md}");
+            }
+            fs::write(&saved, &installed.stdout).unwrap();
+            assert_eq!(
+                run(&[&"session", &"verify", &saved, &"--policy", &policy]).code,
+                0
+            );
+            let sigil_model::CallTarget::Import {
+                macho_import: Some(w),
+                ..
+            } = &mut ins.code[0].call_sites[0].target
+            else {
+                unreachable!()
+            };
+            w.weak = !w.weak;
+            fs::write(&saved, serde_json::to_vec(&ins).unwrap()).unwrap();
+            assert_ne!(
+                run(&[&"session", &"verify", &saved, &"--policy", &policy]).code,
+                0
+            );
+        }
+    }
+}
+
+#[test]
+fn macho_saved_cxx_mapping_cannot_borrow_another_named_library() {
+    use sigil_model::*;
+    let d = TempDir::new().unwrap();
+    let text = "schema = \"sigil-policy/1\"\nname = \"cxx-pinned\"\n[[capabilities.deny]]\nfeature = \"cxx.file_write\"\naction = \"fail\"\nreason = \"test\"\n";
+    let path = d.path().join("deny-cxx.toml");
+    fs::write(&path, text).unwrap();
+    let policy = sigil_engine::policy::Policy::load(text).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sigil-engine/tests/fixtures/code-macho/duplicate-name-dylibs");
+    let produced = binary(&[&"--code", &fixture]);
+    assert_eq!(produced.code, 0);
+    let mut s = session_of(&produced);
+    s.code[0].call_sites.drain(..2);
+    let raw =
+        UntrustedText::new("__ZNSt3__14__fs10filesystem8__removeERKNS1_4pathEPNS_10error_codeE");
+    let mut imports: Vec<_> = [LIBCXX, LIBSYSTEM]
+        .into_iter()
+        .enumerate()
+        .map(|(i, lib)| MachOImport {
+            name: raw.clone(),
+            library: MachOLibrary::Dylib {
+                ordinal: i as u32 + 1,
+                name: Some(UntrustedText::new(lib)),
+            },
+            weak: false,
+        })
+        .collect();
+    s.code[0].call_sites[0].target = CallTarget::Import {
+        symbol: raw,
+        via: ImportVia::MachOStub,
+        macho_import: Some(imports[1].clone()),
+    };
+    let ContainerFacts::MachO(m) = &mut s.binaries[0].container else {
+        unreachable!()
+    };
+    m.load_dylibs = vec![UntrustedText::new(LIBCXX), UntrustedText::new(LIBSYSTEM)];
+    imports.sort();
+    m.imports = imports;
+    s.relations
+        .retain(|r| !matches!(r, Relation::Declares { .. }));
+    for lib in [LIBCXX, LIBSYSTEM] {
+        s.relations.push(Relation::Declares {
+            from: s.binaries[0].slice.clone(),
+            needed: UntrustedText::new(lib),
+            kind: DeclKind::MachOLoadDylib,
+        });
+    }
+    s.hints = sigil_engine::analyze::hints::derive(&s.binaries).unwrap();
+    let at = s.outcome.policy_time.clone();
+    sigil_engine::policy::evaluate(&mut s, &policy, at).unwrap();
+    assert!(s.policy_violations.is_empty());
+    s.validate().unwrap();
+    let saved = d.path().join("session.json");
+    fs::write(&saved, s.to_canonical_json().unwrap()).unwrap();
+    let verified = run(&[&"session", &"verify", &saved, &"--policy", &path]);
+    assert_eq!(verified.code, 0, "{}", verified.stderr);
+    let rendered = run(&[&"session", &"render", &saved]);
+    assert_eq!(rendered.code, 0, "{}", rendered.stderr);
+    let row = rendered
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("| cxx\\.file\\_write | "))
+        .unwrap();
+    assert!(row.contains("none found"), "{row}");
+    let rule = PolicyRuleRef::new("policy:capabilities.deny.cxx.file_write").unwrap();
+    s.policy_violations.push(PolicyViolation {
+        policy_rule: rule.clone(),
+        subject: Ref::Slice(s.code[0].slice.clone()),
+        evidence: vec![EvidenceRef::Code {
+            slice: s.code[0].slice.clone(),
+            loc: Loc::CallSite(s.code[0].call_sites[0].id.clone()),
+        }],
+        decision: PolicyDecision {
+            action: Action::Fail,
+            source: rule,
+            reason: Some("test".into()),
+            expires: None,
+        },
+    });
+    s.open_questions
+        .retain(|q| q.rule.as_str() != CAPABILITY_RULE);
+    s.outcome.verdict = Verdict::Fail;
+    fs::write(&saved, s.to_canonical_json().unwrap()).unwrap();
+    let rejected = run(&[&"session", &"verify", &saved, &"--policy", &path]);
+    assert_ne!(rejected.code, 0);
+    assert!(
+        rejected.stderr.contains("admitted direct call"),
+        "{}",
+        rejected.stderr
+    );
+}
+
+#[test]
+fn macho_thin_fat_install_service_observe_and_shared_budget() {
+    use sigil_model::{CoverageState, Ref};
+    let models = store(true);
+    for name in [
+        "arm64-classic",
+        "x86-classic",
+        "universal",
+        "universal-mixed",
+    ] {
+        let install = TempDir::new().unwrap();
+        fs::create_dir_all(install.path().join("bin")).unwrap();
+        fs::create_dir_all(install.path().join("lib/ollama")).unwrap();
+        let exe = install.path().join("bin/ollama");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../sigil-engine/tests/fixtures/code-macho")
+                .join(name),
+            &exe,
+        )
+        .unwrap();
+        let units = unit_for(install.path());
+        let unit = units.path().join("ollama.service");
+        let expected = session_of(&binary(&[&"--code", &exe]));
+        let slice_states = |s: &Session, check: &str| {
+            s.coverage
+                .iter()
+                .filter(|c| c.check.as_str() == check && matches!(c.scope, Ref::Slice(_)))
+                .map(|c| (c.scope.clone(), c.state.clone(), c.budget.clone()))
+                .collect::<Vec<_>>()
+        };
+        for args in [
+            vec![&"--install-dir" as &dyn AsRef<OsStr>, &install.path()],
+            vec![&"--service-unit" as &dyn AsRef<OsStr>, &unit],
+            vec![
+                &"--install-dir" as &dyn AsRef<OsStr>,
+                &install.path(),
+                &"--mode",
+                &"observe",
+            ],
+        ] {
+            let off = session_of(&inspect(models.path(), &args));
+            assert!(off.code.is_empty());
+            assert!(off.request.code_analysis.is_none());
+            let mut with_code = args.clone();
+            with_code.push(&"--code");
+            let r = inspect(models.path(), &with_code);
+            assert_eq!(r.code, 0, "{name}: {}", r.stderr);
+            let s = session_of(&r);
+            assert_eq!(s.code, expected.code, "{name}");
+            assert_eq!(
+                s.relations, off.relations,
+                "code cannot change service identity"
+            );
+            assert_eq!(
+                slice_states(&s, "artifacts.code"),
+                slice_states(&expected, "binary.code")
+            );
+            let parents: Vec<_> = s
+                .coverage
+                .iter()
+                .filter(|c| {
+                    c.check.as_str() == "artifacts.code" && !matches!(c.scope, Ref::Slice(_))
+                })
+                .collect();
+            assert!(!parents.is_empty());
+            for parent in parents {
+                assert_eq!(
+                    matches!(parent.state, CoverageState::Complete),
+                    name != "universal-mixed"
+                );
+            }
+        }
+        let off = session_of(&binary(&[&exe]));
+        assert!(off.code.is_empty());
+        assert!(off.request.code_analysis.is_none());
+        if name == "universal" {
+            // The first (x86) slice consumes 7094 bytes; the next slice cannot reset that cap.
+            let cap = "binary_code_bytes=7094";
+            for (check, r) in [
+                (
+                    "binary.code",
+                    binary(&[&"--code", &exe, &"--budget", &cap, &"--fail-on-incomplete"]),
+                ),
+                (
+                    "artifacts.code",
+                    inspect(
+                        models.path(),
+                        &[
+                            &"--code",
+                            &"--install-dir",
+                            &install.path(),
+                            &"--budget",
+                            &cap,
+                            &"--fail-on-incomplete",
+                        ],
+                    ),
+                ),
+            ] {
+                assert_eq!(r.code, 4, "{}", r.stderr);
+                let s = session_of(&r);
+                let children = slice_states(&s, check);
+                assert_eq!(children.len(), 2);
+                assert_eq!(
+                    children
+                        .iter()
+                        .filter(|(_, state, _)| matches!(state, CoverageState::Complete))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    children
+                        .iter()
+                        .map(|(_, _, b)| b.as_ref().map_or(0, |b| b.used))
+                        .sum::<u64>(),
+                    7094
+                );
+                assert!(s
+                    .coverage
+                    .iter()
+                    .filter(|c| c.check.as_str() == check && !matches!(c.scope, Ref::Slice(_)))
+                    .all(|c| !matches!(c.state, CoverageState::Complete)));
+            }
         }
     }
 }

@@ -44,6 +44,27 @@ fn every_example_validates_against_the_schema() {
     }
 }
 
+#[test]
+fn fat_container_gaps_are_optional_and_preserved_by_serde_and_schema() {
+    let mut value = gallery()
+        .into_iter()
+        .find(|(name, _)| *name == "MachOFacts")
+        .unwrap()
+        .1;
+    assert!(value.get("fat_gaps").is_none());
+    let old: MachOFacts = serde_json::from_value(value.clone()).unwrap();
+    assert!(old.fat_gaps.is_empty());
+    value["fat_gaps"] = json!(["binary_parse_bytes: 1920 exceeded"]);
+    let validator = validator_for(&schema(), "MachOFacts");
+    assert!(validator.is_valid(&value));
+    let parsed: MachOFacts = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(parsed.fat_gaps, ["binary_parse_bytes: 1920 exceeded"]);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+    value["fat_gaps"] = Value::Null;
+    assert!(!validator.is_valid(&value));
+    assert!(serde_json::from_value::<MachOFacts>(value).is_err());
+}
+
 // --- names: serde probes vs. schema ---------------------------------------------------------
 
 fn registered() -> Vec<(&'static str, schema_check::Probe)> {
@@ -131,6 +152,7 @@ const OPTIONAL_ON_READ: &[(&str, &str)] = &[
     ("ElfFacts", "returns"),
     ("MachOFacts", "imports"),
     ("MachOFacts", "little_endian"),
+    ("MachOFacts", "fat_gaps"),
     ("ProcessObs", "maps_read"),
     ("ElfFacts", "abi"),
     ("ProcessObs", "mnt_ns"),
@@ -396,6 +418,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 fat_cpu_type: Some(0x0100_000c),
                 fat_cpu_subtype: Some(0),
                 fat_alignment: Some(14),
+                fat_gaps: vec![],
                 file_type: 6,
                 flags: 0x200085,
                 uuid: Some("00112233445566778899aabbccddeeff".to_string()),
@@ -416,6 +439,7 @@ fn gallery() -> Vec<(&'static str, Value)> {
                 fat_cpu_type: None,
                 fat_cpu_subtype: None,
                 fat_alignment: None,
+                fat_gaps: vec![],
                 file_type: 6,
                 flags: 0x200085,
                 uuid: None,

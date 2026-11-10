@@ -106,9 +106,9 @@ enum InspectTarget {
 
 #[derive(Debug, Subcommand)]
 enum BinaryCommand {
-    /// Inspect one or more files into one session. An ELF executable, shared object, or
-    /// relocatable object gets its container facts; any other regular file is recorded as
-    /// unsupported; a path that is not a readable regular file is an error. With --code, the
+    /// Inspect one or more files into one session. ELF and thin/universal Mach-O executables,
+    /// shared libraries and relocatable objects get their container facts; any other regular file
+    /// is recorded as unsupported; a path that is not a readable regular file is an error. With --code, the
     /// direct call sites of capability imports are recorded too.
     Inspect(BinaryArgs),
 }
@@ -122,7 +122,8 @@ struct BinaryArgs {
     paths: Vec<PathBuf>,
     /// Also analyze code: the direct call sites of capability imports (connect, dlopen, getenv,
     /// …), with their arguments and functions, and a binary.code check per input. x86-64 and
-    /// AArch64 ELF64 little-endian; the file is never run or loaded.
+    /// AArch64 ELF64 little-endian and 64-bit little-endian Mach-O arm64/x86-64;
+    /// the file is never run or loaded.
     #[arg(long)]
     code: bool,
     /// A policy file (TOML) [default: the built-in policy]. Its binary_audit applies, and its
@@ -181,7 +182,7 @@ struct OllamaArgs {
     /// --install-dir [default: not read].
     #[arg(long, value_name = "FILE", conflicts_with = "install_dir")]
     service_unit: Option<PathBuf>,
-    /// Analyze direct capability-import calls in the installation's x86-64 and AArch64 ELF64 little-endian files.
+    /// Analyze direct capability-import calls in supported x86-64 and AArch64 ELF and Mach-O files.
     #[arg(long)]
     code: bool,
     /// Inventory only the model with this display name (e.g. llama3.2:latest).
@@ -1166,6 +1167,7 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
                 Some((slice, c))
             })
             .collect();
+        let capability_calls = sigil_model::capability_calls::CapabilityCalls::new(s);
         let mut slices: Vec<_> = s.artifacts.iter().flat_map(|a| &a.slices).collect();
         slices.sort_by(|a, b| a.id.cmp(&b.id));
         for slice in slices {
@@ -1175,6 +1177,35 @@ fn summary(s: &Session, out: Option<&Path>, unsaved: Option<&Sha256Hex>) {
                 slice.arch.name(),
                 entry_state(coverage.get(&slice.id).copied())
             ));
+            if capability_calls.marked_macho(&slice.id) {
+                let features: std::collections::BTreeSet<_> = s
+                    .hints
+                    .iter()
+                    .filter(|h| h.subject == slice.id && h.signal == sigil_model::Signal::Import)
+                    .map(|h| h.feature.as_str())
+                    .collect();
+                let capabilities: Vec<_> = features
+                    .into_iter()
+                    .map(|feature| {
+                        if !capability_calls.mapping_supported() {
+                            return format!("{feature} (call eligibility unavailable: unrecognized capability table)");
+                        }
+                        let evidence = capability_calls.evidence(&slice.id, feature);
+                        let unresolved = if evidence.unresolved.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {} unresolved direct calls", evidence.unresolved.len())
+                        };
+                        format!(
+                            "{feature} ({} admitted direct calls{unresolved})",
+                            evidence.admitted.len()
+                        )
+                    })
+                    .collect();
+                if !capabilities.is_empty() {
+                    lines.push(format!("  capabilities: {}", capabilities.join(", ")));
+                }
+            }
         }
     }
     lines.extend(release_line(s));

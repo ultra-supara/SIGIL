@@ -1,0 +1,1514 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {"name": "sigil", "version": "0.0.0-example", "git_rev": null},
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    },
+    {
+      "kind": "ReferenceManifest",
+      "id": "ollama-official",
+      "version": "2026-10-24",
+      "sha256": "f8c41578a78b985bb5f4006578fd9011478783f8ed993e025ce3a32d7c80589d"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "capabilities",
+      "version": "0.1.0",
+      "sha256": "2620e766e87f4ecc97f2bc24d3cd0e10cb538ca8c0ece532d69afaaf0ac7215c"
+    },
+    {
+      "kind": "SignatureDb",
+      "id": "code-abi-signatures",
+      "version": "1",
+      "sha256": "af6afceff3bd76c9e18ae0321cd8260ccc79c96354f4e35bfe09fca61efca735"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [
+      {"id": "install", "path": "/examples/sample-install"},
+      {"id": "models", "path": "/examples/empty-models"}
+    ],
+    "audit": ["installation_code"],
+    "required_checks": ["artifacts.code"],
+    "budgets": {
+      "binary_code_bytes": 268435456,
+      "binary_imports": 4096,
+      "binary_parse_bytes": 67108864,
+      "binary_scan_bytes": 67108864,
+      "dependency_candidates": 65536,
+      "dependency_contexts": 8192,
+      "dependency_search_paths": 65536,
+      "directory_entries": 16384,
+      "entries_listed": 65536,
+      "files_discovered": 4096,
+      "install_bytes": 68719476736,
+      "install_directory_entries": 16384,
+      "install_entries_listed": 16384,
+      "install_files_discovered": 4096,
+      "install_link_hops": 40,
+      "install_walk_depth": 32,
+      "link_hops": 40,
+      "manifest_bytes": 1048576,
+      "walk_depth": 32
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": true,
+    "code_analysis": "multiarch-v1"
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4",
+      "size": 928,
+      "format": "MachO",
+      "slices": [
+        {
+          "id": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+          "arch": "aarch64",
+          "offset": 0,
+          "size": 928,
+          "sha256": "98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4"
+        }
+      ],
+      "code_slice_inventory": "Complete"
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:install/bin/ollama",
+      "root": "install",
+      "path": "/examples/sample-install/bin/ollama",
+      "path_proof": {
+        "root_dev": 66308,
+        "root_ino": 10392024,
+        "parents": [{"name": "bin", "dev": 66308, "ino": 10392025}]
+      },
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 21,
+        "mode": 33204,
+        "uid": 1000,
+        "gid": 1000,
+        "size": 928,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": ["Walk"]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [],
+  "releases": [],
+  "reference_matches": [
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "bin/ollama",
+      "instance": "inst:install/bin/ollama",
+      "result": {
+        "File": {
+          "expected": "34b912df80d511571b161afd1455ba052f390350530ecb7797f1ddbf6da0417c",
+          "observed": "98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4"
+        }
+      }
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libcublas.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libcublas.so.12.8.5.5",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libcublasLt.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libcublasLt.so.12.8.5.5",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libcudart.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libcudart.so.12.8.90",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v12/libggml-cuda.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libcublas.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libcublas.so.13.1.1.3",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libcublasLt.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libcublasLt.so.13.1.1.3",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libcudart.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libcudart.so.13.0.96",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/cuda_v13/libggml-cuda.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-base.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-base.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-base.so.0.13.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-alderlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-cannonlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-cascadelake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-cooperlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-haswell.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-icelake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-ivybridge.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-piledriver.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-sandybridge.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-sapphirerapids.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-skylakex.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-sse42.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-x64.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml-cpu-zen4.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libggml.so.0.13.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libgomp.so.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libgomp.so.1.0.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama-common.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama-common.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama-common.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama-quantize-impl.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama-server-impl.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libllama.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libmtmd.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libmtmd.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/libmtmd.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/llama-quantize",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/llama-server",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/vulkan",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.5",
+      "member": "lib/ollama/vulkan/libggml-vulkan.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "bin/ollama",
+      "instance": "inst:install/bin/ollama",
+      "result": {
+        "File": {
+          "expected": "03f89bf3b38a7fb41e70da60c62d9df0c7681a32450e6281d05a445280adc4f1",
+          "observed": "98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4"
+        }
+      }
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libcublas.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libcublas.so.12.8.5.5",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libcublasLt.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libcublasLt.so.12.8.5.5",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libcudart.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libcudart.so.12.8.90",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v12/libggml-cuda.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libcublas.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libcublas.so.13.1.1.3",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libcublasLt.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libcublasLt.so.13.1.1.3",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libcudart.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libcudart.so.13.0.96",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/cuda_v13/libggml-cuda.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-base.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-base.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-base.so.0.13.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-alderlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-cannonlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-cascadelake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-cooperlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-haswell.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-icelake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-ivybridge.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-piledriver.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-sandybridge.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-sapphirerapids.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-skylakex.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-sse42.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-x64.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-cpu-zen4.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml.so.0.13.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libgomp.so.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libgomp.so.1.0.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama-common.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama-common.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama-common.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama-quantize-impl.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama-server-impl.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libllama.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libmtmd.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libmtmd.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libmtmd.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/llama-quantize",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/llama-server",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/vulkan",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/vulkan/libggml-vulkan.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "bin/ollama",
+      "instance": "inst:install/bin/ollama",
+      "result": {
+        "File": {
+          "expected": "856526267c71977efa7f542ea04e3dcba493b1b6ba3edbab766871c9ae69deb5",
+          "observed": "98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4"
+        }
+      }
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libcublas.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libcublas.so.12.8.5.5",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libcublasLt.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libcublasLt.so.12.8.5.5",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libcudart.so.12",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libcudart.so.12.8.90",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v12/libggml-cuda.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libcublas.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libcublas.so.13.1.1.3",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libcublasLt.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libcublasLt.so.13.1.1.3",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libcudart.so.13",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libcudart.so.13.0.96",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/cuda_v13/libggml-cuda.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-base.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-base.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-base.so.0.13.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-alderlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-cannonlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-cascadelake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-cooperlake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-haswell.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-icelake.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-ivybridge.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-piledriver.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-sandybridge.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-sapphirerapids.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-skylakex.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-sse42.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-x64.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml-cpu-zen4.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libggml.so.0.13.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libgomp.so.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libgomp.so.1.0.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama-common.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama-common.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama-common.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama-quantize-impl.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama-server-impl.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libllama.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libmtmd.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libmtmd.so.0",
+      "instance": null,
+      "result": {"Absent": {"kind": "Symlink"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/libmtmd.so.0.0.1",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/llama-quantize",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/llama-server",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/vulkan",
+      "instance": null,
+      "result": {"Absent": {"kind": "Directory"}}
+    },
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.7",
+      "member": "lib/ollama/vulkan/libggml-vulkan.so",
+      "instance": null,
+      "result": {"Absent": {"kind": "File"}}
+    }
+  ],
+  "binaries": [
+    {
+      "slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+      "container": {
+        "MachO": {
+          "is_64": true,
+          "little_endian": true,
+          "cpu_type": 16777228,
+          "cpu_subtype": 0,
+          "fat_cpu_type": null,
+          "fat_cpu_subtype": null,
+          "fat_alignment": null,
+          "file_type": 1,
+          "flags": 8192,
+          "uuid": null,
+          "id_dylib": null,
+          "load_dylibs": [],
+          "rpaths": [],
+          "dylinker": null,
+          "imports": [{"name": "_connect", "library": "Unbound", "weak": false}]
+        }
+      },
+      "go": null,
+      "gaps": []
+    }
+  ],
+  "hints": [
+    {
+      "subject": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+      "feature": "posix.network",
+      "signal": "Import",
+      "value": "_connect",
+      "at": {"Symbol": "_connect"}
+    }
+  ],
+  "code": [
+    {
+      "slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+      "functions": [
+        {"id": "fn:0x1d8", "entry": 472, "end": 508, "bounds": "MachOCompactUnwind", "names": []},
+        {"id": "fn:0x1fc", "entry": 508, "end": 544, "bounds": "MachOCompactUnwind", "names": []}
+      ],
+      "call_sites": [
+        {
+          "id": "cs:0x1ec",
+          "caller": "fn:0x1d8",
+          "addr": 492,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOReloc",
+              "macho_import": {"name": "_connect", "library": "Unbound", "weak": false}
+            }
+          },
+          "args": [],
+          "args_layout": {"Partial": {"reason": "unknown or unsupported ABI prototype"}}
+        },
+        {
+          "id": "cs:0x210",
+          "caller": "fn:0x1fc",
+          "addr": 528,
+          "kind": "Call",
+          "target": {
+            "Import": {
+              "symbol": "_connect",
+              "via": "MachOReloc",
+              "macho_import": {"name": "_connect", "library": "Unbound", "weak": false}
+            }
+          },
+          "args": [],
+          "args_layout": {"Partial": {"reason": "unknown or unsupported ABI prototype"}}
+        }
+      ],
+      "predicate_checks": [],
+      "close_checks": [],
+      "guard_regions": [],
+      "param_mappings": []
+    }
+  ],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "artifacts.code",
+      "scope": {
+        "Artifact": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4"
+      },
+      "state": {
+        "Partial": {
+          "missing": [
+            "code: incomplete slice sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0"
+          ]
+        }
+      },
+      "budget": {"budget": "binary_code_bytes", "used": 1248, "limit": 268435456}
+    },
+    {
+      "check": "artifacts.code",
+      "scope": {"Root": "install"},
+      "state": {
+        "Partial": {"missing": ["one or more binary contents have incomplete code coverage"]}
+      },
+      "budget": null
+    },
+    {
+      "check": "artifacts.code",
+      "scope": {
+        "Slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0"
+      },
+      "state": {
+        "Partial": {
+          "missing": [
+            "code: Mach-O unwind: object __eh_frame relocations unsupported",
+            "code: argument layout incomplete at cs:0x1ec: unknown or unsupported ABI prototype",
+            "code: argument layout incomplete at cs:0x210: unknown or unsupported ABI prototype"
+          ]
+        }
+      },
+      "budget": {"budget": "binary_code_bytes", "used": 1248, "limit": 268435456}
+    },
+    {
+      "check": "artifacts.container",
+      "scope": {"Root": "install"},
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "artifacts.dependencies",
+      "scope": {"Root": "install"},
+      "state": {
+        "Partial": {"missing": ["inst:install/bin/ollama: Mach-O dependencies: declared only"]}
+      },
+      "budget": null
+    },
+    {
+      "check": "artifacts.discovery",
+      "scope": {"Root": "install"},
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "artifacts.identity",
+      "scope": {"Root": "install"},
+      "state": {"Partial": {"missing": ["bin/ollama: string scan: ELF only"]}},
+      "budget": null
+    },
+    {
+      "check": "artifacts.release",
+      "scope": {"Root": "install"},
+      "state": {"Partial": {"missing": ["bin/ollama: matches no reference"]}},
+      "budget": null
+    },
+    {
+      "check": "model_store.inventory",
+      "scope": {"Root": "models"},
+      "state": {"Unavailable": {"why": "NotFound"}},
+      "budget": null
+    },
+    {
+      "check": "values.configured",
+      "scope": "Audit",
+      "state": {"OutOfScope": {"why": "no service unit was supplied"}},
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [
+    {
+      "id": "capability:posix.network@sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+      "rule": "binary.capability_call",
+      "subject": {
+        "Slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0"
+      },
+      "conditions": [
+        {
+          "id": "calls:posix.network",
+          "state": {
+            "Unknown": {
+              "reason": {"CheckIncomplete": {"check": "artifacts.code"}},
+              "evidence": null
+            }
+          },
+          "unresolved": []
+        }
+      ],
+      "evidence": [
+        {
+          "Code": {
+            "slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+            "loc": {"CallSite": "cs:0x1ec"}
+          }
+        },
+        {
+          "Code": {
+            "slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+            "loc": {"CallSite": "cs:0x210"}
+          }
+        },
+        {
+          "Code": {
+            "slice": "sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0",
+            "loc": {"Symbol": "_connect"}
+          }
+        }
+      ],
+      "decision": {
+        "treatment": "CountAsGap",
+        "source": "policy:open_questions.default",
+        "reason": null
+      }
+    }
+  ],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": {
+      "Incomplete": {
+        "missing_required": ["artifacts.code"],
+        "gaps": [
+          "capability:posix.network@sha256:98c783e74b81a6ff6acdf8363257f9aa48ec64aae88bfc4faa3633cc24db1aa4#aarch64@0"
+        ]
+      }
+    },
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  }
+}

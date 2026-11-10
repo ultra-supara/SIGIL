@@ -1,0 +1,119 @@
+{
+  "schema": "sigil-aibom/2",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "session": {
+    "schema": "sigil-session/1",
+    "sha256": "cbfa1b1f4a696d7c6f6f239a225251f9cacdf351174cd8de848a3e4d72b2a417",
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "macho-examples",
+      "version": "sigil-policy/1",
+      "sha256": "e2726aef38f7acb26edc944a974e6d6d5c16365d516009cad92887ff5681ce96"
+    }
+  },
+  "outcome": {
+    "verdict": "Fail",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-11-04T00:00:00Z"
+  },
+  "runtime": {
+    "processes": [],
+    "listeners": [],
+    "api": [],
+    "releases": []
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1",
+      "size": 65776,
+      "format": "MachOFat",
+      "paths": [
+        "/examples/code-macho/universal"
+      ],
+      "slices": [
+        {
+          "id": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768",
+          "arch": "aarch64",
+          "sha256": "8ecf0df0eba33104e40f536a6118704118b30cb2c674f231f4c7e480b9c07a8f",
+          "components": []
+        },
+        {
+          "id": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096",
+          "arch": "x86_64",
+          "sha256": "a347b198c4a20dd4f83ab6d063f8e55c3a1c24063f2ba951cd06c41d6179017f",
+          "components": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "policy_violations": [
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#aarch64@32768"
+      },
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    },
+    {
+      "policy_rule": "policy:capabilities.deny.posix.network",
+      "subject": {
+        "Slice": "sha256:bdfaeeb80f0cdbe8aa17b54eb11fa8782016ffed530f9f636efdfc6d92594eb1#x86_64@4096"
+      },
+      "decision": {
+        "action": "Fail",
+        "source": "policy:capabilities.deny.posix.network",
+        "reason": "example denies admitted network calls",
+        "expires": null
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "check": "binary.code",
+      "required": true,
+      "closed": true,
+      "states": {
+        "Complete": 3
+      }
+    },
+    {
+      "check": "binary.container",
+      "required": false,
+      "closed": true,
+      "states": {
+        "Complete": 1
+      }
+    },
+    {
+      "check": "binary.dependencies",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    },
+    {
+      "check": "binary.identity",
+      "required": false,
+      "closed": false,
+      "states": {
+        "Unsupported": 1
+      }
+    }
+  ]
+}

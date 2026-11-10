@@ -350,6 +350,7 @@ fn macho_facts(cpu_type: i32, cpu_subtype: i32, fat: (i32, i32)) -> ContainerFac
         fat_cpu_type: Some(fat.0),
         fat_cpu_subtype: Some(fat.1),
         fat_alignment: Some(12),
+        fat_gaps: vec![],
         file_type: 2,
         flags: 0,
         uuid: None,
