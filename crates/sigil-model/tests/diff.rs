@@ -69,3 +69,43 @@ fn canonical_json_orders_changes_by_kind_then_text() {
     assert_eq!(name, &t("a:latest"));
     assert_eq!(back.to_canonical_json().unwrap(), json);
 }
+
+#[test]
+fn every_comparison_builder_gives_a_valid_session() {
+    for case in diff_cases() {
+        assert_valid(&case.baseline);
+        assert_valid(&case.current);
+    }
+    let mut more = vec![
+        static_store(),
+        binary_denied(),
+        relabel_binary_inputs(&binary_inspect()),
+        ggml_base_matched(),
+        install_with_ggml(0x11),
+    ];
+    let mut two = compare_store();
+    add_model_n(&mut two);
+    more.push(two.clone());
+    let mut open = compare_store();
+    inventory_partial(&mut open);
+    more.push(open);
+    let mut relicensed = two;
+    license_unstable(&mut relicensed);
+    relicense(&mut relicensed, MODEL_N, "Apache-2.0");
+    more.push(relicensed);
+    let mut extra = install_with_ggml(0x11);
+    add_extra_library(&mut extra);
+    more.push(extra);
+    let mut undiscovered = install_with_ggml(0x11);
+    discovery_partial(&mut undiscovered);
+    more.push(undiscovered);
+    let mut moved = compare_store();
+    new_socket(&mut moved, 7999);
+    more.push(moved);
+    let mut lan = compare_store();
+    add_listener(&mut lan, "10.0.0.5", 8080, 9001);
+    more.push(lan);
+    for s in &more {
+        assert_valid(s);
+    }
+}
