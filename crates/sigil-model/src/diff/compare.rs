@@ -28,6 +28,7 @@ pub fn compare(
     super::outcome::compare(&b, &c, &mut found);
     super::models::compare(&b, &c, &mut found);
     super::files::compare(&b, &c, &mut found);
+    super::listeners::compare(&b, &c, &mut found);
     let mut diff = Diff {
         schema: DiffSchema::V1,
         tool,

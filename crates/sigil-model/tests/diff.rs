@@ -427,3 +427,50 @@ fn a_claim_gone_where_identity_was_not_closed_is_not_comparable() {
         }]
     );
 }
+
+#[test]
+fn loopback_to_wildcard_is_a_wider_bind_and_back_a_narrower_one() {
+    let mut wide = compare_store();
+    bind_wildcard(&mut wide, 7002);
+    let diff = diff_of(&compare_store(), &wide);
+    assert!(diff.changes.contains(&Change::BindWidened {
+        port: 11434,
+        baseline: BindClass::Loopback,
+        current: BindClass::Wildcard,
+        baseline_listeners: vec![id("listener:tcp/127.0.0.1:11434#7001")],
+        current_listeners: vec![id("listener:tcp/0.0.0.0:11434#7002")],
+    }));
+    assert!(has(&diff_of(&wide, &compare_store()), "BindNarrowed"));
+}
+
+#[test]
+fn a_new_socket_on_the_same_address_is_no_change() {
+    let mut moved = compare_store();
+    new_socket(&mut moved, 7999);
+    let diff = diff_of(&compare_store(), &moved);
+    assert!(diff.changes.is_empty(), "{:?}", diff.changes);
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+}
+
+#[test]
+fn a_listener_added_where_binds_were_closed_is_reported() {
+    let mut more = compare_store();
+    add_listener(&mut more, "10.0.0.5", 8080, 9001);
+    let diff = diff_of(&compare_store(), &more);
+    assert!(diff.changes.contains(&Change::ListenerAdded {
+        port: 8080,
+        class: BindClass::Private,
+        listeners: vec![id("listener:tcp/10.0.0.5:8080#9001")],
+    }));
+}
+
+#[test]
+fn listeners_of_an_observe_run_are_not_comparable_with_a_static_run() {
+    let diff = diff_of(&static_store(), &compare_store());
+    assert!(!has(&diff, "ListenerAdded"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::Port { port: 11434 },
+        checks: ids(&[BINDS]),
+        open_in: Side::Baseline,
+    }));
+}
