@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
+use sigil_model::diff::{Change, Diff, LicenseState};
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
 use sigil_model::{
@@ -3902,4 +3903,152 @@ fn macho_thin_fat_install_service_observe_and_shared_budget() {
             }
         }
     }
+}
+
+// --- compare (#16, PR-16a) ----------------------------------------------------------------------
+
+fn diff_case(case: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas/examples/diff-v1")
+        .join(case)
+}
+
+#[test]
+fn compare_writes_the_diff_of_two_saved_sessions() {
+    let case = diff_case("05-loopback-to-wildcard");
+    let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));
+    let r = run(&[&"compare", &"--baseline", &baseline, &"--current", &current]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let got: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let mut expected: Diff =
+        serde_json::from_str(&fs::read_to_string(case.join("diff.json")).unwrap()).unwrap();
+    // The fixture was compared by the example tool; this is the CLI's own.
+    assert_eq!(got.tool.name, "sigil");
+    expected.tool = got.tool.clone();
+    assert_eq!(got, expected);
+    assert_eq!(r.stdout, expected.to_canonical_json().unwrap());
+    let summary = format!(
+        "compare: {} changes, {} not comparable",
+        expected.changes.len(),
+        expected.not_comparable.len()
+    );
+    assert!(r.stderr.contains(&summary), "{}", r.stderr);
+    let md = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--format",
+        &"md",
+    ]);
+    assert_eq!(md.code, 0, "{}", md.stderr);
+    assert_eq!(md.stdout, fs::read_to_string(case.join("diff.md")).unwrap());
+}
+
+#[test]
+fn compare_is_deterministic_and_one_session_twice_has_no_differences() {
+    let s = diff_case("01-identical").join("baseline.json");
+    let first = run(&[&"compare", &"--baseline", &s, &"--current", &s]);
+    let second = run(&[&"compare", &"--baseline", &s, &"--current", &s]);
+    assert_eq!(first.code, 0, "{}", first.stderr);
+    assert_eq!(first.stdout, second.stdout);
+    let diff: Diff = serde_json::from_str(&first.stdout).unwrap();
+    assert!(diff.changes.is_empty() && diff.not_comparable.is_empty());
+}
+
+#[test]
+fn compare_names_an_input_that_is_not_a_valid_session() {
+    let dir = TempDir::new().unwrap();
+    let broken = write(dir.path(), "current.json", "{not json");
+    let good = diff_case("01-identical").join("baseline.json");
+    let r = run(&[&"compare", &"--baseline", &good, &"--current", &broken]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.contains("current.json"), "{}", r.stderr);
+    assert!(r.stderr.contains("not valid JSON"), "{}", r.stderr);
+    assert!(r.stdout.is_empty());
+}
+
+#[test]
+fn compare_never_writes_an_input() {
+    let dir = TempDir::new().unwrap();
+    let case = diff_case("05-loopback-to-wildcard");
+    let baseline = dir.path().join("baseline.json");
+    fs::copy(case.join("baseline.json"), &baseline).unwrap();
+    let current = case.join("current.json");
+    let before = fs::read(&baseline).unwrap();
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--out",
+        &baseline,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("is the input"), "{}", r.stderr);
+    assert_eq!(fs::read(&baseline).unwrap(), before);
+    let link = dir.path().join("link.json");
+    fs::hard_link(&baseline, &link).unwrap();
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--out",
+        &link,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("hard link"), "{}", r.stderr);
+    assert_eq!(fs::read(&baseline).unwrap(), before);
+    let out = dir.path().join("out/diff.md");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--format",
+        &"md",
+        &"--out",
+        &out,
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.is_empty());
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        fs::read_to_string(case.join("diff.md")).unwrap()
+    );
+}
+
+#[test]
+fn compare_of_two_inspections_reports_a_removed_license() {
+    let (licensed, unlicensed) = (store(true), store(false));
+    let a = inspect(licensed.path(), &[]);
+    let b = inspect(unlicensed.path(), &[]);
+    let dir = TempDir::new().unwrap();
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let r = run(&[&"compare", &"--baseline", &pa, &"--current", &pb]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert!(
+        diff.changes.iter().any(|c| matches!(
+            c,
+            Change::FindingNew { rule, .. } if rule.as_str() == "model.license_missing"
+        )),
+        "{diff:#?}"
+    );
+    assert!(
+        diff.changes.iter().any(|c| matches!(
+            c,
+            Change::LicenseChanged {
+                current: LicenseState::NoLayer,
+                ..
+            }
+        )),
+        "{diff:#?}"
+    );
 }
