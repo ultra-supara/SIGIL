@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 
 use sigil_model::diff::*;
 use sigil_model::render::aibom::ReleaseBasisKind;
-use sigil_model::*;
 
 use super::*;
 
