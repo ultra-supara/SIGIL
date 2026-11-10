@@ -1640,8 +1640,13 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
     };
     emit(&document, target.as_ref(), &input_inodes(&inputs))?;
     eprintln!(
-        "compare: {} changes, {} not comparable (baseline sha256:{}, current sha256:{})",
+        "compare: {} {}, {} not comparable (baseline sha256:{}, current sha256:{})",
         diff.changes.len(),
+        if diff.changes.len() == 1 {
+            "change"
+        } else {
+            "changes"
+        },
         diff.not_comparable.len(),
         diff.baseline.sha256,
         diff.current.sha256

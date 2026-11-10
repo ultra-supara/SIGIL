@@ -8,7 +8,7 @@
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
 
-1 changes\, 0 not comparable\.
+1 change\, 0 not comparable\.
 
 ## Installation
 

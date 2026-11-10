@@ -70,8 +70,13 @@ pub fn markdown(diff: &Diff) -> String {
         return out;
     }
     out.push_str(&esc(&format!(
-        "{} changes, {} not comparable.",
+        "{} {}, {} not comparable.",
         d.changes.len(),
+        if d.changes.len() == 1 {
+            "change"
+        } else {
+            "changes"
+        },
         d.not_comparable.len()
     )));
     out.push_str("\n\n");
@@ -137,31 +142,36 @@ fn policy_ref(k: Option<&KnowledgeRef>) -> String {
 }
 
 /// Each side's decisions: the action and its source, with the reason and expiry when present.
+/// The escaped cell of a decision change. Each value is cut on its own, so a long reason on one
+/// side leaves the other side whole.
 fn decisions_change(baseline: &[PolicyDecision], current: &[PolicyDecision]) -> String {
     format!(
-        "baseline: {}; current: {}",
+        "{}{}{}{}",
+        esc("baseline: "),
         decisions(baseline),
+        esc("; current: "),
         decisions(current)
     )
 }
 
 fn decisions(d: &[PolicyDecision]) -> String {
     if d.is_empty() {
-        return "none".to_string();
+        return esc("none");
     }
     d.iter()
         .map(|d| {
-            let mut text = format!("{} ({})", action(d.action), d.source);
+            let mut text = esc(&format!("{} ({})", action(d.action), d.source));
             if let Some(reason) = &d.reason {
-                text.push_str(&format!(", reason: {reason}"));
+                text.push_str(&esc(", reason: "));
+                text.push_str(&esc(reason));
             }
             if let Some(expires) = &d.expires {
-                text.push_str(&format!(", expires {expires}"));
+                text.push_str(&esc(&format!(", expires {expires}")));
             }
             text
         })
         .collect::<Vec<_>>()
-        .join("; ")
+        .join(&esc("; "))
 }
 
 /// A change's section (an index into [`SECTIONS`]) and its escaped cells.
@@ -228,7 +238,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 esc("new"),
                 esc(rule.as_str()),
                 on(key, at),
-                esc(&joined(current)),
+                cell(current, ", "),
             ],
         ),
         Change::FindingResolved {
@@ -242,7 +252,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 esc("resolved"),
                 esc(rule.as_str()),
                 on(key, at),
-                esc(&joined(baseline)),
+                cell(baseline, ", "),
             ],
         ),
         Change::FindingDecisionChanged {
@@ -257,7 +267,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 esc("decision changed"),
                 esc(rule.as_str()),
                 on(key, at),
-                esc(&decisions_change(baseline, current)),
+                decisions_change(baseline, current),
             ],
         ),
         Change::ViolationNew {
@@ -270,7 +280,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 esc("new"),
                 esc(policy_rule.as_str()),
                 subject_key(key).markdown(),
-                esc(&refs(current)),
+                refs(current),
             ],
         ),
         Change::ViolationResolved {
@@ -283,7 +293,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 esc("resolved"),
                 esc(policy_rule.as_str()),
                 subject_key(key).markdown(),
-                esc(&refs(baseline)),
+                refs(baseline),
             ],
         ),
         Change::ViolationDecisionChanged {
@@ -297,7 +307,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 esc("decision changed"),
                 esc(policy_rule.as_str()),
                 subject_key(key).markdown(),
-                esc(&decisions_change(baseline, current)),
+                decisions_change(baseline, current),
             ],
         ),
         Change::ModelAdded { model, name } => (
@@ -392,8 +402,8 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             vec![
                 esc("release"),
                 esc(product.as_str()),
-                esc(&release(baseline.as_ref())),
-                esc(&release(current.as_ref())),
+                release(baseline.as_ref()),
+                release(current.as_ref()),
             ],
         ),
         Change::ComponentChanged {
@@ -476,8 +486,24 @@ fn states(c: &CheckState) -> String {
     text
 }
 
+/// The escaped cell of `refs`, each one cut on its own.
 fn refs(r: &[Ref]) -> String {
-    r.iter().map(subject).collect::<Vec<_>>().join("; ")
+    r.iter()
+        .map(|r| esc(&subject(r)))
+        .collect::<Vec<_>>()
+        .join(&esc("; "))
+}
+
+/// The escaped cell of a list of values, each one cut on its own. "none" when empty.
+fn cell<T: std::fmt::Display>(items: &[T], sep: &str) -> String {
+    if items.is_empty() {
+        return esc("none");
+    }
+    items
+        .iter()
+        .map(|i| esc(&i.to_string()))
+        .collect::<Vec<_>>()
+        .join(&esc(sep))
 }
 
 fn on(key: &SubjectKey, at: &str) -> String {
@@ -541,13 +567,17 @@ fn read(content: Option<&ArtifactId>) -> String {
 
 fn release(r: Option<&ReleaseState>) -> String {
     let Some(r) = r else {
-        return "no claim".to_string();
+        return esc("no claim");
     };
     let basis = match r.basis {
         ReleaseBasisKind::ReferenceMatches => "reference matches",
         ReleaseBasisKind::SelfReportedCommit => "consistent with a reported commit",
     };
-    format!("{} ({basis})", r.candidates.join(", "))
+    format!(
+        "{}{}",
+        cell(&r.candidates, ", "),
+        esc(&format!(" ({basis})"))
+    )
 }
 
 fn component_state(c: Option<&ComponentState>) -> Shown {

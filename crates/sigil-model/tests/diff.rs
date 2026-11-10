@@ -1140,6 +1140,36 @@ fn an_override_of_a_finding_is_a_finding_decision_change() {
     assert!(diff_of(&waived, &waived).changes.is_empty());
 }
 
+#[test]
+fn a_long_value_does_not_cut_the_other_side_of_a_decision_change() {
+    let rule = "model.license_missing";
+    let long = "x".repeat(600);
+    let mut base = diff_of(&compare_store(), &compare_store());
+    base.changes = vec![Change::FindingDecisionChanged {
+        rule: id(rule),
+        subject: SubjectKey::Model(id(MODEL_M)),
+        at: String::new(),
+        baseline: vec![waiver(rule, &long, "2026-12-31")],
+        current: vec![waiver(rule, "short reason", "2027-01-31")],
+    }];
+    let md = markdown(&base);
+    assert!(md.contains(&esc_md("; current: ")), "{md}");
+    assert!(md.contains(&esc_md("short reason")), "{md}");
+    assert!(md.contains(&esc_md("2027-01-31")), "{md}");
+}
+
+#[test]
+fn one_change_is_not_called_changes() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = vec![Change::ModelAdded {
+        model: id(MODEL_M),
+        name: UntrustedText::new("m"),
+    }];
+    let md = markdown(&diff);
+    assert!(md.contains(&esc_md("1 change, 0 not comparable.")), "{md}");
+    assert!(!md.contains(&esc_md("1 changes")), "{md}");
+}
+
 /// `s` with every set-like list reversed (manifest layer order is evidence, so it stays).
 fn reversed(s: &Session) -> Session {
     let mut s = s.clone();

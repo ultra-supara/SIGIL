@@ -3928,8 +3928,13 @@ fn compare_writes_the_diff_of_two_saved_sessions() {
     assert_eq!(got, expected);
     assert_eq!(r.stdout, expected.to_canonical_json().unwrap());
     let summary = format!(
-        "compare: {} changes, {} not comparable",
+        "compare: {} {}, {} not comparable",
         expected.changes.len(),
+        if expected.changes.len() == 1 {
+            "change"
+        } else {
+            "changes"
+        },
         expected.not_comparable.len()
     );
     assert!(r.stderr.contains(&summary), "{}", r.stderr);
