@@ -109,3 +109,59 @@ fn every_comparison_builder_gives_a_valid_session() {
         assert_valid(s);
     }
 }
+
+#[test]
+fn the_verdict_changes_on_its_own() {
+    let mut warn = compare_store();
+    license_removed(&mut warn);
+    let diff = diff_of(&compare_store(), &warn);
+    assert!(diff.changes.contains(&Change::VerdictChanged {
+        baseline: Verdict::Pass,
+        current: Verdict::Warn,
+    }));
+    assert!(!has(&diff, "CompletenessChanged"), "{:?}", kinds(&diff));
+}
+
+#[test]
+fn completeness_changes_only_when_its_kind_does() {
+    let mut license_open = compare_store();
+    license_unstable(&mut license_open);
+    let mut integrity_open = compare_store();
+    blob_missing(&mut integrity_open);
+    // Incomplete on both sides, for different checks: the checks say it.
+    let diff = diff_of(&license_open, &integrity_open);
+    assert!(!has(&diff, "CompletenessChanged"), "{:?}", kinds(&diff));
+    assert!(diff
+        .changes
+        .iter()
+        .any(|c| matches!(c, Change::CheckOpened { check, .. } if check.as_str() == INTEGRITY)));
+    assert!(diff
+        .changes
+        .iter()
+        .any(|c| matches!(c, Change::CheckClosed { check, .. } if check.as_str() == LICENSE)));
+    let diff = diff_of(&compare_store(), &license_open);
+    assert!(diff.changes.contains(&Change::CompletenessChanged {
+        baseline: Completeness::Complete,
+        current: license_open.outcome.completeness.clone(),
+    }));
+}
+
+#[test]
+fn a_check_with_no_entries_is_open() {
+    let diff = diff_of(&static_store(), &compare_store());
+    let (baseline, current) = diff
+        .changes
+        .iter()
+        .find_map(|c| match c {
+            Change::CheckClosed {
+                check,
+                baseline,
+                current,
+            } if check.as_str() == BINDS => Some((baseline.clone(), current.clone())),
+            _ => None,
+        })
+        .expect("exposure.binds is closed now");
+    assert!(baseline.states.is_empty() && !baseline.required);
+    assert_eq!(current.states.get("Complete"), Some(&2));
+    assert!(current.required);
+}

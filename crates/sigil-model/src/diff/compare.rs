@@ -24,7 +24,8 @@ pub fn compare(
 ) -> Diff {
     let b = canonical(baseline.as_session());
     let c = canonical(current.as_session());
-    let found = Found::default();
+    let mut found = Found::default();
+    super::outcome::compare(&b, &c, &mut found);
     let mut diff = Diff {
         schema: DiffSchema::V1,
         tool,
