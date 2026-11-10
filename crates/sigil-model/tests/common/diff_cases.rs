@@ -457,6 +457,93 @@ pub fn add_extra_library(s: &mut Session) {
     settle(s);
 }
 
+/// libggml is gone from the installation: its file, its content, its claim and its reference
+/// row. The test IDs are `inst:lib/ollama/…` under the root `install`, so the root an ID names
+/// (`lib`) is not the instance's.
+pub fn ggml_uninstalled(s: &mut Session) {
+    let gone = |i: &FileInstance| i.id.as_str() == GGML;
+    let read: Vec<ArtifactId> = s
+        .instances
+        .iter()
+        .filter(|i| gone(i))
+        .filter_map(|i| match &i.content {
+            InstanceContent::Read { artifact } => Some(artifact.clone()),
+            InstanceContent::NotRead { .. } => None,
+        })
+        .collect();
+    s.instances.retain(|i| !gone(i));
+    s.artifacts.retain(|a| !read.contains(&a.id));
+    s.components
+        .retain(|c| !read.contains(&c.subject.artifact()));
+    s.reference_matches
+        .retain(|r| r.instance.as_ref().map(InstanceId::as_str) != Some(GGML));
+    settle(s);
+}
+
+/// The installation's identity check ran to the end: `artifacts.identity` is complete on the
+/// install root (only valid without an unscanned binary there).
+pub fn identity_closed(s: &mut Session) {
+    s.coverage.push(coverage(
+        "artifacts.identity",
+        Ref::Root(id("install")),
+        CoverageState::Complete,
+    ));
+    settle(s);
+}
+
+/// The policy denies `ggml`: a FAIL on libggml's claim.
+pub fn ggml_denied(s: &mut Session) {
+    let rule: PolicyRuleRef = id("policy:components.deny.ggml");
+    let claim = s
+        .components
+        .iter()
+        .find(|c| c.component.as_str() == "ggml")
+        .expect("libggml is claimed");
+    s.policy_violations.push(PolicyViolation {
+        policy_rule: rule.clone(),
+        subject: Ref::Component {
+            slice: claim.subject.clone(),
+            component: claim.component.clone(),
+        },
+        evidence: vec![],
+        decision: decision(Action::Fail, rule.as_str()),
+    });
+    settle(s);
+}
+
+/// The store's integrity check did not run: no `model_store.integrity` entry.
+pub fn integrity_not_run(s: &mut Session) {
+    s.coverage.retain(|c| c.check.as_str() != INTEGRITY);
+    s.request
+        .required_checks
+        .retain(|c| c.as_str() != INTEGRITY);
+    settle(s);
+}
+
+/// The store's license check did not run: no `model_store.license` entry.
+pub fn license_not_run(s: &mut Session) {
+    s.coverage.retain(|c| c.check.as_str() != LICENSE);
+    s.request.required_checks.retain(|c| c.as_str() != LICENSE);
+    settle(s);
+}
+
+/// A finding of `rule`, a model-store rule without a check of its own, on model `model`.
+pub fn other_model_finding(s: &mut Session, rule: &str, model: &str) {
+    let manifest = model_mut(s, model).manifest.clone();
+    let mut f = observed(
+        "model.blob_missing",
+        Ref::Model(id(model)),
+        "",
+        "blob_absent",
+        vec![EvidenceRef::Instance { instance: manifest }],
+    );
+    f.id = id(&format!("finding:{rule}@{model}"));
+    f.rule = id(rule);
+    f.decision = decision(Action::Warn, &format!("default:{rule}"));
+    s.findings.push(f);
+    settle(s);
+}
+
 /// The installation's walk was cut short: discovery is open.
 pub fn discovery_partial(s: &mut Session) {
     set_state(

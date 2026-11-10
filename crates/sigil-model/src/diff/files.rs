@@ -5,12 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::compare::{checks, open_in, Found};
 use super::key;
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for, placement, placements_of, scope_of, IDENTITY,
+    arch_of, checks_at, closed_everywhere, closed_for_under, placement, placements_of, root_at,
+    scope_of, IDENTITY,
 };
 use crate::artifact::{FileInstance, InstanceContent};
 use crate::binary_input::{is_binary_root, BINARY_CONTAINER};
 use crate::diff::{Change, ComponentState, Item, Placement, ReleaseState, Side};
-use crate::id::{ArtifactId, ComponentKey};
+use crate::id::{ArtifactId, ComponentKey, RootId};
 use crate::identity::ReleaseBasis;
 use crate::reference::{ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, INSTALL_ROOT, SERVICE_UNIT_ROOT};
 use crate::render::aibom::ReleaseBasisKind;
@@ -181,10 +182,11 @@ fn releases(b: &Session, c: &Session, found: &mut Found) {
 
 // --- component claims -------------------------------------------------------------------------
 
-/// A claim, keyed by where its slice was found.
+/// A claim, keyed by where its slice was found, with the root the session recorded there.
 struct Claim {
     item: Item,
     state: ComponentState,
+    root: Option<RootId>,
 }
 
 fn claims(s: &Session) -> BTreeMap<String, Claim> {
@@ -197,6 +199,7 @@ fn claims(s: &Session) -> BTreeMap<String, Claim> {
         versions.sort();
         versions.dedup();
         for placement in placements_of(s, &claim.subject.artifact()) {
+            let root = root_at(s, &placement);
             let item = Item::Component {
                 placement,
                 arch,
@@ -207,20 +210,21 @@ fn claims(s: &Session) -> BTreeMap<String, Claim> {
                 status: claim.status,
                 versions: versions.clone(),
             };
-            out.insert(key(&item), Claim { item, state });
+            out.insert(key(&item), Claim { item, state, root });
         }
     }
     out
 }
 
 /// Claims on both sides: their status and versions (the slice is a pointer). A claim on one side
-/// only needs the absent side's identity check closed for that placement.
+/// only needs the absent side's identity check closed for that placement, under the root the
+/// present side recorded there (the file may be gone from the absent side).
 fn components(b: &Session, c: &Session, found: &mut Found) {
     let (was, is) = (claims(b), claims(c));
     let keys: BTreeSet<&String> = was.keys().chain(is.keys()).collect();
     for k in keys {
         let (before, after) = (was.get(k), is.get(k));
-        let Some(Claim { item, .. }) = before.or(after) else {
+        let Some(Claim { item, root, .. }) = before.or(after) else {
             continue;
         };
         let Item::Component {
@@ -244,8 +248,8 @@ fn components(b: &Session, c: &Session, found: &mut Found) {
         };
         if let Some((absent, side)) = absent {
             let names = checks_at(placement, &IDENTITY);
-            let closed =
-                scope_of(absent, placement).is_some_and(|scope| closed_for(absent, names, &scope));
+            let closed = scope_of(absent, placement)
+                .is_some_and(|scope| closed_for_under(absent, names, &scope, root.as_ref()));
             if !closed {
                 found.unjudged(item.clone(), checks(names), side);
                 continue;

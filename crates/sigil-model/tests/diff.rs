@@ -544,6 +544,37 @@ fn a_claim_gone_where_identity_was_not_closed_is_not_comparable() {
 }
 
 #[test]
+fn a_removed_file_s_claim_is_judged_under_the_root_it_was_found_in() {
+    // libggml was at `inst:lib/ollama/…` under the root `install`: its ID names no root of
+    // the current run, so the root is the baseline's record of the instance.
+    let mut before = install_with_ggml(0x11);
+    ggml_denied(&mut before);
+    let mut after = install_with_ggml(0x11);
+    ggml_uninstalled(&mut after);
+    identity_closed(&mut after);
+    let diff = diff_of(&before, &after);
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+    let inst: InstanceId = id(GGML);
+    let placement = Placement::Instance(inst.clone());
+    assert!(diff.changes.contains(&Change::FileRemoved {
+        placement: placement.clone(),
+        instance: inst,
+        content: Some(id(&format!("sha256:{}", hex(0x11)))),
+    }));
+    assert!(diff.changes.iter().any(|c| matches!(
+        c,
+        Change::ComponentChanged { placement: p, component, baseline: Some(_), current: None, .. }
+            if *p == placement && component.as_str() == "ggml"
+    )));
+    // The violation on the claim is judged by the same identity check.
+    assert!(diff.changes.iter().any(|c| matches!(
+        c,
+        Change::ViolationResolved { policy_rule, .. }
+            if policy_rule.as_str() == "policy:components.deny.ggml"
+    )));
+}
+
+#[test]
 fn loopback_to_wildcard_is_a_wider_bind_and_back_a_narrower_one() {
     let mut wide = compare_store();
     bind_wildcard(&mut wide, 7002);
@@ -609,18 +640,151 @@ fn a_resolved_finding_needs_the_current_side_closed() {
     let mut missing = compare_store();
     blob_missing(&mut missing);
     assert!(has(&diff_of(&missing, &compare_store()), "FindingResolved"));
+    // Model m's integrity is open now: its blobs were not all checked.
+    let mut open = compare_store();
+    cut_short(
+        &mut open,
+        INTEGRITY,
+        &Ref::Model(id(MODEL_M)),
+        "layer 1: read failed",
+    );
+    let diff = diff_of(&missing, &open);
+    assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+    assert_eq!(
+        diff.not_comparable,
+        [NotComparable {
+            item: Item::Finding {
+                rule: id("model.blob_missing"),
+                subject: SubjectKey::Model(id(MODEL_M)),
+                at: "#1".to_string(),
+            },
+            cause: Cause::Coverage,
+            checks: ids(&[INTEGRITY]),
+            open_in: Side::Current,
+        }]
+    );
+}
+
+#[test]
+fn integrity_not_run_leaves_a_missing_blob_not_comparable() {
+    // The inventory is complete and model m is there, but no blob of it was checked.
+    let mut missing = compare_store();
+    blob_missing(&mut missing);
+    let mut unchecked = compare_store();
+    integrity_not_run(&mut unchecked);
+    let diff = diff_of(&missing, &unchecked);
+    assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+    assert_eq!(
+        diff.not_comparable,
+        [NotComparable {
+            item: Item::Finding {
+                rule: id("model.blob_missing"),
+                subject: SubjectKey::Model(id(MODEL_M)),
+                at: "#1".to_string(),
+            },
+            cause: Cause::Coverage,
+            checks: ids(&[INTEGRITY]),
+            open_in: Side::Current,
+        }]
+    );
+    // The other way round: no new finding either.
+    let diff = diff_of(&unchecked, &missing);
+    assert!(!has(&diff, "FindingNew"), "{:?}", kinds(&diff));
+    assert!(diff
+        .not_comparable
+        .iter()
+        .any(|n| n.checks == ids(&[INTEGRITY])
+            && n.open_in == Side::Baseline
+            && n.cause == Cause::Coverage));
+}
+
+#[test]
+fn a_model_finding_needs_only_the_check_of_its_rule() {
+    // A missing license is judged by the license check: an open integrity check, or an open
+    // listing of the store, does not hold it back.
+    let mut unlicensed = compare_store();
+    license_removed(&mut unlicensed);
+    let mut integrity_open = compare_store();
+    cut_short(
+        &mut integrity_open,
+        INTEGRITY,
+        &Ref::Model(id(MODEL_M)),
+        "layer 1: read failed",
+    );
+    let mut listing_open = compare_store();
+    inventory_partial(&mut listing_open);
+    for current in [&integrity_open, &listing_open] {
+        let diff = diff_of(&unlicensed, current);
+        assert!(has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+        // (Under an open listing the license layer itself is not comparable: a layer change.)
+        assert!(
+            !diff
+                .not_comparable
+                .iter()
+                .any(|n| matches!(n.item, Item::Finding { .. })),
+            "{:?}",
+            diff.not_comparable
+        );
+    }
+    // A missing blob of a model still listed is judged by integrity alone.
+    let mut missing = compare_store();
+    blob_missing(&mut missing);
+    assert!(has(&diff_of(&missing, &listing_open), "FindingResolved"));
+}
+
+#[test]
+fn another_model_rule_needs_every_model_store_check_with_an_entry() {
+    let rule = "model.layer_unexpected";
+    let mut found = compare_store();
+    other_model_finding(&mut found, rule, MODEL_M);
+    // The license check did not run: integrity and the inventory alone do not judge the rule.
+    let mut unlicensed_run = compare_store();
+    license_not_run(&mut unlicensed_run);
+    let diff = diff_of(&found, &unlicensed_run);
+    assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+    assert_eq!(
+        diff.not_comparable,
+        [NotComparable {
+            item: Item::Finding {
+                rule: id(rule),
+                subject: SubjectKey::Model(id(MODEL_M)),
+                at: String::new(),
+            },
+            cause: Cause::Coverage,
+            checks: ids(&[INTEGRITY, INVENTORY, LICENSE]),
+            open_in: Side::Current,
+        }]
+    );
+    // All three closed: resolved.
+    assert!(has(&diff_of(&found, &compare_store()), "FindingResolved"));
+}
+
+#[test]
+fn a_model_gone_with_its_findings_needs_only_the_inventory() {
+    // Model n is gone; the current run has no integrity or license entry of it, and needs none.
+    let mut unlicensed_n = store_with_n();
+    license_removed_from(&mut unlicensed_n, MODEL_N);
+    let diff = diff_of(&unlicensed_n, &compare_store());
+    assert!(has(&diff, "ModelRemoved"), "{:?}", kinds(&diff));
+    assert!(diff.changes.contains(&Change::FindingResolved {
+        rule: id("model.license_missing"),
+        subject: SubjectKey::Model(id(MODEL_N)),
+        at: String::new(),
+        baseline: vec![id(&format!("finding:model.license_missing@{MODEL_N}"))],
+    }));
+    // With the store's listing cut short, model n may be there unlisted.
     let mut open = compare_store();
     inventory_partial(&mut open);
-    let diff = diff_of(&missing, &open);
+    let diff = diff_of(&unlicensed_n, &open);
     assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
     assert!(diff.not_comparable.contains(&NotComparable {
         item: Item::Finding {
-            rule: id("model.blob_missing"),
-            subject: SubjectKey::Model(id(MODEL_M)),
-            at: "#1".to_string(),
+            rule: id("model.license_missing"),
+            subject: SubjectKey::Model(id(MODEL_N)),
+            at: String::new(),
         },
         cause: Cause::Coverage,
-        checks: ids(&[INTEGRITY, INVENTORY, LICENSE]),
+        checks: ids(&[INVENTORY]),
         open_in: Side::Current,
     }));
 }

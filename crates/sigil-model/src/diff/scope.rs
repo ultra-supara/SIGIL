@@ -43,9 +43,10 @@ pub(crate) fn same_model_filter(b: &Session, c: &Session) -> bool {
     b.request.model_filter == c.request.model_filter
 }
 
-/// The root a scope lies under: a root itself; an instance's recorded root, else the one its ID
+/// The root a scope lies under: a root itself; an instance's recorded root, else `hint` (the root
+/// the other session recorded for the instance, when `s` does not hold it), else the one its ID
 /// names (`inst:<root>/…`); the root a model ID names (`model:<root>/…`).
-pub(crate) fn root_of(s: &Session, scope: &Ref) -> Option<RootId> {
+pub(crate) fn root_of(s: &Session, scope: &Ref, hint: Option<&RootId>) -> Option<RootId> {
     match scope {
         Ref::Root(root) => Some(root.clone()),
         Ref::Instance(id) => s
@@ -53,10 +54,17 @@ pub(crate) fn root_of(s: &Session, scope: &Ref) -> Option<RootId> {
             .iter()
             .find(|i| i.id == *id)
             .map(|i| i.root.clone())
+            .or_else(|| hint.cloned())
             .or_else(|| named_root(id.as_str(), "inst:")),
         Ref::Model(id) => named_root(id.as_str(), "model:"),
         _ => None,
     }
+}
+
+/// The root `s` recorded for what is at `p`: the hint to judge, on a side that does not hold it,
+/// the scope [`scope_of`] gives there.
+pub(crate) fn root_at(s: &Session, p: &Placement) -> Option<RootId> {
+    scope_of(s, p).and_then(|scope| root_of(s, &scope, None))
 }
 
 /// The root an ID names after `prefix`, up to the first `/`.
@@ -68,7 +76,18 @@ fn named_root(id: &str, prefix: &str) -> Option<RootId> {
 /// Whether `checks`, taken together, are closed for `scope` in `s`: some entry of them is
 /// scoped to `scope`, to its root, or to the audit, and every such entry can close.
 pub(crate) fn closed_for(s: &Session, checks: &[&str], scope: &Ref) -> bool {
-    let root = root_of(s, scope).map(Ref::Root);
+    closed_for_under(s, checks, scope, None)
+}
+
+/// [`closed_for`], where an instance `s` does not hold lies under `root`: the root the session
+/// that holds it recorded, rather than the one its ID names.
+pub(crate) fn closed_for_under(
+    s: &Session,
+    checks: &[&str],
+    scope: &Ref,
+    root: Option<&RootId>,
+) -> bool {
+    let root = root_of(s, scope, root).map(Ref::Root);
     let mut entries = s
         .coverage
         .iter()
