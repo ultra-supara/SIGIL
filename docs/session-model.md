@@ -1081,9 +1081,10 @@ The viewer uses the same archive, including when build-version metadata differs.
 
 The committed viewer uses the same model validator as the native reader. Schema and
 internal-consistency checks do not authenticate observation facts against target bytes.
-The M3-B release gate remains open because mixed marked x86 aggregate work accounting
-and alias reuse are unresolved; see the [support matrix](support-matrix.md). These
-changes do not close [#48](https://github.com/ultra-supara/SIGIL/issues/48).
+Marked sessions record discovery hashing, probe and revalidation I/O as Audit-scoped
+`binary.collection.*` coverage, with their limits in `request.budgets`; earlier marked
+sessions may omit all three. [ADR-018](adr/ADR-018-two-phase-code-collection.md) describes
+these budgets and the shared x86 reference allowance.
 
 Older strict readers can reject the marker, new fields or enum variants. Supported
 legacy sessions retain their serialization and validation contract.

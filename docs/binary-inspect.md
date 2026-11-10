@@ -294,8 +294,8 @@ a complete search leaves indirect calls unmodeled; an incomplete search gives
 was not searched. AArch64 calls show `x0`, `x1`, `x2`, and further proved argument locations;
 unknown values stay unknown. Mach-O calls retain their exact import/library witness.
 
-The [M3-B resource blocker](support-matrix.md) remains unresolved for mixed marked x86
-analysis; this is not a completed release milestone.
+In a marked request, x86 analysis uses one combined reference allowance, and aliases of the
+same content are analyzed once ([ADR-018](adr/ADR-018-two-phase-code-collection.md)).
 
 **Budgets and limits.**
 - **`binary_code_bytes`** (default 256 MiB per artifact) bounds the bytes read for code: code,

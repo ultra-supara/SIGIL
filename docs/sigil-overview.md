@@ -10,7 +10,7 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 
 - Anchored, bounded, read-only file access (`SafeFs`) and the Ollama model-store collector: manifests, blob SHA-256 verification, provenance, and license layers with SPDX detection.
 - The installation's release (`--install-dir`): each file of `bin/ollama` and `lib/ollama/` compared with the official release manifests embedded in SIGIL. Which releases the content matches and whether the installation is complete are reported separately.
-- ELF and Mach-O container facts and capability-import hints, ELF signatures and component claims, and conditional ELF dependency candidates. `--code` records direct capability-import call sites for x86-64 ELF in standalone and installation inspections. See the [support matrix](support-matrix.md).
+- ELF and Mach-O container facts and capability-import hints, ELF signatures and component claims, and conditional ELF dependency candidates. `--code` records direct capability-import call sites in x86-64 and AArch64 ELF and in arm64 and x86-64 Mach-O, thin or universal, in standalone and installation inspections. See the [support matrix](support-matrix.md).
 - Observe mode: the runtime's listening sockets, attributed through `/proc` fd tables, with network-namespace checks. `hidepid` and permission gaps are reported as incompleteness.
 - The active API probe (`--active api-probe`): one `GET /api/version` to a literal address, off by default.
 - Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, and denied components and capabilities.
@@ -52,9 +52,9 @@ Verdict and completeness are independent: a run can be `PASS` and `INCOMPLETE`. 
 |---|---|---|
 | M0 | Safety contracts and their syscall tests, the session model, the engine (model store, observe), CLI v2, the active API probe, AI-BOM v2, the viewer | Done |
 | M0 | Identification of the runtime's own files and of its release, and `sigil binary inspect` ([#44](https://github.com/ultra-supara/SIGIL/issues/44)) | In progress: release attribution, ELF/Mach-O containers and imports, ELF signature and component evidence, and conditional ELF dependency candidates are available; loader stages remain incomplete |
-| M1 | Call-site evidence in the runtime's binaries (`--code`; for example `connect` → network), semantic profiles, and how the runtime loads its backends | In progress: direct call sites of capability imports and capability policy are available for x86-64 ELF in standalone and installation scans; branch conditions, cross-module edges, semantic profiles and backend loading remain |
+| M1 | Call-site evidence in the runtime's binaries (`--code`; for example `connect` → network), semantic profiles, and how the runtime loads its backends | In progress: direct call sites of capability imports and capability policy are available for x86-64 ELF, and with M3 for AArch64 ELF and Mach-O, in standalone and installation scans; branch conditions, cross-module edges, semantic profiles and backend loading remain |
 | M2 | The GGUF parsing path, and advisories matched to what was identified | Planned |
-| M3 | AArch64 ELF and Mach-O code analysis | Planned ([#48](https://github.com/ultra-supara/SIGIL/issues/48)); container and import support already exists |
+| M3 | AArch64 ELF and Mach-O code analysis | Done ([#48](https://github.com/ultra-supara/SIGIL/issues/48)): bounded direct calls with argument locations, per-slice coverage, and library-aware Mach-O capability policy; branch conditions remain under M1 |
 | M4 | A decision record for an active lab (dynamic tracing, kept in a separate tool) | Planned |
 | M5 | Other runtimes: llama.cpp server ([#18](https://github.com/ultra-supara/SIGIL/issues/18), [#52](https://github.com/ultra-supara/SIGIL/issues/52)), LM Studio, llamafile | Planned |
 
