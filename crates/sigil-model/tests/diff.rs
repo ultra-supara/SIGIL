@@ -542,3 +542,41 @@ fn a_violation_is_new_or_resolved_on_its_placement() {
         Change::ViolationResolved { subject: s, .. } if *s == subject
     )));
 }
+
+/// `s` with every set-like list reversed (manifest layer order is evidence, so it stays).
+fn reversed(s: &Session) -> Session {
+    let mut s = s.clone();
+    s.artifacts.reverse();
+    s.instances.reverse();
+    s.models.reverse();
+    s.listeners.reverse();
+    s.coverage.reverse();
+    s.findings.reverse();
+    s.components.reverse();
+    s.releases.reverse();
+    s.policy_violations.reverse();
+    s.request.required_checks.reverse();
+    s
+}
+
+#[test]
+fn the_order_of_a_session_s_lists_does_not_matter() {
+    for case in diff_cases() {
+        let straight = diff_of(&case.baseline, &case.current);
+        let turned = diff_of(&reversed(&case.baseline), &reversed(&case.current));
+        assert_eq!(straight, turned, "{}", case.name);
+    }
+}
+
+#[test]
+fn the_same_inputs_give_the_same_bytes() {
+    for case in diff_cases() {
+        let once = diff_of(&case.baseline, &case.current)
+            .to_canonical_json()
+            .unwrap();
+        let twice = diff_of(&case.baseline, &case.current)
+            .to_canonical_json()
+            .unwrap();
+        assert_eq!(once, twice, "{}", case.name);
+    }
+}
