@@ -1144,11 +1144,18 @@ fn an_action_changed_by_the_policy_is_a_violation_decision_change() {
             "ViolationDecisionChanged"
         ]
     );
+    // PR #136 review P2-3: each side's subjects point at the violation in its session.
+    let claim = Ref::Component {
+        slice: binary_inspect().components[0].subject.clone(),
+        component: id("ggml-base"),
+    };
     assert!(diff.changes.contains(&Change::ViolationDecisionChanged {
         policy_rule: id(rule),
         subject,
         baseline: vec![decision(Action::Fail, rule)],
         current: vec![decision(Action::Warn, rule)],
+        baseline_subjects: vec![claim.clone()],
+        current_subjects: vec![claim],
     }));
     // A violation on both sides is judged under either policy: nothing is not comparable.
     assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
@@ -1165,12 +1172,16 @@ fn an_override_of_a_finding_is_a_finding_decision_change() {
     // The same policy file on both sides: decisions are compared all the same.
     let diff = diff_of(&unlicensed, &waived);
     assert_eq!(kinds(&diff), ["VerdictChanged", "FindingDecisionChanged"]);
+    // PR #136 review P2-3: each side's finding IDs point at the finding in its session.
+    let finding: FindingId = id(&format!("finding:{rule}@{MODEL_M}"));
     assert!(diff.changes.contains(&Change::FindingDecisionChanged {
         rule: id(rule),
         subject: SubjectKey::Model(id(MODEL_M)),
         at: String::new(),
         baseline: vec![decision(Action::Warn, &format!("default:{rule}"))],
         current: vec![override_.clone()],
+        baseline_findings: vec![finding.clone()],
+        current_findings: vec![finding],
     }));
     // The same decisions: nothing.
     assert!(diff_of(&waived, &waived).changes.is_empty());
@@ -1187,11 +1198,68 @@ fn a_long_value_does_not_cut_the_other_side_of_a_decision_change() {
         at: String::new(),
         baseline: vec![waiver(rule, &long, "2026-12-31")],
         current: vec![waiver(rule, "short reason", "2027-01-31")],
+        baseline_findings: vec![id(&format!("finding:{rule}@{MODEL_M}"))],
+        current_findings: vec![id(&format!("finding:{rule}@{MODEL_M}#current"))],
     }];
     let md = markdown(&base);
     assert!(md.contains(&esc_md("; current: ")), "{md}");
     assert!(md.contains(&esc_md("short reason")), "{md}");
     assert!(md.contains(&esc_md("2027-01-31")), "{md}");
+    assert!(md.contains(&esc_md("#current")), "{md}");
+}
+
+#[test]
+fn a_decision_change_s_pointers_are_sorted_and_each_once() {
+    let rule = "model.license_missing";
+    let f = |n: u8| -> FindingId { id(&format!("finding:{rule}@{MODEL_M}#{n}")) };
+    let decided = vec![decision(Action::Warn, &format!("default:{rule}"))];
+    let claim = |byte: u8| Ref::Component {
+        slice: SliceId::from_parts(&id(&format!("sha256:{}", hex(byte))), Arch::X86_64, 0),
+        component: id("ggml-base"),
+    };
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = vec![
+        Change::FindingDecisionChanged {
+            rule: id(rule),
+            subject: SubjectKey::Model(id(MODEL_M)),
+            at: String::new(),
+            baseline: decided.clone(),
+            current: vec![],
+            baseline_findings: vec![f(2), f(1), f(2)],
+            current_findings: vec![f(3), f(1)],
+        },
+        Change::ViolationDecisionChanged {
+            policy_rule: id("policy:components.deny.ggml-base"),
+            subject: SubjectKey::Other(claim(0x11)),
+            baseline: decided,
+            current: vec![],
+            baseline_subjects: vec![claim(0x22), claim(0x11), claim(0x22)],
+            current_subjects: vec![claim(0x22), claim(0x11)],
+        },
+    ];
+    diff.canonicalize();
+    assert_eq!(
+        diff.changes[0],
+        Change::FindingDecisionChanged {
+            rule: id(rule),
+            subject: SubjectKey::Model(id(MODEL_M)),
+            at: String::new(),
+            baseline: vec![decision(Action::Warn, &format!("default:{rule}"))],
+            current: vec![],
+            baseline_findings: vec![f(1), f(2)],
+            current_findings: vec![f(1), f(3)],
+        }
+    );
+    let Change::ViolationDecisionChanged {
+        baseline_subjects,
+        current_subjects,
+        ..
+    } = &diff.changes[1]
+    else {
+        panic!("{:?}", diff.changes);
+    };
+    assert_eq!(*baseline_subjects, [claim(0x11), claim(0x22)]);
+    assert_eq!(*current_subjects, [claim(0x11), claim(0x22)]);
 }
 
 #[test]
@@ -1313,13 +1381,24 @@ fn every_change_renders_with_its_key_text() {
         ("FindingResolved", &["exposure.bind_public", "port 11434"]),
         (
             "FindingDecisionChanged",
-            &["model.license_missing", "warn", "fail"],
+            &[
+                "model.license_missing",
+                "warn",
+                "fail",
+                "finding:model.license_missing@model:models/registry.ollama.ai/library/m/latest",
+            ],
         ),
         ("ViolationNew", &["components.deny.ggml-base"]),
         ("ViolationResolved", &["posix.process_spawn"]),
         (
             "ViolationDecisionChanged",
-            &["ignore", "vendored until 0.14", "2026-12-31"],
+            &[
+                "ignore",
+                "vendored until 0.14",
+                "2026-12-31",
+                "ggml-base in sha256:4141",
+                "ggml-base in sha256:4242",
+            ],
         ),
         ("ModelAdded", &["added"]),
         ("ModelRemoved", &["removed"]),

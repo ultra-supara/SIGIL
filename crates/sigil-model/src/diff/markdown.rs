@@ -141,16 +141,30 @@ fn policy_ref(k: Option<&KnowledgeRef>) -> String {
     k.map_or_else(|| "none".to_string(), policy_text)
 }
 
-/// Each side's decisions: the action and its source, with the reason and expiry when present.
-/// The escaped cell of a decision change. Each value is cut on its own, so a long reason on one
-/// side leaves the other side whole.
-fn decisions_change(baseline: &[PolicyDecision], current: &[PolicyDecision]) -> String {
+/// The escaped cell of a decision change: each side's decisions (the action and its source, with
+/// the reason and expiry when present), then in brackets what they were made on in that session
+/// (`what`: its findings or subjects, an escaped cell). Each value is cut on its own, so a long
+/// reason on one side leaves the other side whole.
+fn decisions_change(
+    what: &str,
+    baseline: (&[PolicyDecision], String),
+    current: (&[PolicyDecision], String),
+) -> String {
+    let side = |name: &str, (d, on): (&[PolicyDecision], String)| {
+        format!(
+            "{}{}{}{}{}",
+            esc(&format!("{name}: ")),
+            decisions(d),
+            esc(&format!(" [{what}: ")),
+            on,
+            esc("]")
+        )
+    };
     format!(
-        "{}{}{}{}",
-        esc("baseline: "),
-        decisions(baseline),
-        esc("; current: "),
-        decisions(current)
+        "{}{}{}",
+        side("baseline", baseline),
+        esc("; "),
+        side("current", current)
     )
 }
 
@@ -261,13 +275,19 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             at,
             baseline,
             current,
+            baseline_findings,
+            current_findings,
         } => (
             2,
             vec![
                 esc("decision changed"),
                 esc(rule.as_str()),
                 on(key, at),
-                decisions_change(baseline, current),
+                decisions_change(
+                    "findings",
+                    (baseline, cell(baseline_findings, ", ")),
+                    (current, cell(current_findings, ", ")),
+                ),
             ],
         ),
         Change::ViolationNew {
@@ -301,13 +321,19 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             subject: key,
             baseline,
             current,
+            baseline_subjects,
+            current_subjects,
         } => (
             3,
             vec![
                 esc("decision changed"),
                 esc(policy_rule.as_str()),
                 subject_key(key).markdown(),
-                decisions_change(baseline, current),
+                decisions_change(
+                    "subjects",
+                    (baseline, cell(&subjects(baseline_subjects), ", ")),
+                    (current, cell(&subjects(current_subjects), ", ")),
+                ),
             ],
         ),
         Change::ModelAdded { model, name } => (
@@ -492,6 +518,11 @@ fn refs(r: &[Ref]) -> String {
         .map(|r| esc(&subject(r)))
         .collect::<Vec<_>>()
         .join(&esc("; "))
+}
+
+/// How reports show each of `r`, for [`cell`].
+fn subjects(r: &[Ref]) -> Vec<String> {
+    r.iter().map(subject).collect()
 }
 
 /// The escaped cell of a list of values, each one cut on its own. "none" when empty.

@@ -323,7 +323,9 @@
                 "subject",
                 "at",
                 "baseline",
-                "current"
+                "current",
+                "baseline_findings",
+                "current_findings"
               ],
               "properties": {
                 "rule": {
@@ -345,6 +347,18 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/$defs/PolicyDecision"
+                  }
+                },
+                "baseline_findings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/FindingId"
+                  }
+                },
+                "current_findings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/FindingId"
                   }
                 }
               }
@@ -429,7 +443,9 @@
                 "policy_rule",
                 "subject",
                 "baseline",
-                "current"
+                "current",
+                "baseline_subjects",
+                "current_subjects"
               ],
               "properties": {
                 "policy_rule": {
@@ -448,6 +464,18 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/$defs/PolicyDecision"
+                  }
+                },
+                "baseline_subjects": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Ref"
+                  }
+                },
+                "current_subjects": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Ref"
                   }
                 }
               }

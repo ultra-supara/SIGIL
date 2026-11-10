@@ -103,7 +103,7 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 |---|---|
 | Outcome | `PolicyChanged`, `VerdictChanged`, `CompletenessChanged` (`Complete` against `Incomplete`) |
 | Coverage | `CheckOpened`, `CheckClosed` |
-| Findings and policy violations | `FindingNew`, `FindingResolved`, `ViolationNew`, `ViolationResolved`, by rule and subject; `FindingDecisionChanged`, `ViolationDecisionChanged` when the same item has other policy decisions (an action, a reason, an expiry, or an override that expired) |
+| Findings and policy violations | `FindingNew`, `FindingResolved`, `ViolationNew`, `ViolationResolved`, by rule and subject; `FindingDecisionChanged`, `ViolationDecisionChanged` when the same item has other policy decisions (an action, a reason, an expiry, or an override that expired), with each side's finding IDs or violation subjects |
 | Models | `ModelAdded`, `ModelRemoved`, `LayerChanged`, `LicenseChanged` |
 | Installation | `FileAdded`, `FileRemoved`, `FileContentChanged`, `ReleaseChanged`, `ComponentChanged` |
 | Listeners | `ListenerAdded`, `ListenerRemoved`, `BindWidened`, `BindNarrowed`, by port |

@@ -269,13 +269,16 @@ pub enum Change {
         baseline: Vec<FindingId>,
     },
     /// A finding on both sides whose set of decisions differs: a changed action, reason or
-    /// expiry. Each list holds the distinct decisions of the key's findings.
+    /// expiry. `baseline` and `current` hold the distinct decisions of the key's findings, and
+    /// `baseline_findings` and `current_findings` those findings' IDs in each session.
     FindingDecisionChanged {
         rule: RuleId,
         subject: SubjectKey,
         at: String,
         baseline: Vec<PolicyDecision>,
         current: Vec<PolicyDecision>,
+        baseline_findings: Vec<FindingId>,
+        current_findings: Vec<FindingId>,
     },
     ViolationNew {
         policy_rule: PolicyRuleRef,
@@ -287,12 +290,15 @@ pub enum Change {
         subject: SubjectKey,
         baseline: Vec<Ref>,
     },
-    /// A violation on both sides whose set of decisions differs.
+    /// A violation on both sides whose set of decisions differs. `baseline_subjects` and
+    /// `current_subjects` are the violations' subjects in each session.
     ViolationDecisionChanged {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
         baseline: Vec<PolicyDecision>,
         current: Vec<PolicyDecision>,
+        baseline_subjects: Vec<Ref>,
+        current_subjects: Vec<Ref>,
     },
     ModelAdded {
         model: ModelId,
@@ -416,13 +422,33 @@ impl Change {
                 refs.dedup();
             }
             Change::FindingDecisionChanged {
-                baseline, current, ..
-            }
-            | Change::ViolationDecisionChanged {
-                baseline, current, ..
+                baseline,
+                current,
+                baseline_findings,
+                current_findings,
+                ..
             } => {
                 for decisions in [baseline, current] {
                     sort_decisions(decisions);
+                }
+                for ids in [baseline_findings, current_findings] {
+                    ids.sort();
+                    ids.dedup();
+                }
+            }
+            Change::ViolationDecisionChanged {
+                baseline,
+                current,
+                baseline_subjects,
+                current_subjects,
+                ..
+            } => {
+                for decisions in [baseline, current] {
+                    sort_decisions(decisions);
+                }
+                for refs in [baseline_subjects, current_subjects] {
+                    refs.sort_by_cached_key(key);
+                    refs.dedup();
                 }
             }
             Change::ListenerAdded { listeners, .. } | Change::ListenerRemoved { listeners, .. } => {

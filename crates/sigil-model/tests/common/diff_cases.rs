@@ -893,6 +893,8 @@ pub fn every_change() -> Vec<Change> {
             at: String::new(),
             baseline: vec![decision(Action::Warn, "default:model.license_missing")],
             current: vec![decision(Action::Fail, "policy:rules.model.license_missing")],
+            baseline_findings: vec![id(&format!("finding:model.license_missing@{MODEL_M}"))],
+            current_findings: vec![id(&format!("finding:model.license_missing@{MODEL_M}"))],
         },
         Change::ViolationNew {
             policy_rule: id("policy:components.deny.ggml-base"),
@@ -923,6 +925,14 @@ pub fn every_change() -> Vec<Change> {
             },
             baseline: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
             current: vec![waived],
+            baseline_subjects: vec![Ref::Component {
+                slice: slice.clone(),
+                component: id("ggml-base"),
+            }],
+            current_subjects: vec![Ref::Component {
+                slice: SliceId::from_parts(&a2, Arch::X86_64, 0),
+                component: id("ggml-base"),
+            }],
         },
         Change::ModelAdded {
             model: model.clone(),

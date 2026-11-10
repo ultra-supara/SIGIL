@@ -331,6 +331,8 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
                     at: at.clone(),
                     baseline: j.decisions.clone(),
                     current: now.decisions.clone(),
+                    baseline_findings: j.pointers.clone(),
+                    current_findings: now.pointers.clone(),
                 });
             }
             Some(_) => {}
@@ -381,6 +383,8 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
                     subject: subject.clone(),
                     baseline: j.decisions.clone(),
                     current: now.decisions.clone(),
+                    baseline_subjects: j.pointers.clone(),
+                    current_subjects: now.pointers.clone(),
                 });
             }
             Some(_) => {}
