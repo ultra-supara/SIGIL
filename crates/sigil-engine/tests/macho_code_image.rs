@@ -1,6 +1,5 @@
 //! Same-fd Mach-O image and descriptor boundaries.
 mod common;
-use sha2::{Digest, Sha256};
 use sigil_engine::binary::{parse_artifact, BinaryBudgets};
 use sigil_engine::code::CodeBudgets;
 use sigil_model::{CodeSliceInventory, ContainerFacts, Sha256Hex};
@@ -12,7 +11,7 @@ fn parse(bytes: &[u8], code: bool, parse_bytes: u64) -> sigil_engine::binary::Pa
     parse_artifact(
         f.as_file(),
         bytes.len() as u64,
-        &Sha256Hex::new(format!("{:x}", Sha256::digest(bytes))).unwrap(),
+        &Sha256Hex::new(common::hex(bytes)).unwrap(),
         &bytes[..4],
         BinaryBudgets {
             code: code.then(CodeBudgets::default),
@@ -355,7 +354,7 @@ fn thin_and_universal_fixture_hashes_and_mappings_agree() {
                 };
                 assert_eq!(inner, fixture(source));
             }
-            assert_eq!(s.sha256.as_str(), format!("{:x}", Sha256::digest(inner)));
+            assert_eq!(s.sha256.as_str(), common::hex(inner));
             let v =
                 view(&bytes, s.offset, s.size, s.arch).unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert!(!v.executable.is_empty(), "{name}");
@@ -566,7 +565,7 @@ fn unhashable_overflow_overlap_cpu_and_slice_count_fail_closed() {
     let p = parse_artifact(
         f.as_file(),
         full.len() as u64,
-        &Sha256Hex::new(format!("{:x}", Sha256::digest(&full))).unwrap(),
+        &Sha256Hex::new(common::hex(&full)).unwrap(),
         &full[..4],
         BinaryBudgets {
             code: Some(CodeBudgets::default()),

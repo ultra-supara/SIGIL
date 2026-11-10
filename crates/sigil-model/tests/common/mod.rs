@@ -71,6 +71,15 @@ pub fn t(text: &str) -> UntrustedText {
     UntrustedText::new(text)
 }
 
+/// Lowercase hexadecimal SHA-256 of `bytes` (sha2 0.11 digests have no `LowerHex`).
+pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 pub fn hex(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
@@ -2473,18 +2482,16 @@ pub const EXAMPLE_VALUE_ENV: [&str; 9] = [
 ];
 
 pub fn example_observed_role(process: &ProcessRef, roles: &[ProcessRole]) -> ProcessRole {
-    use sha2::{Digest, Sha256};
     if let [role] = roles {
         return role.clone();
     }
     let bytes = serde_json::to_vec(process).unwrap();
-    id(&format!("observed:{:x}", Sha256::digest(bytes)))
+    id(&format!("observed:{}", sha256_hex(bytes)))
 }
 fn example_value_id(role: &ProcessRole, key: &ValueKey, origin: &ValueOrigin) -> ValueId {
-    use sha2::{Digest, Sha256};
     // Exact tuple order shared with the engine helper: origin, key, role.
     let bytes = serde_json::to_vec(&(origin, key, role)).unwrap();
-    id(&format!("value:{:x}", Sha256::digest(bytes)))
+    id(&format!("value:{}", sha256_hex(bytes)))
 }
 fn example_value(
     role: &ProcessRole,

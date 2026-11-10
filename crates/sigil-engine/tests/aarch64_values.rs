@@ -12,7 +12,10 @@ use sigil_model::{
 #[test]
 fn signature_knowledge_is_archived() {
     assert_eq!(
-        format!("{:x}", Sha256::digest(code_abi::V1_BYTES.as_bytes())),
+        Sha256::digest(code_abi::V1_BYTES.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
         code_abi::V1_SHA256
     );
     let original = support::named();

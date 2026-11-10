@@ -218,7 +218,7 @@ pub fn parse_set(id: &str, version: &str, files: &[(&str, &str)]) -> Result<RefS
     Ok(RefSet {
         id: RefSetId::new(id).map_err(|e| e.to_string())?,
         version: version.to_string(),
-        sha256: Sha256Hex::new(format!("{:x}", hasher.finalize())).map_err(|e| e.to_string())?,
+        sha256: Sha256Hex::new(crate::hex::lower(&hasher.finalize())).map_err(|e| e.to_string())?,
         releases,
     })
 }

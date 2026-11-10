@@ -1,15 +1,10 @@
 mod common;
 use common::*;
-use sha2::{Digest, Sha256};
 use sigil_model::render::aibom::project;
 use sigil_model::*;
 
 fn session_sha(s: &Session) -> Sha256Hex {
-    Sha256Hex::new(format!(
-        "{:x}",
-        Sha256::digest(s.to_canonical_json().unwrap().as_bytes())
-    ))
-    .unwrap()
+    Sha256Hex::new(sha256_hex(s.to_canonical_json().unwrap())).unwrap()
 }
 #[test]
 fn example_21_is_valid_canonical_and_preserves_process_source_identity() {

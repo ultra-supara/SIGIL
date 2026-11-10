@@ -20,7 +20,10 @@ pub fn root() -> RootId {
 }
 
 pub fn hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Writes a blob under `blobs/` and returns its digest.

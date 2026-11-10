@@ -39,7 +39,10 @@ fn install() -> TempDir {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A manifest for release `tag` describing exactly `install()`'s tree, edited by `edit`.

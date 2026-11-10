@@ -21,6 +21,7 @@ pub mod binary;
 pub mod code;
 pub mod collect;
 pub mod explain;
+mod hex;
 pub mod inspect;
 pub mod observe;
 pub mod policy;

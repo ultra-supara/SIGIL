@@ -660,6 +660,6 @@ fn numbered(text: &str, prefix: &str) -> Option<u32> {
 }
 
 fn sha256_hex(text: &str) -> Result<Sha256Hex, PolicyError> {
-    Sha256Hex::new(format!("{:x}", Sha256::digest(text.as_bytes())))
+    Sha256Hex::new(crate::hex::lower(&Sha256::digest(text.as_bytes())))
         .map_err(|e| PolicyError::BadId(e.to_string()))
 }

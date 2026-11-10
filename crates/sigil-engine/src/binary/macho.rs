@@ -894,7 +894,7 @@ fn hash_range(file: &File, offset: u64, size: u64) -> Result<Sha256Hex, String> 
         hasher.update(&buffer[..count]);
         read = read.saturating_add(count as u64);
     }
-    Sha256Hex::new(format!("{:x}", hasher.finalize())).map_err(|error| error.to_string())
+    Sha256Hex::new(crate::hex::lower(&hasher.finalize())).map_err(|error| error.to_string())
 }
 
 fn parsed_slice(
@@ -1168,7 +1168,7 @@ mod code_metadata_tests {
         }
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(&bytes).unwrap();
-        let sha = Sha256Hex::new(format!("{:x}", Sha256::digest(&bytes))).unwrap();
+        let sha = Sha256Hex::new(crate::hex::lower(&Sha256::digest(&bytes))).unwrap();
         parse_artifact(
             f.as_file(),
             bytes.len() as u64,

@@ -256,7 +256,10 @@ fn missing_required_field_fails() {
 #[test]
 fn the_v1_schema_is_frozen() {
     let bytes = std::fs::read(schema_path()).expect("read the v1 schema");
-    let actual = format!("{:x}", Sha256::digest(&bytes));
+    let actual: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     assert_eq!(
         actual, V1_SCHEMA_SHA256,
         "schemas/aibom-v1.schema.json is frozen history (ADR-006): SIGIL no longer writes AI-BOM \

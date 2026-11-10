@@ -284,7 +284,6 @@ fn empty_install_and_extra_required_checks_keep_existing_completeness() {
 
 #[test]
 fn legacy_macho_parser_does_not_invent_a_code_byte_order_observation() {
-    use sha2::{Digest, Sha256};
     use sigil_engine::binary::{parse_artifact, BinaryBudgets};
     let directory = tempfile::tempdir().unwrap();
     let mut containers = Vec::new();
@@ -303,7 +302,7 @@ fn legacy_macho_parser_does_not_invent_a_code_byte_order_observation() {
         let path = directory.path().join(if big { "big" } else { "little" });
         std::fs::write(&path, &bytes).unwrap();
         let file = std::fs::File::open(path).unwrap();
-        let digest = Sha256Hex::new(format!("{:x}", Sha256::digest(&bytes))).unwrap();
+        let digest = Sha256Hex::new(common::hex(&bytes)).unwrap();
         let parsed = parse_artifact(
             &file,
             bytes.len() as u64,

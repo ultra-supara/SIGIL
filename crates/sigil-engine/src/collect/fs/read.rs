@@ -422,7 +422,8 @@ impl SafeFs {
                 return read;
             }
         };
-        let artifact_id = match ArtifactId::new(format!("sha256:{:x}", hasher.finalize())) {
+        let digest = hasher.finalize();
+        let artifact_id = match ArtifactId::new(format!("sha256:{}", crate::hex::lower(&digest))) {
             Ok(id) => id,
             Err(e) => return FileRead::failed_after_read(e.to_string(), total),
         };
