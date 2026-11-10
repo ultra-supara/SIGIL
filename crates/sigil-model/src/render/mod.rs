@@ -6,7 +6,7 @@ pub mod code;
 mod deps_values;
 pub mod html;
 pub mod markdown;
-mod md;
+pub(crate) mod md;
 
 use crate::coverage::{AbsenceBasis, CoverageState, SkipReason, Unavailability};
 use crate::evidence::{Loc, NotObservable, Ref, UnknownReason};

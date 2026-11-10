@@ -15,6 +15,7 @@ mod compare;
 mod files;
 mod judged;
 mod listeners;
+mod markdown;
 mod models;
 mod outcome;
 mod scope;
@@ -38,6 +39,7 @@ use crate::session::{KnowledgeRef, Mode, ToolInfo};
 use crate::text::UntrustedText;
 
 pub use compare::compare;
+pub use markdown::markdown;
 
 /// What changed between two sessions (`sigil-diff/1`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

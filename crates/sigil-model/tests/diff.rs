@@ -1177,3 +1177,160 @@ fn the_same_inputs_give_the_same_bytes() {
         assert_eq!(once, twice, "{}", case.name);
     }
 }
+
+#[test]
+fn identical_sessions_say_no_differences() {
+    let md = markdown(&diff_of(&compare_store(), &compare_store()));
+    assert!(md.starts_with("# SIGIL comparison\n\n"), "{md}");
+    assert!(md.ends_with("No differences.\n"), "{md}");
+    assert!(
+        md.contains(session_sha256(&compare_store()).as_str()),
+        "{md}"
+    );
+}
+
+#[test]
+fn sections_come_in_order_and_only_with_rows() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = every_change();
+    diff.not_comparable = every_not_comparable();
+    let md = markdown(&diff);
+    let at = |title: &str| {
+        md.find(&format!("\n## {title}\n"))
+            .unwrap_or_else(|| panic!("no {title}:\n{md}"))
+    };
+    let order = [
+        "Outcome",
+        "Coverage",
+        "Findings",
+        "Policy violations",
+        "Models",
+        "Installation",
+        "Listeners",
+        "Not comparable",
+    ]
+    .map(at);
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{md}");
+    diff.changes
+        .retain(|c| matches!(c, Change::VerdictChanged { .. }));
+    diff.not_comparable.clear();
+    let md = markdown(&diff);
+    assert!(md.contains("\n## Outcome\n"), "{md}");
+    assert!(!md.contains("\n## Models\n"), "{md}");
+    assert!(!md.contains("Not comparable"), "{md}");
+    assert!(!md.contains(&esc_md("open/closed")), "{md}");
+}
+
+#[test]
+fn input_derived_text_is_escaped() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = vec![Change::FileAdded {
+        placement: Placement::Path(t("/tmp/a|b`<x>")),
+        instance: id("inst:binary-1/x"),
+        content: None,
+    }];
+    let md = markdown(&diff);
+    assert!(md.contains(r"\/tmp\/a\|b\`\<x\>"), "{md}");
+    assert!(!md.contains("a|b"), "{md}");
+}
+
+#[test]
+fn every_change_renders_with_its_key_text() {
+    let base = diff_of(&compare_store(), &compare_store());
+    let want: &[(&str, &[&str])] = &[
+        ("PolicyChanged", &["policy", "default 1"]),
+        ("VerdictChanged", &["verdict"]),
+        ("CompletenessChanged", &["completeness"]),
+        ("CheckOpened", &["opened", "Partial 2"]),
+        ("CheckClosed", &["closed", "Complete 1"]),
+        ("FindingNew", &["model.blob_missing"]),
+        ("FindingResolved", &["exposure.bind_public", "port 11434"]),
+        (
+            "FindingDecisionChanged",
+            &["model.license_missing", "warn", "fail"],
+        ),
+        ("ViolationNew", &["components.deny.ggml-base"]),
+        ("ViolationResolved", &["posix.process_spawn"]),
+        (
+            "ViolationDecisionChanged",
+            &["ignore", "vendored until 0.14", "2026-12-31"],
+        ),
+        ("ModelAdded", &["added"]),
+        ("ModelRemoved", &["removed"]),
+        ("LayerChanged", &["layer"]),
+        ("LicenseChanged", &["license", "no license layer"]),
+        ("FileAdded", &["file added"]),
+        ("FileRemoved", &["file removed"]),
+        ("FileContentChanged", &["content changed"]),
+        ("ReleaseChanged", &["release", "v0.30.5"]),
+        ("ComponentChanged", &["component ggml"]),
+        ("ListenerAdded", &["listener added", "private"]),
+        ("ListenerRemoved", &["listener removed", "global"]),
+        ("BindWidened", &["bind widened", "wildcard"]),
+        ("BindNarrowed", &["bind narrowed", "loopback"]),
+    ];
+    let all = every_change();
+    let mut none = base.clone();
+    none.changes = vec![all[1].clone()];
+    assert!(markdown(&none).contains("none"), "policy removed");
+    for change in all {
+        let kind = kinds(&Diff {
+            changes: vec![change.clone()],
+            ..base.clone()
+        })
+        .remove(0);
+        let mut diff = base.clone();
+        diff.changes = vec![change];
+        let md = markdown(&diff);
+        let (_, keys) = want
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .unwrap_or_else(|| panic!("no keys for {kind}"));
+        for key in *keys {
+            assert!(md.contains(&esc_md(key)), "{kind}: {key}\n{md}");
+        }
+    }
+}
+
+/// `text` as `render::md::esc` writes it, for the characters these tests use.
+fn esc_md(text: &str) -> String {
+    t(text).markdown_inline()
+}
+
+#[test]
+fn every_cause_renders_its_reason() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.not_comparable = every_not_comparable();
+    let md = markdown(&diff);
+    assert!(md.contains(&esc_md("coverage open: ")), "{md}");
+    assert!(md.contains("in baseline"), "{md}");
+    assert!(md.contains("in both"), "{md}");
+    assert!(md.contains(&esc_md("not asked in current: ")), "{md}");
+    assert!(md.contains("policies differ"), "{md}");
+    for n in &diff.not_comparable {
+        let mut one = diff.clone();
+        one.not_comparable = vec![n.clone()];
+        let md = markdown(&one);
+        let reason = match n.cause {
+            Cause::Coverage => "coverage open",
+            Cause::Request => "not asked in",
+            Cause::Policy => "policies differ",
+        };
+        assert!(md.contains(&esc_md(reason)), "{:?}\n{md}", n.cause);
+    }
+}
+
+#[test]
+fn coverage_section_says_only_transitions_are_reported() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = every_change()
+        .into_iter()
+        .filter(|c| matches!(c, Change::CheckOpened { .. }))
+        .collect();
+    let md = markdown(&diff);
+    assert!(
+        md.contains(&esc_md("Only open/closed transitions are reported")),
+        "{md}"
+    );
+    assert!(md.contains(&esc_md("open on both sides")), "{md}");
+}
