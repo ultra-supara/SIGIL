@@ -1218,7 +1218,7 @@ fn sections_come_in_order_and_only_with_rows() {
     assert!(md.contains("\n## Outcome\n"), "{md}");
     assert!(!md.contains("\n## Models\n"), "{md}");
     assert!(!md.contains("Not comparable"), "{md}");
-    assert!(!md.contains(&esc_md("open/closed")), "{md}");
+    assert!(!md.contains("open/closed"), "{md}");
 }
 
 #[test]
@@ -1328,9 +1328,9 @@ fn coverage_section_says_only_transitions_are_reported() {
         .filter(|c| matches!(c, Change::CheckOpened { .. }))
         .collect();
     let md = markdown(&diff);
+    // SIGIL's own text: not escaped (`open/closed`, not `open\/closed`).
     assert!(
-        md.contains(&esc_md("Only open/closed transitions are reported")),
+        md.contains("Only open/closed transitions are reported. A check open on both sides"),
         "{md}"
     );
-    assert!(md.contains(&esc_md("open on both sides")), "{md}");
 }

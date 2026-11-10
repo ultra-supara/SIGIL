@@ -23,7 +23,7 @@
 |---|---|---|---|
 | closed | model\_store\.integrity | Partial 1 \(required\) | Complete 1 \(required\) |
 
-Only open\/closed transitions are reported\. A check open on both sides whose states or gaps changed is not\.
+Only open/closed transitions are reported. A check open on both sides whose states or gaps changed is not.
 
 ## Findings
 

@@ -55,7 +55,8 @@ const SECTIONS: [Section; 7] = [
     },
 ];
 
-/// What the Coverage section says about the checks it does not list.
+/// What the Coverage section says about the checks it does not list. SIGIL's own text, so it
+/// is written without escaping.
 const COVERAGE_NOTE: &str = "Only open/closed transitions are reported. A check open on both sides whose states or gaps changed is not.";
 
 /// The Markdown of `diff`.
@@ -86,7 +87,7 @@ pub fn markdown(diff: &Diff) -> String {
         section(&mut out, s.title);
         table(&mut out, s.header, rows);
         if s.title == "Coverage" {
-            out.push_str(&esc(COVERAGE_NOTE));
+            out.push_str(COVERAGE_NOTE);
             out.push_str("\n\n");
         }
     }
