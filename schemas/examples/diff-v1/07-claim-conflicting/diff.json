@@ -1,0 +1,67 @@
+{
+  "schema": "sigil-diff/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "baseline": {
+    "sha256": "6f02e8e60f915894721e7b088ff9c589b7f476a12b3a843817f9aca8357144aa",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "current": {
+    "sha256": "8552a00067a5de6060efd8fe5b6b82a7de5692a0013beb11ab0c8e5bc9b0cf03",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "changes": [
+    {
+      "ComponentChanged": {
+        "placement": {
+          "Instance": "inst:lib/ollama/libggml-base.so.0.13.1"
+        },
+        "arch": "x86_64",
+        "component": "ggml-base",
+        "baseline": {
+          "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+          "status": "ReferenceMatched",
+          "versions": [
+            "0.13.1"
+          ]
+        },
+        "current": {
+          "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+          "status": "Conflicting",
+          "versions": [
+            "0.12.0",
+            "0.13.1"
+          ]
+        }
+      }
+    }
+  ],
+  "not_comparable": []
+}

@@ -1,0 +1,74 @@
+{
+  "schema": "sigil-diff/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "baseline": {
+    "sha256": "7446ed112019a82fcfb8a4006b68b1576a921157e3963ae38d3f0a56ce7dc694",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "current": {
+    "sha256": "7a644e85c5a5a3243db3bc6e63426f2929f0855074bc3ab9cccf2182f53a822a",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "changes": [
+    {
+      "VerdictChanged": {
+        "baseline": "Pass",
+        "current": "Warn"
+      }
+    },
+    {
+      "FindingNew": {
+        "rule": "exposure.bind_public",
+        "subject": {
+          "Port": 11434
+        },
+        "at": "",
+        "current": [
+          "finding:exposure.bind_public@listener:tcp/0.0.0.0:11434#7002"
+        ]
+      }
+    },
+    {
+      "BindWidened": {
+        "port": 11434,
+        "baseline": "Loopback",
+        "current": "Wildcard",
+        "baseline_listeners": [
+          "listener:tcp/127.0.0.1:11434#7001"
+        ],
+        "current_listeners": [
+          "listener:tcp/0.0.0.0:11434#7002"
+        ]
+      }
+    }
+  ],
+  "not_comparable": []
+}

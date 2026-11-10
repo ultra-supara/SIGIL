@@ -1,0 +1,254 @@
+{
+  "schema": "sigil-session/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "knowledge": [
+    {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    },
+    {
+      "kind": "ReferenceManifest",
+      "id": "ollama-official",
+      "version": "2026-10-07",
+      "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+  ],
+  "request": {
+    "mode": "Static",
+    "roots": [
+      {
+        "id": "install",
+        "path": "/usr/local"
+      }
+    ],
+    "audit": [
+      "backend_loader"
+    ],
+    "required_checks": [
+      "artifacts.discovery",
+      "loader.identify"
+    ],
+    "budgets": {
+      "files": 4096
+    },
+    "observe_env": false,
+    "model_filter": null,
+    "active": [],
+    "code": false
+  },
+  "observation": {
+    "started_at": "2026-10-07T07:00:00Z",
+    "finished_at": "2026-10-07T07:00:02Z",
+    "uid": 1000,
+    "gid": 1000,
+    "capabilities": [],
+    "boot_id": "00000000-0000-4000-8000-000000000000",
+    "kernel": "6.8.0",
+    "net_ns": null,
+    "mnt_ns": null
+  },
+  "artifacts": [
+    {
+      "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 1048576,
+      "format": {
+        "Elf": {
+          "kind": "Dyn"
+        }
+      },
+      "slices": [
+        {
+          "id": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+          "arch": "x86_64",
+          "offset": 0,
+          "size": 1048576,
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    }
+  ],
+  "instances": [
+    {
+      "id": "inst:lib/ollama/libggml-base.so.0.13.1",
+      "root": "install",
+      "path": "/usr/local/lib/ollama/libggml-base.so.0.13.1",
+      "link_chain": [],
+      "resolved": null,
+      "content": {
+        "Read": {
+          "artifact": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "stat": {
+        "dev": 2049,
+        "ino": 1001,
+        "mode": 33188,
+        "uid": 0,
+        "gid": 0,
+        "size": 1048576,
+        "mtime_ns": 1791331200000000000,
+        "nlink": 1
+      },
+      "stability": "NoChangeDetected",
+      "discovered_by": [
+        "Walk"
+      ]
+    }
+  ],
+  "models": [],
+  "processes": [],
+  "listeners": [],
+  "probes": [],
+  "values": [],
+  "components": [
+    {
+      "subject": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+      "component": "ggml-base",
+      "assertions": [
+        {
+          "Embedded": {
+            "field": "ggml_version",
+            "value": "0.12.0",
+            "at": {
+              "Code": {
+                "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+                "loc": {
+                  "VAddr": 643424
+                }
+              }
+            },
+            "method": {
+              "FunctionReturn": {
+                "function": "ggml_version"
+              }
+            }
+          }
+        },
+        {
+          "KnownHash": {
+            "reference": "ollama-official",
+            "release": "v0.30.6",
+            "member": "lib/ollama/libggml-base.so.0.13.1",
+            "matched": true
+          }
+        },
+        {
+          "SelfName": {
+            "kind": "Filename",
+            "value": "libggml-base.so.0.13.1",
+            "at": {
+              "Instance": {
+                "instance": "inst:lib/ollama/libggml-base.so.0.13.1"
+              }
+            }
+          }
+        },
+        {
+          "Signature": {
+            "state": "NotChecked"
+          }
+        }
+      ],
+      "status": "Conflicting",
+      "versions": [
+        {
+          "value": "0.12.0",
+          "source": {
+            "Embedded": {
+              "field": "ggml_version"
+            }
+          },
+          "at": {
+            "Code": {
+              "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
+              "loc": {
+                "VAddr": 643424
+              }
+            }
+          }
+        },
+        {
+          "value": "0.13.1",
+          "source": {
+            "SelfName": {
+              "kind": "Filename"
+            }
+          },
+          "at": {
+            "Instance": {
+              "instance": "inst:lib/ollama/libggml-base.so.0.13.1"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "releases": [
+    {
+      "product": "ollama",
+      "candidates": [
+        "v0.30.6"
+      ],
+      "basis": {
+        "ReferenceMatches": {
+          "reference": "ollama-official",
+          "files": [
+            "inst:lib/ollama/libggml-base.so.0.13.1"
+          ]
+        }
+      }
+    }
+  ],
+  "reference_matches": [
+    {
+      "reference": "ollama-official",
+      "release": "v0.30.6",
+      "member": "lib/ollama/libggml-base.so.0.13.1",
+      "instance": "inst:lib/ollama/libggml-base.so.0.13.1",
+      "result": {
+        "File": {
+          "expected": "1111111111111111111111111111111111111111111111111111111111111111",
+          "observed": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      }
+    }
+  ],
+  "hints": [],
+  "code": [],
+  "relations": [],
+  "rule_support": [],
+  "bindings": [],
+  "loads": [],
+  "access": [],
+  "assumptions": [],
+  "coverage": [
+    {
+      "check": "artifacts.discovery",
+      "scope": "Audit",
+      "state": "Complete",
+      "budget": null
+    },
+    {
+      "check": "loader.identify",
+      "scope": "Audit",
+      "state": "Complete",
+      "budget": null
+    }
+  ],
+  "findings": [],
+  "open_questions": [],
+  "policy_violations": [],
+  "outcome": {
+    "verdict": "Pass",
+    "completeness": "Complete",
+    "confirmed_failures": 0,
+    "confirmed_warnings": 0,
+    "policy_time": "2026-10-07T07:00:00Z"
+  }
+}

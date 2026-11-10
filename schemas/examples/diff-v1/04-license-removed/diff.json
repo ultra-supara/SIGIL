@@ -1,0 +1,82 @@
+{
+  "schema": "sigil-diff/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "baseline": {
+    "sha256": "7446ed112019a82fcfb8a4006b68b1576a921157e3963ae38d3f0a56ce7dc694",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "current": {
+    "sha256": "845d7dc364fb5e35100667fb8c5d3ee1fad171bc2001f11b43237951078fda86",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "changes": [
+    {
+      "VerdictChanged": {
+        "baseline": "Pass",
+        "current": "Warn"
+      }
+    },
+    {
+      "FindingNew": {
+        "rule": "model.license_missing",
+        "subject": {
+          "Model": "model:models/registry.ollama.ai/library/m/latest"
+        },
+        "at": "",
+        "current": [
+          "finding:model.license_missing@model:models/registry.ollama.ai/library/m/latest"
+        ]
+      }
+    },
+    {
+      "LayerChanged": {
+        "model": "model:models/registry.ollama.ai/library/m/latest",
+        "role": "Layer",
+        "media_type": "application/vnd.ollama.image.license",
+        "ordinal": 0,
+        "baseline": "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+        "current": null
+      }
+    },
+    {
+      "LicenseChanged": {
+        "model": "model:models/registry.ollama.ai/library/m/latest",
+        "baseline": {
+          "Spdx": {
+            "id": "MIT"
+          }
+        },
+        "current": "NoLayer"
+      }
+    }
+  ],
+  "not_comparable": []
+}
