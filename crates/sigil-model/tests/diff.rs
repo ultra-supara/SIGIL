@@ -1479,3 +1479,42 @@ fn coverage_section_says_only_transitions_are_reported() {
         "{md}"
     );
 }
+
+#[test]
+fn a_held_model_s_finding_is_judged_by_its_manifest_s_stability() {
+    let rule = "model.manifest_digest_malformed";
+    let mut malformed = compare_store();
+    other_model_finding(&mut malformed, rule, MODEL_M);
+    let mut unstable = compare_store();
+    manifest_unstable(&mut unstable, MODEL_M);
+    let item = Item::Finding {
+        rule: id(rule),
+        subject: SubjectKey::Model(id(MODEL_M)),
+        at: String::new(),
+    };
+    for (baseline, current, open_in) in [
+        (&malformed, &unstable, Side::Current),
+        (&unstable, &malformed, Side::Baseline),
+    ] {
+        let diff = diff_of(baseline, current);
+        assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+        assert!(!has(&diff, "FindingNew"), "{:?}", kinds(&diff));
+        assert!(
+            diff.not_comparable.contains(&NotComparable {
+                item: item.clone(),
+                cause: Cause::Coverage,
+                checks: ids(&[INVENTORY]),
+                open_in,
+            }),
+            "{:?}",
+            diff.not_comparable
+        );
+    }
+    // A manifest read stably with the malformed digest fixed: the finding is resolved, and new
+    // the other way.
+    assert!(has(
+        &diff_of(&malformed, &compare_store()),
+        "FindingResolved"
+    ));
+    assert!(has(&diff_of(&compare_store(), &malformed), "FindingNew"));
+}

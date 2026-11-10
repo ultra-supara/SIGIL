@@ -213,7 +213,9 @@ fn complete(s: &Session) -> Absence {
 /// present side's (`same_filter` false), it first needs the subject's model on the absent side:
 /// the filter may have left it out. Under the same filter, a model that is gone from the absent
 /// side has none of its findings, so that side's inventory closed for the model's manifest (the
-/// present side's record of it, under the root recorded there) is enough. An exposure rule needs
+/// present side's record of it, under the root recorded there) is enough. A model the absent side
+/// holds additionally needs no open inventory entry on that side's manifest of it: a manifest
+/// that changed during the read keeps the model with no findings. An exposure rule needs
 /// `exposure.binds` closed everywhere; any other rule a `Complete` absent side.
 fn finding_recorded(
     present: &Session,
@@ -237,10 +239,26 @@ fn finding_recorded(
             return Absence::closed(closed, checks(&[INVENTORY]));
         }
         let required = model_checks(rule.as_str());
-        let closed = required
+        let mut closed = required
             .iter()
             .all(|check| closed_for_under(absent, &[*check], scope, root));
-        Absence::closed(closed, checks(required))
+        let mut open = checks(required);
+        // The model is held: a manifest that changed during the read keeps it but records no
+        // findings and leaves the inventory open on the manifest itself, whatever the rule's
+        // checks say. The root's listing is not asked again here: only entries of the manifest.
+        if let Some(manifest) = manifest_of(absent, scope) {
+            let manifest = Ref::Instance(manifest.clone());
+            let gap = absent.coverage.iter().any(|c| {
+                c.check.as_str() == INVENTORY && c.scope == manifest && !c.state.can_close()
+            });
+            if gap {
+                closed = false;
+                open.extend(checks(&[INVENTORY]));
+                open.sort();
+                open.dedup();
+            }
+        }
+        Absence::closed(closed, open)
     } else if rule.as_str().starts_with("exposure.") {
         Absence::closed(closed_everywhere(absent, BINDS), checks(&[BINDS]))
     } else {
