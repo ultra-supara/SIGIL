@@ -4,20 +4,17 @@ use std::collections::BTreeMap;
 
 use super::compare::{checks, Found};
 use super::key;
-use super::scope::{arch_of, closed_everywhere, closed_for, placement, placements_of, scope_of};
-use crate::binary::{ARTIFACTS_CODE, ARTIFACTS_IDENTITY};
-use crate::binary_input::{BINARY_CODE, BINARY_IDENTITY};
+use super::scope::{
+    arch_of, checks_at, closed_everywhere, closed_for, placement, placements_of, same_model_filter,
+    scope_of, CODE, IDENTITY, INVENTORY,
+};
 use crate::diff::{Change, Item, Placement, Side, SubjectKey};
 use crate::evidence::Ref;
 use crate::finding::{Completeness, Finding, CAPABILITY_DENY_PREFIX};
 use crate::id::{CheckId, FindingId, PolicyRuleRef, RuleId};
 use crate::session::Session;
 
-const MODEL_STORE: [&str; 3] = [
-    "model_store.integrity",
-    "model_store.inventory",
-    "model_store.license",
-];
+const MODEL_STORE: [&str; 3] = ["model_store.integrity", INVENTORY, "model_store.license"];
 const BINDS: &str = "exposure.binds";
 const COMPONENT_DENY_PREFIX: &str = "policy:components.deny.";
 
@@ -141,10 +138,20 @@ fn complete(s: &Session) -> (bool, Vec<CheckId>) {
 
 /// Whether `absent` would have recorded a finding of `rule` about `scope`, and the checks
 /// that say so. A model-store rule needs the model-store checks taken together closed for the
-/// subject's scope (its root's inventory answers for a model that is gone); an exposure rule
-/// needs `exposure.binds` closed everywhere.
-fn finding_recorded(absent: &Session, rule: &RuleId, scope: &Ref) -> (bool, Vec<CheckId>) {
+/// subject's scope (its root's inventory answers for a model that is gone). Under another model
+/// filter than the present side's (`same_filter` false), it also needs the subject's model on
+/// the absent side: the filter may have left it out. An exposure rule needs `exposure.binds`
+/// closed everywhere.
+fn finding_recorded(
+    absent: &Session,
+    same_filter: bool,
+    rule: &RuleId,
+    scope: &Ref,
+) -> (bool, Vec<CheckId>) {
     if rule.as_str().starts_with("model.") {
+        if !same_filter && !holds_model(absent, scope) {
+            return (false, checks(&[INVENTORY]));
+        }
         (
             closed_for(absent, &MODEL_STORE, scope),
             checks(&MODEL_STORE),
@@ -153,6 +160,16 @@ fn finding_recorded(absent: &Session, rule: &RuleId, scope: &Ref) -> (bool, Vec<
         (closed_everywhere(absent, BINDS), checks(&[BINDS]))
     } else {
         complete(absent)
+    }
+}
+
+/// Whether `s` holds the model a finding's subject is about: that model, or the model of that
+/// manifest. Any other subject names no model.
+fn holds_model(s: &Session, subject: &Ref) -> bool {
+    match subject {
+        Ref::Model(id) => s.models.iter().any(|m| m.id == *id),
+        Ref::Instance(manifest) => s.models.iter().any(|m| m.manifest == *manifest),
+        _ => false,
     }
 }
 
@@ -167,26 +184,30 @@ fn placement_of(subject: &SubjectKey) -> Option<&Placement> {
 }
 
 /// Whether `absent` would have recorded a violation of `rule` about `subject`: a component
-/// denial needs the placement's identity check closed, a capability denial its code check.
+/// denial needs the placement's identity check closed, a capability denial its code check. A
+/// subject with no placement cannot be judged; both checks are named.
 fn violation_recorded(
     absent: &Session,
     rule: &PolicyRuleRef,
     subject: &SubjectKey,
 ) -> (bool, Vec<CheckId>) {
-    let names: &[&str] = if rule.as_str().starts_with(COMPONENT_DENY_PREFIX) {
-        &[ARTIFACTS_IDENTITY, BINARY_IDENTITY]
+    let pair = if rule.as_str().starts_with(COMPONENT_DENY_PREFIX) {
+        &IDENTITY
     } else if rule.as_str().starts_with(CAPABILITY_DENY_PREFIX) {
-        &[ARTIFACTS_CODE, BINARY_CODE]
+        &CODE
     } else {
         return complete(absent);
     };
-    let closed = placement_of(subject)
-        .and_then(|p| scope_of(absent, p))
-        .is_some_and(|scope| closed_for(absent, names, &scope));
+    let Some(p) = placement_of(subject) else {
+        return (false, checks(pair));
+    };
+    let names = checks_at(p, pair);
+    let closed = scope_of(absent, p).is_some_and(|scope| closed_for(absent, names, &scope));
     (closed, checks(names))
 }
 
 pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
+    let same_filter = same_model_filter(b, c);
     let (was, is) = (findings(b), findings(c));
     for (k, j) in &was {
         let Item::Finding { rule, subject, at } = &j.item else {
@@ -195,7 +216,7 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         if is.contains_key(k) {
             continue;
         }
-        match finding_recorded(c, rule, &j.scope) {
+        match finding_recorded(c, same_filter, rule, &j.scope) {
             (true, _) => found.changes.push(Change::FindingResolved {
                 rule: rule.clone(),
                 subject: subject.clone(),
@@ -212,7 +233,7 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         if was.contains_key(k) {
             continue;
         }
-        match finding_recorded(b, rule, &j.scope) {
+        match finding_recorded(b, same_filter, rule, &j.scope) {
             (true, _) => found.changes.push(Change::FindingNew {
                 rule: rule.clone(),
                 subject: subject.clone(),

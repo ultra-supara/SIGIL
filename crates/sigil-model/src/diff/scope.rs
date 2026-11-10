@@ -1,6 +1,8 @@
 //! Comparability and placement keys (spec "Comparability", "Placement keys").
 
 use crate::artifact::{Arch, FileInstance, InstanceContent};
+use crate::binary::{ARTIFACTS_CODE, ARTIFACTS_IDENTITY};
+use crate::binary_input::{BINARY_CODE, BINARY_IDENTITY};
 use crate::diff::Placement;
 use crate::evidence::Ref;
 use crate::id::{ArtifactId, RootId, SliceId};
@@ -12,6 +14,34 @@ const MODELS_ROOT: &str = "models";
 
 /// Roots whose instance IDs are root-relative under a fixed name, so stable across runs.
 const FIXED_ROOTS: [&str; 3] = [MODELS_ROOT, INSTALL_ROOT, SERVICE_UNIT_ROOT];
+
+/// The check that lists the model store's models.
+pub(crate) const INVENTORY: &str = "model_store.inventory";
+
+/// The identity check of an installation, and of a binary input ([`checks_at`]).
+pub(crate) static IDENTITY: [&str; 2] = [ARTIFACTS_IDENTITY, BINARY_IDENTITY];
+/// The code check of an installation, and of a binary input ([`checks_at`]).
+pub(crate) static CODE: [&str; 2] = [ARTIFACTS_CODE, BINARY_CODE];
+
+/// Of a check kept as an installation's and a binary input's (`pair`, in that order), the ones
+/// that record what is at `p`: the installation's for an instance under a fixed root, the binary
+/// input's for a recorded path, either for content no instance read.
+pub(crate) fn checks_at(
+    p: &Placement,
+    pair: &'static [&'static str; 2],
+) -> &'static [&'static str] {
+    match p {
+        Placement::Instance(_) => &pair[..1],
+        Placement::Path(_) => &pair[1..],
+        Placement::Content(_) => pair,
+    }
+}
+
+/// Whether two sessions inventoried the model store under the same model filter. Under
+/// different ones, a model one side did not record may be one its filter left out.
+pub(crate) fn same_model_filter(b: &Session, c: &Session) -> bool {
+    b.request.model_filter == c.request.model_filter
+}
 
 /// The root a scope lies under: a root itself; an instance's recorded root, else the one its ID
 /// names (`inst:<root>/…`); the root a model ID names (`model:<root>/…`).

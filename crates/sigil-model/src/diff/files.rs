@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::compare::{checks, open_in, Found};
 use super::key;
-use super::scope::{arch_of, closed_everywhere, closed_for, placement, placements_of, scope_of};
+use super::scope::{
+    arch_of, checks_at, closed_everywhere, closed_for, placement, placements_of, scope_of, IDENTITY,
+};
 use crate::artifact::{FileInstance, InstanceContent};
-use crate::binary::ARTIFACTS_IDENTITY;
-use crate::binary_input::{is_binary_root, BINARY_CONTAINER, BINARY_IDENTITY};
+use crate::binary_input::{is_binary_root, BINARY_CONTAINER};
 use crate::diff::{Change, ComponentState, Item, Placement, ReleaseState, Side};
 use crate::id::{ArtifactId, ComponentKey};
 use crate::identity::ReleaseBasis;
@@ -38,8 +39,8 @@ fn placed_files(s: &Session) -> BTreeMap<String, (Placement, &FileInstance)> {
         .collect()
 }
 
-/// The check that records a file at `p`: an installation's discovery, or a binary input's
-/// container check.
+/// The check that records a file at `p`: discovery for an installation's file or the service
+/// unit, the container check for a binary input.
 fn file_check(p: &Placement) -> &'static str {
     match p {
         Placement::Instance(_) => ARTIFACTS_DISCOVERY,
@@ -65,7 +66,7 @@ fn files(b: &Session, c: &Session, found: &mut Found) {
                     instance: before.id.clone(),
                     content: content(before),
                 };
-                one_side(c, p, Side::Current, removed, found);
+                one_side(c, p, before, Side::Current, removed, found);
             }
         }
     }
@@ -76,16 +77,23 @@ fn files(b: &Session, c: &Session, found: &mut Found) {
                 instance: after.id.clone(),
                 content: content(after),
             };
-            one_side(b, p, Side::Baseline, added, found);
+            one_side(b, p, after, Side::Baseline, added, found);
         }
     }
 }
 
-/// A file on one side only. An installation file's absence holds when the absent side's
-/// discovery is closed; a binary input's never does, since which files are inputs is the
-/// request.
-fn one_side(absent: &Session, p: &Placement, side: Side, change: Change, found: &mut Found) {
-    if matches!(p, Placement::Instance(_)) && closed_everywhere(absent, ARTIFACTS_DISCOVERY) {
+/// A file on one side only (`present` there). An installation file's absence holds when the
+/// absent side's discovery is closed. A file named on the command line (a binary input, or the
+/// service unit) is never judged absent: which files were named is the request, not the system.
+fn one_side(
+    absent: &Session,
+    p: &Placement,
+    present: &FileInstance,
+    side: Side,
+    change: Change,
+    found: &mut Found,
+) {
+    if present.root.as_str() == INSTALL_ROOT && closed_everywhere(absent, ARTIFACTS_DISCOVERY) {
         found.changes.push(change);
     } else {
         let item = Item::File {
@@ -203,15 +211,6 @@ fn claims(s: &Session) -> BTreeMap<String, Claim> {
     out
 }
 
-/// The identity checks that cover a placement.
-fn identity_checks(p: &Placement) -> &'static [&'static str] {
-    match p {
-        Placement::Instance(_) => &[ARTIFACTS_IDENTITY],
-        Placement::Path(_) => &[BINARY_IDENTITY],
-        Placement::Content(_) => &[ARTIFACTS_IDENTITY, BINARY_IDENTITY],
-    }
-}
-
 /// Claims on both sides: their status and versions (the slice is a pointer). A claim on one side
 /// only needs the absent side's identity check closed for that placement.
 fn components(b: &Session, c: &Session, found: &mut Found) {
@@ -242,7 +241,7 @@ fn components(b: &Session, c: &Session, found: &mut Found) {
             (None, None) => continue,
         };
         if let Some((absent, side)) = absent {
-            let names = identity_checks(placement);
+            let names = checks_at(placement, &IDENTITY);
             let closed =
                 scope_of(absent, placement).is_some_and(|scope| closed_for(absent, names, &scope));
             if !closed {

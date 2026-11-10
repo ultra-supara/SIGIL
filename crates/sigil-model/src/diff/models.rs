@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::compare::{checks, open_in, Found};
 use super::key;
-use super::scope::{closed_everywhere, closed_for};
+use super::scope::{closed_everywhere, closed_for, same_model_filter, INVENTORY};
 use crate::diff::{Change, Item, LicenseState, Side};
 use crate::evidence::Ref;
 use crate::id::ModelId;
@@ -12,17 +12,16 @@ use crate::model::{LayerRole, LicenseText, Model};
 use crate::session::Session;
 use crate::text::UntrustedText;
 
-const INVENTORY: &str = "model_store.inventory";
 const LICENSE: &str = "model_store.license";
 
 pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
     let was: BTreeMap<&ModelId, &Model> = b.models.iter().map(|m| (&m.id, m)).collect();
     let is: BTreeMap<&ModelId, &Model> = c.models.iter().map(|m| (&m.id, m)).collect();
-    let same_filter = b.request.model_filter == c.request.model_filter;
+    let same_filter = same_model_filter(b, c);
     for (id, before) in &was {
         match is.get(id) {
             Some(after) => {
-                layers(before, after, found);
+                layers(b, c, before, after, found);
                 license(b, c, before, after, found);
             }
             None => {
@@ -93,19 +92,22 @@ fn keyed_layers(m: &Model) -> BTreeMap<String, Layer<'_>> {
     out
 }
 
-/// Layers on both sides whose digests differ, and layers on one side only. A manifest read on
-/// both sides is a fact on both: no check is needed.
-fn layers(before: &Model, after: &Model, found: &mut Found) {
+/// Layers on both sides whose digests differ, and layers on one side only. They are compared
+/// when `model_store.inventory` is closed for the model's manifest on both sides: the layers of a
+/// manifest that changed while it was read support no claim. When it is open on a side and the
+/// layers differ, that is not comparable.
+fn layers(b: &Session, c: &Session, before: &Model, after: &Model, found: &mut Found) {
     let (was, is) = (keyed_layers(before), keyed_layers(after));
     let keys: BTreeSet<&String> = was.keys().chain(is.keys()).collect();
+    let mut changed = vec![];
     for k in keys {
-        let (b, c) = (was.get(k), is.get(k));
-        let (baseline, current) = (b.map(|l| l.digest), c.map(|l| l.digest));
+        let (bl, cl) = (was.get(k), is.get(k));
+        let (baseline, current) = (bl.map(|l| l.digest), cl.map(|l| l.digest));
         if baseline == current {
             continue;
         }
-        let Some(l) = b.or(c) else { continue };
-        found.changes.push(Change::LayerChanged {
+        let Some(l) = bl.or(cl) else { continue };
+        changed.push(Change::LayerChanged {
             model: after.id.clone(),
             role: l.role,
             media_type: l.media_type.cloned(),
@@ -113,6 +115,19 @@ fn layers(before: &Model, after: &Model, found: &mut Found) {
             baseline: baseline.cloned(),
             current: current.cloned(),
         });
+    }
+    if changed.is_empty() {
+        return;
+    }
+    let was_open = !closed_for(b, &[INVENTORY], &Ref::Instance(before.manifest.clone()));
+    let is_open = !closed_for(c, &[INVENTORY], &Ref::Instance(after.manifest.clone()));
+    if was_open || is_open {
+        let item = Item::Model {
+            model: after.id.clone(),
+        };
+        found.unjudged(item, checks(&[INVENTORY]), open_in(was_open, is_open));
+    } else {
+        found.changes.extend(changed);
     }
 }
 

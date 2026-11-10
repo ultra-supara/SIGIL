@@ -285,18 +285,59 @@ pub fn weights_replaced(s: &mut Session) {
 
 /// Case 04: model `m` has no license layer any more, and the store's analysis reports it.
 pub fn license_removed(s: &mut Session) {
-    let m = model_mut(s, MODEL_M);
+    license_removed_from(s, MODEL_M);
+}
+
+/// Case 04 on `model`: it has no license layer any more, and the store's analysis reports it.
+pub fn license_removed_from(s: &mut Session, model: &str) {
+    let m = model_mut(s, model);
     m.layers
         .retain(|l| l.media_type.as_ref().and_then(UntrustedText::as_str) != Some(LICENSE_MEDIA));
     m.license = None;
     let manifest = m.manifest.clone();
     s.findings.push(observed(
         "model.license_missing",
-        Ref::Model(id(MODEL_M)),
+        Ref::Model(id(model)),
         "",
         "license_layer_absent",
         vec![EvidenceRef::Instance { instance: manifest }],
     ));
+    settle(s);
+}
+
+/// Model `model`'s manifest changed while it was read. As the engine records it
+/// (`analyze::model_store`), its inventory is open on the manifest and its integrity and license
+/// on the model; the layers read stay in the facts.
+pub fn manifest_unstable(s: &mut Session, model: &str) {
+    let manifest = model_mut(s, model).manifest.clone();
+    let placed = s
+        .instances
+        .iter_mut()
+        .find(|i| i.id == manifest)
+        .unwrap_or_else(|| panic!("no manifest {manifest}"));
+    placed.stability = Stability::ChangedDuringRead;
+    let gap = || CoverageState::Partial {
+        missing: vec![
+            "the manifest was not stable during the read (ChangedDuringRead)".to_string(),
+        ],
+    };
+    s.coverage
+        .push(coverage(INVENTORY, Ref::Instance(manifest), gap()));
+    set_state(s, INTEGRITY, &Ref::Model(id(model)), gap());
+    set_state(s, LICENSE, &Ref::Model(id(model)), gap());
+    settle(s);
+}
+
+/// The entry of `check` on `scope` is `Partial` for the gap `why`: the check is open there.
+pub fn cut_short(s: &mut Session, check: &str, scope: &Ref, why: &str) {
+    set_state(
+        s,
+        check,
+        scope,
+        CoverageState::Partial {
+            missing: vec![why.to_string()],
+        },
+    );
     settle(s);
 }
 
@@ -427,6 +468,47 @@ pub fn discovery_partial(s: &mut Session) {
         },
     );
     settle(s);
+}
+
+/// Example 19 without its unit: the installation inspected as with `--install-dir /usr/local`.
+pub fn without_service_unit(s: &mut Session) {
+    let unit = |i: &FileInstance| i.root.as_str() == SERVICE_UNIT_ROOT;
+    let read: Vec<ArtifactId> = s
+        .instances
+        .iter()
+        .filter(|i| unit(i))
+        .filter_map(|i| match &i.content {
+            InstanceContent::Read { artifact } => Some(artifact.clone()),
+            InstanceContent::NotRead { .. } => None,
+        })
+        .collect();
+    s.instances.retain(|i| !unit(i));
+    s.artifacts.retain(|a| !read.contains(&a.id));
+    s.request
+        .roots
+        .retain(|r| r.id.as_str() != SERVICE_UNIT_ROOT);
+    s.request.budgets.remove("service_unit_bytes");
+    for i in &mut s.instances {
+        i.discovered_by
+            .retain(|d| !matches!(d, DiscoverySource::ServiceUnit { .. }));
+    }
+}
+
+/// Example 19's unit, edited: its content is now `byte×32`.
+pub fn unit_rewritten(s: &mut Session, byte: u8) {
+    let now: ArtifactId = id(&format!("sha256:{}", hex(byte)));
+    let unit = s
+        .instances
+        .iter_mut()
+        .find(|i| i.root.as_str() == SERVICE_UNIT_ROOT)
+        .expect("example 19 has a unit");
+    let InstanceContent::Read { artifact } = &mut unit.content else {
+        panic!("example 19's unit was read");
+    };
+    let was = std::mem::replace(artifact, now.clone());
+    for a in s.artifacts.iter_mut().filter(|a| a.id == was) {
+        a.id = now.clone();
+    }
 }
 
 /// Case 07's baseline: example 12's libggml-base before its `ggml_version()` disagreed:

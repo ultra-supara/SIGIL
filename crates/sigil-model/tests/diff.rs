@@ -106,6 +106,36 @@ fn every_comparison_builder_gives_a_valid_session() {
     let mut lan = compare_store();
     add_listener(&mut lan, "10.0.0.5", 8080, 9001);
     more.push(lan);
+    let mut unlicensed_n = compare_store();
+    add_model_n(&mut unlicensed_n);
+    license_removed_from(&mut unlicensed_n, MODEL_N);
+    more.push(unlicensed_n);
+    let mut unstable = compare_store();
+    manifest_unstable(&mut unstable, MODEL_M);
+    weights_replaced(&mut unstable);
+    more.push(unstable);
+    let mut install_dir = service_unit();
+    without_service_unit(&mut install_dir);
+    more.push(install_dir);
+    let mut edited = service_unit();
+    unit_rewritten(&mut edited, 0x1b);
+    more.push(edited);
+    let mut unidentified = binary_inspect();
+    cut_short(
+        &mut unidentified,
+        BINARY_IDENTITY,
+        &Ref::Instance(id(ELF_INPUT)),
+        SCAN_READ_FAILED,
+    );
+    more.push(unidentified);
+    let mut unanalyzed = binary_code();
+    cut_short(
+        &mut unanalyzed,
+        BINARY_CODE,
+        &Ref::Instance(id(KERNEL_INPUT)),
+        "code: cut short",
+    );
+    more.push(unanalyzed);
     for s in &more {
         assert_valid(s);
     }
@@ -230,6 +260,41 @@ fn a_layer_is_matched_by_role_media_type_and_position() {
 }
 
 #[test]
+fn layers_of_an_unstable_manifest_are_not_comparable() {
+    let mut unstable = compare_store();
+    manifest_unstable(&mut unstable, MODEL_M);
+    // The same layers read: nothing to judge.
+    let diff = diff_of(&compare_store(), &unstable);
+    assert!(!has(&diff, "LayerChanged"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+    // Other layers read from a manifest that changed meanwhile support no claim.
+    weights_replaced(&mut unstable);
+    let item = Item::Model { model: id(MODEL_M) };
+    for (baseline, current, open_in) in [
+        (&compare_store(), &unstable, Side::Current),
+        (&unstable, &compare_store(), Side::Baseline),
+        (&unstable, &unstable_with(compare_store()), Side::Both),
+    ] {
+        let diff = diff_of(baseline, current);
+        assert!(!has(&diff, "LayerChanged"), "{:?}", kinds(&diff));
+        assert!(
+            diff.not_comparable.contains(&NotComparable {
+                item: item.clone(),
+                checks: ids(&[INVENTORY]),
+                open_in,
+            }),
+            "{:?}",
+            diff.not_comparable
+        );
+    }
+}
+
+fn unstable_with(mut s: Session) -> Session {
+    manifest_unstable(&mut s, MODEL_M);
+    s
+}
+
+#[test]
 fn a_removed_license_layer_is_a_license_change() {
     let mut removed = compare_store();
     license_removed(&mut removed);
@@ -347,6 +412,47 @@ fn a_binary_input_on_one_side_only_is_not_comparable() {
         checks: ids(&["binary.container"]),
         open_in: Side::Current,
     }));
+}
+
+#[test]
+fn a_service_unit_on_one_side_only_is_not_comparable() {
+    let unit = Placement::Instance(id("inst:service-unit/ollama.service"));
+    let given = service_unit();
+    let mut install_dir = service_unit();
+    without_service_unit(&mut install_dir);
+    for (baseline, current, open_in) in [
+        (&given, &install_dir, Side::Current),
+        (&install_dir, &given, Side::Baseline),
+    ] {
+        let diff = diff_of(baseline, current);
+        assert!(!has(&diff, "FileRemoved"), "{:?}", kinds(&diff));
+        assert!(!has(&diff, "FileAdded"), "{:?}", kinds(&diff));
+        assert!(
+            diff.not_comparable.contains(&NotComparable {
+                item: Item::File {
+                    placement: unit.clone(),
+                },
+                checks: ids(&["artifacts.discovery"]),
+                open_in,
+            }),
+            "{:?}",
+            diff.not_comparable
+        );
+    }
+    // The unit given on both sides, edited: its content changed.
+    let mut edited = service_unit();
+    unit_rewritten(&mut edited, 0x1b);
+    let diff = diff_of(&given, &edited);
+    assert_eq!(
+        diff.changes,
+        [Change::FileContentChanged {
+            placement: unit,
+            baseline: id("inst:service-unit/ollama.service"),
+            current: id("inst:service-unit/ollama.service"),
+            baseline_content: id(&format!("sha256:{}", hex(0x19))),
+            current_content: id(&format!("sha256:{}", hex(0x1b))),
+        }]
+    );
 }
 
 #[test]
@@ -509,6 +615,41 @@ fn a_resolved_finding_needs_the_current_side_closed() {
 }
 
 #[test]
+fn a_model_finding_a_model_filter_left_out_is_not_comparable() {
+    let mut unlicensed = store_with_n();
+    license_removed_from(&mut unlicensed, MODEL_N);
+    let mut filtered = compare_store();
+    filtered.request.model_filter = Some("m:latest".to_string());
+    let item = Item::Finding {
+        rule: id("model.license_missing"),
+        subject: SubjectKey::Model(id(MODEL_N)),
+        at: String::new(),
+    };
+    for (baseline, current, open_in) in [
+        (&unlicensed, &filtered, Side::Current),
+        (&filtered, &unlicensed, Side::Baseline),
+    ] {
+        let diff = diff_of(baseline, current);
+        assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+        assert!(!has(&diff, "FindingNew"), "{:?}", kinds(&diff));
+        assert!(
+            diff.not_comparable.contains(&NotComparable {
+                item: item.clone(),
+                checks: ids(&[INVENTORY]),
+                open_in,
+            }),
+            "{:?}",
+            diff.not_comparable
+        );
+    }
+    // A model both filters kept is judged as before.
+    let mut m_unlicensed = store_with_n();
+    license_removed(&mut m_unlicensed);
+    let diff = diff_of(&m_unlicensed, &filtered);
+    assert!(has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+}
+
+#[test]
 fn an_exposure_finding_on_a_new_socket_is_the_same_finding() {
     let mut a = compare_store();
     bind_wildcard(&mut a, 7002);
@@ -541,6 +682,61 @@ fn a_violation_is_new_or_resolved_on_its_placement() {
         c,
         Change::ViolationResolved { subject: s, .. } if *s == subject
     )));
+}
+
+#[test]
+fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
+    // A component denial on a binary input: that input's identity check alone.
+    let mut unidentified = binary_inspect();
+    cut_short(
+        &mut unidentified,
+        BINARY_IDENTITY,
+        &Ref::Instance(id(ELF_INPUT)),
+        SCAN_READ_FAILED,
+    );
+    let diff = diff_of(&binary_denied(), &unidentified);
+    assert!(!has(&diff, "ViolationResolved"), "{:?}", kinds(&diff));
+    assert!(
+        diff.not_comparable.contains(&NotComparable {
+            item: Item::Violation {
+                policy_rule: id("policy:components.deny.ggml-base"),
+                subject: SubjectKey::Component {
+                    placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+                    arch: Arch::X86_64,
+                    component: id("ggml-base"),
+                },
+            },
+            checks: ids(&[BINARY_IDENTITY]),
+            open_in: Side::Current,
+        }),
+        "{:?}",
+        diff.not_comparable
+    );
+    // A capability denial on a binary input: that input's code check alone.
+    let mut unanalyzed = binary_code();
+    cut_short(
+        &mut unanalyzed,
+        BINARY_CODE,
+        &Ref::Instance(id(KERNEL_INPUT)),
+        "code: cut short",
+    );
+    let diff = diff_of(&capability_policy(), &unanalyzed);
+    assert!(!has(&diff, "ViolationResolved"), "{:?}", kinds(&diff));
+    assert!(
+        diff.not_comparable.contains(&NotComparable {
+            item: Item::Violation {
+                policy_rule: id("policy:capabilities.deny.posix.network"),
+                subject: SubjectKey::Slice {
+                    placement: Placement::Path(t("/home/user/src/suspicious_kernel-gcc-O2.o")),
+                    arch: Arch::X86_64,
+                },
+            },
+            checks: ids(&[BINARY_CODE]),
+            open_in: Side::Current,
+        }),
+        "{:?}",
+        diff.not_comparable
+    );
 }
 
 /// `s` with every set-like list reversed (manifest layer order is evidence, so it stays).
