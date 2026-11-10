@@ -1,5 +1,10 @@
 # Multiarchitecture code validation
 
+> **Historical record.** Each entry below describes the state at its own task. Its notes that
+> M3-B, M3-C or [#48](https://github.com/ultra-supara/SIGIL/issues/48) remain open predate
+> #129 and #130: M3 is complete and #48 was closed on 2026-11-09. Current support is in the
+> [support matrix](support-matrix.md).
+
 Task 12 (2026-11-04), base `d54b6cd`, worktree `SIGIL-issue48`.
 Toolchain: rustc 1.93.0 (254b59607), cargo 1.93.0 (083ac5135).
 All Cargo commands ran sequentially with `CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0`.

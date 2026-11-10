@@ -126,8 +126,8 @@ Current analysis boundaries:
 
 - **Code analysis covers x86-64 and AArch64 ELF64 little-endian**, including relocatable objects. It searches executable code covered by `.eh_frame` function ranges. Function-pointer calls, statically linked capability implementations, and raw system calls are outside this analysis.
 - **`--code` analyzes these ELF targets on both `binary inspect` and `inspect ollama --install-dir` or `--service-unit`.** The installation scan reports coverage for each binary content and a summary for the walk.
-- **Mach-O supports containers, imports and bounded direct calls** in 64-bit little-endian arm64/x86-64 thin and universal files. [Exact bounds, binding and ABI limits](docs/binary-inspect.md#mach-o-code) apply; incomplete or unsupported slices remain visible. Identity scans remain unsupported. M3-B/M3-C release gates and original #48 predicate/guard acceptance remain open.
-- **The #48 M3-B release gate remains open.** Mixed marked x86 work-budget accounting and alias reuse are unresolved; see the [support matrix](docs/support-matrix.md).
+- **Mach-O supports containers, imports and bounded direct calls** in 64-bit little-endian arm64/x86-64 thin and universal files. [Exact bounds, binding and ABI limits](docs/binary-inspect.md#mach-o-code) apply; incomplete or unsupported slices remain visible. Identity scans remain unsupported.
+- **Branch conditions are not analyzed.** A direct call site does not say under which conditions the call runs. Predicate and guard analysis is planned in [#44](https://github.com/ultra-supara/SIGIL/issues/44); see the [support matrix](docs/support-matrix.md).
 - **Capability mappings cover specific names.** POSIX, libstdc++, and libc++ import mappings are listed in the [binary guide](docs/binary-inspect.md#capabilities-and-code---code). Missing hints do not establish that a capability is absent. Go, Ollama, and RPC signature hints cannot be used as capability-denial keys.
 
 ## Apply a policy
