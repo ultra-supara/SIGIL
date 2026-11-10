@@ -1238,6 +1238,36 @@ fn explain_the_verdict() {
     assert_clean(&r, &policy(&fx, &[], &["runtime"]));
 }
 
+/// #16: `compare` reads its two sessions and writes only its `--out`. The model store the
+/// sessions were made from is under `target/` too, as a decoy: it is never opened.
+#[test]
+fn compare_reads_only_its_inputs_and_writes_only_its_out() {
+    if !require_tracer("compare_reads_only_its_inputs_and_writes_only_its_out") {
+        return;
+    }
+    let fx = fixture();
+    let baseline = saved_session(&fx);
+    let current = fx.target.join("current.json");
+    std::fs::copy(&baseline, &current).unwrap();
+    let diff = fx.out.join("compare/diff.json");
+    let args = os(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--out",
+        &diff,
+    ]);
+    let r = run("compare", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(diff.is_file());
+    assert_read_under(&r, &baseline);
+    assert_read_under(&r, &current);
+    assert_opened_only(&r, &fx.target, &[&baseline, &current]);
+    assert_clean(&r, &policy(&fx, &[&diff], &["runtime"]));
+}
+
 #[test]
 fn rules_reads_nothing() {
     if !require_tracer("rules_reads_nothing") {
