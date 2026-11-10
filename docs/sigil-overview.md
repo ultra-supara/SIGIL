@@ -16,8 +16,9 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 - Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, and denied components and capabilities.
 - The session (`sigil-session/1`): the one record of a run, with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): a compact projection of the session that names it by SHA-256.
+- Comparison (`sigil compare`, `sigil-diff/1`): what changed between two sessions, each change pointing at its evidence, and what could not be judged.
 - The browser viewer (`sigil-wasm`), which renders sessions and AI-BOM v2 with the CLI's own renderers.
-- The CLI: `inspect ollama`, `binary inspect`, `session render`, `session verify`, `explain`, and `rules`.
+- The CLI: `inspect ollama`, `binary inspect`, `session render`, `session verify`, `compare`, `explain`, and `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path.
 
 How to run it: the [Ollama guide](ollama-inspection.md).
@@ -26,7 +27,7 @@ How to run it: the [Ollama guide](ollama-inspection.md).
 
 - Analysis beyond direct call sites and backend-loader analysis (see the Roadmap).
 - Runtimes other than Ollama.
-- Comparing a session against a baseline.
+- Policy actions on comparisons (a `[compare]` policy section and `--fail-on`).
 
 ## Inspection model
 
@@ -58,4 +59,4 @@ Verdict and completeness are independent: a run can be `PASS` and `INCOMPLETE`. 
 | M4 | A decision record for an active lab (dynamic tracing, kept in a separate tool) | Planned |
 | M5 | Other runtimes: llama.cpp server ([#18](https://github.com/ultra-supara/SIGIL/issues/18), [#52](https://github.com/ultra-supara/SIGIL/issues/52)), LM Studio, llamafile | Planned |
 
-Comparing sessions against a trusted baseline (digest drift, a missing license, wider exposure, new findings) is planned as well: [AI-BOM and comparison](ai-bom-and-comparison.md).
+`sigil compare` reports what changed against a trusted baseline (digest drift, a missing license, wider exposure, new findings): [AI-BOM and comparison](ai-bom-and-comparison.md). Policy actions on those changes are a follow-up to #16.

@@ -1,0 +1,91 @@
+{
+  "schema": "sigil-diff/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "baseline": {
+    "sha256": "e5fedab833aa0344831b21acd8387e515f1f3d2c3df2beff0e6065a04bdd8de7",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "current": {
+    "sha256": "7446ed112019a82fcfb8a4006b68b1576a921157e3963ae38d3f0a56ce7dc694",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Observe",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "1",
+      "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+    }
+  },
+  "changes": [
+    {
+      "VerdictChanged": {
+        "baseline": "Warn",
+        "current": "Pass"
+      }
+    },
+    {
+      "CompletenessChanged": {
+        "baseline": {
+          "Incomplete": {
+            "missing_required": [
+              "model_store.integrity"
+            ],
+            "gaps": []
+          }
+        },
+        "current": "Complete"
+      }
+    },
+    {
+      "CheckClosed": {
+        "check": "model_store.integrity",
+        "baseline": {
+          "required": true,
+          "states": {
+            "Partial": 1
+          }
+        },
+        "current": {
+          "required": true,
+          "states": {
+            "Complete": 1
+          }
+        }
+      }
+    },
+    {
+      "FindingResolved": {
+        "rule": "model.blob_missing",
+        "subject": {
+          "Model": "model:models/registry.ollama.ai/library/m/latest"
+        },
+        "at": "#1",
+        "baseline": [
+          "finding:model.blob_missing@model:models/registry.ollama.ai/library/m/latest#1"
+        ]
+      }
+    }
+  ],
+  "not_comparable": []
+}

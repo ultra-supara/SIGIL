@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 
 use sigil_model::*;
 
+pub mod diff_cases;
+
 pub const EXAMPLE_VERSION: &str = "0.0.0-example";
 /// The libggml hash the plan's §5.8 example uses (official Ollama v0.30.6, from PR-0).
 pub const R1_GGML_HEX: &str = "40e1f9070eee43ad95a8f3151b691368ac64db9f826fc5796d5ba84836a1305f";

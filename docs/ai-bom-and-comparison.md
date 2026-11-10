@@ -76,25 +76,74 @@ The browser viewer uses it through wasm (`crates/sigil-wasm`), after checking th
 - Within `sigil-aibom/2`, every field is always written and required.
 - Types shared with the session are copied from `session-v1.schema.json`, and a test keeps them equal.
 
-## Planned Comparison Work
+## Comparing two sessions
 
-Future comparison should answer:
-
-- Which models were added or removed?
-- Did any model blob digest change?
-- Did runtime exposure become less restrictive?
-- Did a runtime binary change?
-- Did a model lose license or provenance metadata?
-- Did a custom model's Modelfile or adapter chain change?
-- Do current findings violate local policy?
-
-Comparison will work on sessions, with AI-BOMs as their summaries, so that every difference can be traced to evidence. A possible future command shape:
+`sigil compare` (#16) reports what changed between two saved sessions. It writes a versioned
+document (`sigil-diff/1`, [`schemas/diff-v1.schema.json`](../schemas/diff-v1.schema.json)) as
+canonical JSON, or its Markdown. It reads its two inputs and writes `--out`, nothing else.
 
 ```bash
-sigil compare --baseline baseline/session.json --current out/session.json
+sigil inspect ollama --out baseline/session.json
+# later
+sigil inspect ollama --out out/session.json
+sigil compare --baseline baseline/session.json --current out/session.json --format md
 ```
 
-AI-BOM comparison and baseline drift detection are tracked in issue #16.
+Each input is loaded and re-verified as `session render` does; a failure names the input and exits
+1. A usage error exits 2. Otherwise the exit code is 0 whether or not the sessions differ. A
+one-line summary goes to stderr ("1 change" for one):
+`compare: {N} changes, {M} not comparable (baseline sha256:…, current sha256:…)`. `--out` may not
+name either input. The same file as both inputs gives no differences.
+
+The diff names each session by the SHA-256 of its canonical JSON, as the AI-BOM does. Each change
+carries the IDs of its item in the session that holds it. Fixture pairs, with their diffs and
+Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
+
+| Kind | Changes |
+|---|---|
+| Outcome | `PolicyChanged`, `VerdictChanged`, `CompletenessChanged` (`Complete` against `Incomplete`) |
+| Coverage | `CheckOpened`, `CheckClosed` |
+| Findings and policy violations | `FindingNew`, `FindingResolved`, `ViolationNew`, `ViolationResolved`, by rule and subject; `FindingDecisionChanged`, `ViolationDecisionChanged` when the same item has other policy decisions (an action, a reason, an expiry, or an override that expired), with each side's finding IDs or violation subjects |
+| Models | `ModelAdded`, `ModelRemoved`, `LayerChanged`, `LicenseChanged` |
+| Installation | `FileAdded`, `FileRemoved`, `FileContentChanged`, `ReleaseChanged`, `ComponentChanged` |
+| Listeners | `ListenerAdded`, `ListenerRemoved`, `BindWidened`, `BindNarrowed`, by port |
+
+- **Matching.** Items are matched by keys that survive a new run:
+  - model IDs (manifest paths);
+  - where a file was found: the root-relative path under `models`, `install` and
+    `service-unit`, or the recorded path of a `binary inspect` input;
+  - ports;
+  - rules, with their subjects normalized the same way.
+
+  Listener inodes, `binary-<n>` numbers and slice IDs are pointers, not keys. A restart, files
+  given in another order are not changes. An upgraded file is one `FileContentChanged`; its claims keep
+  their key (placement, arch, component), so a new slice ID alone is no claim change.
+- **Comparability.** Saying that something is absent on one side needs the check that would
+  have recorded it to be closed on that side. Otherwise the item is *not comparable*, never
+  removed or resolved. The diff's `not_comparable` lists it with a `cause`, the checks, and the
+  side they are open on. Values recorded on both sides (layer digests, file contents, claims) are
+  compared directly. A new finding is reported even when the current run's coverage is partial,
+  since its conditions establish it.
+  - `Coverage`: a check is open on that side.
+  - `Request`: the two runs asked for different things. They used different `--model` filters, or
+    one named a binary input or a service unit that the other did not. The claims and violations
+    about such an input are included.
+  - `Policy`: the sessions applied different policies, so a violation on one side only is not
+    judged (the rule may be absent from the other policy). `PolicyChanged` reports the two. A
+    session that records no policy did not apply the same policy as any other, even one that
+    records none either.
+- **Model findings.** A finding of the model store is judged by the check of its rule (integrity,
+  license or inventory). The findings of a model that is gone are judged by the inventory check of
+  its manifest.
+- **Limits.**
+  - Only open/closed transitions of checks are reported. A check open on both sides whose
+    states or gaps changed is not.
+  - The layers of a manifest that is unstable on either side are not compared.
+  - Text that came from the inspected system (model names, paths, rule subjects) stays untrusted
+    in both documents, and the Markdown escapes it.
+- **Not compared yet:** hints and code facts, open questions, AI-BOM input. The policy part of
+  #16 is a follow-up: a `[compare]` section in `sigil-policy/1` and `--fail-on` with exit code 3.
+  Until then `sigil compare` only reports.
 
 ## Runtime Comparison
 

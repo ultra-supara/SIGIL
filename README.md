@@ -187,11 +187,22 @@ The same threshold flags work with `binary inspect`. Use `--fail-on warn` for a 
 - **Session JSON** ([`sigil-session/1`](schemas/session-v1.schema.json)) is the full record: request, facts, evidence, component claims, code facts, findings, policy decisions, coverage, and outcome. Its canonical serialization is deterministic for the same session value; separate inspections retain their own timestamps.
 - **Markdown** is a readable report rendered from that session, suitable for a review ticket. Input-derived text is escaped.
 - **AI-BOM v2** ([`sigil-aibom/2`](schemas/aibom-v2.schema.json)) is a compact projection for reviewers and downstream tools. It identifies its source session by SHA-256.
+- **Comparisons** ([`sigil-diff/1`](schemas/diff-v1.schema.json)) report what changed between two saved sessions: models, installation files and claims, the runtime's listeners, findings, policy violations, verdict, completeness, and coverage.
 
 ```bash
 cargo run --locked -q -p sigil-cli -- session render out/session.json \
   --format aibom --out out/aibom.json
 ```
+
+Compare two saved sessions with `sigil compare`. It reports what changed and what could not be judged, and exits 0 either way:
+
+```bash
+cargo run --locked -q -p sigil-cli -- inspect ollama --out out/current.json
+cargo run --locked -q -p sigil-cli -- compare --baseline out/session.json \
+  --current out/current.json --format md --out out/compare.md
+```
+
+A difference is reported as not comparable, never as a removal, when the check that would have recorded the item was not closed on the side it is missing from, or when the two runs asked for different things. Only open/closed transitions of checks are reported. Committed example pairs are in [`schemas/examples/diff-v1/`](schemas/examples/diff-v1/).
 
 The [browser viewer](https://ultra-supara.github.io/SIGIL/viewer/) opens session JSON and AI-BOM v2 locally, using the Rust renderers compiled to WebAssembly. Files stay in the browser, and sessions are validated before rendering. It also includes samples to explore without building the CLI.
 
@@ -229,7 +240,7 @@ Changes to the model or browser bindings also require rebuilding `site/viewer/pk
 
 ## What's next
 
-The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Baseline comparison, GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
+The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Policy actions on comparisons (a `[compare]` policy section and `--fail-on`), GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
 
 The legacy `lift` and `assess` commands and their IR/emulator were removed. See [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md) for the transition and the [roadmap](docs/sigil-overview.md#roadmap) for milestones.
 
@@ -244,7 +255,7 @@ The legacy `lift` and `assess` commands and their IR/emulator were removed. See 
 | [Runtime artifacts](docs/runtime-artifacts.md) | Release references, binary facts, and component identification. |
 | [Dependency candidates and values](docs/dependencies-and-values.md) | Conditional ELF candidates, configured values and minimized observations with their sources. |
 | [Model store](docs/model-store.md) / [Exposure](docs/exposure.md) | Integrity and license checks; listener attribution and visibility limits. |
-| [AI-BOM and comparison](docs/ai-bom-and-comparison.md) | AI-BOM v2 and the planned baseline comparison workflow. |
+| [AI-BOM and comparison](docs/ai-bom-and-comparison.md) | AI-BOM v2 and `sigil compare`. |
 | [Architecture and safety](docs/architecture-and-safety.md) | Crate boundaries, data flow, output handling, and safety contracts. |
 
 ## License

@@ -16,6 +16,10 @@ Machine-readable contracts for SIGIL outputs.
   - Same conventions as the session schema. Every field is written and required.
   - Definitions shared with the session (`Outcome`, `Ref`, `ApiProbe`, IDs, …) are copied from `session-v1.schema.json`. `crates/sigil-model/tests/aibom_schema.rs` keeps them equal, and checks the AI-BOM types' names and variants as for the session.
   - `examples/aibom-v2/` holds the AI-BOMs of the session examples, with the same names. `crates/sigil-model/tests/aibom.rs` compares them with their projections.
+- `diff-v1.schema.json`: the comparison of two sessions (`schema: "sigil-diff/1"`), written by `sigil compare`. Defined by `sigil_model::diff`; see `docs/ai-bom-and-comparison.md`.
+  - Same conventions as the session schema. Every field is written and required.
+  - Definitions shared with the session (`Ref`, `Completeness`, IDs, …) are copied from `session-v1.schema.json`, and `ReleaseBasisKind` from `aibom-v2.schema.json`. `crates/sigil-model/tests/diff_schema.rs` keeps them equal and checks the diff types' names and variants.
+  - `examples/diff-v1/<case>/` holds a pair of sessions (`baseline.json`, `current.json`), their diff and its Markdown. The sessions are written in canonical form, so each file hashes to the SHA-256 its diff records. `crates/sigil-model/tests/diff_examples.rs` compares them with the builders; regenerate with `SIGIL_BLESS=1 cargo test -p sigil-model --test diff_examples golden_pairs_match_the_builders`.
 - `aibom-v1.schema.json`: the AI-BOM of SIGIL 0.1 (`schema_version: "1.x"`). Kept for the reports it wrote (`reports/2026-h1/`). SIGIL v2 no longer writes it, and an AI-BOM v1 document is not an AI-BOM v2.
 
 ## Versioning

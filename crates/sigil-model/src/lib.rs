@@ -35,6 +35,7 @@ pub mod code_coverage;
 pub mod coverage;
 pub mod dependency_path;
 pub mod dependency_search;
+pub mod diff;
 pub mod evidence;
 pub mod finding;
 pub mod hint;
@@ -109,7 +110,7 @@ pub use identity::{
     is_commit, ComponentClaim, ExtractMethod, IdentityAssertion, IdentityStatus, NameKind,
     ReleaseBasis, ReleaseClaim, ReportedCommit, SigState, VersionAssertion, VersionSource,
 };
-pub use listener::{Listener, ListenerOwner, Protocol};
+pub use listener::{bind_class, BindClass, Listener, ListenerOwner, Protocol};
 pub use load::{
     allowlisted_env_name, CandidateWhy, EffectWhy, LoadContext, LoadFact, LoadFacts, LoaderPhase,
     ProcessValue, ProcessValueRead, TriValue, ValueKey, ValueOrigin, VALUES_CONFIGURED,
