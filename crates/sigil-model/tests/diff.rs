@@ -5,6 +5,7 @@ mod common;
 use common::diff_cases::*;
 use common::*;
 use sigil_model::diff::*;
+use sigil_model::render::aibom::ReleaseBasisKind;
 use sigil_model::*;
 
 #[test]
@@ -280,4 +281,149 @@ fn an_open_license_check_with_another_recorded_license_is_not_comparable() {
         checks: ids(&[LICENSE]),
         open_in: Side::Current,
     }));
+}
+
+fn ggml_at(rel: &str) -> Placement {
+    Placement::Instance(id(&format!("inst:{rel}")))
+}
+
+#[test]
+fn a_replaced_installation_file_keeps_its_placement_and_claim() {
+    // The slice ID changes with the content; the claim is keyed by placement, so it is the same.
+    let diff = diff_of(&install_with_ggml(0x11), &install_with_ggml(0x22));
+    let inst: InstanceId = id("inst:lib/ollama/libggml.so.0.13.1");
+    assert_eq!(
+        diff.changes,
+        [Change::FileContentChanged {
+            placement: Placement::Instance(inst.clone()),
+            baseline: inst.clone(),
+            current: inst,
+            baseline_content: id(&format!("sha256:{}", hex(0x11))),
+            current_content: id(&format!("sha256:{}", hex(0x22))),
+        }]
+    );
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+}
+
+#[test]
+fn an_installation_file_on_one_side_needs_discovery_closed_on_the_other() {
+    let mut more = install_with_ggml(0x11);
+    add_extra_library(&mut more);
+    let added = diff_of(&install_with_ggml(0x11), &more);
+    assert!(added.changes.contains(&Change::FileAdded {
+        placement: ggml_at("lib/ollama/libextra.so"),
+        instance: id("inst:lib/ollama/libextra.so"),
+        content: Some(id(&format!("sha256:{}", hex(0x33)))),
+    }));
+    let mut open = install_with_ggml(0x11);
+    discovery_partial(&mut open);
+    let diff = diff_of(&more, &open);
+    assert!(!has(&diff, "FileRemoved"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::File {
+            placement: ggml_at("lib/ollama/libextra.so"),
+        },
+        checks: ids(&["artifacts.discovery"]),
+        open_in: Side::Current,
+    }));
+}
+
+#[test]
+fn reordered_binary_inputs_give_no_changes() {
+    let s = binary_inspect();
+    let diff = diff_of(&s, &relabel_binary_inputs(&s));
+    assert!(diff.changes.is_empty(), "{:?}", diff.changes);
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+}
+
+#[test]
+fn a_binary_input_on_one_side_only_is_not_comparable() {
+    let diff = diff_of(&binary_inspect(), &binary_session_one_elf());
+    assert!(!has(&diff, "FileRemoved"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::File {
+            placement: Placement::Path(t("/home/user/Downloads/NOTES.txt")),
+        },
+        checks: ids(&["binary.container"]),
+        open_in: Side::Current,
+    }));
+}
+
+#[test]
+fn release_claims_on_both_sides_are_compared() {
+    let diff = diff_of(&conflicting_identity(), &open_release());
+    let releases: Vec<&Change> = diff
+        .changes
+        .iter()
+        .filter(|c| matches!(c, Change::ReleaseChanged { .. }))
+        .collect();
+    assert_eq!(
+        releases,
+        [&Change::ReleaseChanged {
+            product: id("ollama"),
+            baseline: Some(ReleaseState {
+                candidates: vec!["v0.30.6".to_string()],
+                basis: ReleaseBasisKind::ReferenceMatches,
+            }),
+            current: Some(ReleaseState {
+                candidates: OPEN_RELEASES.iter().map(|r| r.to_string()).collect(),
+                basis: ReleaseBasisKind::SelfReportedCommit,
+            }),
+        }]
+    );
+}
+
+#[test]
+fn a_release_claim_on_one_side_needs_the_release_check_closed_on_the_other() {
+    let diff = diff_of(&conflicting_identity(), &complete_pass());
+    assert!(!has(&diff, "ReleaseChanged"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.contains(&NotComparable {
+        item: Item::Release {
+            product: id("ollama"),
+        },
+        checks: ids(&["artifacts.release"]),
+        open_in: Side::Current,
+    }));
+}
+
+#[test]
+fn a_claim_that_turns_conflicting_is_a_component_change() {
+    let diff = diff_of(&ggml_base_matched(), &conflicting_identity());
+    assert_eq!(kinds(&diff), ["ComponentChanged"]);
+    let Change::ComponentChanged {
+        placement,
+        arch,
+        component,
+        baseline,
+        current,
+    } = &diff.changes[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(placement, &ggml_at("lib/ollama/libggml-base.so.0.13.1"));
+    assert_eq!((*arch, component.as_str()), (Arch::X86_64, "ggml-base"));
+    let (baseline, current) = (baseline.as_ref().unwrap(), current.as_ref().unwrap());
+    assert_eq!(baseline.status, IdentityStatus::ReferenceMatched);
+    assert_eq!(current.status, IdentityStatus::Conflicting);
+    assert_eq!(current.versions, [t("0.12.0"), t("0.13.1")]);
+}
+
+#[test]
+fn a_claim_gone_where_identity_was_not_closed_is_not_comparable() {
+    let mut unclaimed = install_with_ggml(0x11);
+    unclaimed.components.clear();
+    let diff = diff_of(&install_with_ggml(0x11), &unclaimed);
+    assert!(!has(&diff, "ComponentChanged"), "{:?}", kinds(&diff));
+    assert_eq!(
+        diff.not_comparable,
+        [NotComparable {
+            item: Item::Component {
+                placement: ggml_at("lib/ollama/libggml.so.0.13.1"),
+                arch: Arch::X86_64,
+                component: id("ggml"),
+            },
+            checks: ids(&["artifacts.identity"]),
+            open_in: Side::Current,
+        }]
+    );
 }

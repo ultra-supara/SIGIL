@@ -12,6 +12,7 @@
 //!   removed or resolved. Values recorded on both sides are compared directly.
 
 mod compare;
+mod files;
 mod models;
 mod outcome;
 mod scope;
