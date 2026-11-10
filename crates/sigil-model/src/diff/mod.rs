@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::Arch;
 use crate::evidence::Ref;
-use crate::finding::{Completeness, Verdict};
+use crate::finding::{Completeness, PolicyDecision, Verdict};
 use crate::id::{
     ArtifactId, CheckId, ComponentKey, FindingId, InstanceId, ListenerId, ModelId, PolicyRuleRef,
     RootId, RuleId, Sha256Hex, SliceId, Timestamp,
@@ -147,14 +147,31 @@ pub enum Item {
     },
 }
 
-/// A difference that could not be judged: `checks` are not closed on `open_in`.
+/// A difference that could not be judged, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotComparable {
     pub item: Item,
-    /// The checks that would have to be closed, sorted.
+    pub cause: Cause,
+    /// The checks involved, sorted: for [`Cause::Coverage`] the ones that would have to be closed
+    /// on `open_in`; for [`Cause::Request`] the one the request bears on; none for
+    /// [`Cause::Policy`].
     pub checks: Vec<CheckId>,
+    /// For [`Cause::Coverage`] the side(s) where `checks` are open; for [`Cause::Request`] the
+    /// side that did not ask for the item; [`Side::Both`] for [`Cause::Policy`].
     pub open_in: Side,
+}
+
+/// Why a difference could not be judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Cause {
+    /// A check is open on `open_in`.
+    Coverage,
+    /// The two runs asked for different things: other model filters, or a binary input or a
+    /// service unit named on one side only.
+    Request,
+    /// The two sessions applied different policies.
+    Policy,
 }
 
 /// One side of a comparison, or both.
@@ -210,6 +227,12 @@ pub struct CheckState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Change {
+    /// The policy applied (each session's `Policy` knowledge entry) differs. Violations are then
+    /// not judged, and decisions may differ.
+    PolicyChanged {
+        baseline: Option<KnowledgeRef>,
+        current: Option<KnowledgeRef>,
+    },
     VerdictChanged {
         baseline: Verdict,
         current: Verdict,
@@ -243,6 +266,15 @@ pub enum Change {
         at: String,
         baseline: Vec<FindingId>,
     },
+    /// A finding on both sides whose set of decisions differs: a changed action, reason or
+    /// expiry. Each list holds the distinct decisions of the key's findings.
+    FindingDecisionChanged {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        baseline: Vec<PolicyDecision>,
+        current: Vec<PolicyDecision>,
+    },
     ViolationNew {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
@@ -252,6 +284,13 @@ pub enum Change {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
         baseline: Vec<Ref>,
+    },
+    /// A violation on both sides whose set of decisions differs.
+    ViolationDecisionChanged {
+        policy_rule: PolicyRuleRef,
+        subject: SubjectKey,
+        baseline: Vec<PolicyDecision>,
+        current: Vec<PolicyDecision>,
     },
     ModelAdded {
         model: ModelId,
@@ -337,27 +376,30 @@ impl Change {
     /// The kind's position in the declaration: the first part of the canonical order.
     fn rank(&self) -> u8 {
         match self {
-            Change::VerdictChanged { .. } => 0,
-            Change::CompletenessChanged { .. } => 1,
-            Change::CheckOpened { .. } => 2,
-            Change::CheckClosed { .. } => 3,
-            Change::FindingNew { .. } => 4,
-            Change::FindingResolved { .. } => 5,
-            Change::ViolationNew { .. } => 6,
-            Change::ViolationResolved { .. } => 7,
-            Change::ModelAdded { .. } => 8,
-            Change::ModelRemoved { .. } => 9,
-            Change::LayerChanged { .. } => 10,
-            Change::LicenseChanged { .. } => 11,
-            Change::FileAdded { .. } => 12,
-            Change::FileRemoved { .. } => 13,
-            Change::FileContentChanged { .. } => 14,
-            Change::ReleaseChanged { .. } => 15,
-            Change::ComponentChanged { .. } => 16,
-            Change::ListenerAdded { .. } => 17,
-            Change::ListenerRemoved { .. } => 18,
-            Change::BindWidened { .. } => 19,
-            Change::BindNarrowed { .. } => 20,
+            Change::PolicyChanged { .. } => 0,
+            Change::VerdictChanged { .. } => 1,
+            Change::CompletenessChanged { .. } => 2,
+            Change::CheckOpened { .. } => 3,
+            Change::CheckClosed { .. } => 4,
+            Change::FindingNew { .. } => 5,
+            Change::FindingResolved { .. } => 6,
+            Change::FindingDecisionChanged { .. } => 7,
+            Change::ViolationNew { .. } => 8,
+            Change::ViolationResolved { .. } => 9,
+            Change::ViolationDecisionChanged { .. } => 10,
+            Change::ModelAdded { .. } => 11,
+            Change::ModelRemoved { .. } => 12,
+            Change::LayerChanged { .. } => 13,
+            Change::LicenseChanged { .. } => 14,
+            Change::FileAdded { .. } => 15,
+            Change::FileRemoved { .. } => 16,
+            Change::FileContentChanged { .. } => 17,
+            Change::ReleaseChanged { .. } => 18,
+            Change::ComponentChanged { .. } => 19,
+            Change::ListenerAdded { .. } => 20,
+            Change::ListenerRemoved { .. } => 21,
+            Change::BindWidened { .. } => 22,
+            Change::BindNarrowed { .. } => 23,
         }
     }
 
@@ -370,6 +412,16 @@ impl Change {
             | Change::ViolationResolved { baseline: refs, .. } => {
                 refs.sort_by_cached_key(key);
                 refs.dedup();
+            }
+            Change::FindingDecisionChanged {
+                baseline, current, ..
+            }
+            | Change::ViolationDecisionChanged {
+                baseline, current, ..
+            } => {
+                for decisions in [baseline, current] {
+                    sort_decisions(decisions);
+                }
             }
             Change::ListenerAdded { listeners, .. } | Change::ListenerRemoved { listeners, .. } => {
                 listeners.sort();
@@ -438,4 +490,10 @@ impl Diff {
 /// A value's JSON text: a total, deterministic order and map key for types without `Ord`.
 fn key<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Decisions in canonical order (by their JSON text), each once.
+fn sort_decisions(decisions: &mut Vec<PolicyDecision>) {
+    decisions.sort_by_cached_key(key);
+    decisions.dedup();
 }

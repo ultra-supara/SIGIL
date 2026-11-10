@@ -93,12 +93,14 @@ fn one_side(
     change: Change,
     found: &mut Found,
 ) {
-    if present.root.as_str() == INSTALL_ROOT && closed_everywhere(absent, ARTIFACTS_DISCOVERY) {
+    let item = Item::File {
+        placement: p.clone(),
+    };
+    if present.root.as_str() != INSTALL_ROOT {
+        found.not_asked(item, checks(&[file_check(p)]), side);
+    } else if closed_everywhere(absent, ARTIFACTS_DISCOVERY) {
         found.changes.push(change);
     } else {
-        let item = Item::File {
-            placement: p.clone(),
-        };
         found.unjudged(item, checks(&[file_check(p)]), side);
     }
 }

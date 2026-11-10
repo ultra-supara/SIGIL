@@ -45,7 +45,8 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
 }
 
 /// A model on one side only: `change`, when `absent` (the other session) inventoried the whole
-/// store under the same model filter; otherwise not comparable.
+/// store under the same model filter. Under another filter the request differs; with the
+/// inventory open, the coverage does.
 fn presence(
     absent: &Session,
     same_filter: bool,
@@ -54,13 +55,15 @@ fn presence(
     side: Side,
     found: &mut Found,
 ) {
-    if same_filter && closed_everywhere(absent, INVENTORY) {
+    let item = || Item::Model {
+        model: model.clone(),
+    };
+    if !same_filter {
+        found.not_asked(item(), checks(&[INVENTORY]), side);
+    } else if closed_everywhere(absent, INVENTORY) {
         found.changes.push(change);
     } else {
-        let item = Item::Model {
-            model: model.clone(),
-        };
-        found.unjudged(item, checks(&[INVENTORY]), side);
+        found.unjudged(item(), checks(&[INVENTORY]), side);
     }
 }
 

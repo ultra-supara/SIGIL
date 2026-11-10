@@ -1,8 +1,9 @@
-//! The outcome (verdict and completeness, each on its own) and the coverage of each check.
+//! The policy applied, the outcome (verdict and completeness, each on its own) and the coverage
+//! of each check.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::compare::Found;
+use super::compare::{policy_of, Found};
 use super::scope::closed_everywhere;
 use crate::diff::{Change, CheckState};
 use crate::finding::Completeness;
@@ -11,6 +12,13 @@ use crate::render::aibom::state_name;
 use crate::session::Session;
 
 pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
+    let (was, is) = (policy_of(b), policy_of(c));
+    if was != is {
+        found.changes.push(Change::PolicyChanged {
+            baseline: was.cloned(),
+            current: is.cloned(),
+        });
+    }
     if b.outcome.verdict != c.outcome.verdict {
         found.changes.push(Change::VerdictChanged {
             baseline: b.outcome.verdict,

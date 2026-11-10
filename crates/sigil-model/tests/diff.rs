@@ -223,6 +223,7 @@ fn an_open_inventory_on_the_absent_side_is_not_comparable() {
     assert!(!has(&diff, "ModelRemoved"), "{:?}", kinds(&diff));
     assert!(diff.not_comparable.contains(&NotComparable {
         item: Item::Model { model: id(MODEL_N) },
+        cause: Cause::Coverage,
         checks: ids(&[INVENTORY]),
         open_in: Side::Current,
     }));
@@ -236,6 +237,7 @@ fn models_inventoried_under_different_filters_are_not_comparable() {
     assert!(!has(&diff, "ModelRemoved"), "{:?}", kinds(&diff));
     assert!(diff.not_comparable.contains(&NotComparable {
         item: Item::Model { model: id(MODEL_N) },
+        cause: Cause::Request,
         checks: ids(&[INVENTORY]),
         open_in: Side::Current,
     }));
@@ -280,6 +282,7 @@ fn layers_of_an_unstable_manifest_are_not_comparable() {
         assert!(
             diff.not_comparable.contains(&NotComparable {
                 item: item.clone(),
+                cause: Cause::Coverage,
                 checks: ids(&[INVENTORY]),
                 open_in,
             }),
@@ -343,6 +346,7 @@ fn an_open_license_check_with_another_recorded_license_is_not_comparable() {
     assert!(!has(&diff, "LicenseChanged"), "{:?}", kinds(&diff));
     assert!(diff.not_comparable.contains(&NotComparable {
         item: Item::License { model: id(MODEL_M) },
+        cause: Cause::Coverage,
         checks: ids(&[LICENSE]),
         open_in: Side::Current,
     }));
@@ -388,6 +392,7 @@ fn an_installation_file_on_one_side_needs_discovery_closed_on_the_other() {
         item: Item::File {
             placement: ggml_at("lib/ollama/libextra.so"),
         },
+        cause: Cause::Coverage,
         checks: ids(&["artifacts.discovery"]),
         open_in: Side::Current,
     }));
@@ -409,6 +414,7 @@ fn a_binary_input_on_one_side_only_is_not_comparable() {
         item: Item::File {
             placement: Placement::Path(t("/home/user/Downloads/NOTES.txt")),
         },
+        cause: Cause::Request,
         checks: ids(&["binary.container"]),
         open_in: Side::Current,
     }));
@@ -432,6 +438,7 @@ fn a_service_unit_on_one_side_only_is_not_comparable() {
                 item: Item::File {
                     placement: unit.clone(),
                 },
+                cause: Cause::Request,
                 checks: ids(&["artifacts.discovery"]),
                 open_in,
             }),
@@ -487,6 +494,7 @@ fn a_release_claim_on_one_side_needs_the_release_check_closed_on_the_other() {
         item: Item::Release {
             product: id("ollama"),
         },
+        cause: Cause::Coverage,
         checks: ids(&["artifacts.release"]),
         open_in: Side::Current,
     }));
@@ -528,6 +536,7 @@ fn a_claim_gone_where_identity_was_not_closed_is_not_comparable() {
                 arch: Arch::X86_64,
                 component: id("ggml"),
             },
+            cause: Cause::Coverage,
             checks: ids(&["artifacts.identity"]),
             open_in: Side::Current,
         }]
@@ -576,6 +585,7 @@ fn listeners_of_an_observe_run_are_not_comparable_with_a_static_run() {
     assert!(!has(&diff, "ListenerAdded"), "{:?}", kinds(&diff));
     assert!(diff.not_comparable.contains(&NotComparable {
         item: Item::Port { port: 11434 },
+        cause: Cause::Coverage,
         checks: ids(&[BINDS]),
         open_in: Side::Baseline,
     }));
@@ -609,6 +619,7 @@ fn a_resolved_finding_needs_the_current_side_closed() {
             subject: SubjectKey::Model(id(MODEL_M)),
             at: "#1".to_string(),
         },
+        cause: Cause::Coverage,
         checks: ids(&[INTEGRITY, INVENTORY, LICENSE]),
         open_in: Side::Current,
     }));
@@ -635,6 +646,7 @@ fn a_model_finding_a_model_filter_left_out_is_not_comparable() {
         assert!(
             diff.not_comparable.contains(&NotComparable {
                 item: item.clone(),
+                cause: Cause::Request,
                 checks: ids(&[INVENTORY]),
                 open_in,
             }),
@@ -706,13 +718,15 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
                     component: id("ggml-base"),
                 },
             },
+            cause: Cause::Coverage,
             checks: ids(&[BINARY_IDENTITY]),
             open_in: Side::Current,
         }),
         "{:?}",
         diff.not_comparable
     );
-    // A capability denial on a binary input: that input's code check alone.
+    // A capability denial on a binary input: that input's code check alone. Example 18 applies
+    // its own policy; the current run applies it too, or the violation is not judged at all.
     let mut unanalyzed = binary_code();
     cut_short(
         &mut unanalyzed,
@@ -720,6 +734,7 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
         &Ref::Instance(id(KERNEL_INPUT)),
         "code: cut short",
     );
+    adopt_policy(&mut unanalyzed, &capability_policy());
     let diff = diff_of(&capability_policy(), &unanalyzed);
     assert!(!has(&diff, "ViolationResolved"), "{:?}", kinds(&diff));
     assert!(
@@ -731,12 +746,150 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
                     arch: Arch::X86_64,
                 },
             },
+            cause: Cause::Coverage,
             checks: ids(&[BINARY_CODE]),
             open_in: Side::Current,
         }),
         "{:?}",
         diff.not_comparable
     );
+}
+
+fn default_policy(byte: u8) -> KnowledgeRef {
+    KnowledgeRef {
+        kind: KnowledgeKind::Policy,
+        id: "default".to_string(),
+        version: "1".to_string(),
+        sha256: id(&hex(byte)),
+    }
+}
+
+#[test]
+fn a_not_comparable_item_names_its_cause_after_the_item() {
+    let mut filtered = compare_store();
+    filtered.request.model_filter = Some("m:latest".to_string());
+    let diff = diff_of(&store_with_n(), &filtered);
+    let json = serde_json::to_string(&diff.not_comparable[0]).unwrap();
+    assert_eq!(
+        json,
+        format!(
+            r#"{{"item":{{"Model":{{"model":"{MODEL_N}"}}}},"cause":"Request","checks":["{INVENTORY}"],"open_in":"Current"}}"#
+        )
+    );
+}
+
+#[test]
+fn a_changed_policy_is_the_first_change() {
+    let mut edited = compare_store();
+    policy_edited(&mut edited, 0xa5);
+    license_removed(&mut edited);
+    let diff = diff_of(&compare_store(), &edited);
+    assert_eq!(
+        diff.changes[0],
+        Change::PolicyChanged {
+            baseline: Some(default_policy(0xa3)),
+            current: Some(default_policy(0xa5)),
+        }
+    );
+    assert!(has(&diff, "VerdictChanged"), "{:?}", kinds(&diff));
+    // A session that recorded no policy.
+    let mut none = compare_store();
+    none.knowledge.retain(|k| k.kind != KnowledgeKind::Policy);
+    let diff = diff_of(&none, &compare_store());
+    assert_eq!(
+        diff.changes,
+        [Change::PolicyChanged {
+            baseline: None,
+            current: Some(default_policy(0xa3)),
+        }]
+    );
+    // The same policy: nothing.
+    assert!(!has(&diff_of(&edited, &edited), "PolicyChanged"));
+}
+
+#[test]
+fn a_deny_rule_removed_from_the_policy_is_not_a_resolved_violation() {
+    // The same binary; the policy no longer denies ggml-base, so the violation is gone.
+    let mut allowed = binary_inspect();
+    policy_edited(&mut allowed, 0xa5);
+    let diff = diff_of(&binary_denied(), &allowed);
+    assert!(!has(&diff, "ViolationResolved"), "{:?}", kinds(&diff));
+    assert!(diff.changes.contains(&Change::PolicyChanged {
+        baseline: Some(default_policy(0xa3)),
+        current: Some(default_policy(0xa5)),
+    }));
+    assert_eq!(
+        diff.not_comparable,
+        [NotComparable {
+            item: Item::Violation {
+                policy_rule: id("policy:components.deny.ggml-base"),
+                subject: SubjectKey::Component {
+                    placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+                    arch: Arch::X86_64,
+                    component: id("ggml-base"),
+                },
+            },
+            cause: Cause::Policy,
+            checks: vec![],
+            open_in: Side::Both,
+        }]
+    );
+    // And the other way round: a deny rule added is not a new violation.
+    let diff = diff_of(&allowed, &binary_denied());
+    assert!(!has(&diff, "ViolationNew"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.iter().any(|n| n.cause == Cause::Policy));
+}
+
+#[test]
+fn an_action_changed_by_the_policy_is_a_violation_decision_change() {
+    let rule = "policy:components.deny.ggml-base";
+    let mut warned = binary_denied();
+    policy_edited(&mut warned, 0xa5);
+    decide_violations(&mut warned, rule, decision(Action::Warn, rule));
+    let subject = SubjectKey::Component {
+        placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+        arch: Arch::X86_64,
+        component: id("ggml-base"),
+    };
+    let diff = diff_of(&binary_denied(), &warned);
+    assert_eq!(
+        kinds(&diff),
+        [
+            "PolicyChanged",
+            "VerdictChanged",
+            "ViolationDecisionChanged"
+        ]
+    );
+    assert!(diff.changes.contains(&Change::ViolationDecisionChanged {
+        policy_rule: id(rule),
+        subject,
+        baseline: vec![decision(Action::Fail, rule)],
+        current: vec![decision(Action::Warn, rule)],
+    }));
+    // A violation on both sides is judged under either policy: nothing is not comparable.
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+}
+
+#[test]
+fn an_override_of_a_finding_is_a_finding_decision_change() {
+    let rule = "model.license_missing";
+    let mut unlicensed = compare_store();
+    license_removed(&mut unlicensed);
+    let mut waived = unlicensed.clone();
+    let override_ = waiver(rule, "relicensing in progress", "2026-12-31");
+    decide_findings(&mut waived, rule, override_.clone());
+    // The same policy file on both sides: decisions are compared all the same.
+    let diff = diff_of(&unlicensed, &waived);
+    assert_eq!(kinds(&diff), ["VerdictChanged", "FindingDecisionChanged"]);
+    assert!(diff.changes.contains(&Change::FindingDecisionChanged {
+        rule: id(rule),
+        subject: SubjectKey::Model(id(MODEL_M)),
+        at: String::new(),
+        baseline: vec![decision(Action::Warn, &format!("default:{rule}"))],
+        current: vec![override_.clone()],
+    }));
+    // The same decisions: nothing.
+    assert!(diff_of(&waived, &waived).changes.is_empty());
 }
 
 /// `s` with every set-like list reversed (manifest layer order is evidence, so it stays).

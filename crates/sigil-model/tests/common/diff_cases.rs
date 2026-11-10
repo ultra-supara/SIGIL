@@ -543,6 +543,58 @@ pub fn binary_denied() -> Session {
     s
 }
 
+/// The policy file was edited: the `Policy` knowledge entry's SHA-256 is `byte×32` now.
+pub fn policy_edited(s: &mut Session, byte: u8) {
+    let entry = s
+        .knowledge
+        .iter_mut()
+        .find(|k| k.kind == KnowledgeKind::Policy)
+        .expect("the session records its policy");
+    entry.sha256 = id(&hex(byte));
+}
+
+/// `s` applied the policy `other` applied: its `Policy` knowledge entry is `other`'s.
+pub fn adopt_policy(s: &mut Session, other: &Session) {
+    let policy = |s: &Session| {
+        s.knowledge
+            .iter()
+            .find(|k| k.kind == KnowledgeKind::Policy)
+            .cloned()
+    };
+    s.knowledge.retain(|k| k.kind != KnowledgeKind::Policy);
+    s.knowledge.extend(policy(other));
+}
+
+/// Every finding of `rule` is decided `decision` now.
+pub fn decide_findings(s: &mut Session, rule: &str, decision: PolicyDecision) {
+    for f in s.findings.iter_mut().filter(|f| f.rule.as_str() == rule) {
+        f.decision = decision.clone();
+    }
+    settle(s);
+}
+
+/// Every violation of `policy_rule` is decided `decision` now.
+pub fn decide_violations(s: &mut Session, policy_rule: &str, decision: PolicyDecision) {
+    for v in s
+        .policy_violations
+        .iter_mut()
+        .filter(|v| v.policy_rule.as_str() == policy_rule)
+    {
+        v.decision = decision.clone();
+    }
+    settle(s);
+}
+
+/// An override of `rule`: ignored, for `reason`, until `expires`.
+pub fn waiver(rule: &str, reason: &str, expires: &str) -> PolicyDecision {
+    PolicyDecision {
+        action: Action::Ignore,
+        source: id(&format!("policy:waivers.{rule}")),
+        reason: Some(reason.to_string()),
+        expires: Some(id(expires)),
+    }
+}
+
 /// `s` with its inputs `binary-1` and `binary-2` numbered the other way round, as when the files
 /// are given in the other order.
 pub fn relabel_binary_inputs(s: &Session) -> Session {
@@ -662,7 +714,27 @@ pub fn every_change() -> Vec<Change> {
     };
     let wildcard: ListenerId = id("listener:tcp/0.0.0.0:11434#7002");
     let loopback: ListenerId = id("listener:tcp/127.0.0.1:11434#7001");
+    let policy = |byte: u8| KnowledgeRef {
+        kind: KnowledgeKind::Policy,
+        id: "default".to_string(),
+        version: "1".to_string(),
+        sha256: id(&hex(byte)),
+    };
+    let waived = PolicyDecision {
+        action: Action::Ignore,
+        source: id("policy:waivers.ggml-base"),
+        reason: Some("vendored until 0.14".to_string()),
+        expires: Some(id("2026-12-31")),
+    };
     vec![
+        Change::PolicyChanged {
+            baseline: Some(policy(0xa3)),
+            current: Some(policy(0xa4)),
+        },
+        Change::PolicyChanged {
+            baseline: Some(policy(0xa3)),
+            current: None,
+        },
         Change::VerdictChanged {
             baseline: Verdict::Pass,
             current: Verdict::Fail,
@@ -698,6 +770,13 @@ pub fn every_change() -> Vec<Change> {
                 "finding:exposure.bind_public@listener:tcp/0.0.0.0:11434#7002",
             )],
         },
+        Change::FindingDecisionChanged {
+            rule: id("model.license_missing"),
+            subject: SubjectKey::Model(model.clone()),
+            at: String::new(),
+            baseline: vec![decision(Action::Warn, "default:model.license_missing")],
+            current: vec![decision(Action::Fail, "policy:rules.model.license_missing")],
+        },
         Change::ViolationNew {
             policy_rule: id("policy:components.deny.ggml-base"),
             subject: SubjectKey::Component {
@@ -717,6 +796,16 @@ pub fn every_change() -> Vec<Change> {
                 arch: Arch::Aarch64,
             },
             baseline: vec![Ref::Slice(slice.clone())],
+        },
+        Change::ViolationDecisionChanged {
+            policy_rule: id("policy:components.deny.ggml-base"),
+            subject: SubjectKey::Component {
+                placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+                arch: Arch::X86_64,
+                component: id("ggml-base"),
+            },
+            baseline: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
+            current: vec![waived],
         },
         Change::ModelAdded {
             model: model.clone(),
@@ -812,25 +901,34 @@ pub fn every_change() -> Vec<Change> {
     ]
 }
 
-/// One non-comparable item of every kind, with every side and every kind of subject key.
+/// One non-comparable item of every kind, with every cause, every side and every kind of subject
+/// key.
 pub fn every_not_comparable() -> Vec<NotComparable> {
     let place = Placement::Instance(id("inst:install/bin/ollama"));
-    let item = |item, checks: &[&str], open_in| NotComparable {
+    let item = |item, cause, checks: &[&str], open_in| NotComparable {
         item,
+        cause,
         checks: ids(checks),
         open_in,
     };
     vec![
         item(
             Item::Model { model: id(MODEL_N) },
+            Cause::Request,
             &[INVENTORY],
             Side::Current,
         ),
-        item(Item::License { model: id(MODEL_M) }, &[LICENSE], Side::Both),
+        item(
+            Item::License { model: id(MODEL_M) },
+            Cause::Coverage,
+            &[LICENSE],
+            Side::Both,
+        ),
         item(
             Item::File {
                 placement: place.clone(),
             },
+            Cause::Coverage,
             &["artifacts.discovery"],
             Side::Baseline,
         ),
@@ -838,6 +936,7 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
             Item::Release {
                 product: id("ollama"),
             },
+            Cause::Coverage,
             &["artifacts.release"],
             Side::Current,
         ),
@@ -847,16 +946,23 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
                 arch: Arch::X86_64,
                 component: id("ggml"),
             },
+            Cause::Coverage,
             &["artifacts.identity"],
             Side::Current,
         ),
-        item(Item::Port { port: 11434 }, &[BINDS], Side::Baseline),
+        item(
+            Item::Port { port: 11434 },
+            Cause::Coverage,
+            &[BINDS],
+            Side::Baseline,
+        ),
         item(
             Item::Finding {
                 rule: id("model.not_found"),
                 subject: SubjectKey::Root(id("models")),
                 at: String::new(),
             },
+            Cause::Coverage,
             &[INVENTORY],
             Side::Current,
         ),
@@ -865,8 +971,9 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
                 policy_rule: id("policy:components.deny.ggml"),
                 subject: SubjectKey::Placement(place),
             },
+            Cause::Policy,
             &[],
-            Side::Current,
+            Side::Both,
         ),
         item(
             Item::Finding {
@@ -874,6 +981,7 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
                 subject: SubjectKey::Other(Ref::Audit),
                 at: String::new(),
             },
+            Cause::Coverage,
             &[],
             Side::Baseline,
         ),

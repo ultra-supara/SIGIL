@@ -1,16 +1,17 @@
-//! Findings and policy violations: new or resolved, by rule and normalized subject.
+//! Findings and policy violations: new, resolved, or decided otherwise, by rule and normalized
+//! subject.
 
 use std::collections::BTreeMap;
 
-use super::compare::{checks, Found};
-use super::key;
+use super::compare::{checks, policy_of, Found};
 use super::scope::{
     arch_of, checks_at, closed_everywhere, closed_for, placement, placements_of, same_model_filter,
     scope_of, CODE, IDENTITY, INVENTORY,
 };
+use super::{key, sort_decisions};
 use crate::diff::{Change, Item, Placement, Side, SubjectKey};
 use crate::evidence::Ref;
-use crate::finding::{Completeness, Finding, CAPABILITY_DENY_PREFIX};
+use crate::finding::{Completeness, Finding, PolicyDecision, CAPABILITY_DENY_PREFIX};
 use crate::id::{CheckId, FindingId, PolicyRuleRef, RuleId};
 use crate::session::Session;
 
@@ -74,16 +75,36 @@ fn at(f: &Finding) -> String {
         .to_string()
 }
 
-/// One judged item on one side: what it is, the scope its absence is judged over, and the
-/// pointers to it in the session.
+/// One judged item on one side: what it is, the scope its absence is judged over, the pointers
+/// to it in the session, and its distinct decisions in canonical order.
 struct Judged<P> {
     item: Item,
     scope: Ref,
     pointers: Vec<P>,
+    decisions: Vec<PolicyDecision>,
+}
+
+/// Adds one finding or violation to the item `item` of `out`.
+fn add<P>(
+    out: &mut BTreeMap<String, Judged<P>>,
+    item: Item,
+    scope: &Ref,
+    pointer: P,
+    decision: &PolicyDecision,
+) {
+    let judged = out.entry(key(&item)).or_insert_with(|| Judged {
+        item,
+        scope: scope.clone(),
+        pointers: vec![],
+        decisions: vec![],
+    });
+    judged.pointers.push(pointer);
+    judged.decisions.push(decision.clone());
+    sort_decisions(&mut judged.decisions);
 }
 
 fn findings(s: &Session) -> BTreeMap<String, Judged<FindingId>> {
-    let mut out: BTreeMap<String, Judged<FindingId>> = BTreeMap::new();
+    let mut out = BTreeMap::new();
     for f in &s.findings {
         let at = at(f);
         for subject in subject_keys(s, &f.subject) {
@@ -92,72 +113,74 @@ fn findings(s: &Session) -> BTreeMap<String, Judged<FindingId>> {
                 subject,
                 at: at.clone(),
             };
-            out.entry(key(&item))
-                .or_insert_with(|| Judged {
-                    item,
-                    scope: f.subject.clone(),
-                    pointers: vec![],
-                })
-                .pointers
-                .push(f.id.clone());
+            add(&mut out, item, &f.subject, f.id.clone(), &f.decision);
         }
     }
     out
 }
 
 fn violations(s: &Session) -> BTreeMap<String, Judged<Ref>> {
-    let mut out: BTreeMap<String, Judged<Ref>> = BTreeMap::new();
+    let mut out = BTreeMap::new();
     for v in &s.policy_violations {
         for subject in subject_keys(s, &v.subject) {
             let item = Item::Violation {
                 policy_rule: v.policy_rule.clone(),
                 subject,
             };
-            out.entry(key(&item))
-                .or_insert_with(|| Judged {
-                    item,
-                    scope: v.subject.clone(),
-                    pointers: vec![],
-                })
-                .pointers
-                .push(v.subject.clone());
+            add(&mut out, item, &v.subject, v.subject.clone(), &v.decision);
         }
     }
     out
 }
 
-/// Any other rule: the absent side is `Complete`, or the checks it left open.
-fn complete(s: &Session) -> (bool, Vec<CheckId>) {
-    match &s.outcome.completeness {
-        Completeness::Complete => (true, vec![]),
-        Completeness::Incomplete {
-            missing_required, ..
-        } => (false, missing_required.clone()),
+/// Whether the side an item is absent from would have recorded it.
+enum Absence {
+    /// It would have: the item is gone from it (or new on the other).
+    Recorded,
+    /// These checks are not closed on it.
+    Open(Vec<CheckId>),
+    /// It did not ask for the item, which these checks would have recorded.
+    NotAsked(Vec<CheckId>),
+    /// The two sessions applied different policies.
+    OtherPolicy,
+}
+
+impl Absence {
+    fn closed(closed: bool, checks: Vec<CheckId>) -> Absence {
+        if closed {
+            Absence::Recorded
+        } else {
+            Absence::Open(checks)
+        }
     }
 }
 
-/// Whether `absent` would have recorded a finding of `rule` about `scope`, and the checks
-/// that say so. A model-store rule needs the model-store checks taken together closed for the
-/// subject's scope (its root's inventory answers for a model that is gone). Under another model
-/// filter than the present side's (`same_filter` false), it also needs the subject's model on
-/// the absent side: the filter may have left it out. An exposure rule needs `exposure.binds`
-/// closed everywhere.
-fn finding_recorded(
-    absent: &Session,
-    same_filter: bool,
-    rule: &RuleId,
-    scope: &Ref,
-) -> (bool, Vec<CheckId>) {
+/// Any other rule: the absent side is `Complete`, or the checks it left open.
+fn complete(s: &Session) -> Absence {
+    match &s.outcome.completeness {
+        Completeness::Complete => Absence::Recorded,
+        Completeness::Incomplete {
+            missing_required, ..
+        } => Absence::Open(missing_required.clone()),
+    }
+}
+
+/// Whether `absent` would have recorded a finding of `rule` about `scope`. A model-store rule
+/// needs the model-store checks taken together closed for the subject's scope (its root's
+/// inventory answers for a model that is gone). Under another model filter than the present
+/// side's (`same_filter` false), it also needs the subject's model on the absent side: the
+/// filter may have left it out. An exposure rule needs `exposure.binds` closed everywhere.
+fn finding_recorded(absent: &Session, same_filter: bool, rule: &RuleId, scope: &Ref) -> Absence {
     if rule.as_str().starts_with("model.") {
         if !same_filter && !holds_model(absent, scope) {
-            return (false, checks(&[INVENTORY]));
+            return Absence::NotAsked(checks(&[INVENTORY]));
         }
-        (
+        Absence::closed(
             closed_for(absent, &MODEL_STORE, scope),
             checks(&MODEL_STORE),
         )
     } else if rule.as_str().starts_with("exposure.") {
-        (closed_everywhere(absent, BINDS), checks(&[BINDS]))
+        Absence::closed(closed_everywhere(absent, BINDS), checks(&[BINDS]))
     } else {
         complete(absent)
     }
@@ -183,14 +206,19 @@ fn placement_of(subject: &SubjectKey) -> Option<&Placement> {
     }
 }
 
-/// Whether `absent` would have recorded a violation of `rule` about `subject`: a component
-/// denial needs the placement's identity check closed, a capability denial its code check. A
-/// subject with no placement cannot be judged; both checks are named.
+/// Whether `absent` would have recorded a violation of `rule` about `subject`. Only under the
+/// policy the present side applied (`same_policy`): another may not have the rule at all. Then a
+/// component denial needs the placement's identity check closed, a capability denial its code
+/// check. A subject with no placement cannot be judged; both checks are named.
 fn violation_recorded(
     absent: &Session,
+    same_policy: bool,
     rule: &PolicyRuleRef,
     subject: &SubjectKey,
-) -> (bool, Vec<CheckId>) {
+) -> Absence {
+    if !same_policy {
+        return Absence::OtherPolicy;
+    }
     let pair = if rule.as_str().starts_with(COMPONENT_DENY_PREFIX) {
         &IDENTITY
     } else if rule.as_str().starts_with(CAPABILITY_DENY_PREFIX) {
@@ -199,11 +227,22 @@ fn violation_recorded(
         return complete(absent);
     };
     let Some(p) = placement_of(subject) else {
-        return (false, checks(pair));
+        return Absence::Open(checks(pair));
     };
     let names = checks_at(p, pair);
     let closed = scope_of(absent, p).is_some_and(|scope| closed_for(absent, names, &scope));
-    (closed, checks(names))
+    Absence::closed(closed, checks(names))
+}
+
+/// An item on one side only: `change` when the other side would have recorded it, otherwise not
+/// comparable for the reason `absence` gives, on `side`.
+fn judge(found: &mut Found, absence: Absence, item: &Item, side: Side, change: Change) {
+    match absence {
+        Absence::Recorded => found.changes.push(change),
+        Absence::Open(checks) => found.unjudged(item.clone(), checks, side),
+        Absence::NotAsked(checks) => found.not_asked(item.clone(), checks, side),
+        Absence::OtherPolicy => found.under_other_policies(item.clone()),
+    }
 }
 
 pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
@@ -213,17 +252,27 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         let Item::Finding { rule, subject, at } = &j.item else {
             continue;
         };
-        if is.contains_key(k) {
-            continue;
-        }
-        match finding_recorded(c, same_filter, rule, &j.scope) {
-            (true, _) => found.changes.push(Change::FindingResolved {
-                rule: rule.clone(),
-                subject: subject.clone(),
-                at: at.clone(),
-                baseline: j.pointers.clone(),
-            }),
-            (false, open) => found.unjudged(j.item.clone(), open, Side::Current),
+        match is.get(k) {
+            Some(now) if j.decisions != now.decisions => {
+                found.changes.push(Change::FindingDecisionChanged {
+                    rule: rule.clone(),
+                    subject: subject.clone(),
+                    at: at.clone(),
+                    baseline: j.decisions.clone(),
+                    current: now.decisions.clone(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                let resolved = Change::FindingResolved {
+                    rule: rule.clone(),
+                    subject: subject.clone(),
+                    at: at.clone(),
+                    baseline: j.pointers.clone(),
+                };
+                let absence = finding_recorded(c, same_filter, rule, &j.scope);
+                judge(found, absence, &j.item, Side::Current, resolved);
+            }
         }
     }
     for (k, j) in &is {
@@ -233,16 +282,16 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         if was.contains_key(k) {
             continue;
         }
-        match finding_recorded(b, same_filter, rule, &j.scope) {
-            (true, _) => found.changes.push(Change::FindingNew {
-                rule: rule.clone(),
-                subject: subject.clone(),
-                at: at.clone(),
-                current: j.pointers.clone(),
-            }),
-            (false, open) => found.unjudged(j.item.clone(), open, Side::Baseline),
-        }
+        let new = Change::FindingNew {
+            rule: rule.clone(),
+            subject: subject.clone(),
+            at: at.clone(),
+            current: j.pointers.clone(),
+        };
+        let absence = finding_recorded(b, same_filter, rule, &j.scope);
+        judge(found, absence, &j.item, Side::Baseline, new);
     }
+    let same_policy = policy_of(b) == policy_of(c);
     let (was, is) = (violations(b), violations(c));
     for (k, j) in &was {
         let Item::Violation {
@@ -252,16 +301,25 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         else {
             continue;
         };
-        if is.contains_key(k) {
-            continue;
-        }
-        match violation_recorded(c, policy_rule, subject) {
-            (true, _) => found.changes.push(Change::ViolationResolved {
-                policy_rule: policy_rule.clone(),
-                subject: subject.clone(),
-                baseline: j.pointers.clone(),
-            }),
-            (false, open) => found.unjudged(j.item.clone(), open, Side::Current),
+        match is.get(k) {
+            Some(now) if j.decisions != now.decisions => {
+                found.changes.push(Change::ViolationDecisionChanged {
+                    policy_rule: policy_rule.clone(),
+                    subject: subject.clone(),
+                    baseline: j.decisions.clone(),
+                    current: now.decisions.clone(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                let resolved = Change::ViolationResolved {
+                    policy_rule: policy_rule.clone(),
+                    subject: subject.clone(),
+                    baseline: j.pointers.clone(),
+                };
+                let absence = violation_recorded(c, same_policy, policy_rule, subject);
+                judge(found, absence, &j.item, Side::Current, resolved);
+            }
         }
     }
     for (k, j) in &is {
@@ -275,13 +333,12 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         if was.contains_key(k) {
             continue;
         }
-        match violation_recorded(b, policy_rule, subject) {
-            (true, _) => found.changes.push(Change::ViolationNew {
-                policy_rule: policy_rule.clone(),
-                subject: subject.clone(),
-                current: j.pointers.clone(),
-            }),
-            (false, open) => found.unjudged(j.item.clone(), open, Side::Baseline),
-        }
+        let new = Change::ViolationNew {
+            policy_rule: policy_rule.clone(),
+            subject: subject.clone(),
+            current: j.pointers.clone(),
+        };
+        let absence = violation_recorded(b, same_policy, policy_rule, subject);
+        judge(found, absence, &j.item, Side::Baseline, new);
     }
 }

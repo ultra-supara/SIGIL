@@ -1,8 +1,8 @@
 //! [`compare`]: the differences between two validated sessions.
 
-use crate::diff::{Change, Diff, DiffSchema, DiffSide, Item, NotComparable, Side};
+use crate::diff::{Cause, Change, Diff, DiffSchema, DiffSide, Item, NotComparable, Side};
 use crate::id::{CheckId, Sha256Hex};
-use crate::session::{KnowledgeKind, Session, ToolInfo};
+use crate::session::{KnowledgeKind, KnowledgeRef, Session, ToolInfo};
 use crate::validate::ValidatedSession;
 
 /// What a comparison has found so far.
@@ -54,19 +54,36 @@ fn side(s: &Session, sha256: Sha256Hex) -> DiffSide {
         tool: s.tool.clone(),
         mode: s.request.mode,
         started_at: s.observation.started_at.clone(),
-        policy: s
-            .knowledge
-            .iter()
-            .find(|k| k.kind == KnowledgeKind::Policy)
-            .cloned(),
+        policy: policy_of(s).cloned(),
     }
+}
+
+/// The policy a session applied: its first knowledge entry of kind `Policy`.
+pub(super) fn policy_of(s: &Session) -> Option<&KnowledgeRef> {
+    s.knowledge.iter().find(|k| k.kind == KnowledgeKind::Policy)
 }
 
 impl Found {
     /// A difference that cannot be judged: `checks` are not closed on `open_in`.
     pub(super) fn unjudged(&mut self, item: Item, checks: Vec<CheckId>, open_in: Side) {
+        self.record(item, Cause::Coverage, checks, open_in);
+    }
+
+    /// A difference that cannot be judged because the two runs asked for different things:
+    /// `open_in` did not ask for the item, which `checks` would have recorded.
+    pub(super) fn not_asked(&mut self, item: Item, checks: Vec<CheckId>, open_in: Side) {
+        self.record(item, Cause::Request, checks, open_in);
+    }
+
+    /// A difference that cannot be judged because the two sessions applied different policies.
+    pub(super) fn under_other_policies(&mut self, item: Item) {
+        self.record(item, Cause::Policy, vec![], Side::Both);
+    }
+
+    fn record(&mut self, item: Item, cause: Cause, checks: Vec<CheckId>, open_in: Side) {
         self.not_comparable.push(NotComparable {
             item,
+            cause,
             checks,
             open_in,
         });
