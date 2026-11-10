@@ -270,11 +270,12 @@ fn placement_of(subject: &SubjectKey) -> Option<&Placement> {
 }
 
 /// Whether `absent` would have recorded a violation of `rule` about `subject`. Only under the
-/// policy the present side applied (`same_policy`): another may not have the rule at all. Then a
-/// component denial needs the placement's identity check closed, a capability denial its code
-/// check, under the root the present side recorded there (`root`: the file may be gone from the
-/// absent side). A placement the absent run did not name (a binary input, the service unit) is
-/// a difference of request. A subject with no placement cannot be judged; both checks are named.
+/// policy the present side applied (`same_policy`, both recording it): another may not have the
+/// rule at all. Then a component denial needs the placement's identity check closed, a capability
+/// denial its code check, under the root the present side recorded there (`root`: the file may be
+/// gone from the absent side). A placement the absent run did not name (a binary input, the
+/// service unit) is a difference of request. A subject with no placement cannot be judged; both
+/// checks are named.
 fn violation_recorded(
     absent: &Session,
     same_policy: bool,
@@ -361,7 +362,9 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         let absence = finding_recorded(c, b, same_filter, rule, j);
         judge(found, absence, &j.item, Side::Baseline, new);
     }
-    let same_policy = policy_of(b) == policy_of(c);
+    // Both sides record the same policy. No entry on either side is not the same policy: what a
+    // run applied is unknown then (PR #136 review P2-2).
+    let same_policy = matches!((policy_of(b), policy_of(c)), (Some(was), Some(is)) if was == is);
     let (was, is) = (violations(b), violations(c));
     for (k, j) in &was {
         let Item::Violation {

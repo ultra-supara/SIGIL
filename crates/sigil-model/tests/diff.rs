@@ -1089,6 +1089,42 @@ fn a_deny_rule_removed_from_the_policy_is_not_a_resolved_violation() {
 }
 
 #[test]
+fn sessions_that_record_no_policy_did_not_apply_the_same_one() {
+    // PR #136 review P2-2: no `Policy` knowledge entry on either side says nothing about the
+    // rules each run applied, so a violation on one side only is not judged.
+    let no_policy = |mut s: Session| {
+        s.knowledge.retain(|k| k.kind != KnowledgeKind::Policy);
+        s
+    };
+    // With the policy recorded, the current run's identity check is closed: resolved.
+    assert!(has(
+        &diff_of(&binary_denied(), &binary_inspect()),
+        "ViolationResolved"
+    ));
+    let (denied, allowed) = (no_policy(binary_denied()), no_policy(binary_inspect()));
+    let expected = NotComparable {
+        item: Item::Violation {
+            policy_rule: id("policy:components.deny.ggml-base"),
+            subject: SubjectKey::Component {
+                placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+                arch: Arch::X86_64,
+                component: id("ggml-base"),
+            },
+        },
+        cause: Cause::Policy,
+        checks: vec![],
+        open_in: Side::Both,
+    };
+    for (baseline, current) in [(&denied, &allowed), (&allowed, &denied)] {
+        let diff = diff_of(baseline, current);
+        for kind in ["ViolationResolved", "ViolationNew", "PolicyChanged"] {
+            assert!(!has(&diff, kind), "{kind}: {:?}", kinds(&diff));
+        }
+        assert_eq!(diff.not_comparable, std::slice::from_ref(&expected));
+    }
+}
+
+#[test]
 fn an_action_changed_by_the_policy_is_a_violation_decision_change() {
     let rule = "policy:components.deny.ggml-base";
     let mut warned = binary_denied();

@@ -129,7 +129,9 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
     one named a binary input or a service unit that the other did not. The claims and violations
     about such an input are included.
   - `Policy`: the sessions applied different policies, so a violation on one side only is not
-    judged (the rule may be absent from the other policy). `PolicyChanged` reports the two.
+    judged (the rule may be absent from the other policy). `PolicyChanged` reports the two. A
+    session that records no policy did not apply the same policy as any other, even one that
+    records none either.
 - **Model findings.** A finding of the model store is judged by the check of its rule (integrity,
   license or inventory). The findings of a model that is gone are judged by the inventory check of
   its manifest.
