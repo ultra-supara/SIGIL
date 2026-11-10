@@ -1,0 +1,435 @@
+//! `sigil-diff/1` (#16, PR-16a): what changed between two sessions, and what could not be judged.
+//!
+//! [`compare`] compares two validated sessions. It is pure and deterministic, as the AI-BOM's
+//! projection is. Each [`Change`] carries the IDs of its item in the session(s) that hold it, so
+//! every line traces back to evidence there.
+//!
+//! - **Keys.** Items are matched by what survives a new run: model IDs (manifest paths),
+//!   [`Placement`]s, ports, and rules with a normalized [`SubjectKey`]. Listener inodes,
+//!   `binary-<n>` roots and slice IDs are pointers, never keys.
+//! - **Comparability.** Saying that something is absent on one side needs the check that would
+//!   have recorded it to be closed on that side; otherwise the item is [`NotComparable`], never
+//!   removed or resolved. Values recorded on both sides are compared directly.
+
+mod compare;
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::artifact::Arch;
+use crate::evidence::Ref;
+use crate::finding::{Completeness, Verdict};
+use crate::id::{
+    ArtifactId, CheckId, ComponentKey, FindingId, InstanceId, ListenerId, ModelId, PolicyRuleRef,
+    RootId, RuleId, Sha256Hex, SliceId, Timestamp,
+};
+use crate::identity::IdentityStatus;
+use crate::listener::BindClass;
+use crate::model::LayerRole;
+use crate::render::aibom::ReleaseBasisKind;
+use crate::session::{KnowledgeRef, Mode, ToolInfo};
+use crate::text::UntrustedText;
+
+pub use compare::compare;
+
+/// What changed between two sessions (`sigil-diff/1`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Diff {
+    pub schema: DiffSchema,
+    /// The SIGIL that compared.
+    pub tool: ToolInfo,
+    pub baseline: DiffSide,
+    pub current: DiffSide,
+    /// In canonical order ([`Diff::canonicalize`]).
+    pub changes: Vec<Change>,
+    /// Differences that could not be judged.
+    pub not_comparable: Vec<NotComparable>,
+}
+
+/// The diff schema version. Only `sigil-diff/1` is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiffSchema {
+    #[serde(rename = "sigil-diff/1")]
+    V1,
+}
+
+/// One compared session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiffSide {
+    /// The SHA-256 of the session's canonical JSON (`Session::to_canonical_json`), computed by
+    /// the caller. A session SIGIL saved hashes to its file.
+    pub sha256: Sha256Hex,
+    pub tool: ToolInfo,
+    pub mode: Mode,
+    pub started_at: Timestamp,
+    /// The policy applied: the session's knowledge entry of kind `Policy`.
+    pub policy: Option<KnowledgeRef>,
+}
+
+/// Where a file was found, as a key that survives a new run.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Placement {
+    /// An instance under `models`, `install` or `service-unit`: its ID is root-relative.
+    Instance(InstanceId),
+    /// The recorded path of an instance under any other root: `binary-<n>` inputs are numbered
+    /// by argument order.
+    Path(UntrustedText),
+    /// Content that no instance read.
+    Content(ArtifactId),
+}
+
+/// What a finding or policy violation is about, with its run-dependent IDs replaced by keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum SubjectKey {
+    Model(ModelId),
+    Root(RootId),
+    /// An instance, by placement.
+    Placement(Placement),
+    /// A listener, by port.
+    Port(u16),
+    /// A component claim, by where its slice was found.
+    Component {
+        placement: Placement,
+        arch: Arch,
+        component: ComponentKey,
+    },
+    /// A slice, by where it was found.
+    Slice {
+        placement: Placement,
+        arch: Arch,
+    },
+    /// Any other subject, as recorded.
+    Other(Ref),
+}
+
+/// An item whose difference could not be judged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Item {
+    Model {
+        model: ModelId,
+    },
+    License {
+        model: ModelId,
+    },
+    File {
+        placement: Placement,
+    },
+    Release {
+        product: ComponentKey,
+    },
+    Component {
+        placement: Placement,
+        arch: Arch,
+        component: ComponentKey,
+    },
+    Port {
+        port: u16,
+    },
+    Finding {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+    },
+    Violation {
+        policy_rule: PolicyRuleRef,
+        subject: SubjectKey,
+    },
+}
+
+/// A difference that could not be judged: `checks` are not closed on `open_in`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotComparable {
+    pub item: Item,
+    /// The checks that would have to be closed, sorted.
+    pub checks: Vec<CheckId>,
+    pub open_in: Side,
+}
+
+/// One side of a comparison, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Side {
+    Baseline,
+    Current,
+    Both,
+}
+
+/// What a session recorded of a model's license, with `model_store.license` closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum LicenseState {
+    /// The manifest has no license layer.
+    NoLayer,
+    /// A license layer, read, of this SPDX license.
+    Spdx { id: String },
+    /// A license layer, read, whose license was not identified.
+    Unidentified,
+}
+
+/// A release claim, with its basis reduced to its kind (as in the AI-BOM).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseState {
+    /// Sorted.
+    pub candidates: Vec<String>,
+    pub basis: ReleaseBasisKind,
+}
+
+/// A component claim. `slice` points at it; it is not part of the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentState {
+    pub slice: SliceId,
+    pub status: IdentityStatus,
+    /// Sorted, each once.
+    pub versions: Vec<UntrustedText>,
+}
+
+/// One check of one session: whether it is required, and its entries by coverage state (as the
+/// AI-BOM's `CheckSummary`). No entries: open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckState {
+    pub required: bool,
+    pub states: BTreeMap<String, u32>,
+}
+
+/// One difference, with the IDs of its item in the session(s) that hold it. The variants are
+/// declared in the Markdown's section order, which is also their canonical order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Change {
+    VerdictChanged {
+        baseline: Verdict,
+        current: Verdict,
+    },
+    /// `Complete` against `Incomplete`; which checks are open is the checks' own change.
+    CompletenessChanged {
+        baseline: Completeness,
+        current: Completeness,
+    },
+    /// Closed in the baseline, open now.
+    CheckOpened {
+        check: CheckId,
+        baseline: CheckState,
+        current: CheckState,
+    },
+    /// Open in the baseline, closed now.
+    CheckClosed {
+        check: CheckId,
+        baseline: CheckState,
+        current: CheckState,
+    },
+    FindingNew {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        current: Vec<FindingId>,
+    },
+    FindingResolved {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        baseline: Vec<FindingId>,
+    },
+    ViolationNew {
+        policy_rule: PolicyRuleRef,
+        subject: SubjectKey,
+        current: Vec<Ref>,
+    },
+    ViolationResolved {
+        policy_rule: PolicyRuleRef,
+        subject: SubjectKey,
+        baseline: Vec<Ref>,
+    },
+    ModelAdded {
+        model: ModelId,
+        name: UntrustedText,
+    },
+    ModelRemoved {
+        model: ModelId,
+        name: UntrustedText,
+    },
+    /// A layer, by role, media type and position among the layers with both: its digest
+    /// changed, or it is on one side only.
+    LayerChanged {
+        model: ModelId,
+        role: LayerRole,
+        media_type: Option<UntrustedText>,
+        ordinal: u32,
+        baseline: Option<UntrustedText>,
+        current: Option<UntrustedText>,
+    },
+    LicenseChanged {
+        model: ModelId,
+        baseline: LicenseState,
+        current: LicenseState,
+    },
+    FileAdded {
+        placement: Placement,
+        instance: InstanceId,
+        content: Option<ArtifactId>,
+    },
+    FileRemoved {
+        placement: Placement,
+        instance: InstanceId,
+        content: Option<ArtifactId>,
+    },
+    FileContentChanged {
+        placement: Placement,
+        baseline: InstanceId,
+        current: InstanceId,
+        baseline_content: ArtifactId,
+        current_content: ArtifactId,
+    },
+    ReleaseChanged {
+        product: ComponentKey,
+        baseline: Option<ReleaseState>,
+        current: Option<ReleaseState>,
+    },
+    /// A claim, by placement, architecture and component: its status or versions changed, or
+    /// it is on one side only.
+    ComponentChanged {
+        placement: Placement,
+        arch: Arch,
+        component: ComponentKey,
+        baseline: Option<ComponentState>,
+        current: Option<ComponentState>,
+    },
+    ListenerAdded {
+        port: u16,
+        class: BindClass,
+        listeners: Vec<ListenerId>,
+    },
+    ListenerRemoved {
+        port: u16,
+        class: BindClass,
+        listeners: Vec<ListenerId>,
+    },
+    BindWidened {
+        port: u16,
+        baseline: BindClass,
+        current: BindClass,
+        baseline_listeners: Vec<ListenerId>,
+        current_listeners: Vec<ListenerId>,
+    },
+    BindNarrowed {
+        port: u16,
+        baseline: BindClass,
+        current: BindClass,
+        baseline_listeners: Vec<ListenerId>,
+        current_listeners: Vec<ListenerId>,
+    },
+}
+
+impl Change {
+    /// The kind's position in the declaration: the first part of the canonical order.
+    fn rank(&self) -> u8 {
+        match self {
+            Change::VerdictChanged { .. } => 0,
+            Change::CompletenessChanged { .. } => 1,
+            Change::CheckOpened { .. } => 2,
+            Change::CheckClosed { .. } => 3,
+            Change::FindingNew { .. } => 4,
+            Change::FindingResolved { .. } => 5,
+            Change::ViolationNew { .. } => 6,
+            Change::ViolationResolved { .. } => 7,
+            Change::ModelAdded { .. } => 8,
+            Change::ModelRemoved { .. } => 9,
+            Change::LayerChanged { .. } => 10,
+            Change::LicenseChanged { .. } => 11,
+            Change::FileAdded { .. } => 12,
+            Change::FileRemoved { .. } => 13,
+            Change::FileContentChanged { .. } => 14,
+            Change::ReleaseChanged { .. } => 15,
+            Change::ComponentChanged { .. } => 16,
+            Change::ListenerAdded { .. } => 17,
+            Change::ListenerRemoved { .. } => 18,
+            Change::BindWidened { .. } => 19,
+            Change::BindNarrowed { .. } => 20,
+        }
+    }
+
+    /// Sorts the lists a change holds.
+    fn sort_lists(&mut self) {
+        match self {
+            Change::FindingNew { current: ids, .. }
+            | Change::FindingResolved { baseline: ids, .. } => ids.sort(),
+            Change::ViolationNew { current: refs, .. }
+            | Change::ViolationResolved { baseline: refs, .. } => {
+                refs.sort_by_cached_key(key);
+                refs.dedup();
+            }
+            Change::ListenerAdded { listeners, .. } | Change::ListenerRemoved { listeners, .. } => {
+                listeners.sort();
+            }
+            Change::BindWidened {
+                baseline_listeners,
+                current_listeners,
+                ..
+            }
+            | Change::BindNarrowed {
+                baseline_listeners,
+                current_listeners,
+                ..
+            } => {
+                baseline_listeners.sort();
+                current_listeners.sort();
+            }
+            Change::ReleaseChanged {
+                baseline, current, ..
+            } => {
+                for state in [baseline, current].into_iter().flatten() {
+                    state.candidates.sort();
+                }
+            }
+            Change::ComponentChanged {
+                baseline, current, ..
+            } => {
+                for state in [baseline, current].into_iter().flatten() {
+                    state.versions.sort();
+                    state.versions.dedup();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Diff {
+    /// Puts the lists in canonical order: changes by kind, in declared order, then by their
+    /// JSON text; non-comparable items by their JSON text; the lists inside each sorted.
+    /// Idempotent.
+    pub fn canonicalize(&mut self) {
+        for change in &mut self.changes {
+            change.sort_lists();
+        }
+        self.changes.sort_by_cached_key(|c| (c.rank(), key(c)));
+        self.changes.dedup();
+        for item in &mut self.not_comparable {
+            item.checks.sort();
+            item.checks.dedup();
+        }
+        self.not_comparable.sort_by_cached_key(key);
+        self.not_comparable.dedup();
+    }
+
+    /// The diff as SIGIL writes it: canonical order, pretty JSON, a final newline.
+    pub fn to_canonical_json(&self) -> Result<String, serde_json::Error> {
+        let mut canonical = self.clone();
+        canonical.canonicalize();
+        let mut json = serde_json::to_string_pretty(&canonical)?;
+        json.push('\n');
+        Ok(json)
+    }
+}
+
+/// A value's JSON text: a total, deterministic order and map key for types without `Ord`.
+fn key<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}

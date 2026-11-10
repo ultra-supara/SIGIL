@@ -35,6 +35,7 @@ pub mod code_coverage;
 pub mod coverage;
 pub mod dependency_path;
 pub mod dependency_search;
+pub mod diff;
 pub mod evidence;
 pub mod finding;
 pub mod hint;
