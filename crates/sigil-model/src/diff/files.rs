@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::compare::{checks, open_in, Found};
 use super::key;
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for_under, placement, placements_of, root_at,
-    scope_of, IDENTITY,
+    arch_of, checks_at, closed_everywhere, closed_for_under, named_file_checks, not_named_in,
+    placement, placements_of, root_at, scope_of, IDENTITY,
 };
 use crate::artifact::{FileInstance, InstanceContent};
 use crate::binary_input::{is_binary_root, BINARY_CONTAINER};
@@ -40,8 +40,8 @@ fn placed_files(s: &Session) -> BTreeMap<String, (Placement, &FileInstance)> {
         .collect()
 }
 
-/// The check that records a file at `p`: discovery for an installation's file or the service
-/// unit, the container check for a binary input.
+/// The check that records the content of a file at `p`: discovery for an installation's file or
+/// the service unit, the container check for a binary input.
 fn file_check(p: &Placement) -> &'static str {
     match p {
         Placement::Instance(_) => ARTIFACTS_DISCOVERY,
@@ -97,9 +97,11 @@ fn one_side(
     let item = Item::File {
         placement: p.clone(),
     };
-    if present.root.as_str() != INSTALL_ROOT {
-        found.not_asked(item, checks(&[file_check(p)]), side);
-    } else if closed_everywhere(absent, ARTIFACTS_DISCOVERY) {
+    if let Some(named) = named_file_checks(&present.root) {
+        found.not_asked(item, checks(named), side);
+    } else if present.root.as_str() == INSTALL_ROOT
+        && closed_everywhere(absent, ARTIFACTS_DISCOVERY)
+    {
         found.changes.push(change);
     } else {
         found.unjudged(item, checks(&[file_check(p)]), side);
@@ -218,7 +220,8 @@ fn claims(s: &Session) -> BTreeMap<String, Claim> {
 
 /// Claims on both sides: their status and versions (the slice is a pointer). A claim on one side
 /// only needs the absent side's identity check closed for that placement, under the root the
-/// present side recorded there (the file may be gone from the absent side).
+/// present side recorded there (the file may be gone from the absent side). The claim of a file
+/// the absent run did not name (a binary input, the service unit) is a difference of request.
 fn components(b: &Session, c: &Session, found: &mut Found) {
     let (was, is) = (claims(b), claims(c));
     let keys: BTreeSet<&String> = was.keys().chain(is.keys()).collect();
@@ -247,6 +250,10 @@ fn components(b: &Session, c: &Session, found: &mut Found) {
             (None, None) => continue,
         };
         if let Some((absent, side)) = absent {
+            if let Some(named) = not_named_in(absent, placement, root.as_ref()) {
+                found.not_asked(item.clone(), checks(named), side);
+                continue;
+            }
             let names = checks_at(placement, &IDENTITY);
             let closed = scope_of(absent, placement)
                 .is_some_and(|scope| closed_for_under(absent, names, &scope, root.as_ref()));

@@ -5,14 +5,14 @@ use std::collections::BTreeMap;
 
 use super::compare::{checks, policy_of, Found};
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for_under, placement, placements_of, root_at,
-    root_of, same_model_filter, scope_of, CODE, IDENTITY, INVENTORY,
+    arch_of, checks_at, closed_everywhere, closed_for_under, not_named_in, placement,
+    placements_of, root_at, root_of, same_model_filter, scope_of, CODE, IDENTITY, INVENTORY,
 };
 use super::{key, sort_decisions};
 use crate::diff::{Change, Item, Placement, Side, SubjectKey};
 use crate::evidence::Ref;
 use crate::finding::{Completeness, Finding, PolicyDecision, CAPABILITY_DENY_PREFIX};
-use crate::id::{CheckId, FindingId, PolicyRuleRef, RootId, RuleId};
+use crate::id::{CheckId, FindingId, InstanceId, PolicyRuleRef, RootId, RuleId};
 use crate::session::Session;
 
 const INTEGRITY: &str = "model_store.integrity";
@@ -212,8 +212,9 @@ fn complete(s: &Session) -> Absence {
 /// subject's scope, under the root `present` recorded for it. Under another model filter than the
 /// present side's (`same_filter` false), it first needs the subject's model on the absent side:
 /// the filter may have left it out. Under the same filter, a model that is gone from the absent
-/// side has none of its findings, so that side's inventory closed for it is enough. An exposure
-/// rule needs `exposure.binds` closed everywhere; any other rule a `Complete` absent side.
+/// side has none of its findings, so that side's inventory closed for the model's manifest (the
+/// present side's record of it, under the root recorded there) is enough. An exposure rule needs
+/// `exposure.binds` closed everywhere; any other rule a `Complete` absent side.
 fn finding_recorded(
     present: &Session,
     absent: &Session,
@@ -223,12 +224,16 @@ fn finding_recorded(
 ) -> Absence {
     let (scope, root) = (&j.scope, j.root.as_ref());
     if rule.as_str().starts_with("model.") {
-        let held = holds_model(absent, scope);
+        let held = manifest_of(absent, scope).is_some();
         if !same_filter && !held {
             return Absence::NotAsked(checks(&[INVENTORY]));
         }
-        if !held && holds_model(present, scope) {
-            let closed = closed_for_under(absent, &[INVENTORY], scope, root);
+        if let (false, Some(manifest)) = (held, manifest_of(present, scope)) {
+            // Gone, or unread: an unreadable or unparseable manifest leaves the inventory open
+            // on it, while one really deleted is judged by its root's listing.
+            let manifest = Ref::Instance(manifest.clone());
+            let root = root_of(present, &manifest, None);
+            let closed = closed_for_under(absent, &[INVENTORY], &manifest, root.as_ref());
             return Absence::closed(closed, checks(&[INVENTORY]));
         }
         let required = model_checks(rule.as_str());
@@ -243,14 +248,15 @@ fn finding_recorded(
     }
 }
 
-/// Whether `s` holds the model a finding's subject is about: that model, or the model of that
-/// manifest. Any other subject names no model.
-fn holds_model(s: &Session, subject: &Ref) -> bool {
-    match subject {
-        Ref::Model(id) => s.models.iter().any(|m| m.id == *id),
-        Ref::Instance(manifest) => s.models.iter().any(|m| m.manifest == *manifest),
-        _ => false,
-    }
+/// The manifest of the model a finding's subject is about, when `s` holds that model: the
+/// model's, or that manifest's. Any other subject names no model.
+fn manifest_of<'s>(s: &'s Session, subject: &Ref) -> Option<&'s InstanceId> {
+    let model = match subject {
+        Ref::Model(id) => s.models.iter().find(|m| m.id == *id),
+        Ref::Instance(manifest) => s.models.iter().find(|m| m.manifest == *manifest),
+        _ => None,
+    };
+    model.map(|m| &m.manifest)
 }
 
 /// The placement a subject key names.
@@ -267,7 +273,8 @@ fn placement_of(subject: &SubjectKey) -> Option<&Placement> {
 /// policy the present side applied (`same_policy`): another may not have the rule at all. Then a
 /// component denial needs the placement's identity check closed, a capability denial its code
 /// check, under the root the present side recorded there (`root`: the file may be gone from the
-/// absent side). A subject with no placement cannot be judged; both checks are named.
+/// absent side). A placement the absent run did not name (a binary input, the service unit) is
+/// a difference of request. A subject with no placement cannot be judged; both checks are named.
 fn violation_recorded(
     absent: &Session,
     same_policy: bool,
@@ -277,6 +284,9 @@ fn violation_recorded(
 ) -> Absence {
     if !same_policy {
         return Absence::OtherPolicy;
+    }
+    if let Some(named) = placement_of(subject).and_then(|p| not_named_in(absent, p, root)) {
+        return Absence::NotAsked(checks(named));
     }
     let pair = if rule.as_str().starts_with(COMPONENT_DENY_PREFIX) {
         &IDENTITY

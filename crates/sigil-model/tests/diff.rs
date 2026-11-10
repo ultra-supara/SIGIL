@@ -438,8 +438,9 @@ fn a_service_unit_on_one_side_only_is_not_comparable() {
                 item: Item::File {
                     placement: unit.clone(),
                 },
+                // No check records a unit the run was not given.
                 cause: Cause::Request,
-                checks: ids(&["artifacts.discovery"]),
+                checks: vec![],
                 open_in,
             }),
             "{:?}",
@@ -787,6 +788,89 @@ fn a_model_gone_with_its_findings_needs_only_the_inventory() {
         checks: ids(&[INVENTORY]),
         open_in: Side::Current,
     }));
+}
+
+#[test]
+fn a_gone_model_s_findings_are_judged_by_its_manifest() {
+    // The current run could not read model n's manifest: the gap is on the manifest alone, and
+    // the store's listing is complete. Model n is not gone; it is unread.
+    let mut unlicensed_n = store_with_n();
+    license_removed_from(&mut unlicensed_n, MODEL_N);
+    let mut unreadable = store_with_n();
+    manifest_unreadable(&mut unreadable, MODEL_N);
+    let item = Item::Finding {
+        rule: id("model.license_missing"),
+        subject: SubjectKey::Model(id(MODEL_N)),
+        at: String::new(),
+    };
+    for (baseline, current, open_in) in [
+        (&unlicensed_n, &unreadable, Side::Current),
+        (&unreadable, &unlicensed_n, Side::Baseline),
+    ] {
+        let diff = diff_of(baseline, current);
+        assert!(!has(&diff, "FindingResolved"), "{:?}", kinds(&diff));
+        assert!(!has(&diff, "FindingNew"), "{:?}", kinds(&diff));
+        assert!(
+            diff.not_comparable.contains(&NotComparable {
+                item: item.clone(),
+                cause: Cause::Coverage,
+                checks: ids(&[INVENTORY]),
+                open_in,
+            }),
+            "{:?}",
+            diff.not_comparable
+        );
+        // The model itself is not comparable either.
+        assert!(diff
+            .not_comparable
+            .iter()
+            .any(|n| n.item == Item::Model { model: id(MODEL_N) }));
+    }
+    // A manifest really deleted, with the listing complete: the finding is resolved.
+    assert!(has(
+        &diff_of(&unlicensed_n, &compare_store()),
+        "FindingResolved"
+    ));
+}
+
+#[test]
+fn claims_and_violations_of_a_binary_input_named_on_one_side_are_a_request_difference() {
+    // `binary inspect libggml-base.so NOTES.txt` with ggml-base denied, then
+    // `binary inspect NOTES.txt` under the same policy.
+    let baseline = binary_denied();
+    let current = binary_session_one_unsupported();
+    let placement = Placement::Path(t("/home/user/Downloads/libggml-base.so"));
+    let diff = diff_of(&baseline, &current);
+    assert!(!has(&diff, "ComponentChanged"), "{:?}", kinds(&diff));
+    assert!(!has(&diff, "ViolationResolved"), "{:?}", kinds(&diff));
+    let request = |item| NotComparable {
+        item,
+        cause: Cause::Request,
+        checks: ids(&["binary.container"]),
+        open_in: Side::Current,
+    };
+    for expected in [
+        request(Item::Component {
+            placement: placement.clone(),
+            arch: Arch::X86_64,
+            component: id("ggml-base"),
+        }),
+        request(Item::Violation {
+            policy_rule: id("policy:components.deny.ggml-base"),
+            subject: SubjectKey::Component {
+                placement: placement.clone(),
+                arch: Arch::X86_64,
+                component: id("ggml-base"),
+            },
+        }),
+        request(Item::File { placement }),
+    ] {
+        assert!(
+            diff.not_comparable.contains(&expected),
+            "{expected:?} in {:?}",
+            diff.not_comparable
+        );
+    }
 }
 
 #[test]

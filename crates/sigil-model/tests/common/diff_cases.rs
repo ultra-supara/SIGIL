@@ -491,6 +491,37 @@ pub fn identity_closed(s: &mut Session) {
     settle(s);
 }
 
+/// Model `model`'s manifest could not be read this time (permission denied). As the collector
+/// records it (`collect::ollama_store`), the gap is on the manifest's instance alone: the store's
+/// listing stays complete, and there is no model, nor any integrity or license entry of it.
+pub fn manifest_unreadable(s: &mut Session, model: &str) {
+    let manifest = model_mut(s, model).manifest.clone();
+    s.models.retain(|m| m.id.as_str() != model);
+    s.coverage.retain(|c| c.scope != Ref::Model(id(model)));
+    let placed = s
+        .instances
+        .iter_mut()
+        .find(|i| i.id == manifest)
+        .unwrap_or_else(|| panic!("no manifest {manifest}"));
+    let InstanceContent::Read { artifact } = std::mem::replace(
+        &mut placed.content,
+        InstanceContent::NotRead {
+            why: NotReadReason::PermissionDenied,
+        },
+    ) else {
+        panic!("the manifest was read");
+    };
+    s.artifacts.retain(|a| a.id != artifact);
+    s.coverage.push(coverage(
+        INVENTORY,
+        Ref::Instance(manifest),
+        CoverageState::Unavailable {
+            why: Unavailability::PermissionDenied,
+        },
+    ));
+    settle(s);
+}
+
 /// The policy denies `ggml`: a FAIL on libggml's claim.
 pub fn ggml_denied(s: &mut Session) {
     let rule: PolicyRuleRef = id("policy:components.deny.ggml");

@@ -2,7 +2,7 @@
 
 use crate::artifact::{Arch, FileInstance, InstanceContent};
 use crate::binary::{ARTIFACTS_CODE, ARTIFACTS_IDENTITY};
-use crate::binary_input::{BINARY_CODE, BINARY_IDENTITY};
+use crate::binary_input::{is_binary_root, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY};
 use crate::diff::Placement;
 use crate::evidence::Ref;
 use crate::id::{ArtifactId, RootId, SliceId};
@@ -146,6 +146,32 @@ pub(crate) fn scope_of(s: &Session, p: &Placement) -> Option<Ref> {
         Placement::Instance(id) => Some(Ref::Instance(id.clone())),
         _ => None,
     }
+}
+
+/// The checks that record a file named on the command line under `root`: `binary.container` for
+/// a binary input, none for the service unit (nothing records a unit the run was not given).
+/// `None` for a root whose files are found, not named.
+pub(crate) fn named_file_checks(root: &RootId) -> Option<&'static [&'static str]> {
+    if is_binary_root(root) {
+        Some(&[BINARY_CONTAINER])
+    } else if root.as_str() == SERVICE_UNIT_ROOT {
+        Some(&[])
+    } else {
+        None
+    }
+}
+
+/// Whether `absent` simply did not name the file at `p`: the present side recorded it under a
+/// root of named files (`root`), and `absent` holds no instance there. Then the checks that would
+/// record it ([`named_file_checks`]): what is at `p` is a difference of request, not of system.
+pub(crate) fn not_named_in(
+    absent: &Session,
+    p: &Placement,
+    root: Option<&RootId>,
+) -> Option<&'static [&'static str]> {
+    let checks = named_file_checks(root?)?;
+    let held = absent.instances.iter().any(|i| placement(i) == *p);
+    (!held).then_some(checks)
 }
 
 /// The architecture of a slice of `s`.
