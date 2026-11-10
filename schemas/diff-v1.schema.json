@@ -1,0 +1,1999 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ultra-supara/SIGIL/main/schemas/diff-v1.schema.json",
+  "title": "SIGIL diff v1",
+  "description": "Schema for the comparison of two SIGIL analysis sessions (`schema: \"sigil-diff/1\"`), as `sigil compare` writes it. Self-contained: no external $ref. Strict: additionalProperties: false on every object. Enums are externally tagged with their variant names; struct fields are snake_case; every field is always serialized and required. Definitions shared with the session schema are copied from session-v1.schema.json, and ReleaseBasisKind from aibom-v2.schema.json; crates/sigil-model/tests/diff_schema.rs keeps them equal.",
+  "$ref": "#/$defs/Diff",
+  "$defs": {
+    "Diff": {
+      "description": "What changed between two sessions (sigil-diff/1), as sigil compare writes it. changes are in canonical order: by kind, in the order of Change's variants, then by their JSON text. not_comparable lists the differences that could not be judged, because a check was not closed on the side an item is absent from.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "tool",
+        "baseline",
+        "current",
+        "changes",
+        "not_comparable"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/DiffSchema"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolInfo"
+        },
+        "baseline": {
+          "$ref": "#/$defs/DiffSide"
+        },
+        "current": {
+          "$ref": "#/$defs/DiffSide"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Change"
+          }
+        },
+        "not_comparable": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NotComparable"
+          }
+        }
+      }
+    },
+    "DiffSchema": {
+      "type": "string",
+      "enum": [
+        "sigil-diff/1"
+      ]
+    },
+    "DiffSide": {
+      "description": "One compared session. sha256 is the SHA-256 of its canonical JSON; a session SIGIL saved hashes to its file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "tool",
+        "mode",
+        "started_at",
+        "policy"
+      ],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolInfo"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Change": {
+      "description": "One difference, with the IDs of its item in the session(s) that hold it.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "PolicyChanged"
+          ],
+          "properties": {
+            "PolicyChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "baseline": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/KnowledgeRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "current": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/KnowledgeRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "VerdictChanged"
+          ],
+          "properties": {
+            "VerdictChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "baseline": {
+                  "$ref": "#/$defs/Verdict"
+                },
+                "current": {
+                  "$ref": "#/$defs/Verdict"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "CompletenessChanged"
+          ],
+          "properties": {
+            "CompletenessChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "baseline": {
+                  "$ref": "#/$defs/Completeness"
+                },
+                "current": {
+                  "$ref": "#/$defs/Completeness"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "CheckOpened"
+          ],
+          "properties": {
+            "CheckOpened": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "check",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "check": {
+                  "$ref": "#/$defs/CheckId"
+                },
+                "baseline": {
+                  "$ref": "#/$defs/CheckState"
+                },
+                "current": {
+                  "$ref": "#/$defs/CheckState"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "CheckClosed"
+          ],
+          "properties": {
+            "CheckClosed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "check",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "check": {
+                  "$ref": "#/$defs/CheckId"
+                },
+                "baseline": {
+                  "$ref": "#/$defs/CheckState"
+                },
+                "current": {
+                  "$ref": "#/$defs/CheckState"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FindingNew"
+          ],
+          "properties": {
+            "FindingNew": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at",
+                "current"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "current": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/FindingId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FindingResolved"
+          ],
+          "properties": {
+            "FindingResolved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at",
+                "baseline"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "baseline": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/FindingId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FindingDecisionChanged"
+          ],
+          "properties": {
+            "FindingDecisionChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "baseline": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PolicyDecision"
+                  }
+                },
+                "current": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PolicyDecision"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ViolationNew"
+          ],
+          "properties": {
+            "ViolationNew": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_rule",
+                "subject",
+                "current"
+              ],
+              "properties": {
+                "policy_rule": {
+                  "$ref": "#/$defs/PolicyRuleRef"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "current": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Ref"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ViolationResolved"
+          ],
+          "properties": {
+            "ViolationResolved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_rule",
+                "subject",
+                "baseline"
+              ],
+              "properties": {
+                "policy_rule": {
+                  "$ref": "#/$defs/PolicyRuleRef"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "baseline": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Ref"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ViolationDecisionChanged"
+          ],
+          "properties": {
+            "ViolationDecisionChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_rule",
+                "subject",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "policy_rule": {
+                  "$ref": "#/$defs/PolicyRuleRef"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "baseline": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PolicyDecision"
+                  }
+                },
+                "current": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PolicyDecision"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ModelAdded"
+          ],
+          "properties": {
+            "ModelAdded": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "name"
+              ],
+              "properties": {
+                "model": {
+                  "$ref": "#/$defs/ModelId"
+                },
+                "name": {
+                  "$ref": "#/$defs/UntrustedText"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ModelRemoved"
+          ],
+          "properties": {
+            "ModelRemoved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "name"
+              ],
+              "properties": {
+                "model": {
+                  "$ref": "#/$defs/ModelId"
+                },
+                "name": {
+                  "$ref": "#/$defs/UntrustedText"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "LayerChanged"
+          ],
+          "properties": {
+            "LayerChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "role",
+                "media_type",
+                "ordinal",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "model": {
+                  "$ref": "#/$defs/ModelId"
+                },
+                "role": {
+                  "$ref": "#/$defs/LayerRole"
+                },
+                "media_type": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/UntrustedText"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ordinal": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "baseline": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/UntrustedText"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "current": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/UntrustedText"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "LicenseChanged"
+          ],
+          "properties": {
+            "LicenseChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "model": {
+                  "$ref": "#/$defs/ModelId"
+                },
+                "baseline": {
+                  "$ref": "#/$defs/LicenseState"
+                },
+                "current": {
+                  "$ref": "#/$defs/LicenseState"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FileAdded"
+          ],
+          "properties": {
+            "FileAdded": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "instance",
+                "content"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "instance": {
+                  "$ref": "#/$defs/InstanceId"
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ArtifactId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FileRemoved"
+          ],
+          "properties": {
+            "FileRemoved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "instance",
+                "content"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "instance": {
+                  "$ref": "#/$defs/InstanceId"
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ArtifactId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FileContentChanged"
+          ],
+          "properties": {
+            "FileContentChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "baseline",
+                "current",
+                "baseline_content",
+                "current_content"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "baseline": {
+                  "$ref": "#/$defs/InstanceId"
+                },
+                "current": {
+                  "$ref": "#/$defs/InstanceId"
+                },
+                "baseline_content": {
+                  "$ref": "#/$defs/ArtifactId"
+                },
+                "current_content": {
+                  "$ref": "#/$defs/ArtifactId"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ReleaseChanged"
+          ],
+          "properties": {
+            "ReleaseChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "product",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "product": {
+                  "$ref": "#/$defs/ComponentKey"
+                },
+                "baseline": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ReleaseState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "current": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ReleaseState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ComponentChanged"
+          ],
+          "properties": {
+            "ComponentChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "arch",
+                "component",
+                "baseline",
+                "current"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "arch": {
+                  "$ref": "#/$defs/Arch"
+                },
+                "component": {
+                  "$ref": "#/$defs/ComponentKey"
+                },
+                "baseline": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ComponentState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "current": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ComponentState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ListenerAdded"
+          ],
+          "properties": {
+            "ListenerAdded": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "port",
+                "class",
+                "listeners"
+              ],
+              "properties": {
+                "port": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "class": {
+                  "$ref": "#/$defs/BindClass"
+                },
+                "listeners": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ListenerId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ListenerRemoved"
+          ],
+          "properties": {
+            "ListenerRemoved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "port",
+                "class",
+                "listeners"
+              ],
+              "properties": {
+                "port": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "class": {
+                  "$ref": "#/$defs/BindClass"
+                },
+                "listeners": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ListenerId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "BindWidened"
+          ],
+          "properties": {
+            "BindWidened": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "port",
+                "baseline",
+                "current",
+                "baseline_listeners",
+                "current_listeners"
+              ],
+              "properties": {
+                "port": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "baseline": {
+                  "$ref": "#/$defs/BindClass"
+                },
+                "current": {
+                  "$ref": "#/$defs/BindClass"
+                },
+                "baseline_listeners": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ListenerId"
+                  }
+                },
+                "current_listeners": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ListenerId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "BindNarrowed"
+          ],
+          "properties": {
+            "BindNarrowed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "port",
+                "baseline",
+                "current",
+                "baseline_listeners",
+                "current_listeners"
+              ],
+              "properties": {
+                "port": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "baseline": {
+                  "$ref": "#/$defs/BindClass"
+                },
+                "current": {
+                  "$ref": "#/$defs/BindClass"
+                },
+                "baseline_listeners": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ListenerId"
+                  }
+                },
+                "current_listeners": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ListenerId"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Placement": {
+      "description": "Where a file was found, as a key that survives a new run: the root-relative instance ID under models, install or service-unit; the recorded path under any other root; or content no instance read.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Instance"
+          ],
+          "properties": {
+            "Instance": {
+              "$ref": "#/$defs/InstanceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Path"
+          ],
+          "properties": {
+            "Path": {
+              "$ref": "#/$defs/UntrustedText"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Content"
+          ],
+          "properties": {
+            "Content": {
+              "$ref": "#/$defs/ArtifactId"
+            }
+          }
+        }
+      ]
+    },
+    "SubjectKey": {
+      "description": "What a finding or policy violation is about, with run-dependent IDs replaced by keys.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ],
+          "properties": {
+            "Model": {
+              "$ref": "#/$defs/ModelId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Root"
+          ],
+          "properties": {
+            "Root": {
+              "$ref": "#/$defs/RootId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Placement"
+          ],
+          "properties": {
+            "Placement": {
+              "$ref": "#/$defs/Placement"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Port"
+          ],
+          "properties": {
+            "Port": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Component"
+          ],
+          "properties": {
+            "Component": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "arch",
+                "component"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "arch": {
+                  "$ref": "#/$defs/Arch"
+                },
+                "component": {
+                  "$ref": "#/$defs/ComponentKey"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Slice"
+          ],
+          "properties": {
+            "Slice": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "arch"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "arch": {
+                  "$ref": "#/$defs/Arch"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Other"
+          ],
+          "properties": {
+            "Other": {
+              "$ref": "#/$defs/Ref"
+            }
+          }
+        }
+      ]
+    },
+    "Item": {
+      "description": "An item whose difference could not be judged.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ],
+          "properties": {
+            "Model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model"
+              ],
+              "properties": {
+                "model": {
+                  "$ref": "#/$defs/ModelId"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "License"
+          ],
+          "properties": {
+            "License": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model"
+              ],
+              "properties": {
+                "model": {
+                  "$ref": "#/$defs/ModelId"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "File"
+          ],
+          "properties": {
+            "File": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Release"
+          ],
+          "properties": {
+            "Release": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "product"
+              ],
+              "properties": {
+                "product": {
+                  "$ref": "#/$defs/ComponentKey"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Component"
+          ],
+          "properties": {
+            "Component": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "placement",
+                "arch",
+                "component"
+              ],
+              "properties": {
+                "placement": {
+                  "$ref": "#/$defs/Placement"
+                },
+                "arch": {
+                  "$ref": "#/$defs/Arch"
+                },
+                "component": {
+                  "$ref": "#/$defs/ComponentKey"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Port"
+          ],
+          "properties": {
+            "Port": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "port"
+              ],
+              "properties": {
+                "port": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Finding"
+          ],
+          "properties": {
+            "Finding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Violation"
+          ],
+          "properties": {
+            "Violation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "policy_rule",
+                "subject"
+              ],
+              "properties": {
+                "policy_rule": {
+                  "$ref": "#/$defs/PolicyRuleRef"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "NotComparable": {
+      "description": "A difference that could not be judged, and why. For Coverage, checks are the ones that would have to be closed on open_in; for Request, open_in is the side that did not ask for the item and checks holds the one check the request bears on; for Policy, checks is empty and open_in is Both.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item",
+        "cause",
+        "checks",
+        "open_in"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/Item"
+        },
+        "cause": {
+          "$ref": "#/$defs/Cause"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckId"
+          }
+        },
+        "open_in": {
+          "$ref": "#/$defs/Side"
+        }
+      }
+    },
+    "Cause": {
+      "description": "Why a difference could not be judged: Coverage (a check is open on open_in), Request (the two runs asked for different things) or Policy (the two sessions applied different policies).",
+      "type": "string",
+      "enum": [
+        "Coverage",
+        "Request",
+        "Policy"
+      ]
+    },
+    "Side": {
+      "type": "string",
+      "enum": [
+        "Baseline",
+        "Current",
+        "Both"
+      ]
+    },
+    "LicenseState": {
+      "description": "What a session recorded of a model's license, with model_store.license closed.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "NoLayer",
+            "Unidentified"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Spdx"
+          ],
+          "properties": {
+            "Spdx": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ReleaseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidates",
+        "basis"
+      ],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "basis": {
+          "$ref": "#/$defs/ReleaseBasisKind"
+        }
+      }
+    },
+    "ComponentState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slice",
+        "status",
+        "versions"
+      ],
+      "properties": {
+        "slice": {
+          "$ref": "#/$defs/SliceId"
+        },
+        "status": {
+          "$ref": "#/$defs/IdentityStatus"
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UntrustedText"
+          }
+        }
+      }
+    },
+    "CheckState": {
+      "description": "One check of one session: whether it is required, and its entries by coverage state. No entries: open.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "states"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "states": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "Complete",
+              "Partial",
+              "NotPresent",
+              "ProfileMismatch",
+              "OutOfScope",
+              "Skipped",
+              "Unavailable",
+              "Unsupported",
+              "BudgetExceeded",
+              "Error"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          }
+        }
+      }
+    },
+    "BindClass": {
+      "type": "string",
+      "enum": [
+        "Loopback",
+        "Private",
+        "Global",
+        "Wildcard"
+      ]
+    },
+    "ReleaseBasisKind": {
+      "type": "string",
+      "enum": [
+        "ReferenceMatches",
+        "SelfReportedCommit"
+      ]
+    },
+    "Action": {
+      "type": "string",
+      "enum": [
+        "Fail",
+        "Warn",
+        "Ignore"
+      ]
+    },
+    "Arch": {
+      "type": "string",
+      "enum": [
+        "x86_64",
+        "aarch64",
+        "other"
+      ]
+    },
+    "ArtifactId": {
+      "description": "Content identity: sha256 of the whole file. Never a path.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "CheckId": {
+      "description": "An audit check whose coverage decides completeness.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Completeness": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Complete"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Incomplete"
+          ],
+          "properties": {
+            "Incomplete": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "missing_required",
+                "gaps"
+              ],
+              "properties": {
+                "missing_required": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/CheckId"
+                  }
+                },
+                "gaps": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionId"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ComponentKey": {
+      "description": "A component name used by identification.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Date": {
+      "description": "A calendar date.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+    },
+    "FindingId": {
+      "description": "A technical finding.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "IdentityStatus": {
+      "type": "string",
+      "enum": [
+        "Conflicting",
+        "ReferenceMatched",
+        "Corroborated",
+        "NameOnly",
+        "Unidentified"
+      ]
+    },
+    "InstanceId": {
+      "description": "Placement identity: inst:<scan-root-relative path>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^inst:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "KnowledgeKind": {
+      "type": "string",
+      "enum": [
+        "SignatureDb",
+        "Profile",
+        "RuleSet",
+        "Policy",
+        "ReferenceManifest"
+      ]
+    },
+    "KnowledgeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "version",
+        "sha256"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/KnowledgeKind"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        }
+      }
+    },
+    "LayerRole": {
+      "type": "string",
+      "enum": [
+        "Config",
+        "Layer"
+      ]
+    },
+    "ListenerId": {
+      "description": "A listening socket: listener:<protocol>/<address>:<port>#<socket inode>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^listener:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "Mode": {
+      "type": "string",
+      "enum": [
+        "Static",
+        "Observe"
+      ]
+    },
+    "ModelId": {
+      "description": "A model in a model store: model:<root id>/<manifest path under manifests/>.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^model:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "OpenQuestionId": {
+      "description": "An open question.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "source",
+        "reason",
+        "expires"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "source": {
+          "$ref": "#/$defs/PolicyRuleRef"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PolicyRuleRef": {
+      "description": "The policy rule a decision came from.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "ProbeId": {
+      "description": "An active probe: probe:api/<address>:<port>, with an IPv6 address in brackets.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^probe:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f]$"
+    },
+    "ProcessRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "start_ticks",
+        "boot_id"
+      ],
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "start_ticks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "boot_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ProcessRole": {
+      "description": "A process role from a topology rule. Generic: no runtime-specific meaning.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Ref": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Audit"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Root"
+          ],
+          "properties": {
+            "Root": {
+              "$ref": "#/$defs/RootId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Artifact"
+          ],
+          "properties": {
+            "Artifact": {
+              "$ref": "#/$defs/ArtifactId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Slice"
+          ],
+          "properties": {
+            "Slice": {
+              "$ref": "#/$defs/SliceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Instance"
+          ],
+          "properties": {
+            "Instance": {
+              "$ref": "#/$defs/InstanceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Component"
+          ],
+          "properties": {
+            "Component": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "slice",
+                "component"
+              ],
+              "properties": {
+                "slice": {
+                  "$ref": "#/$defs/SliceId"
+                },
+                "component": {
+                  "$ref": "#/$defs/ComponentKey"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Role"
+          ],
+          "properties": {
+            "Role": {
+              "$ref": "#/$defs/ProcessRole"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "SearchPath"
+          ],
+          "properties": {
+            "SearchPath": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role",
+                "search_path"
+              ],
+              "properties": {
+                "role": {
+                  "$ref": "#/$defs/ProcessRole"
+                },
+                "search_path": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Process"
+          ],
+          "properties": {
+            "Process": {
+              "$ref": "#/$defs/ProcessRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Model"
+          ],
+          "properties": {
+            "Model": {
+              "$ref": "#/$defs/ModelId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Listener"
+          ],
+          "properties": {
+            "Listener": {
+              "$ref": "#/$defs/ListenerId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Probe"
+          ],
+          "properties": {
+            "Probe": {
+              "$ref": "#/$defs/ProbeId"
+            }
+          }
+        }
+      ]
+    },
+    "RootId": {
+      "description": "A scan root declared in the request.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "RuleId": {
+      "description": "A detection rule that yields findings or open questions.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
+    },
+    "Sha256Hex": {
+      "description": "A lowercase hex SHA-256 digest.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "SliceId": {
+      "description": "One architecture slice of an artifact: <artifact>#<arch>@<offset>.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}#(x86_64|aarch64|other)@(0|[1-9][0-9]*)$"
+    },
+    "Timestamp": {
+      "description": "An instant, RFC 3339 UTC.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]{1,9})?Z$"
+    },
+    "ToolInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "git_rev"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "git_rev": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "UntrustedText": {
+      "description": "Input-derived text. A string when valid UTF-8; otherwise {\"hex\": <lowercase hex of the bytes>}, used only for values that are not valid UTF-8. Consumers must escape it before display.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hex"
+          ],
+          "properties": {
+            "hex": {
+              "type": "string",
+              "pattern": "^([0-9a-f]{2})*$"
+            }
+          }
+        }
+      ]
+    },
+    "Verdict": {
+      "type": "string",
+      "enum": [
+        "Pass",
+        "Warn",
+        "Fail"
+      ]
+    }
+  }
+}
