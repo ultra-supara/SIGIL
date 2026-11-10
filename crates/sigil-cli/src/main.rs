@@ -1621,9 +1621,9 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
         )?),
         None => None,
     };
-    let baseline = load_session(&args.baseline)?;
+    let (baseline, baseline_read) = load_session_with_identity(&args.baseline)?;
     reverify(baseline.as_session(), &args.baseline)?;
-    let current = load_session(&args.current)?;
+    let (current, current_read) = load_session_with_identity(&args.current)?;
     reverify(current.as_session(), &args.current)?;
     let diff = sigil_model::diff::compare(
         &baseline,
@@ -1638,7 +1638,9 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
             .map_err(|e| Failure::Run(format!("the diff cannot be serialized: {e}")))?,
         CompareFormat::Md => sigil_model::diff::markdown(&diff),
     };
-    emit(&document, target.as_ref(), &input_inodes(&inputs))?;
+    // The files as they were read, never a later lookup of their paths: an input moved to
+    // `--out` after it was read is still protected (PR #136 review P2-1).
+    emit(&document, target.as_ref(), &[baseline_read, current_read])?;
     eprintln!(
         "compare: {} {}, {} not comparable (baseline sha256:{}, current sha256:{})",
         diff.changes.len(),
@@ -1654,21 +1656,26 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The `dev:ino` of each input that exists: the write puts back any of them it would displace.
-fn input_inodes(inputs: &[PathBuf]) -> Vec<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    inputs
-        .iter()
-        .filter_map(|p| fs::metadata(p).ok())
-        .map(|m| (m.dev(), m.ino()))
-        .collect()
-}
-
 /// A saved session: JSON, schema `sigil-session/1`, and valid.
 fn load_session(path: &Path) -> Result<ValidatedSession, Failure> {
+    load_session_with_identity(path).map(|(session, _)| session)
+}
+
+/// [`load_session`], with the `dev:ino` of the file the session was read from: `fstat` on the
+/// descriptor it was read through, never a later lookup of `path`, so a file moved or replaced
+/// after the read keeps the identity it was read with (PR #136 review P2-1).
+fn load_session_with_identity(path: &Path) -> Result<(ValidatedSession, (u64, u64)), Failure> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
     let name = shown_path(path);
-    let text = fs::read_to_string(path)
-        .map_err(|e| Failure::Run(format!("{name} cannot be read: {e}")))?;
+    let unreadable = |e: std::io::Error| Failure::Run(format!("{name} cannot be read: {e}"));
+    let mut file = fs::File::open(path).map_err(unreadable)?;
+    let read = file
+        .metadata()
+        .map(|m| (m.dev(), m.ino()))
+        .map_err(unreadable)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).map_err(unreadable)?;
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| Failure::Run(format!("{name} is not valid JSON: {e}")))?;
     match value.get("schema").and_then(serde_json::Value::as_str) {
@@ -1692,7 +1699,7 @@ fn load_session(path: &Path) -> Result<ValidatedSession, Failure> {
             shown(&e.to_string())
         ))
     })?;
-    ValidatedSession::new(session).map_err(|errors| {
+    let session = ValidatedSession::new(session).map_err(|errors| {
         let first: Vec<String> = errors
             .iter()
             .take(5)
@@ -1703,7 +1710,8 @@ fn load_session(path: &Path) -> Result<ValidatedSession, Failure> {
             errors.len(),
             first.join("; ")
         ))
-    })
+    })?;
+    Ok((session, read))
 }
 
 // --- output -----------------------------------------------------------------------------------
@@ -1880,6 +1888,46 @@ mod tests {
         std::fs::remove_file(&report).unwrap();
         std::fs::write(&report, b"new").unwrap();
         assert!(super::check_out_against_inputs(&report, &report, &s).is_err());
+    }
+
+    /// PR #136 review P2-1: an input of `compare` moved to `--out` after it was read, and after
+    /// `--out` was checked against the inputs. A lookup of the input's path finds nothing now, so
+    /// only the `dev:ino` the read saw keeps the write from replacing it.
+    #[test]
+    fn compare_protects_an_input_moved_to_out_after_it_was_read() {
+        use std::os::unix::fs::MetadataExt;
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let example = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../schemas/examples/session-v1/01-complete-pass.json"
+        );
+        let (a, b, out) = (p.join("a.json"), p.join("b.json"), p.join("diff.json"));
+        std::fs::copy(example, &a).unwrap();
+        std::fs::copy(example, &b).unwrap();
+        let bytes = std::fs::read(&a).unwrap();
+        let Ok(target) = super::check_out_not_inputs(&out, &[a.clone(), b.clone()], "never") else {
+            panic!("--out names neither input when it is checked");
+        };
+        let (Ok((_, a_read)), Ok((_, b_read))) = (
+            super::load_session_with_identity(&a),
+            super::load_session_with_identity(&b),
+        ) else {
+            panic!("both inputs load");
+        };
+        let m = std::fs::metadata(&a).unwrap();
+        assert_eq!(a_read, (m.dev(), m.ino()));
+        // Moved after the read: the baseline is at --out, and its path names nothing.
+        std::fs::rename(&a, &out).unwrap();
+        assert!(std::fs::metadata(&a).is_err());
+        assert!(target.write(b"doc", &[a_read, b_read]).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), bytes);
+        let mut names: Vec<_> = std::fs::read_dir(&p)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["b.json", "diff.json"], "no temporary file left");
     }
 
     #[test]
