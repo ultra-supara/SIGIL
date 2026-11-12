@@ -617,6 +617,17 @@ mod tests {
         assert_eq!(fs::read(p.join(&name)).unwrap(), b"doc");
     }
 
+    /// Whether `err` is the refusal of a write that met a protected input at the target: put
+    /// back after the exchange, or, without the exchange, an existing file not replaced. Any
+    /// other error (one before the exchange) is not.
+    fn refused_as_an_input(err: &str) -> bool {
+        err == "it is an input of this run; not replaced"
+            || err.starts_with(
+                "this file system cannot exchange files, so an existing output is not replaced \
+                 while inputs are protected",
+            )
+    }
+
     /// The input whose inode is protected is what the exchange displaced: it is put back.
     #[test]
     fn a_protected_inode_is_not_replaced() {
@@ -625,7 +636,9 @@ mod tests {
         fs::write(&input, b"input bytes").unwrap();
         let target = p.join("out.json");
         fs::hard_link(&input, &target).unwrap();
-        assert!(write(&target, b"doc", &[inode(&input)]).is_err());
+        let err = write(&target, b"doc", &[inode(&input)]).unwrap_err();
+        assert!(refused_as_an_input(&err), "{err}");
+        assert_eq!(fs::read(&input).unwrap(), b"input bytes");
         assert_eq!(fs::read(&target).unwrap(), b"input bytes");
         assert_eq!(inode(&target), inode(&input));
         assert_eq!(
@@ -647,7 +660,8 @@ mod tests {
         let read = inode(&input);
         let target = Target::pin(&p.join("diff.json"), vec![]).unwrap();
         fs::rename(&input, p.join("diff.json")).unwrap();
-        assert!(target.write(b"doc", &[read]).is_err());
+        let err = target.write(b"doc", &[read]).unwrap_err();
+        assert!(refused_as_an_input(&err), "{err}");
         assert_eq!(
             fs::read(p.join("diff.json")).unwrap(),
             b"schema = \"sigil-policy/1\"\n"

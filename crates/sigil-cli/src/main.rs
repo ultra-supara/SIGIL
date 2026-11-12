@@ -1118,20 +1118,17 @@ fn load_policy(path: Option<&Path>) -> Result<Policy, Failure> {
         return Policy::builtin_default()
             .map_err(|e| Failure::Run(format!("the built-in policy: {e}")));
     };
-    let text = fs::read_to_string(path)
-        .map_err(|e| Failure::Run(format!("--policy {} cannot be read: {e}", shown_path(path))))?;
+    let text = fs::read_to_string(path).map_err(|e| policy_unreadable(path, &e))?;
     parse_policy(path, &text)
 }
 
 /// A policy file `compare` reads, with the `dev:ino` of the file it was read from (`fstat` on the
 /// descriptor), as for its sessions: `--out` never replaces it, even one moved there after the
 /// read.
-fn load_policy_file(path: &Path) -> Result<(Policy, (u64, u64)), Failure> {
+fn load_policy_with_identity(path: &Path) -> Result<(Policy, (u64, u64)), Failure> {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
-    let unreadable = |e: std::io::Error| {
-        Failure::Run(format!("--policy {} cannot be read: {e}", shown_path(path)))
-    };
+    let unreadable = |e: std::io::Error| policy_unreadable(path, &e);
     let mut file = fs::File::open(path).map_err(unreadable)?;
     let read = file
         .metadata()
@@ -1140,6 +1137,11 @@ fn load_policy_file(path: &Path) -> Result<(Policy, (u64, u64)), Failure> {
     let mut text = String::new();
     file.read_to_string(&mut text).map_err(unreadable)?;
     Ok((parse_policy(path, &text)?, read))
+}
+
+/// The policy file at `path` could not be read.
+fn policy_unreadable(path: &Path, e: &std::io::Error) -> Failure {
+    Failure::Run(format!("--policy {} cannot be read: {e}", shown_path(path)))
 }
 
 /// `text`, the policy file at `path`, loaded.
@@ -1680,7 +1682,7 @@ fn compare_sessions(args: &CompareArgs) -> Result<u8, Failure> {
     };
     let (policy, policy_read) = match &args.policy {
         Some(path) => {
-            let (policy, read) = load_policy_file(path)?;
+            let (policy, read) = load_policy_with_identity(path)?;
             (policy, Some(read))
         }
         None => (load_policy(None)?, None),
@@ -1708,8 +1710,11 @@ fn compare_sessions(args: &CompareArgs) -> Result<u8, Failure> {
     let mut protected = vec![baseline_read, current_read];
     protected.extend(policy_read);
     emit(&document, target.as_ref(), &protected)?;
-    let e = &diff.evaluation;
-    let incomplete = matches!(e.completeness(), DiffCompleteness::Incomplete { .. });
+    let evaluation = &diff.evaluation;
+    let incomplete = matches!(
+        evaluation.completeness(),
+        DiffCompleteness::Incomplete { .. }
+    );
     eprintln!(
         "compare: {} {}, {} not comparable: {} + {} under {} (sha256:{}) (baseline sha256:{}, \
          current sha256:{})",
@@ -1720,15 +1725,15 @@ fn compare_sessions(args: &CompareArgs) -> Result<u8, Failure> {
             "changes"
         },
         diff.not_comparable.len(),
-        verdict(e.verdict()),
+        verdict(evaluation.verdict()),
         if incomplete { "INCOMPLETE" } else { "COMPLETE" },
-        shown(&e.policy().id),
-        e.policy().sha256,
+        shown(&evaluation.policy().id),
+        evaluation.policy().sha256,
         diff.baseline.sha256,
         diff.current.sha256
     );
     Ok(exit_code(
-        e.verdict(),
+        evaluation.verdict(),
         incomplete,
         args.fail_on,
         args.fail_on_incomplete,
