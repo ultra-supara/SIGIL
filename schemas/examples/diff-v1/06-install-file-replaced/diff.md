@@ -7,12 +7,15 @@
 | Mode | static | static |
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
+| Completeness | COMPLETE | COMPLETE |
+
+Result\: FAIL \+ COMPLETE\, under the policy default sigil\-policy\/1 \(sha256\:61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123\)\.
 
 1 change\, 0 not comparable\.
 
 ## Installation
 
-| Change | Where | Baseline | Current |
-|---|---|---|---|
-| content changed | inst\:lib\/ollama\/libggml\.so\.0\.13\.1 | sha256\:1111111111111111111111111111111111111111111111111111111111111111 | sha256\:2222222222222222222222222222222222222222222222222222222222222222 |
+| Action | Change | Where | Baseline | Current |
+|---|---|---|---|---|
+| FAIL | content changed | inst\:lib\/ollama\/libggml\.so\.0\.13\.1 | sha256\:1111111111111111111111111111111111111111111111111111111111111111 | sha256\:2222222222222222222222222222222222222222222222222222222222222222 |
 

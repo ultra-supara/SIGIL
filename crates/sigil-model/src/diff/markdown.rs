@@ -3,11 +3,11 @@
 //! and the same `Diff` gives the same text.
 
 use crate::diff::{
-    Cause, Change, CheckState, ComponentState, Diff, DiffSide, Item, LicenseState, NotComparable,
-    Placement, ReleaseState, Side, SubjectKey,
+    Cause, Change, CheckState, ComponentState, Diff, DiffCompleteness, DiffSide, Evaluation, Item,
+    LicenseState, NotComparable, Placement, ReleaseState, Side, SubjectKey,
 };
 use crate::evidence::Ref;
-use crate::finding::PolicyDecision;
+use crate::finding::{Action, OqTreatment, PolicyDecision};
 use crate::id::ArtifactId;
 use crate::listener::BindClass;
 use crate::model::LayerRole;
@@ -23,35 +23,42 @@ struct Section {
     header: &'static [&'static str],
 }
 
-/// In the order of [`Change`]'s declaration.
+/// In the order of [`Change`]'s declaration. The first column is the line's weight under the
+/// diff's evaluation.
 const SECTIONS: [Section; 7] = [
     Section {
         title: "Outcome",
-        header: &["What", "Baseline", "Current"],
+        header: &["Action", "What", "Baseline", "Current"],
     },
     Section {
         title: "Coverage",
-        header: &["Change", "Check", "Baseline", "Current"],
+        header: &["Action", "Change", "Check", "Baseline", "Current"],
     },
     Section {
         title: "Findings",
-        header: &["Change", "Rule", "Subject", "Findings"],
+        header: &["Action", "Change", "Rule", "Subject", "Findings"],
     },
     Section {
         title: "Policy violations",
-        header: &["Change", "Policy rule", "Subject", "In the session"],
+        header: &[
+            "Action",
+            "Change",
+            "Policy rule",
+            "Subject",
+            "In the session",
+        ],
     },
     Section {
         title: "Models",
-        header: &["Change", "Model", "Baseline", "Current"],
+        header: &["Action", "Change", "Model", "Baseline", "Current"],
     },
     Section {
         title: "Installation",
-        header: &["Change", "Where", "Baseline", "Current"],
+        header: &["Action", "Change", "Where", "Baseline", "Current"],
     },
     Section {
         title: "Listeners",
-        header: &["Change", "Port", "Baseline", "Current"],
+        header: &["Action", "Change", "Port", "Baseline", "Current"],
     },
 ];
 
@@ -65,6 +72,7 @@ pub fn markdown(diff: &Diff) -> String {
     d.canonicalize();
     let mut out = String::from("# SIGIL comparison\n\n");
     header(&mut out, &d.baseline, &d.current);
+    result(&mut out, &d.evaluation);
     if d.changes.is_empty() && d.not_comparable.is_empty() {
         out.push_str("No differences.\n");
         return out;
@@ -83,7 +91,9 @@ pub fn markdown(diff: &Diff) -> String {
     let mut rows: [Vec<Vec<String>>; 7] = Default::default();
     for change in &d.changes {
         let (n, cells) = row(change);
-        rows[n].push(cells);
+        let mut line = vec![weighed(&d.evaluation, change)];
+        line.extend(cells);
+        rows[n].push(line);
     }
     for (s, rows) in SECTIONS.iter().zip(rows) {
         if rows.is_empty() {
@@ -98,8 +108,12 @@ pub fn markdown(diff: &Diff) -> String {
     }
     if !d.not_comparable.is_empty() {
         section(&mut out, "Not comparable");
-        let rows = d.not_comparable.iter().map(not_comparable).collect();
-        table(&mut out, &["Item", "Why"], rows);
+        let rows = d
+            .not_comparable
+            .iter()
+            .map(|n| not_comparable(n, &d.evaluation))
+            .collect();
+        table(&mut out, &["Item", "Why", "Treatment"], rows);
     }
     out
 }
@@ -119,8 +133,72 @@ fn header(out: &mut String, b: &DiffSide, c: &DiffSide) {
             esc(c.started_at.as_str()),
         ],
         vec![esc("Policy"), esc(&policy(b)), esc(&policy(c))],
+        vec![
+            esc("Completeness"),
+            esc(completeness(&b.completeness)),
+            esc(completeness(&c.completeness)),
+        ],
     ];
     table(out, &["", "Baseline", "Current"], rows);
+}
+
+/// The line under the header: the verdict and completeness the compare policy gives, why the
+/// comparison is incomplete, and the policy. The policy's text is escaped on its own.
+fn result(out: &mut String, e: &Evaluation) {
+    let completeness = match e.completeness() {
+        DiffCompleteness::Complete => "COMPLETE".to_string(),
+        DiffCompleteness::Incomplete {
+            inputs,
+            not_comparable,
+        } => {
+            let mut why = vec![];
+            match inputs {
+                Some(Side::Baseline) => why.push("the baseline is incomplete".to_string()),
+                Some(Side::Current) => why.push("the current session is incomplete".to_string()),
+                Some(Side::Both) => why.push("both sessions are incomplete".to_string()),
+                None => {}
+            }
+            match not_comparable {
+                0 => {}
+                1 => why.push("1 item not comparable, counted as a gap".to_string()),
+                n => why.push(format!("{n} items not comparable, counted as gaps")),
+            }
+            format!("INCOMPLETE ({})", why.join("; "))
+        }
+    };
+    out.push_str(&esc(&format!(
+        "Result: {} + {completeness}, under the policy ",
+        verdict(e.verdict())
+    )));
+    out.push_str(&esc(&policy_text(e.policy())));
+    out.push_str(&esc("."));
+    out.push_str("\n\n");
+}
+
+/// The escaped Action cell of `change`: its weight under the evaluation, with "(as decided)"
+/// when its own decisions gave it.
+fn weighed(e: &Evaluation, change: &Change) -> String {
+    let (action, decided) = e.weigh(change);
+    let word = match action {
+        Action::Fail => "FAIL",
+        Action::Warn => "WARN",
+        Action::Ignore => "ignored",
+    };
+    if decided {
+        esc(&format!("{word} (as decided)"))
+    } else {
+        esc(word)
+    }
+}
+
+/// The escaped Treatment cell of an item not comparable.
+fn treated(e: &Evaluation, n: &NotComparable) -> String {
+    esc(match e.treatment(n) {
+        OqTreatment::CountAsGap => "gap",
+        OqTreatment::Warn => "WARN",
+        OqTreatment::Fail => "FAIL",
+        OqTreatment::Ignore => "ignored",
+    })
 }
 
 fn tool(s: &DiffSide) -> String {
@@ -633,7 +711,7 @@ fn bind(c: BindClass) -> &'static str {
     }
 }
 
-fn not_comparable(n: &NotComparable) -> Vec<String> {
+fn not_comparable(n: &NotComparable, e: &Evaluation) -> Vec<String> {
     let checks = if n.checks.is_empty() {
         "-".to_string()
     } else {
@@ -644,7 +722,7 @@ fn not_comparable(n: &NotComparable) -> Vec<String> {
         Cause::Request => format!("not asked in {}: {checks}", side(n.open_in)),
         Cause::Policy => "policies differ".to_string(),
     };
-    vec![item(&n.item).markdown(), esc(&why)]
+    vec![item(&n.item).markdown(), esc(&why), treated(e, n)]
 }
 
 fn item(i: &Item) -> Shown {

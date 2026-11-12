@@ -625,3 +625,72 @@ fn each_side_records_its_completeness_and_the_diff_counts_it() {
         }
     );
 }
+
+/// `text` as `render::md::esc` writes it.
+fn esc_md(text: &str) -> String {
+    t(text).markdown_inline()
+}
+
+#[test]
+fn the_markdown_names_the_result_and_each_line_s_action() {
+    let blob = case_named("03-blob-digest-changed");
+    let md = markdown(&diff_of(&blob.baseline, &blob.current));
+    assert!(
+        md.contains(&esc_md("Result: FAIL + COMPLETE, under the policy ")),
+        "{md}"
+    );
+    assert!(
+        md.contains(&esc_md(&format!(
+            "default sigil-policy/1 (sha256:{})",
+            builtin_policy().sha256
+        ))),
+        "{md}"
+    );
+    assert!(
+        md.contains("| Completeness | COMPLETE | COMPLETE |"),
+        "{md}"
+    );
+    assert!(
+        md.contains("| Action | Change | Model | Baseline | Current |"),
+        "{md}"
+    );
+    assert!(md.contains("\n| FAIL | "), "{md}");
+    let new = case_named("08-new-finding");
+    let md = markdown(&diff_of(&new.baseline, &new.current));
+    assert!(
+        md.contains(&format!("\n| {} | ", esc_md("WARN (as decided)"))),
+        "{md}"
+    );
+    assert!(md.contains("\n| ignored | "), "{md}");
+    // Review P1: an incomplete input is named in the result and in the header.
+    let open = case_named("10-check-now-open");
+    let md = markdown(&diff_of(&open.baseline, &open.current));
+    assert!(
+        md.contains(&esc_md(
+            "Result: WARN + INCOMPLETE (the current session is incomplete), under the policy "
+        )),
+        "{md}"
+    );
+    assert!(
+        md.contains("| Completeness | COMPLETE | INCOMPLETE |"),
+        "{md}"
+    );
+    let both = markdown(&diff_of(&open.current, &open.current));
+    assert!(
+        both.contains(&esc_md(
+            "Result: PASS + INCOMPLETE (both sessions are incomplete), under the policy "
+        )),
+        "{both}"
+    );
+    assert!(both.ends_with("No differences.\n"), "{both}");
+    let md = markdown(&diff_of(&static_store(), &compare_store()));
+    assert!(md.contains(&esc_md(" not comparable, counted as ")), "{md}");
+    assert!(md.contains("| Item | Why | Treatment |"), "{md}");
+    assert!(md.contains(" | gap |\n"), "{md}");
+    let same = markdown(&diff_of(&compare_store(), &compare_store()));
+    assert!(
+        same.contains(&esc_md("Result: PASS + COMPLETE, under the policy ")),
+        "{same}"
+    );
+    assert!(same.ends_with("No differences.\n"), "{same}");
+}
