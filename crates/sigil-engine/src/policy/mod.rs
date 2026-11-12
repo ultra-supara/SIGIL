@@ -2,9 +2,11 @@
 //!
 //! A policy says which audit scopes are required (and so which checks must be closed), how open
 //! questions count, which assumptions a finding may rest on, how individual rules are treated, who
-//! is trusted, and which components and capabilities are denied. Loading is strict: an unknown
-//! key, rule, scope, check, assumption, denied component, or denied capability, a malformed date,
-//! and `ignore` without a reason are all fatal, so a typo never silently weakens a policy.
+//! is trusted, which components and capabilities are denied, and how `sigil compare` treats the
+//! changes between two sessions (`[compare]`, #16). Loading is strict: an unknown key, rule,
+//! scope, check, assumption, denied component, denied capability, change kind, or cause, a
+//! malformed date, `ignore` without a reason, and `decided` for a change kind other than
+//! `FindingNew` and `ViolationNew` are all fatal, so a typo never silently weakens a policy.
 //!
 //! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
 //! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy
@@ -274,7 +276,8 @@ pub enum PolicyError {
     UnknownCause(String),
     /// `decided` for a change kind whose changes carry no decisions.
     DecidedNotAllowed(String),
-    /// The resolved compare table is incomplete (a SIGIL bug: the defaults cover every entry).
+    /// The resolved compare table is invalid (a SIGIL bug: the defaults cover every entry, and
+    /// `decided` is refused above where it does not apply).
     CompareTable(String),
 }
 
@@ -349,7 +352,7 @@ impl fmt::Display for PolicyError {
                 f,
                 "compare.changes {k:?}: \"decided\" applies to FindingNew and ViolationNew only"
             ),
-            CompareTable(m) => write!(f, "the compare table is incomplete: {m}"),
+            CompareTable(m) => write!(f, "the compare table is invalid: {m}"),
         }
     }
 }
@@ -556,13 +559,7 @@ impl Policy {
                 .collect::<Result<_, PolicyError>>()?,
         };
         let sha256 = sha256_hex(text)?;
-        let knowledge = KnowledgeRef {
-            kind: KnowledgeKind::Policy,
-            id: raw.name.clone(),
-            version: SCHEMA.to_string(),
-            sha256: sha256.clone(),
-        };
-        let compare = compare_rules(raw.compare, knowledge)?;
+        let compare = compare_rules(raw.compare, knowledge(&raw.name, &sha256))?;
         Ok(Policy {
             name: raw.name,
             sha256,
@@ -651,12 +648,17 @@ impl Policy {
 
     /// The knowledge entry that records which policy was applied.
     pub fn knowledge(&self) -> KnowledgeRef {
-        KnowledgeRef {
-            kind: KnowledgeKind::Policy,
-            id: self.name.clone(),
-            version: SCHEMA.to_string(),
-            sha256: self.sha256.clone(),
-        }
+        knowledge(&self.name, &self.sha256)
+    }
+}
+
+/// The knowledge entry of the policy named `name` whose text hashes to `sha256`.
+fn knowledge(name: &str, sha256: &Sha256Hex) -> KnowledgeRef {
+    KnowledgeRef {
+        kind: KnowledgeKind::Policy,
+        id: name.to_string(),
+        version: SCHEMA.to_string(),
+        sha256: sha256.clone(),
     }
 }
 

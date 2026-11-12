@@ -884,6 +884,13 @@ fn every_malformed_compare_entry_is_fatal() {
             |e| matches!(e, E::Syntax(_)),
         ),
         (
+            format!(
+                "{HEAD}[compare.not_comparable.Coverage]\ntreatment = \"ignore\"\nreason = \"r\"\n\
+                 expires = \"2027-01-01\"\n"
+            ),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        (
             format!("{HEAD}[compare.changes.ModelAdded]\naction = \"count_as_gap\"\n"),
             |e| matches!(e, E::Syntax(_)),
         ),
