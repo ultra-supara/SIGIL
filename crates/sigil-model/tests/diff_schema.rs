@@ -39,7 +39,9 @@ fn registered() -> Vec<(&'static str, schema_check::Probe)> {
         NotComparable => "NotComparable", Cause => "Cause", Side => "Side", LicenseState => "LicenseState",
         ReleaseState => "ReleaseState", ComponentState => "ComponentState",
         CheckState => "CheckState", BindClass => "BindClass",
-        ReleaseBasisKind => "ReleaseBasisKind",
+        ReleaseBasisKind => "ReleaseBasisKind", Evaluation => "Evaluation",
+        ChangeTreatment => "ChangeTreatment", NotComparableTreatment => "NotComparableTreatment",
+        CompareAction => "CompareAction", DiffCompleteness => "DiffCompleteness",
     ]
 }
 
@@ -149,6 +151,29 @@ fn gallery() -> Vec<(&'static str, Value)> {
         "Cause",
         [Cause::Coverage, Cause::Request, Cause::Policy],
     ));
+    out.push(sample(
+        "CompareAction",
+        [
+            CompareAction::Fail,
+            CompareAction::Warn,
+            CompareAction::Ignore,
+            CompareAction::Decided,
+        ],
+    ));
+    out.push(sample(
+        "DiffCompleteness",
+        [
+            DiffCompleteness::Complete,
+            DiffCompleteness::Incomplete {
+                inputs: Some(Side::Current),
+                not_comparable: 0,
+            },
+            DiffCompleteness::Incomplete {
+                inputs: None,
+                not_comparable: 2,
+            },
+        ],
+    ));
     out.extend(
         every_not_comparable()
             .into_iter()
@@ -216,4 +241,133 @@ fn unknown_fields_and_other_versions_are_rejected_by_both() {
     let mut v = base.clone();
     v["baseline"]["sha256"] = json!("d5aa7e58…");
     both_reject(v, "an elided session hash");
+
+    let mut v = base.clone();
+    v["evaluation"]["changes"]["LayerChanged"]["extra"] = json!(1);
+    both_reject(v, "an unknown field in a change treatment");
+
+    let mut v = base.clone();
+    let layer = v["evaluation"]["changes"]["LayerChanged"].clone();
+    v["evaluation"]["changes"]["LayerChanges"] = layer;
+    both_reject(v, "an unknown change kind in the evaluation");
+
+    // Review P2b: a table without one of its kinds is refused by the schema and by serde.
+    let mut v = base.clone();
+    v["evaluation"]["changes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("BindNarrowed");
+    both_reject(v, "an evaluation without BindNarrowed");
+
+    let mut v = base.clone();
+    v["evaluation"]["not_comparable"]
+        .as_object_mut()
+        .unwrap()
+        .remove("Policy");
+    both_reject(v, "an evaluation without the cause Policy");
+}
+
+fn example(name: &str) -> Value {
+    examples()
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("no example {name}"))
+        .1
+}
+
+#[test]
+fn the_evaluation_names_every_change_kind_and_every_cause() {
+    let schema = schema();
+    let e = &defs(&schema)["Evaluation"]["properties"];
+    let required = |v: &Value| -> BTreeSet<String> {
+        v["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect()
+    };
+    let kinds: BTreeSet<String> = ChangeKind::ALL
+        .iter()
+        .map(|k| k.name().to_string())
+        .collect();
+    assert_eq!(required(&e["changes"]), kinds);
+    assert_eq!(schema_check::object_keys(&e["changes"]), kinds);
+    let variants: BTreeSet<String> = schema_check::variants(&defs(&schema)["Change"])
+        .into_keys()
+        .collect();
+    assert_eq!(variants, kinds);
+    let causes: BTreeSet<String> = Cause::ALL.iter().map(|c| c.name().to_string()).collect();
+    assert_eq!(required(&e["not_comparable"]), causes);
+    assert_eq!(schema_check::object_keys(&e["not_comparable"]), causes);
+}
+
+/// Review P2b: the schema checks a diff's shape; serde also checks that the recorded result is
+/// what the recorded evaluation gives.
+#[test]
+fn a_recorded_result_that_its_evaluation_does_not_give_is_refused() {
+    let base = example("05-loopback-to-wildcard");
+    assert_eq!(base["evaluation"]["verdict"], json!("Fail"));
+    let validator = validator_for(&schema(), "Diff");
+
+    let mut v = base.clone();
+    v["evaluation"]["verdict"] = json!("Pass");
+    assert!(validator.is_valid(&v), "the schema cannot see the judgment");
+    let err = serde_json::from_value::<Diff>(v).unwrap_err().to_string();
+    assert!(err.contains("Pass") && err.contains("Fail"), "{err}");
+
+    let mut v = base.clone();
+    v["evaluation"]["completeness"] = json!({"Incomplete": {"inputs": null, "not_comparable": 1}});
+    assert!(validator.is_valid(&v));
+    let err = serde_json::from_value::<Diff>(v).unwrap_err().to_string();
+    assert!(err.contains("not what its evaluation gives"), "{err}");
+
+    // A side that turned incomplete while the evaluation still says complete.
+    let mut v = base;
+    v["current"]["completeness"] =
+        json!({"Incomplete": {"missing_required": ["model_store.license"], "gaps": []}});
+    assert!(validator.is_valid(&v));
+    let err = serde_json::from_value::<Diff>(v).unwrap_err().to_string();
+    assert!(err.contains("not what its evaluation gives"), "{err}");
+}
+
+/// Review P2a: `sigil-diff/1` was revised before its first release. A diff that main wrote
+/// between #136 and PR-16b (no `evaluation`, no `completeness` per side, `FindingNew` without
+/// `decisions`) neither validates nor loads.
+#[test]
+fn a_diff_written_before_the_revision_of_v1_is_refused() {
+    let base = example("05-loopback-to-wildcard");
+
+    let mut v = base.clone();
+    v.as_object_mut().unwrap().remove("evaluation");
+    both_reject(v, "a diff without evaluation");
+
+    let mut v = base.clone();
+    for side in ["baseline", "current"] {
+        v[side].as_object_mut().unwrap().remove("completeness");
+    }
+    both_reject(v, "sides without completeness");
+
+    let mut v = base.clone();
+    let mut stripped = 0;
+    for change in v["changes"].as_array_mut().unwrap() {
+        if let Some(new) = change.get_mut("FindingNew") {
+            new.as_object_mut().unwrap().remove("decisions");
+            stripped += 1;
+        }
+    }
+    assert_eq!(stripped, 1);
+    both_reject(v, "a FindingNew without decisions");
+
+    let mut v = base;
+    v.as_object_mut().unwrap().remove("evaluation");
+    for side in ["baseline", "current"] {
+        v[side].as_object_mut().unwrap().remove("completeness");
+    }
+    for change in v["changes"].as_array_mut().unwrap() {
+        if let Some(new) = change.get_mut("FindingNew") {
+            new.as_object_mut().unwrap().remove("decisions");
+        }
+    }
+    both_reject(v, "a diff of PR-16a's shape");
 }

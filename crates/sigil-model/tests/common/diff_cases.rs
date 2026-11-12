@@ -43,8 +43,13 @@ pub fn session_sha256(s: &Session) -> Sha256Hex {
     id(&sha256_hex(s.to_canonical_json().unwrap()))
 }
 
-/// The diff of two valid sessions, as `sigil compare` makes it.
+/// The diff of two valid sessions, as `sigil compare` makes it without `--policy`.
 pub fn diff_of(baseline: &Session, current: &Session) -> Diff {
+    diff_under(baseline, current, &builtin_rules())
+}
+
+/// The diff of two valid sessions, judged under `rules`.
+pub fn diff_under(baseline: &Session, current: &Session, rules: &CompareRules) -> Diff {
     let b = ValidatedSession::new(baseline.clone())
         .unwrap_or_else(|e| panic!("baseline is not valid: {}", render(&e)));
     let c = ValidatedSession::new(current.clone())
@@ -55,6 +60,7 @@ pub fn diff_of(baseline: &Session, current: &Session) -> Diff {
         &c,
         session_sha256(current),
         example_tool(),
+        rules,
     )
 }
 

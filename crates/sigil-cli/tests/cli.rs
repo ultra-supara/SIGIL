@@ -3914,6 +3914,37 @@ fn diff_case(case: &str) -> PathBuf {
 }
 
 #[test]
+fn the_fixture_diffs_are_judged_under_the_built_in_policy() {
+    let policy = sigil_engine::policy::Policy::builtin_default().unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/examples/diff-v1");
+    let mut n = 0;
+    for entry in fs::read_dir(dir).unwrap() {
+        let case = entry.unwrap().path();
+        let diff: Diff =
+            serde_json::from_str(&fs::read_to_string(case.join("diff.json")).unwrap()).unwrap();
+        assert_eq!(
+            diff.evaluation.policy(),
+            &policy.knowledge(),
+            "{}",
+            case.display()
+        );
+        assert_eq!(
+            diff.evaluation,
+            policy.compare.judge(
+                &diff.baseline.completeness,
+                &diff.current.completeness,
+                &diff.changes,
+                &diff.not_comparable
+            ),
+            "{}",
+            case.display()
+        );
+        n += 1;
+    }
+    assert_eq!(n, 10);
+}
+
+#[test]
 fn compare_writes_the_diff_of_two_saved_sessions() {
     let case = diff_case("05-loopback-to-wildcard");
     let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));

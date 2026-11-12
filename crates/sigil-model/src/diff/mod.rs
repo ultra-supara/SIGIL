@@ -22,6 +22,7 @@ mod outcome;
 mod scope;
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -46,9 +47,11 @@ pub use judge::{
 };
 pub use markdown::markdown;
 
-/// What changed between two sessions (`sigil-diff/1`).
+/// What changed between two sessions (`sigil-diff/1`). It is read through a record of the same
+/// fields (unknown fields refused): a document whose recorded verdict or completeness is not
+/// what its own evaluation gives does not load ([`DiffError`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "DiffRecord")]
 pub struct Diff {
     pub schema: DiffSchema,
     /// The SIGIL that compared.
@@ -59,6 +62,83 @@ pub struct Diff {
     pub changes: Vec<Change>,
     /// Differences that could not be judged.
     pub not_comparable: Vec<NotComparable>,
+    /// How the changes, the items not comparable and the two inputs' completeness were judged
+    /// (#16, PR-16b).
+    pub evaluation: Evaluation,
+}
+
+/// The JSON form of a [`Diff`], before its result is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiffRecord {
+    schema: DiffSchema,
+    tool: ToolInfo,
+    baseline: DiffSide,
+    current: DiffSide,
+    changes: Vec<Change>,
+    not_comparable: Vec<NotComparable>,
+    evaluation: Evaluation,
+}
+
+/// Why a document is not a diff as SIGIL writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffError {
+    /// The recorded verdict and completeness are not what the recorded evaluation's table gives
+    /// for the recorded changes, items not comparable and inputs.
+    Judgment {
+        recorded: (Verdict, DiffCompleteness),
+        judged: (Verdict, DiffCompleteness),
+    },
+}
+
+impl fmt::Display for DiffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DiffError::Judgment { recorded, judged } => write!(
+                f,
+                "the recorded result {:?} + {:?} is not what its evaluation gives: {:?} + {:?}",
+                recorded.0, recorded.1, judged.0, judged.1
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DiffError {}
+
+impl TryFrom<DiffRecord> for Diff {
+    type Error = DiffError;
+
+    /// The record in canonical order, if its evaluation's table gives the recorded result.
+    fn try_from(record: DiffRecord) -> Result<Diff, DiffError> {
+        let mut diff = Diff {
+            schema: record.schema,
+            tool: record.tool,
+            baseline: record.baseline,
+            current: record.current,
+            changes: record.changes,
+            not_comparable: record.not_comparable,
+            evaluation: record.evaluation,
+        };
+        diff.canonicalize();
+        let judged = diff.evaluation.rules().judge(
+            &diff.baseline.completeness,
+            &diff.current.completeness,
+            &diff.changes,
+            &diff.not_comparable,
+        );
+        if judged.verdict() != diff.evaluation.verdict()
+            || judged.completeness() != diff.evaluation.completeness()
+        {
+            return Err(DiffError::Judgment {
+                recorded: (
+                    diff.evaluation.verdict(),
+                    diff.evaluation.completeness().clone(),
+                ),
+                judged: (judged.verdict(), judged.completeness().clone()),
+            });
+        }
+        Ok(diff)
+    }
 }
 
 /// The diff schema version. Only `sigil-diff/1` is accepted.
@@ -80,6 +160,9 @@ pub struct DiffSide {
     pub started_at: Timestamp,
     /// The policy applied: the session's knowledge entry of kind `Policy`.
     pub policy: Option<KnowledgeRef>,
+    /// The session's own completeness, as recorded (`outcome.completeness`). An incomplete
+    /// input makes the diff incomplete.
+    pub completeness: Completeness,
 }
 
 /// Where a file was found, as a key that survives a new run.

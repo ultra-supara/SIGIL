@@ -1,6 +1,9 @@
 //! [`compare`]: the differences between two validated sessions.
 
-use crate::diff::{Cause, Change, Diff, DiffSchema, DiffSide, Item, NotComparable, Side};
+use crate::diff::{
+    Cause, Change, CompareRules, Diff, DiffSchema, DiffSide, Item, NotComparable, Side,
+};
+use crate::finding::Completeness;
 use crate::id::{CheckId, Sha256Hex};
 use crate::session::{KnowledgeKind, KnowledgeRef, Session, ToolInfo};
 use crate::validate::ValidatedSession;
@@ -13,14 +16,16 @@ pub(super) struct Found {
 }
 
 /// The differences between `baseline` and `current`, whose canonical JSON have the SHA-256s
-/// given (computed by the caller, as for the AI-BOM). Pure and deterministic: both sessions are
-/// compared in canonical order, whatever order their lists are in.
+/// given (computed by the caller, as for the AI-BOM), judged under `rules` with both sessions'
+/// recorded completeness (#16, PR-16b). Pure and deterministic: both sessions are compared in
+/// canonical order, whatever order their lists are in.
 pub fn compare(
     baseline: &ValidatedSession,
     baseline_sha256: Sha256Hex,
     current: &ValidatedSession,
     current_sha256: Sha256Hex,
     tool: ToolInfo,
+    rules: &CompareRules,
 ) -> Diff {
     let b = canonical(baseline.as_session());
     let c = canonical(current.as_session());
@@ -37,8 +42,16 @@ pub fn compare(
         current: side(&c, current_sha256),
         changes: found.changes,
         not_comparable: found.not_comparable,
+        evaluation: rules.judge(&Completeness::Complete, &Completeness::Complete, &[], &[]),
     };
     diff.canonicalize();
+    // Judged on the canonical lists, where each change and each item occurs once.
+    diff.evaluation = rules.judge(
+        &diff.baseline.completeness,
+        &diff.current.completeness,
+        &diff.changes,
+        &diff.not_comparable,
+    );
     diff
 }
 
@@ -55,6 +68,7 @@ fn side(s: &Session, sha256: Sha256Hex) -> DiffSide {
         mode: s.request.mode,
         started_at: s.observation.started_at.clone(),
         policy: policy_of(s).cloned(),
+        completeness: s.outcome.completeness.clone(),
     }
 }
 

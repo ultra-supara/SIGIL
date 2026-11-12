@@ -529,3 +529,99 @@ fn an_evaluation_reads_back_only_with_a_complete_table() {
     extra["extra"] = serde_json::json!(1);
     assert!(serde_json::from_value::<Evaluation>(extra).is_err());
 }
+
+fn case_named(name: &str) -> DiffCase {
+    diff_cases()
+        .into_iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("no case {name}"))
+}
+
+#[test]
+fn a_diff_records_its_evaluation_under_the_table_it_was_compared_with() {
+    for case in diff_cases() {
+        let diff = diff_of(&case.baseline, &case.current);
+        assert_eq!(
+            diff.evaluation,
+            builtin_rules().judge(
+                &diff.baseline.completeness,
+                &diff.current.completeness,
+                &diff.changes,
+                &diff.not_comparable
+            ),
+            "{}",
+            case.name
+        );
+    }
+    let blob = case_named("03-blob-digest-changed");
+    assert_eq!(
+        diff_of(&blob.baseline, &blob.current).evaluation.verdict(),
+        Verdict::Fail
+    );
+    let lenient = with_action(
+        &builtin_rules(),
+        ChangeKind::LayerChanged,
+        CompareAction::Ignore,
+    );
+    let diff = diff_under(&blob.baseline, &blob.current, &lenient);
+    assert_eq!(diff.evaluation.verdict(), Verdict::Pass);
+    assert_eq!(
+        diff.evaluation.changes()[&ChangeKind::LayerChanged].action,
+        CompareAction::Ignore
+    );
+    // An item not comparable counts as a gap.
+    let diff = diff_of(&static_store(), &compare_store());
+    assert!(!diff.not_comparable.is_empty());
+    let DiffCompleteness::Incomplete { not_comparable, .. } = diff.evaluation.completeness() else {
+        panic!("{:?}", diff.evaluation.completeness());
+    };
+    assert_eq!(
+        usize::try_from(*not_comparable).unwrap(),
+        diff.not_comparable.len()
+    );
+}
+
+#[test]
+fn each_side_records_its_completeness_and_the_diff_counts_it() {
+    // Review P1: the current session of case 10 is incomplete, so the comparison is too.
+    let open = case_named("10-check-now-open");
+    let diff = diff_of(&open.baseline, &open.current);
+    let mut current = open.current.clone();
+    current.canonicalize();
+    assert_eq!(diff.current.completeness, current.outcome.completeness);
+    assert!(matches!(
+        diff.current.completeness,
+        Completeness::Incomplete { .. }
+    ));
+    assert_eq!(diff.baseline.completeness, Completeness::Complete);
+    assert_eq!(diff.evaluation.verdict(), Verdict::Warn);
+    assert_eq!(
+        diff.evaluation.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Current),
+            not_comparable: 0
+        }
+    );
+    // One incomplete session on both sides: nothing changed, and what it could not see is still
+    // unseen.
+    let same = diff_of(&open.current, &open.current);
+    assert!(same.changes.is_empty() && same.not_comparable.is_empty());
+    assert_eq!(same.evaluation.verdict(), Verdict::Pass);
+    assert_eq!(
+        same.evaluation.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Both),
+            not_comparable: 0
+        }
+    );
+    let resolved = case_named("09-resolved-finding");
+    assert_eq!(
+        diff_of(&resolved.baseline, &resolved.current)
+            .evaluation
+            .completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Baseline),
+            not_comparable: 0
+        }
+    );
+}

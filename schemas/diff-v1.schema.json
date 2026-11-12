@@ -6,7 +6,7 @@
   "$ref": "#/$defs/Diff",
   "$defs": {
     "Diff": {
-      "description": "What changed between two sessions (sigil-diff/1), as sigil compare writes it. changes are in canonical order: by kind, in the order of Change's variants, then by their JSON text. not_comparable lists the differences that could not be judged, because a check was not closed on the side an item is absent from.",
+      "description": "What changed between two sessions (sigil-diff/1), as sigil compare writes it. changes are in canonical order: by kind, in the order of Change's variants, then by their JSON text. not_comparable lists the differences that could not be judged, because a check was not closed on the side an item is absent from. evaluation is how the diff was judged under a compare policy (the [compare] section of sigil-policy/1); a reader re-judges it, and a recorded verdict or completeness that the evaluation does not give does not load.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -15,7 +15,8 @@
         "baseline",
         "current",
         "changes",
-        "not_comparable"
+        "not_comparable",
+        "evaluation"
       ],
       "properties": {
         "schema": {
@@ -41,6 +42,9 @@
           "items": {
             "$ref": "#/$defs/NotComparable"
           }
+        },
+        "evaluation": {
+          "$ref": "#/$defs/Evaluation"
         }
       }
     },
@@ -51,7 +55,7 @@
       ]
     },
     "DiffSide": {
-      "description": "One compared session. sha256 is the SHA-256 of its canonical JSON; a session SIGIL saved hashes to its file.",
+      "description": "One compared session. sha256 is the SHA-256 of its canonical JSON; a session SIGIL saved hashes to its file. completeness is the session's own outcome.completeness, as recorded; an incomplete input makes the diff incomplete.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -59,7 +63,8 @@
         "tool",
         "mode",
         "started_at",
-        "policy"
+        "policy",
+        "completeness"
       ],
       "properties": {
         "sha256": {
@@ -83,6 +88,9 @@
               "type": "null"
             }
           ]
+        },
+        "completeness": {
+          "$ref": "#/$defs/Completeness"
         }
       }
     },
@@ -2035,6 +2043,273 @@
         "Pass",
         "Warn",
         "Fail"
+      ]
+    },
+    "Evaluation": {
+      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions (Fail when it has none). verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "changes",
+        "not_comparable",
+        "verdict",
+        "completeness"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/KnowledgeRef"
+        },
+        "changes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "PolicyChanged",
+            "VerdictChanged",
+            "CompletenessChanged",
+            "CheckOpened",
+            "CheckClosed",
+            "FindingNew",
+            "FindingResolved",
+            "FindingDecisionChanged",
+            "ViolationNew",
+            "ViolationResolved",
+            "ViolationDecisionChanged",
+            "ModelAdded",
+            "ModelRemoved",
+            "LayerChanged",
+            "LicenseChanged",
+            "FileAdded",
+            "FileRemoved",
+            "FileContentChanged",
+            "ReleaseChanged",
+            "ComponentChanged",
+            "ListenerAdded",
+            "ListenerRemoved",
+            "BindWidened",
+            "BindNarrowed"
+          ],
+          "properties": {
+            "PolicyChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "VerdictChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "CompletenessChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "CheckOpened": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "CheckClosed": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "FindingNew": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "FindingResolved": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "FindingDecisionChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ViolationNew": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ViolationResolved": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ViolationDecisionChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ModelAdded": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ModelRemoved": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "LayerChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "LicenseChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "FileAdded": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "FileRemoved": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "FileContentChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ReleaseChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ComponentChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ListenerAdded": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "ListenerRemoved": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "BindWidened": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "BindNarrowed": {
+              "$ref": "#/$defs/ChangeTreatment"
+            }
+          }
+        },
+        "not_comparable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Coverage",
+            "Request",
+            "Policy"
+          ],
+          "properties": {
+            "Coverage": {
+              "$ref": "#/$defs/NotComparableTreatment"
+            },
+            "Request": {
+              "$ref": "#/$defs/NotComparableTreatment"
+            },
+            "Policy": {
+              "$ref": "#/$defs/NotComparableTreatment"
+            }
+          }
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "completeness": {
+          "$ref": "#/$defs/DiffCompleteness"
+        }
+      }
+    },
+    "ChangeTreatment": {
+      "description": "The action of one change kind, its source (default:compare.<Kind>, or policy:compare.changes.<Kind>), and the policy's reason (a policy file must give one for Ignore).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "source",
+        "reason"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/CompareAction"
+        },
+        "source": {
+          "$ref": "#/$defs/PolicyRuleRef"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "NotComparableTreatment": {
+      "description": "The treatment of the items not comparable for one cause: CountAsGap makes the diff Incomplete, Warn and Fail count toward the verdict, Ignore toward neither. source is default:compare.not_comparable.<Cause>, or policy:compare.not_comparable.<Cause>.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treatment",
+        "source",
+        "reason"
+      ],
+      "properties": {
+        "treatment": {
+          "$ref": "#/$defs/OqTreatment"
+        },
+        "source": {
+          "$ref": "#/$defs/PolicyRuleRef"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "CompareAction": {
+      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say; FindingNew and ViolationNew only.",
+      "type": "string",
+      "enum": [
+        "Fail",
+        "Warn",
+        "Ignore",
+        "Decided"
+      ]
+    },
+    "DiffCompleteness": {
+      "description": "Whether the comparison saw everything it judged. Incomplete names the inputs that are incomplete themselves (null when both are complete) and counts the items not comparable treated CountAsGap; at least one of the two holds.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Complete"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Incomplete"
+          ],
+          "properties": {
+            "Incomplete": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "inputs",
+                "not_comparable"
+              ],
+              "properties": {
+                "inputs": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Side"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "not_comparable": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "OqTreatment": {
+      "type": "string",
+      "enum": [
+        "CountAsGap",
+        "Warn",
+        "Fail",
+        "Ignore"
       ]
     }
   }

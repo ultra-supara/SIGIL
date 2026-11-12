@@ -1621,6 +1621,7 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
         )?),
         None => None,
     };
+    let policy = load_policy(None)?;
     let (baseline, baseline_read) = load_session_with_identity(&args.baseline)?;
     reverify(baseline.as_session(), &args.baseline)?;
     let (current, current_read) = load_session_with_identity(&args.current)?;
@@ -1631,6 +1632,7 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
         &current,
         session_sha256(current.as_session())?,
         tool_info(),
+        &policy.compare,
     );
     let document = match args.format {
         CompareFormat::Json => diff

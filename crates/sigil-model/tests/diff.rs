@@ -60,6 +60,13 @@ fn canonical_json_orders_changes_by_kind_then_text() {
             name: t("a:latest"),
         },
     ];
+    // Hand-made changes are judged again: a diff reads back only as judged.
+    diff.evaluation = builtin_rules().judge(
+        &diff.baseline.completeness,
+        &diff.current.completeness,
+        &diff.changes,
+        &diff.not_comparable,
+    );
     let json = diff.to_canonical_json().unwrap();
     assert!(json.ends_with("}\n"), "{json}");
     let back: Diff = serde_json::from_str(&json).unwrap();
