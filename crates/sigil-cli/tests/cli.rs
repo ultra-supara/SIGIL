@@ -704,6 +704,36 @@ fn rules_lists_the_catalog() {
         "{}",
         r.stdout
     );
+    // #16 (PR-16b): the change kinds and causes a compare policy can name, with their defaults.
+    assert!(
+        r.stdout.contains(
+            "\nChanges a compare policy can act on ([compare.changes]), with their default \
+             action:\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    for (kind, action) in [
+        ("PolicyChanged", "warn"),
+        ("LayerChanged", "fail"),
+        ("FindingNew", "decided"),
+        ("BindNarrowed", "ignore"),
+    ] {
+        let line = format!("  {kind:<25} {action}\n");
+        assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
+    }
+    assert!(
+        r.stdout.contains(
+            "Causes of an item not comparable ([compare.not_comparable]), with their default \
+             treatment:\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    for cause in ["Coverage", "Request", "Policy"] {
+        let line = format!("  {cause:<25} count_as_gap\n");
+        assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
+    }
 }
 
 #[test]

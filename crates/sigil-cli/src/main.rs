@@ -11,7 +11,8 @@
 //!   session (#21).
 //! - `compare` reports what changed between two saved sessions, as `sigil-diff/1` JSON or its
 //!   Markdown, judged under a policy's `[compare]` section (#16).
-//! - `rules` lists the detection rules, and the capabilities a policy can deny.
+//! - `rules` lists the detection rules, the capabilities a policy can deny, and the change kinds
+//!   and causes a compare policy can act on.
 //! - `binary inspect` inspects files directly: each one's digest, format, and container facts, in
 //!   one session (PR-4b-2a). With `--code`, it also records the direct call sites of capability
 //!   imports (PR-5a).
@@ -49,7 +50,7 @@ use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::{self, RULES};
 use sigil_engine::policy::Policy;
 use sigil_engine::reference;
-use sigil_model::diff::DiffCompleteness;
+use sigil_model::diff::{Cause, ChangeKind, CompareAction, DiffCompleteness};
 use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
@@ -59,7 +60,7 @@ use sigil_model::render::{
 use sigil_model::{
     binary_root_index, is_binary_inspection, is_binary_root, is_loopback, target, ActiveFeature,
     Completeness, Coverage, CoverageState, KnowledgeKind, MemberKind, MemberResult, Mode,
-    ReleaseBasis, ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText,
+    OqTreatment, ReleaseBasis, ScanRoot, Session, Sha256Hex, Timestamp, ToolInfo, UntrustedText,
     ValidatedSession, Verdict, ARTIFACTS_DISCOVERY, ARTIFACTS_RELEASE, BINARY_BYTES,
     BINARY_CODE_BYTES, BINARY_SCAN_BYTES, INSTALL_ROOT,
 };
@@ -101,7 +102,8 @@ enum Command {
     /// Compare two saved sessions: what changed from the baseline to the current one, each
     /// change with the IDs of its evidence, and what could not be judged.
     Compare(CompareArgs),
-    /// List the detection rules, and the capabilities a policy can deny.
+    /// List the detection rules, the capabilities a policy can deny, and what a compare policy
+    /// can act on.
     Rules,
 }
 
@@ -1657,6 +1659,33 @@ fn rules() -> Result<(), Failure> {
         sigil_model::CAPABILITY_RULE,
         catalog::CAPABILITY_SUMMARY
     ));
+    // #16 (PR-16b): what a `[compare]` section can name, and what it gives without an entry, in
+    // the policy file's own spelling.
+    text.push_str(
+        "\nChanges a compare policy can act on ([compare.changes]), with their default action:\n",
+    );
+    for kind in ChangeKind::ALL {
+        let action = match kind.default_action() {
+            CompareAction::Fail => "fail",
+            CompareAction::Warn => "warn",
+            CompareAction::Ignore => "ignore",
+            CompareAction::Decided => "decided",
+        };
+        text.push_str(&format!("  {:<25} {action}\n", kind.name()));
+    }
+    text.push_str(
+        "Causes of an item not comparable ([compare.not_comparable]), with their default \
+         treatment:\n",
+    );
+    for cause in Cause::ALL {
+        let treatment = match cause.default_treatment() {
+            OqTreatment::CountAsGap => "count_as_gap",
+            OqTreatment::Warn => "warn",
+            OqTreatment::Fail => "fail",
+            OqTreatment::Ignore => "ignore",
+        };
+        text.push_str(&format!("  {:<25} {treatment}\n", cause.name()));
+    }
     emit(&text, None, &[])
 }
 
