@@ -10,14 +10,15 @@
 //! - `explain` explains a finding or open question, the verdict, or the coverage of a saved
 //!   session (#21).
 //! - `compare` reports what changed between two saved sessions, as `sigil-diff/1` JSON or its
-//!   Markdown (#16).
+//!   Markdown, judged under a policy's `[compare]` section (#16).
 //! - `rules` lists the detection rules, and the capabilities a policy can deny.
 //! - `binary inspect` inspects files directly: each one's digest, format, and container facts, in
 //!   one session (PR-4b-2a). With `--code`, it also records the direct call sites of capability
 //!   imports (PR-5a).
 //!
-//! Exit codes: 0 normal, 1 execution error, 2 usage error, 3 `--fail-on` reached by the verdict,
-//! 4 `--fail-on-incomplete` with an incomplete result (when 3 does not apply).
+//! Exit codes: 0 normal, 1 execution error, 2 usage error, 3 `--fail-on` reached by the verdict
+//! (of a session, or of a comparison), 4 `--fail-on-incomplete` with an incomplete result (when 3
+//! does not apply).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -48,6 +49,7 @@ use sigil_engine::observe::proc::ProcBudgets;
 use sigil_engine::policy::catalog::{self, RULES};
 use sigil_engine::policy::Policy;
 use sigil_engine::reference;
+use sigil_model::diff::DiffCompleteness;
 use sigil_model::render::aibom::project;
 use sigil_model::render::markdown::render_session;
 use sigil_model::render::{
@@ -301,12 +303,23 @@ struct CompareArgs {
     /// The later session (JSON).
     #[arg(long, value_name = "FILE")]
     current: PathBuf,
+    /// A policy file (TOML) whose [compare] section judges the changes [default: the built-in
+    /// policy].
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
     /// The document written.
     #[arg(long, value_enum, default_value = "json")]
     format: CompareFormat,
-    /// Write here instead of stdout (neither input; an existing file is replaced).
+    /// Write here instead of stdout (none of the inputs; an existing file is replaced).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
+    /// Exit with 3 when the diff's verdict reaches this level.
+    #[arg(long, value_enum)]
+    fail_on: Option<FailOn>,
+    /// Exit with 4 when the diff is incomplete (an input is, or an item not comparable counts as
+    /// a gap) and 3 does not apply.
+    #[arg(long)]
+    fail_on_incomplete: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -375,7 +388,7 @@ fn main() -> ExitCode {
             command: SessionCommand::Verify(args),
         } => verify_session(&args).map(|()| 0),
         Command::Explain(args) => explain_session(&args).map(|()| 0),
-        Command::Compare(args) => compare_sessions(&args).map(|()| 0),
+        Command::Compare(args) => compare_sessions(&args),
         Command::Rules => rules().map(|()| 0),
     };
     match result {
@@ -583,22 +596,38 @@ fn conclude(
     };
     emit(&document, target, protected)?;
     summary(&session, out, unsaved.as_ref());
-    let failed = match fail_on {
-        Some(FailOn::Warn) => session.outcome.verdict >= Verdict::Warn,
-        Some(FailOn::Fail) => session.outcome.verdict == Verdict::Fail,
-        None => false,
-    };
     let incomplete = matches!(
         session.outcome.completeness,
         Completeness::Incomplete { .. }
     );
-    Ok(if failed {
+    Ok(exit_code(
+        session.outcome.verdict,
+        incomplete,
+        fail_on,
+        fail_on_incomplete,
+    ))
+}
+
+/// The exit code of a judged result (a session's or a comparison's): 3 when the verdict reaches
+/// `--fail-on`, else 4 when it is incomplete and `--fail-on-incomplete` was given, else 0.
+fn exit_code(
+    verdict: Verdict,
+    incomplete: bool,
+    fail_on: Option<FailOn>,
+    fail_on_incomplete: bool,
+) -> u8 {
+    let failed = match fail_on {
+        Some(FailOn::Warn) => verdict >= Verdict::Warn,
+        Some(FailOn::Fail) => verdict == Verdict::Fail,
+        None => false,
+    };
+    if failed {
         3
     } else if fail_on_incomplete && incomplete {
         4
     } else {
         0
-    })
+    }
 }
 
 // --- binary inspect ---------------------------------------------------------------------------
@@ -1091,7 +1120,31 @@ fn load_policy(path: Option<&Path>) -> Result<Policy, Failure> {
     };
     let text = fs::read_to_string(path)
         .map_err(|e| Failure::Run(format!("--policy {} cannot be read: {e}", shown_path(path))))?;
-    Policy::load(&text).map_err(|e| {
+    parse_policy(path, &text)
+}
+
+/// A policy file `compare` reads, with the `dev:ino` of the file it was read from (`fstat` on the
+/// descriptor), as for its sessions: `--out` never replaces it, even one moved there after the
+/// read.
+fn load_policy_file(path: &Path) -> Result<(Policy, (u64, u64)), Failure> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let unreadable = |e: std::io::Error| {
+        Failure::Run(format!("--policy {} cannot be read: {e}", shown_path(path)))
+    };
+    let mut file = fs::File::open(path).map_err(unreadable)?;
+    let read = file
+        .metadata()
+        .map(|m| (m.dev(), m.ino()))
+        .map_err(unreadable)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).map_err(unreadable)?;
+    Ok((parse_policy(path, &text)?, read))
+}
+
+/// `text`, the policy file at `path`, loaded.
+fn parse_policy(path: &Path, text: &str) -> Result<Policy, Failure> {
+    Policy::load(text).map_err(|e| {
         Failure::Run(format!(
             "--policy {} is invalid: {}",
             shown_path(path),
@@ -1607,21 +1660,31 @@ fn rules() -> Result<(), Failure> {
 
 // --- compare ----------------------------------------------------------------------------------
 
-/// `compare` (#16, PR-16a): the differences between two saved sessions, as `sigil-diff/1` JSON
-/// or its Markdown. Each input is loaded and re-verified as for `session render`. `--out` is
-/// neither input, by path or by `dev:ino`, and the write never replaces either. A one-line
-/// summary goes to stderr; the exit is 0 whether or not anything changed.
-fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
-    let inputs = [args.baseline.clone(), args.current.clone()];
+/// `compare` (#16): the differences between two saved sessions, as `sigil-diff/1` JSON or its
+/// Markdown, judged under the `[compare]` section of `--policy` (the built-in policy without
+/// one, PR-16b). Each session is loaded and re-verified as for `session render`. `--out` is none
+/// of the inputs (the two sessions and the policy file), by path or by `dev:ino`, and the write
+/// never replaces one. A one-line summary goes to stderr. The exit code is 3 when the diff's
+/// verdict reaches `--fail-on`, else 4 when it is incomplete and `--fail-on-incomplete` was
+/// given, else 0.
+fn compare_sessions(args: &CompareArgs) -> Result<u8, Failure> {
+    let mut inputs = vec![args.baseline.clone(), args.current.clone()];
+    inputs.extend(args.policy.clone());
     let target = match &args.out {
         Some(out) => Some(check_out_not_inputs(
             out,
             &inputs,
-            "SIGIL never writes a compared session",
+            "SIGIL never writes an input of a comparison",
         )?),
         None => None,
     };
-    let policy = load_policy(None)?;
+    let (policy, policy_read) = match &args.policy {
+        Some(path) => {
+            let (policy, read) = load_policy_file(path)?;
+            (policy, Some(read))
+        }
+        None => (load_policy(None)?, None),
+    };
     let (baseline, baseline_read) = load_session_with_identity(&args.baseline)?;
     reverify(baseline.as_session(), &args.baseline)?;
     let (current, current_read) = load_session_with_identity(&args.current)?;
@@ -1642,9 +1705,14 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
     };
     // The files as they were read, never a later lookup of their paths: an input moved to
     // `--out` after it was read is still protected (PR #136 review P2-1).
-    emit(&document, target.as_ref(), &[baseline_read, current_read])?;
+    let mut protected = vec![baseline_read, current_read];
+    protected.extend(policy_read);
+    emit(&document, target.as_ref(), &protected)?;
+    let e = &diff.evaluation;
+    let incomplete = matches!(e.completeness(), DiffCompleteness::Incomplete { .. });
     eprintln!(
-        "compare: {} {}, {} not comparable (baseline sha256:{}, current sha256:{})",
+        "compare: {} {}, {} not comparable: {} + {} under {} (sha256:{}) (baseline sha256:{}, \
+         current sha256:{})",
         diff.changes.len(),
         if diff.changes.len() == 1 {
             "change"
@@ -1652,10 +1720,19 @@ fn compare_sessions(args: &CompareArgs) -> Result<(), Failure> {
             "changes"
         },
         diff.not_comparable.len(),
+        verdict(e.verdict()),
+        if incomplete { "INCOMPLETE" } else { "COMPLETE" },
+        shown(&e.policy().id),
+        e.policy().sha256,
         diff.baseline.sha256,
         diff.current.sha256
     );
-    Ok(())
+    Ok(exit_code(
+        e.verdict(),
+        incomplete,
+        args.fail_on,
+        args.fail_on_incomplete,
+    ))
 }
 
 /// A saved session: JSON, schema `sigil-session/1`, and valid.
@@ -2092,5 +2169,20 @@ mod tests {
             "{}",
             line(&s)
         );
+    }
+
+    #[test]
+    fn the_exit_code_prefers_fail_on_over_fail_on_incomplete() {
+        use super::{exit_code, FailOn};
+        use sigil_model::Verdict;
+        assert_eq!(exit_code(Verdict::Fail, true, Some(FailOn::Fail), true), 3);
+        assert_eq!(exit_code(Verdict::Warn, true, Some(FailOn::Fail), true), 4);
+        assert_eq!(
+            exit_code(Verdict::Warn, false, Some(FailOn::Warn), false),
+            3
+        );
+        assert_eq!(exit_code(Verdict::Pass, true, Some(FailOn::Warn), false), 0);
+        assert_eq!(exit_code(Verdict::Fail, true, None, false), 0);
+        assert_eq!(exit_code(Verdict::Pass, true, None, true), 4);
     }
 }

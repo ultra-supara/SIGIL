@@ -635,6 +635,27 @@ mod tests {
         );
     }
 
+    /// PR-16b review (P3): an input renamed onto `--out` after it was read and the target was
+    /// pinned is what the write would displace. It stays at `--out`, whole, and no temporary
+    /// file is left: with the exchange it is displaced and put back, and without it a run that
+    /// protects inputs never replaces an existing file.
+    #[test]
+    fn an_input_renamed_onto_the_target_after_the_pin_is_not_replaced() {
+        let (_d, p) = dir();
+        let input = p.join("policy.toml");
+        fs::write(&input, b"schema = \"sigil-policy/1\"\n").unwrap();
+        let read = inode(&input);
+        let target = Target::pin(&p.join("diff.json"), vec![]).unwrap();
+        fs::rename(&input, p.join("diff.json")).unwrap();
+        assert!(target.write(b"doc", &[read]).is_err());
+        assert_eq!(
+            fs::read(p.join("diff.json")).unwrap(),
+            b"schema = \"sigil-policy/1\"\n"
+        );
+        assert_eq!(inode(&p.join("diff.json")), read);
+        assert_eq!(names(&p), ["diff.json"], "no temporary file left");
+    }
+
     /// A directory put at `--out` after it was pinned: exchanged, then put back.
     #[test]
     fn a_directory_at_out_is_put_back_and_the_temporary_file_removed() {

@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
-use sigil_model::diff::{Change, Diff, LicenseState};
+use sigil_model::diff::{
+    Change, ChangeKind, CompareAction, Diff, DiffCompleteness, LicenseState, Side,
+};
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
 use sigil_model::{
@@ -4116,4 +4118,260 @@ fn compare_of_two_inspections_reports_a_removed_license() {
         )),
         "{diff:#?}"
     );
+}
+
+// --- compare policies and exit codes (#16, PR-16b) ---------------------------------------------
+
+#[test]
+fn compare_exits_3_when_the_diff_s_verdict_reaches_fail_on() {
+    let case = diff_case("03-blob-digest-changed");
+    let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));
+    let plain = run(&[&"compare", &"--baseline", &baseline, &"--current", &current]);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    assert!(
+        plain.stderr.contains(
+            "compare: 1 change, 0 not comparable: FAIL + COMPLETE under default (sha256:"
+        ),
+        "{}",
+        plain.stderr
+    );
+    for level in ["fail", "warn"] {
+        let r = run(&[
+            &"compare",
+            &"--baseline",
+            &baseline,
+            &"--current",
+            &current,
+            &"--fail-on",
+            &level,
+        ]);
+        assert_eq!(r.code, 3, "--fail-on {level}: {}", r.stderr);
+        let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+        assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
+    }
+    let same = diff_case("01-identical").join("baseline.json");
+    let pass = run(&[
+        &"compare",
+        &"--baseline",
+        &same,
+        &"--current",
+        &same,
+        &"--fail-on",
+        &"warn",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(pass.code, 0, "{}", pass.stderr);
+    assert!(pass.stderr.contains("PASS + COMPLETE"), "{}", pass.stderr);
+}
+
+#[test]
+fn compare_exits_4_when_an_item_not_comparable_counts_as_a_gap() {
+    // Models m and n; the baseline inventoried m only, so n is not comparable (Request).
+    let d = store(true);
+    let weights = blob(d.path(), b"n weights");
+    let license = blob(d.path(), b"MIT");
+    manifest(
+        d.path(),
+        "registry.ollama.ai/library/n/latest",
+        &[
+            (MODEL_MEDIA, weights.as_str()),
+            (LICENSE_MEDIA, license.as_str()),
+        ],
+    );
+    let a = inspect(d.path(), &[&"--model", &"m:latest"]);
+    let b = inspect(d.path(), &[]);
+    assert_eq!((a.code, b.code), (0, 0), "{}\n{}", a.stderr, b.stderr);
+    let dir = TempDir::new().unwrap();
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let plain = run(&[&"compare", &"--baseline", &pa, &"--current", &pb]);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    let diff: Diff = serde_json::from_str(&plain.stdout).unwrap();
+    assert!(!diff.not_comparable.is_empty(), "{diff:#?}");
+    assert_ne!(diff.evaluation.verdict(), Verdict::Fail, "{diff:#?}");
+    let DiffCompleteness::Incomplete { not_comparable, .. } = diff.evaluation.completeness() else {
+        panic!("{diff:#?}");
+    };
+    assert_eq!(
+        usize::try_from(*not_comparable).unwrap(),
+        diff.not_comparable.len()
+    );
+    assert!(
+        plain
+            .stderr
+            .contains(" + INCOMPLETE under default (sha256:"),
+        "{}",
+        plain.stderr
+    );
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &pa,
+        &"--current",
+        &pb,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+}
+
+#[test]
+fn compare_exits_4_when_an_input_is_incomplete() {
+    // Review P1: case 10's current session is incomplete, so the comparison is too.
+    let case = diff_case("10-check-now-open");
+    let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("WARN + INCOMPLETE under default (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        diff.evaluation.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Current),
+            not_comparable: 0
+        }
+    );
+    // One incomplete session as both inputs: no changes, and still incomplete.
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &current,
+        &"--current",
+        &current,
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("compare: 0 changes, 0 not comparable: PASS + INCOMPLETE under default"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        diff.evaluation.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Both),
+            not_comparable: 0
+        }
+    );
+    let r = run(&[&"compare", &"--baseline", &current, &"--current", &current]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}
+
+#[test]
+fn compare_judges_under_the_policy_s_compare_section() {
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "ci.toml",
+        "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[compare.changes.LayerChanged]\n\
+         action = \"ignore\"\nreason = \"The model is retrained nightly\"\n",
+    );
+    let case = diff_case("03-blob-digest-changed");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &case.join("baseline.json"),
+        &"--current",
+        &case.join("current.json"),
+        &"--policy",
+        &policy,
+        &"--fail-on",
+        &"warn",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(diff.evaluation.policy().id, "ci");
+    assert_eq!(diff.evaluation.verdict(), Verdict::Pass);
+    let layer = &diff.evaluation.changes()[&ChangeKind::LayerChanged];
+    assert_eq!(layer.action, CompareAction::Ignore);
+    assert_eq!(layer.source.as_str(), "policy:compare.changes.LayerChanged");
+    assert_eq!(
+        layer.reason.as_deref(),
+        Some("The model is retrained nightly")
+    );
+    assert!(
+        r.stderr.contains("PASS + COMPLETE under ci (sha256:"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn compare_names_a_policy_that_does_not_load() {
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "typo.toml",
+        "schema = \"sigil-policy/1\"\nname = \"t\"\n\n[compare.changes.LayerChanges]\n\
+         action = \"warn\"\n",
+    );
+    let s = diff_case("01-identical").join("baseline.json");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &s,
+        &"--current",
+        &s,
+        &"--policy",
+        &policy,
+    ]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.contains("typo.toml"), "{}", r.stderr);
+    assert!(r.stderr.contains("LayerChanges"), "{}", r.stderr);
+    assert!(r.stdout.is_empty());
+}
+
+#[test]
+fn compare_never_writes_its_policy() {
+    let dir = TempDir::new().unwrap();
+    let text = "schema = \"sigil-policy/1\"\nname = \"t\"\n";
+    let policy = write(dir.path(), "p.toml", text);
+    let s = diff_case("01-identical").join("baseline.json");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &s,
+        &"--current",
+        &s,
+        &"--policy",
+        &policy,
+        &"--out",
+        &policy,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("is the input"), "{}", r.stderr);
+    assert_eq!(fs::read_to_string(&policy).unwrap(), text);
+    let link = dir.path().join("link.toml");
+    fs::hard_link(&policy, &link).unwrap();
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &s,
+        &"--current",
+        &s,
+        &"--policy",
+        &policy,
+        &"--out",
+        &link,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("hard link"), "{}", r.stderr);
+    assert_eq!(fs::read_to_string(&policy).unwrap(), text);
 }
