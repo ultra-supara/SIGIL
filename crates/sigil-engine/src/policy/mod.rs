@@ -14,6 +14,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use sha2::{Digest, Sha256};
+use sigil_model::diff::{
+    Cause, ChangeKind, ChangeTreatment, CompareAction, CompareRules, NotComparableTreatment,
+};
 use sigil_model::{
     Action, AssumptionAcceptance, AssumptionId, AuditScope, CheckId, ComponentKey, Date,
     FeatureKey, KnowledgeKind, KnowledgeRef, Mode, OqTreatment, PolicyRuleRef, RuleId, Sha256Hex,
@@ -112,6 +115,10 @@ pub struct Policy {
     pub deny: Vec<ComponentDeny>,
     /// The capabilities denied (`[[capabilities.deny]]`, #51), in file order.
     pub capabilities: Vec<CapabilityDeny>,
+    /// `[compare]` (#16, PR-16b): the action of every change kind of `sigil compare` and the
+    /// treatment of every cause of an item not comparable, the defaults where the file names
+    /// none, with this policy's knowledge entry. Nothing but `sigil compare` reads it.
+    pub compare: CompareRules,
     /// The decision sources, validated when the policy is loaded so that evaluation cannot fail.
     pub(crate) sources: Sources,
 }
@@ -261,6 +268,14 @@ pub enum PolicyError {
     /// The embedded capability table is invalid (`the_embedded_signatures_parse` rules it out).
     Signatures(String),
     BadId(String),
+    /// A `[compare.changes]` key that is not a change kind of `sigil-diff/1`.
+    UnknownChangeKind(String),
+    /// A `[compare.not_comparable]` key that is not a cause.
+    UnknownCause(String),
+    /// `decided` for a change kind whose changes carry no decisions.
+    DecidedNotAllowed(String),
+    /// The resolved compare table is incomplete (a SIGIL bug: the defaults cover every entry).
+    CompareTable(String),
 }
 
 impl fmt::Display for PolicyError {
@@ -322,6 +337,19 @@ impl fmt::Display for PolicyError {
             DuplicateCapabilityDeny(c) => write!(f, "capabilities.deny names {c:?} twice"),
             Signatures(m) => write!(f, "the embedded capability table is invalid: {m}"),
             BadId(m) => write!(f, "{m}"),
+            UnknownChangeKind(k) => write!(
+                f,
+                "compare.changes {k:?}: not a change kind of sigil-diff/1 (sigil rules lists them)"
+            ),
+            UnknownCause(c) => write!(
+                f,
+                "compare.not_comparable {c:?}: not a cause (Coverage, Request, or Policy)"
+            ),
+            DecidedNotAllowed(k) => write!(
+                f,
+                "compare.changes {k:?}: \"decided\" applies to FindingNew and ViolationNew only"
+            ),
+            CompareTable(m) => write!(f, "the compare table is incomplete: {m}"),
         }
     }
 }
@@ -377,12 +405,7 @@ impl Policy {
             })
             .collect::<Result<_, _>>()?;
         let oq = raw.open_questions;
-        let treatment = match oq.default {
-            raw::RawTreatment::CountAsGap => OqTreatment::CountAsGap,
-            raw::RawTreatment::Warn => OqTreatment::Warn,
-            raw::RawTreatment::Fail => OqTreatment::Fail,
-            raw::RawTreatment::Ignore => OqTreatment::Ignore,
-        };
+        let treatment = oq_treatment(oq.default);
         let open_questions = OqPolicy {
             treatment,
             reason: reason(
@@ -532,9 +555,17 @@ impl Policy {
                 })
                 .collect::<Result<_, PolicyError>>()?,
         };
+        let sha256 = sha256_hex(text)?;
+        let knowledge = KnowledgeRef {
+            kind: KnowledgeKind::Policy,
+            id: raw.name.clone(),
+            version: SCHEMA.to_string(),
+            sha256: sha256.clone(),
+        };
+        let compare = compare_rules(raw.compare, knowledge)?;
         Ok(Policy {
             name: raw.name,
-            sha256: sha256_hex(text)?,
+            sha256,
             audit,
             observe_audit,
             active_audit,
@@ -552,6 +583,7 @@ impl Policy {
             },
             deny,
             capabilities,
+            compare,
             sources,
         })
     }
@@ -639,6 +671,69 @@ fn action(raw: raw::RawAction) -> Action {
         raw::RawAction::Warn => Action::Warn,
         raw::RawAction::Ignore => Action::Ignore,
     }
+}
+
+fn oq_treatment(raw: raw::RawTreatment) -> OqTreatment {
+    match raw {
+        raw::RawTreatment::CountAsGap => OqTreatment::CountAsGap,
+        raw::RawTreatment::Warn => OqTreatment::Warn,
+        raw::RawTreatment::Fail => OqTreatment::Fail,
+        raw::RawTreatment::Ignore => OqTreatment::Ignore,
+    }
+}
+
+/// `[compare]` (#16, PR-16b): the defaults, then each entry of the file, with its source
+/// (`policy:compare.changes.<Kind>`, `policy:compare.not_comparable.<Cause>`) and reason.
+fn compare_rules(raw: raw::RawCompare, policy: KnowledgeRef) -> Result<CompareRules, PolicyError> {
+    let defaults = CompareRules::defaults(policy.clone());
+    let mut changes = defaults.changes().clone();
+    for (name, entry) in raw.changes {
+        let kind = ChangeKind::from_name(&name)
+            .ok_or_else(|| PolicyError::UnknownChangeKind(name.clone()))?;
+        let action = match entry.action {
+            raw::RawCompareAction::Fail => CompareAction::Fail,
+            raw::RawCompareAction::Warn => CompareAction::Warn,
+            raw::RawCompareAction::Ignore => CompareAction::Ignore,
+            raw::RawCompareAction::Decided if kind.takes_decided() => CompareAction::Decided,
+            raw::RawCompareAction::Decided => return Err(PolicyError::DecidedNotAllowed(name)),
+        };
+        let at = format!("compare.changes.{name:?}");
+        let reason = reason(entry.reason, action == CompareAction::Ignore, &at)?;
+        let source = id(PolicyRuleRef::new(format!(
+            "policy:compare.changes.{}",
+            kind.name()
+        )))?;
+        changes.insert(
+            kind,
+            ChangeTreatment {
+                action,
+                source,
+                reason,
+            },
+        );
+    }
+    let mut not_comparable = defaults.not_comparable().clone();
+    for (name, entry) in raw.not_comparable {
+        let cause =
+            Cause::from_name(&name).ok_or_else(|| PolicyError::UnknownCause(name.clone()))?;
+        let treatment = oq_treatment(entry.treatment);
+        let at = format!("compare.not_comparable.{name:?}");
+        let reason = reason(entry.reason, treatment == OqTreatment::Ignore, &at)?;
+        let source = id(PolicyRuleRef::new(format!(
+            "policy:compare.not_comparable.{}",
+            cause.name()
+        )))?;
+        not_comparable.insert(
+            cause,
+            NotComparableTreatment {
+                treatment,
+                source,
+                reason,
+            },
+        );
+    }
+    CompareRules::new(policy, changes, not_comparable)
+        .map_err(|e| PolicyError::CompareTable(e.to_string()))
 }
 
 /// The trimmed reason; required (non-blank) when `required`.

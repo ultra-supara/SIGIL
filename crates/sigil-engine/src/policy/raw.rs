@@ -24,6 +24,9 @@ pub(super) struct RawPolicy {
     /// Added in #51: optional, so older policy files load unchanged.
     #[serde(default)]
     pub capabilities: RawCapabilities,
+    /// Added in #16 (PR-16b): optional, so older policy files load unchanged.
+    #[serde(default)]
+    pub compare: RawCompare,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -175,4 +178,39 @@ pub(super) struct RawCapabilityDeny {
     pub feature: String,
     pub action: RawAction,
     pub reason: String,
+}
+
+/// `[compare]`: actions on the changes of `sigil compare`, by change kind, and treatments of the
+/// items not comparable, by cause. Keys are checked when the policy is loaded.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawCompare {
+    #[serde(default)]
+    pub changes: BTreeMap<String, RawCompareChange>,
+    #[serde(default)]
+    pub not_comparable: BTreeMap<String, RawNotComparable>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RawCompareAction {
+    Fail,
+    Warn,
+    Ignore,
+    Decided,
+}
+
+/// No `expires`: a diff records no time to judge it at.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawCompareChange {
+    pub action: RawCompareAction,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RawNotComparable {
+    pub treatment: RawTreatment,
+    pub reason: Option<String>,
 }
