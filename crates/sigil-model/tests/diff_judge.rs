@@ -226,17 +226,45 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
         Err(RulesError::Decided(ChangeKind::LayerChanged))
     );
     assert_eq!(CompareRules::new(builtin_policy(), changes, causes), Ok(r));
+    assert_eq!(
+        RulesError::MissingKind(ChangeKind::BindNarrowed).to_string(),
+        "no action for BindNarrowed"
+    );
+    assert_eq!(
+        RulesError::MissingCause(Cause::Policy).to_string(),
+        "no treatment for Policy"
+    );
+    assert_eq!(
+        RulesError::Decided(ChangeKind::LayerChanged).to_string(),
+        "LayerChanged carries no decisions, so it cannot be decided"
+    );
+}
+
+const COMPLETE: Completeness = Completeness::Complete;
+
+/// A recorded completeness with one required check open.
+fn incomplete() -> Completeness {
+    Completeness::Incomplete {
+        missing_required: vec![id(LICENSE)],
+        gaps: vec![],
+    }
+}
+
+/// `r`'s judgment of `changes` and `items` between two complete inputs.
+fn judged(r: &CompareRules, changes: &[Change], items: &[NotComparable]) -> Evaluation {
+    r.judge(&COMPLETE, &COMPLETE, changes, items)
 }
 
 #[test]
 fn nothing_to_judge_is_a_pass_and_complete() {
     let r = builtin_rules();
-    let e = r.judge(&[], &[]);
-    assert_eq!(e.verdict, Verdict::Pass);
-    assert_eq!(e.completeness, DiffCompleteness::Complete);
-    assert_eq!(e.policy, builtin_policy());
-    assert_eq!(&e.changes, r.changes());
-    assert_eq!(&e.not_comparable, r.not_comparable());
+    let e = judged(&r, &[], &[]);
+    assert_eq!(e.verdict(), Verdict::Pass);
+    assert_eq!(e.completeness(), &DiffCompleteness::Complete);
+    assert_eq!(e.policy(), &builtin_policy());
+    assert_eq!(e.rules(), &r);
+    assert_eq!(e.changes(), r.changes());
+    assert_eq!(e.not_comparable(), r.not_comparable());
 }
 
 #[test]
@@ -245,32 +273,35 @@ fn a_change_weighs_its_kind_s_action() {
     let layer = change_of(ChangeKind::LayerChanged);
     let closed = change_of(ChangeKind::CheckClosed);
     let added = change_of(ChangeKind::ModelAdded);
-    assert_eq!(r.judge(&[closed.clone()], &[]).verdict, Verdict::Pass);
     assert_eq!(
-        r.judge(&[closed.clone(), added.clone()], &[]).verdict,
+        judged(&r, std::slice::from_ref(&closed), &[]).verdict(),
+        Verdict::Pass
+    );
+    assert_eq!(
+        judged(&r, &[closed.clone(), added.clone()], &[]).verdict(),
         Verdict::Warn
     );
     assert_eq!(
-        r.judge(&[added.clone(), layer.clone()], &[]).verdict,
+        judged(&r, &[added.clone(), layer.clone()], &[]).verdict(),
         Verdict::Fail
     );
-    let e = r.judge(&[layer.clone()], &[]);
-    assert_eq!(e.weigh(&layer), Some((Action::Fail, false)));
-    assert_eq!(e.weigh(&closed), Some((Action::Ignore, false)));
+    let e = judged(&r, std::slice::from_ref(&layer), &[]);
+    assert_eq!(e.weigh(&layer), (Action::Fail, false));
+    assert_eq!(e.weigh(&closed), (Action::Ignore, false));
+    assert_eq!(r.weigh(&added), (Action::Warn, false));
     let lenient = with_action(&r, ChangeKind::LayerChanged, CompareAction::Ignore);
-    assert_eq!(lenient.judge(&[layer], &[]).verdict, Verdict::Pass);
+    assert_eq!(judged(&lenient, &[layer], &[]).verdict(), Verdict::Pass);
 }
 
 #[test]
 fn decided_weighs_the_item_s_own_decisions() {
     let r = builtin_rules();
     assert_eq!(
-        r.judge(&[finding_new(&[Action::Ignore])], &[]).verdict,
+        judged(&r, &[finding_new(&[Action::Ignore])], &[]).verdict(),
         Verdict::Pass
     );
     assert_eq!(
-        r.judge(&[finding_new(&[Action::Ignore, Action::Warn])], &[])
-            .verdict,
+        judged(&r, &[finding_new(&[Action::Ignore, Action::Warn])], &[]).verdict(),
         Verdict::Warn
     );
     let violation = Change::ViolationNew {
@@ -279,15 +310,26 @@ fn decided_weighs_the_item_s_own_decisions() {
         current: vec![],
         decisions: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
     };
-    let e = r.judge(&[violation.clone()], &[]);
-    assert_eq!(e.verdict, Verdict::Fail);
-    assert_eq!(e.weigh(&violation), Some((Action::Fail, true)));
+    let e = judged(&r, std::slice::from_ref(&violation), &[]);
+    assert_eq!(e.verdict(), Verdict::Fail);
+    assert_eq!(e.weigh(&violation), (Action::Fail, true));
     // An item without decisions is never lighter than it could be.
-    assert_eq!(r.judge(&[finding_new(&[])], &[]).verdict, Verdict::Fail);
+    assert_eq!(
+        judged(&r, &[finding_new(&[])], &[]).verdict(),
+        Verdict::Fail
+    );
+    let bare = Change::ViolationNew {
+        policy_rule: id("policy:components.deny.ggml-base"),
+        subject: SubjectKey::Port(11434),
+        current: vec![],
+        decisions: vec![],
+    };
+    assert_eq!(r.weigh(&bare), (Action::Fail, true));
+    assert_eq!(judged(&r, &[bare], &[]).verdict(), Verdict::Fail);
     // A policy may weigh new findings itself.
     let strict = with_action(&r, ChangeKind::FindingNew, CompareAction::Fail);
     assert_eq!(
-        strict.judge(&[finding_new(&[Action::Ignore])], &[]).verdict,
+        judged(&strict, &[finding_new(&[Action::Ignore])], &[]).verdict(),
         Verdict::Fail
     );
 }
@@ -300,33 +342,190 @@ fn each_treatment_of_an_item_not_comparable() {
         not_comparable(Cause::Coverage),
         not_comparable(Cause::Request),
     ];
-    let e = r.judge(&[], &items);
-    assert_eq!(e.verdict, Verdict::Pass);
+    let e = judged(&r, &[], &items);
+    assert_eq!(e.verdict(), Verdict::Pass);
     assert_eq!(
-        e.completeness,
-        DiffCompleteness::Incomplete { not_comparable: 3 }
+        e.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: None,
+            not_comparable: 3
+        }
     );
-    assert_eq!(e.treatment(&items[2]), Some(OqTreatment::CountAsGap));
+    assert_eq!(e.treatment(&items[2]), OqTreatment::CountAsGap);
+    assert_eq!(r.treatment(Cause::Policy), OqTreatment::CountAsGap);
     let warn = with_treatment(&r, Cause::Request, OqTreatment::Warn);
-    let e = warn.judge(&[], &items);
-    assert_eq!(e.verdict, Verdict::Warn);
+    let e = judged(&warn, &[], &items);
+    assert_eq!(e.verdict(), Verdict::Warn);
     assert_eq!(
-        e.completeness,
-        DiffCompleteness::Incomplete { not_comparable: 2 }
+        e.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: None,
+            not_comparable: 2
+        }
     );
     let fail = with_treatment(&r, Cause::Coverage, OqTreatment::Fail);
-    let e = fail.judge(&[], &items);
-    assert_eq!(e.verdict, Verdict::Fail);
+    let e = judged(&fail, &[], &items);
+    assert_eq!(e.verdict(), Verdict::Fail);
     assert_eq!(
-        e.completeness,
-        DiffCompleteness::Incomplete { not_comparable: 1 }
+        e.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: None,
+            not_comparable: 1
+        }
     );
     let ignore = with_treatment(
         &with_treatment(&r, Cause::Coverage, OqTreatment::Ignore),
         Cause::Request,
         OqTreatment::Ignore,
     );
-    let e = ignore.judge(&[], &items);
-    assert_eq!(e.verdict, Verdict::Pass);
-    assert_eq!(e.completeness, DiffCompleteness::Complete);
+    let e = judged(&ignore, &[], &items);
+    assert_eq!(e.verdict(), Verdict::Pass);
+    assert_eq!(e.completeness(), &DiffCompleteness::Complete);
+}
+
+#[test]
+fn an_item_of_another_policy_takes_its_cause_s_treatment() {
+    let r = builtin_rules();
+    let other = not_comparable(Cause::Policy);
+    let coverage = not_comparable(Cause::Coverage);
+    let fail = with_treatment(&r, Cause::Policy, OqTreatment::Fail);
+    let e = judged(&fail, &[], std::slice::from_ref(&other));
+    assert_eq!(e.treatment(&other), OqTreatment::Fail);
+    assert_eq!(e.verdict(), Verdict::Fail);
+    assert_eq!(e.completeness(), &DiffCompleteness::Complete);
+    // The other causes keep theirs.
+    let e = judged(&fail, &[], &[other.clone(), coverage.clone()]);
+    assert_eq!(e.treatment(&coverage), OqTreatment::CountAsGap);
+    assert_eq!(e.verdict(), Verdict::Fail);
+    assert_eq!(
+        e.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: None,
+            not_comparable: 1
+        }
+    );
+    let ignore = with_treatment(&r, Cause::Policy, OqTreatment::Ignore);
+    let e = judged(&ignore, &[], &[other]);
+    assert_eq!(e.verdict(), Verdict::Pass);
+    assert_eq!(e.completeness(), &DiffCompleteness::Complete);
+}
+
+#[test]
+fn an_incomplete_input_makes_the_diff_incomplete() {
+    let r = builtin_rules();
+    for (baseline, current, side) in [
+        (incomplete(), COMPLETE, Side::Baseline),
+        (COMPLETE, incomplete(), Side::Current),
+        (incomplete(), incomplete(), Side::Both),
+    ] {
+        let e = r.judge(&baseline, &current, &[], &[]);
+        // Completeness never changes the verdict.
+        assert_eq!(e.verdict(), Verdict::Pass);
+        assert_eq!(
+            e.completeness(),
+            &DiffCompleteness::Incomplete {
+                inputs: Some(side),
+                not_comparable: 0
+            }
+        );
+    }
+    let e = r.judge(
+        &COMPLETE,
+        &incomplete(),
+        &[],
+        &[not_comparable(Cause::Coverage)],
+    );
+    assert_eq!(
+        e.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Current),
+            not_comparable: 1
+        }
+    );
+}
+
+#[test]
+fn the_judgment_does_not_depend_on_the_lists_order() {
+    let r = with_treatment(&builtin_rules(), Cause::Request, OqTreatment::Warn);
+    let changes = every_change();
+    let items = [
+        not_comparable(Cause::Coverage),
+        not_comparable(Cause::Request),
+        not_comparable(Cause::Policy),
+    ];
+    let forward = r.judge(&incomplete(), &COMPLETE, &changes, &items);
+    assert_eq!(forward.verdict(), Verdict::Fail);
+    assert_eq!(
+        forward.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Baseline),
+            not_comparable: 2
+        }
+    );
+    let mut reversed_changes = changes;
+    reversed_changes.reverse();
+    let mut reversed_items = items.to_vec();
+    reversed_items.reverse();
+    assert_eq!(
+        r.judge(&incomplete(), &COMPLETE, &reversed_changes, &reversed_items),
+        forward
+    );
+}
+
+#[test]
+fn an_evaluation_reads_back_only_with_a_complete_table() {
+    let r = builtin_rules();
+    let e = judged(&r, &[change_of(ChangeKind::LayerChanged)], &[]);
+    let json = serde_json::to_value(&e).unwrap();
+    // Flat: the table's parts, then the result.
+    let keys: std::collections::BTreeSet<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "changes",
+            "completeness",
+            "not_comparable",
+            "policy",
+            "verdict"
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(json["verdict"], serde_json::json!("Fail"));
+    assert_eq!(
+        serde_json::from_value::<Evaluation>(json.clone()).unwrap(),
+        e
+    );
+    let mut short = json.clone();
+    short["changes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("BindNarrowed");
+    let err = serde_json::from_value::<Evaluation>(short)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no action for BindNarrowed"), "{err}");
+    let mut no_cause = json.clone();
+    no_cause["not_comparable"]
+        .as_object_mut()
+        .unwrap()
+        .remove("Policy");
+    let err = serde_json::from_value::<Evaluation>(no_cause)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no treatment for Policy"), "{err}");
+    let mut misplaced = json.clone();
+    misplaced["changes"]["LayerChanged"]["action"] = serde_json::json!("Decided");
+    let err = serde_json::from_value::<Evaluation>(misplaced)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("LayerChanged carries no decisions"), "{err}");
+    let mut extra = json;
+    extra["extra"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<Evaluation>(extra).is_err());
 }

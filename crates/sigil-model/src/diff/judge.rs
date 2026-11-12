@@ -2,17 +2,18 @@
 //!
 //! A compare policy never changes what changed. It gives each [`ChangeKind`] an action and each
 //! [`Cause`] of an item not comparable a treatment, and so the diff a verdict and a completeness,
-//! as a session's policy gives its findings decisions and the session an outcome.
-//! [`CompareRules`] is a complete table (every kind, every cause), so judging is total.
-//! [`Evaluation`] is what a diff records of it.
+//! as a session's policy gives its findings decisions and the session an outcome. A diff is
+//! complete only when both its inputs are: what a session could not see, a comparison with it
+//! cannot see either. [`CompareRules`] is a complete table (every kind, every cause), so judging
+//! is total. [`Evaluation`] is what a diff records of it, and it reads back only whole.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::diff::{Cause, Change, ChangeKind, NotComparable};
-use crate::finding::{Action, OqTreatment, PolicyDecision, Verdict};
+use crate::diff::{Cause, Change, ChangeKind, NotComparable, Side};
+use crate::finding::{Action, Completeness, OqTreatment, PolicyDecision, Verdict};
 use crate::id::PolicyRuleRef;
 use crate::session::KnowledgeRef;
 
@@ -49,31 +50,67 @@ pub struct NotComparableTreatment {
     pub reason: Option<String>,
 }
 
-/// Whether every difference could be judged, as the policy counts it.
+/// Whether the comparison saw everything it judged: both inputs complete, and no item not
+/// comparable counted as a gap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum DiffCompleteness {
     Complete,
     Incomplete {
+        /// The inputs whose own recorded completeness is `Incomplete`; `None` when both are
+        /// complete.
+        inputs: Option<Side>,
         /// The items not comparable whose cause is treated `CountAsGap`.
         not_comparable: u32,
     },
 }
 
-/// How a diff was judged: the policy, its whole table, and the result.
+/// How a diff was judged: the policy's complete table, and the result. Built by
+/// [`CompareRules::judge`]. Read back through [`CompareRules::new`]: a document whose table
+/// misses a kind or a cause, or gives `Decided` to a kind without decisions, does not load. The
+/// JSON form is flat: `policy`, `changes` and `not_comparable` (the table), then `verdict` and
+/// `completeness`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "EvaluationRecord", into = "EvaluationRecord")]
 pub struct Evaluation {
-    /// The policy's knowledge entry, as a session records the policy it applied.
-    pub policy: KnowledgeRef,
-    /// Every change kind's action, after the policy's entries.
-    pub changes: BTreeMap<ChangeKind, ChangeTreatment>,
-    /// Every cause's treatment, after the policy's entries.
-    pub not_comparable: BTreeMap<Cause, NotComparableTreatment>,
-    /// The maximum weight of the changes, and of the items not comparable treated `Warn` or
-    /// `Fail`; `Pass` without any.
-    pub verdict: Verdict,
-    pub completeness: DiffCompleteness,
+    rules: CompareRules,
+    verdict: Verdict,
+    completeness: DiffCompleteness,
+}
+
+/// The JSON form of an [`Evaluation`].
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationRecord {
+    policy: KnowledgeRef,
+    changes: BTreeMap<ChangeKind, ChangeTreatment>,
+    not_comparable: BTreeMap<Cause, NotComparableTreatment>,
+    verdict: Verdict,
+    completeness: DiffCompleteness,
+}
+
+impl TryFrom<EvaluationRecord> for Evaluation {
+    type Error = RulesError;
+
+    fn try_from(record: EvaluationRecord) -> Result<Evaluation, RulesError> {
+        Ok(Evaluation {
+            rules: CompareRules::new(record.policy, record.changes, record.not_comparable)?,
+            verdict: record.verdict,
+            completeness: record.completeness,
+        })
+    }
+}
+
+impl From<Evaluation> for EvaluationRecord {
+    fn from(e: Evaluation) -> EvaluationRecord {
+        EvaluationRecord {
+            policy: e.rules.policy,
+            changes: e.rules.changes,
+            not_comparable: e.rules.not_comparable,
+            verdict: e.verdict,
+            completeness: e.completeness,
+        }
+    }
 }
 
 /// A complete compare table, built by [`CompareRules::new`] or [`CompareRules::defaults`]:
@@ -231,35 +268,71 @@ impl CompareRules {
         &self.not_comparable
     }
 
-    /// The evaluation of `changes` and `not_comparable` under this table. Pure, and independent
-    /// of the lists' order.
-    pub fn judge(&self, changes: &[Change], not_comparable: &[NotComparable]) -> Evaluation {
+    /// What `change` weighs: its kind's action, or for `Decided` the maximum action of its own
+    /// decisions (`Fail` without any: an item whose decisions are unknown is never lighter than
+    /// it could be), and whether its decisions gave it.
+    pub fn weigh(&self, change: &Change) -> (Action, bool) {
+        // Every kind has an entry (`new`, `defaults`). The fallback is never taken, and it would
+        // not make a change lighter.
+        let action = self
+            .changes
+            .get(&change.kind())
+            .map_or(CompareAction::Fail, |t| t.action);
+        match action {
+            CompareAction::Fail => (Action::Fail, false),
+            CompareAction::Warn => (Action::Warn, false),
+            CompareAction::Ignore => (Action::Ignore, false),
+            CompareAction::Decided => (decided(change.decisions().unwrap_or(&[])), true),
+        }
+    }
+
+    /// How the items not comparable for `cause` count.
+    pub fn treatment(&self, cause: Cause) -> OqTreatment {
+        // Every cause has an entry; the fallback is never taken.
+        self.not_comparable
+            .get(&cause)
+            .map_or(OqTreatment::CountAsGap, |t| t.treatment)
+    }
+
+    /// The evaluation of a diff under this table: its changes, its items not comparable, and the
+    /// recorded completeness of its two inputs. Pure, and independent of the lists' order. The
+    /// inputs' completeness never changes the verdict, as a gap never changes a session's.
+    pub fn judge(
+        &self,
+        baseline: &Completeness,
+        current: &Completeness,
+        changes: &[Change],
+        not_comparable: &[NotComparable],
+    ) -> Evaluation {
         let mut verdict = Verdict::Pass;
         for change in changes {
-            if let Some((action, _)) = weigh(&self.changes, change) {
-                verdict = verdict.max(verdict_of(action));
-            }
+            verdict = verdict.max(verdict_of(self.weigh(change).0));
         }
         let mut gaps = 0usize;
         for item in not_comparable {
-            match self.not_comparable.get(&item.cause).map(|t| t.treatment) {
-                Some(OqTreatment::CountAsGap) => gaps += 1,
-                Some(OqTreatment::Warn) => verdict = verdict.max(Verdict::Warn),
-                Some(OqTreatment::Fail) => verdict = Verdict::Fail,
-                Some(OqTreatment::Ignore) | None => {}
+            match self.treatment(item.cause) {
+                OqTreatment::CountAsGap => gaps += 1,
+                OqTreatment::Warn => verdict = verdict.max(Verdict::Warn),
+                OqTreatment::Fail => verdict = Verdict::Fail,
+                OqTreatment::Ignore => {}
             }
         }
-        let completeness = if gaps == 0 {
+        let inputs = match (is_incomplete(baseline), is_incomplete(current)) {
+            (true, true) => Some(Side::Both),
+            (true, false) => Some(Side::Baseline),
+            (false, true) => Some(Side::Current),
+            (false, false) => None,
+        };
+        let completeness = if inputs.is_none() && gaps == 0 {
             DiffCompleteness::Complete
         } else {
             DiffCompleteness::Incomplete {
+                inputs,
                 not_comparable: u32::try_from(gaps).unwrap_or(u32::MAX),
             }
         };
         Evaluation {
-            policy: self.policy.clone(),
-            changes: self.changes.clone(),
-            not_comparable: self.not_comparable.clone(),
+            rules: self.clone(),
             verdict,
             completeness,
         }
@@ -267,42 +340,59 @@ impl CompareRules {
 }
 
 impl Evaluation {
-    /// What `change` weighs under the recorded table, and whether its own decisions gave it.
-    /// `None` when the table has no entry for its kind (a document's table may be short).
-    pub fn weigh(&self, change: &Change) -> Option<(Action, bool)> {
-        weigh(&self.changes, change)
+    /// The table the diff was judged by.
+    pub fn rules(&self) -> &CompareRules {
+        &self.rules
     }
 
-    /// How an item not comparable counts under the recorded table; `None` without an entry.
-    pub fn treatment(&self, item: &NotComparable) -> Option<OqTreatment> {
-        self.not_comparable.get(&item.cause).map(|t| t.treatment)
+    /// The policy the table is from.
+    pub fn policy(&self) -> &KnowledgeRef {
+        self.rules.policy()
+    }
+
+    /// Every kind's action.
+    pub fn changes(&self) -> &BTreeMap<ChangeKind, ChangeTreatment> {
+        self.rules.changes()
+    }
+
+    /// Every cause's treatment.
+    pub fn not_comparable(&self) -> &BTreeMap<Cause, NotComparableTreatment> {
+        self.rules.not_comparable()
+    }
+
+    /// The maximum weight of the changes, and of the items not comparable treated `Warn` or
+    /// `Fail`; `Pass` without any.
+    pub fn verdict(&self) -> Verdict {
+        self.verdict
+    }
+
+    /// The inputs that are incomplete, and the items not comparable counted as gaps.
+    pub fn completeness(&self) -> &DiffCompleteness {
+        &self.completeness
+    }
+
+    /// What `change` weighs under the table ([`CompareRules::weigh`]).
+    pub fn weigh(&self, change: &Change) -> (Action, bool) {
+        self.rules.weigh(change)
+    }
+
+    /// How an item not comparable counts under the table.
+    pub fn treatment(&self, item: &NotComparable) -> OqTreatment {
+        self.rules.treatment(item.cause)
     }
 }
 
-/// `change`'s kind's action, or for `Decided` the maximum action of its decisions, and whether
-/// it was decided.
-fn weigh(table: &BTreeMap<ChangeKind, ChangeTreatment>, change: &Change) -> Option<(Action, bool)> {
-    let treatment = table.get(&change.kind())?;
-    Some(match treatment.action {
-        CompareAction::Fail => (Action::Fail, false),
-        CompareAction::Warn => (Action::Warn, false),
-        CompareAction::Ignore => (Action::Ignore, false),
-        CompareAction::Decided => (decided(change.decisions().unwrap_or(&[])), true),
-    })
+fn is_incomplete(c: &Completeness) -> bool {
+    matches!(c, Completeness::Incomplete { .. })
 }
 
-/// The maximum action of `decisions`. Without any, `Fail`: an item whose decisions are unknown is
-/// never lighter than it could be.
+/// The maximum action of `decisions`, ordered as the verdicts they give (`Ignore < Warn <
+/// Fail`). Without any, `Fail`.
 fn decided(decisions: &[PolicyDecision]) -> Action {
-    let rank = |a: Action| match a {
-        Action::Ignore => 0,
-        Action::Warn => 1,
-        Action::Fail => 2,
-    };
     decisions
         .iter()
         .map(|d| d.action)
-        .max_by_key(|a| rank(*a))
+        .max_by_key(|a| verdict_of(*a))
         .unwrap_or(Action::Fail)
 }
 
