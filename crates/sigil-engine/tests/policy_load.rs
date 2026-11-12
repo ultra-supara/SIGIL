@@ -471,6 +471,14 @@ fn the_documented_example_loads() {
     assert_eq!(policy.rules.len(), 2);
     assert_eq!(policy.deny.len(), 1);
     assert_eq!(policy.capabilities.len(), 1);
+    assert_eq!(
+        policy.compare.changes()[&ChangeKind::ModelAdded].action,
+        CompareAction::Ignore
+    );
+    assert_eq!(
+        policy.compare.not_comparable()[&Cause::Request].treatment,
+        OqTreatment::Warn
+    );
 }
 
 #[test]

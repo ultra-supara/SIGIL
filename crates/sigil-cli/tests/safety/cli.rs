@@ -1268,6 +1268,7 @@ fn compare_reads_only_its_inputs_and_writes_only_its_out() {
     assert_clean(&r, &policy(&fx, &[&diff], &["runtime"]));
 }
 
+/// #16: `compare --policy` also reads the policy file, and nothing else under `target/`.
 #[test]
 fn compare_with_a_policy_reads_only_its_inputs_and_its_policy() {
     if !require_tracer("compare_with_a_policy_reads_only_its_inputs_and_its_policy") {
