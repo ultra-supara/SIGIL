@@ -400,6 +400,17 @@ string_id!(
     PolicyRuleRef,
     check_plain
 );
+
+impl PolicyRuleRef {
+    /// `<prefix><name>` from two of SIGIL's own static names. Both are non-empty plain text
+    /// without control characters or surrounding whitespace, which [`PolicyRuleRef::new`]
+    /// always accepts, so this cannot fail. For the sources of the built-in compare table
+    /// (`default:compare.<Kind>`).
+    pub(crate) fn from_static(prefix: &'static str, name: &'static str) -> PolicyRuleRef {
+        PolicyRuleRef(format!("{prefix}{name}"))
+    }
+}
+
 string_id!(
     /// A requested audit scope, e.g. `backend_loader`.
     AuditScope,

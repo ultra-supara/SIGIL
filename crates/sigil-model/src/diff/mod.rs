@@ -13,6 +13,7 @@
 
 mod compare;
 mod files;
+mod judge;
 mod judged;
 mod listeners;
 mod markdown;
@@ -39,6 +40,10 @@ use crate::session::{KnowledgeRef, Mode, ToolInfo};
 use crate::text::UntrustedText;
 
 pub use compare::compare;
+pub use judge::{
+    ChangeTreatment, CompareAction, CompareRules, DiffCompleteness, Evaluation,
+    NotComparableTreatment, RulesError,
+};
 pub use markdown::markdown;
 
 /// What changed between two sessions (`sigil-diff/1`).

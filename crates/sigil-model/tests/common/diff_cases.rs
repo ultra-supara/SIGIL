@@ -18,6 +18,26 @@ pub fn example_tool() -> ToolInfo {
     }
 }
 
+/// The built-in policy's knowledge entry, as `sigil_engine::policy::Policy::builtin_default()`
+/// gives it: name `default`, version `sigil-policy/1`, and the SHA-256 of `default.toml`. The
+/// fixtures are judged under it, as `sigil compare` without `--policy` judges them; the CLI test
+/// `the_fixture_diffs_are_judged_under_the_built_in_policy` keeps the two equal.
+pub fn builtin_policy() -> KnowledgeRef {
+    KnowledgeRef {
+        kind: KnowledgeKind::Policy,
+        id: "default".to_string(),
+        version: "sigil-policy/1".to_string(),
+        sha256: id(&sha256_hex(include_str!(
+            "../../../sigil-engine/policies/default.toml"
+        ))),
+    }
+}
+
+/// The built-in policy's compare table: the defaults.
+pub fn builtin_rules() -> CompareRules {
+    CompareRules::defaults(builtin_policy())
+}
+
 /// The SHA-256 of `s`'s canonical JSON: what a diff names it by.
 pub fn session_sha256(s: &Session) -> Sha256Hex {
     id(&sha256_hex(s.to_canonical_json().unwrap()))
