@@ -488,6 +488,41 @@ mod tests {
     }
 
     #[test]
+    fn findings_of_one_key_hold_their_distinct_decisions_in_canonical_order() {
+        let item = Item::Finding {
+            rule: RuleId::new("model.blob_missing").unwrap_or_else(|e| panic!("{e}")),
+            subject: SubjectKey::Port(11434),
+            at: String::new(),
+        };
+        let scope = Ref::Root(RootId::new("root:r").unwrap_or_else(|e| panic!("{e}")));
+        let decision = |action, source: &str| PolicyDecision {
+            action,
+            source: PolicyRuleRef::new(source).unwrap_or_else(|e| panic!("{e}")),
+            reason: None,
+            expires: None,
+        };
+        let warn = decision(Action::Warn, "default:model.blob_missing");
+        let fail = decision(Action::Fail, "policy:model.blob_missing");
+        let mut out = BTreeMap::new();
+        for (n, d) in [&fail, &warn, &fail].into_iter().enumerate() {
+            let entry = Entry {
+                scope: &scope,
+                root: None,
+                pointer: n,
+                decision: d,
+            };
+            add(&mut out, item.clone(), entry);
+        }
+        let [(_, judged)] = out.iter().collect::<Vec<_>>()[..] else {
+            panic!("one key");
+        };
+        assert_eq!(judged.pointers, [0, 1, 2]);
+        let mut want = vec![warn, fail];
+        want.sort_by_cached_key(key);
+        assert_eq!(judged.decisions, want);
+    }
+
+    #[test]
     fn a_slice_s_new_id_after_an_upgrade_does_not_split_its_finding() {
         let key = |s: SliceId| {
             let id = format!("finding:binary.example@{s}#2");

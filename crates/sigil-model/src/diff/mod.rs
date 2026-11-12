@@ -276,7 +276,8 @@ pub enum Change {
         baseline: CheckState,
         current: CheckState,
     },
-    /// A finding in the current session only. `decisions` are its distinct decisions there.
+    /// A finding in the current session only. `decisions` are the distinct decisions of the
+    /// current side's findings with this key, in canonical order (by JSON text).
     FindingNew {
         rule: RuleId,
         subject: SubjectKey,
@@ -302,8 +303,8 @@ pub enum Change {
         baseline_findings: Vec<FindingId>,
         current_findings: Vec<FindingId>,
     },
-    /// A policy violation in the current session only. `decisions` are its distinct decisions
-    /// there.
+    /// A policy violation in the current session only. `decisions` are the distinct decisions of
+    /// the current side's violations with this key, in canonical order (by JSON text).
     ViolationNew {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,

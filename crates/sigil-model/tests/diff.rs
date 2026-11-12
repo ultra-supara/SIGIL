@@ -1265,6 +1265,41 @@ fn a_decision_change_s_pointers_are_sorted_and_each_once() {
 }
 
 #[test]
+fn a_new_item_s_decisions_are_sorted_and_each_once() {
+    let rule = "model.license_missing";
+    let claim = Ref::Component {
+        slice: SliceId::from_parts(&id(&format!("sha256:{}", hex(0x11))), Arch::X86_64, 0),
+        component: id("ggml-base"),
+    };
+    let warn = decision(Action::Warn, &format!("default:{rule}"));
+    let fail = decision(Action::Fail, "policy:components.deny.ggml-base");
+    let mut sorted = vec![warn.clone(), fail.clone()];
+    sorted.sort_by_key(|d| serde_json::to_string(d).unwrap());
+    let reversed: Vec<_> = sorted.iter().rev().cloned().collect();
+    let messy = vec![reversed[0].clone(), sorted[0].clone(), reversed[0].clone()];
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = vec![
+        Change::FindingNew {
+            rule: id(rule),
+            subject: SubjectKey::Model(id(MODEL_M)),
+            at: String::new(),
+            current: vec![],
+            decisions: messy.clone(),
+        },
+        Change::ViolationNew {
+            policy_rule: id("policy:components.deny.ggml-base"),
+            subject: SubjectKey::Other(claim),
+            current: vec![],
+            decisions: messy,
+        },
+    ];
+    diff.canonicalize();
+    for change in &diff.changes {
+        assert_eq!(change.decisions(), Some(&sorted[..]), "{change:?}");
+    }
+}
+
+#[test]
 fn one_change_is_not_called_changes() {
     let mut diff = diff_of(&compare_store(), &compare_store());
     diff.changes = vec![Change::ModelAdded {
