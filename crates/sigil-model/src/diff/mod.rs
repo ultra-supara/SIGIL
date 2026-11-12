@@ -729,21 +729,13 @@ impl Change {
 }
 
 impl Diff {
-    /// Puts the lists in canonical order: changes by kind, in declared order, then by their
-    /// JSON text; non-comparable items by their JSON text; the lists inside each sorted.
-    /// Idempotent.
+    /// Puts the lists in canonical order: each side's completeness lists sorted, as a session's
+    /// are; changes by kind, in declared order, then by their JSON text; non-comparable items by
+    /// their JSON text; the lists inside each sorted. Idempotent.
     pub fn canonicalize(&mut self) {
-        for change in &mut self.changes {
-            change.sort_lists();
-        }
-        self.changes.sort_by_cached_key(|c| (c.rank(), key(c)));
-        self.changes.dedup();
-        for item in &mut self.not_comparable {
-            item.checks.sort();
-            item.checks.dedup();
-        }
-        self.not_comparable.sort_by_cached_key(key);
-        self.not_comparable.dedup();
+        sort_completeness(&mut self.baseline.completeness);
+        sort_completeness(&mut self.current.completeness);
+        canonicalize_lists(&mut self.changes, &mut self.not_comparable);
     }
 
     /// The diff as SIGIL writes it: canonical order, pretty JSON, a final newline.
@@ -754,6 +746,34 @@ impl Diff {
         json.push('\n');
         Ok(json)
     }
+}
+
+/// A completeness's lists sorted, as `Session::canonicalize` sorts the outcome's.
+fn sort_completeness(completeness: &mut Completeness) {
+    if let Completeness::Incomplete {
+        missing_required,
+        gaps,
+    } = completeness
+    {
+        missing_required.sort();
+        gaps.sort();
+    }
+}
+
+/// A diff's changes and items not comparable in canonical order ([`Diff::canonicalize`]), each
+/// once.
+fn canonicalize_lists(changes: &mut Vec<Change>, not_comparable: &mut Vec<NotComparable>) {
+    for change in changes.iter_mut() {
+        change.sort_lists();
+    }
+    changes.sort_by_cached_key(|c| (c.rank(), key(c)));
+    changes.dedup();
+    for item in not_comparable.iter_mut() {
+        item.checks.sort();
+        item.checks.dedup();
+    }
+    not_comparable.sort_by_cached_key(key);
+    not_comparable.dedup();
 }
 
 /// A value's JSON text: a total, deterministic order and map key for types without `Ord`.

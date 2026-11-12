@@ -3,7 +3,6 @@
 use crate::diff::{
     Cause, Change, CompareRules, Diff, DiffSchema, DiffSide, Item, NotComparable, Side,
 };
-use crate::finding::Completeness;
 use crate::id::{CheckId, Sha256Hex};
 use crate::session::{KnowledgeKind, KnowledgeRef, Session, ToolInfo};
 use crate::validate::ValidatedSession;
@@ -35,24 +34,30 @@ pub fn compare(
     super::models::compare(&b, &c, &mut found);
     super::files::compare(&b, &c, &mut found);
     super::listeners::compare(&b, &c, &mut found);
-    let mut diff = Diff {
+    let Found {
+        mut changes,
+        mut not_comparable,
+    } = found;
+    super::canonicalize_lists(&mut changes, &mut not_comparable);
+    // The sides of canonical sessions: their completeness lists are sorted already.
+    let baseline = side(&b, baseline_sha256);
+    let current = side(&c, current_sha256);
+    // Judged on the canonical lists, where each change and each item occurs once.
+    let evaluation = rules.judge(
+        &baseline.completeness,
+        &current.completeness,
+        &changes,
+        &not_comparable,
+    );
+    Diff {
         schema: DiffSchema::V1,
         tool,
-        baseline: side(&b, baseline_sha256),
-        current: side(&c, current_sha256),
-        changes: found.changes,
-        not_comparable: found.not_comparable,
-        evaluation: rules.judge(&Completeness::Complete, &Completeness::Complete, &[], &[]),
-    };
-    diff.canonicalize();
-    // Judged on the canonical lists, where each change and each item occurs once.
-    diff.evaluation = rules.judge(
-        &diff.baseline.completeness,
-        &diff.current.completeness,
-        &diff.changes,
-        &diff.not_comparable,
-    );
-    diff
+        baseline,
+        current,
+        changes,
+        not_comparable,
+        evaluation,
+    }
 }
 
 fn canonical(s: &Session) -> Session {

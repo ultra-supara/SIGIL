@@ -79,6 +79,57 @@ fn canonical_json_orders_changes_by_kind_then_text() {
 }
 
 #[test]
+fn a_side_s_completeness_lists_are_written_in_canonical_order() {
+    let incomplete = |reversed: bool| {
+        let mut missing_required: Vec<CheckId> =
+            ids(&["loader.search_paths", "model_store.license"]);
+        let mut gaps: Vec<OpenQuestionId> = vec![
+            id(&format!(
+                "oq:loader.search_path_untrusted_creator@cwd/{ROLE}"
+            )),
+            id(&format!(
+                "oq:loader.search_path_untrusted_creator@exe_dir/{ROLE}"
+            )),
+        ];
+        if reversed {
+            missing_required.reverse();
+            gaps.reverse();
+        }
+        Completeness::Incomplete {
+            missing_required,
+            gaps,
+        }
+    };
+    let mut sorted = diff_of(&complete_pass(), &complete_pass());
+    sorted.baseline.completeness = incomplete(false);
+    sorted.current.completeness = incomplete(false);
+    sorted.evaluation = builtin_rules().judge(
+        &sorted.baseline.completeness,
+        &sorted.current.completeness,
+        &sorted.changes,
+        &sorted.not_comparable,
+    );
+    let mut canonical = sorted.clone();
+    canonical.canonicalize();
+    assert_eq!(canonical, sorted, "the sorted lists are canonical");
+    let mut reversed = sorted.clone();
+    reversed.baseline.completeness = incomplete(true);
+    reversed.current.completeness = incomplete(true);
+    assert_ne!(reversed, sorted);
+    assert_eq!(
+        reversed.to_canonical_json().unwrap(),
+        sorted.to_canonical_json().unwrap()
+    );
+    // A file with the lists reversed reads back, and is written back, in canonical order.
+    let back: Diff = serde_json::from_str(&serde_json::to_string(&reversed).unwrap()).unwrap();
+    assert_eq!(back, sorted);
+    assert_eq!(
+        back.to_canonical_json().unwrap(),
+        sorted.to_canonical_json().unwrap()
+    );
+}
+
+#[test]
 fn every_comparison_builder_gives_a_valid_session() {
     for case in diff_cases() {
         assert_valid(&case.baseline);
