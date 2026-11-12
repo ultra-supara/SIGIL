@@ -53,6 +53,14 @@
         "at": "",
         "current": [
           "finding:model.license_missing@model:models/registry.ollama.ai/library/m/latest"
+        ],
+        "decisions": [
+          {
+            "action": "Warn",
+            "source": "default:model.license_missing",
+            "reason": null,
+            "expires": null
+          }
         ]
       }
     },

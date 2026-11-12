@@ -378,6 +378,7 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
             subject: subject.clone(),
             at: at.clone(),
             current: j.pointers.clone(),
+            decisions: j.decisions.clone(),
         };
         let absence = finding_recorded(c, b, same_filter, rule, j);
         judge(found, absence, &j.item, Side::Baseline, new);
@@ -433,6 +434,7 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
             policy_rule: policy_rule.clone(),
             subject: subject.clone(),
             current: j.pointers.clone(),
+            decisions: j.decisions.clone(),
         };
         let root = j.root.as_ref();
         let absence = violation_recorded(b, same_policy, policy_rule, subject, root);

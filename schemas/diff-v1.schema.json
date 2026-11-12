@@ -250,7 +250,8 @@
                 "rule",
                 "subject",
                 "at",
-                "current"
+                "current",
+                "decisions"
               ],
               "properties": {
                 "rule": {
@@ -266,6 +267,12 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/$defs/FindingId"
+                  }
+                },
+                "decisions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PolicyDecision"
                   }
                 }
               }
@@ -378,7 +385,8 @@
               "required": [
                 "policy_rule",
                 "subject",
-                "current"
+                "current",
+                "decisions"
               ],
               "properties": {
                 "policy_rule": {
@@ -391,6 +399,12 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/$defs/Ref"
+                  }
+                },
+                "decisions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PolicyDecision"
                   }
                 }
               }

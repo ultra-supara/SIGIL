@@ -53,6 +53,14 @@
         "at": "",
         "current": [
           "finding:exposure.bind_public@listener:tcp/0.0.0.0:11434#7002"
+        ],
+        "decisions": [
+          {
+            "action": "Warn",
+            "source": "default:exposure.bind_public",
+            "reason": null,
+            "expires": null
+          }
         ]
       }
     },

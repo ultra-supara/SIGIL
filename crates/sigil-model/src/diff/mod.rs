@@ -276,11 +276,13 @@ pub enum Change {
         baseline: CheckState,
         current: CheckState,
     },
+    /// A finding in the current session only. `decisions` are its distinct decisions there.
     FindingNew {
         rule: RuleId,
         subject: SubjectKey,
         at: String,
         current: Vec<FindingId>,
+        decisions: Vec<PolicyDecision>,
     },
     FindingResolved {
         rule: RuleId,
@@ -300,10 +302,13 @@ pub enum Change {
         baseline_findings: Vec<FindingId>,
         current_findings: Vec<FindingId>,
     },
+    /// A policy violation in the current session only. `decisions` are its distinct decisions
+    /// there.
     ViolationNew {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
         current: Vec<Ref>,
+        decisions: Vec<PolicyDecision>,
     },
     ViolationResolved {
         policy_rule: PolicyRuleRef,
@@ -532,13 +537,39 @@ impl Change {
         self.kind() as u8
     }
 
+    /// The decisions a new finding or policy violation carries (the current session's); `None`
+    /// for every other kind.
+    pub fn decisions(&self) -> Option<&[PolicyDecision]> {
+        match self {
+            Change::FindingNew { decisions, .. } | Change::ViolationNew { decisions, .. } => {
+                Some(decisions)
+            }
+            _ => None,
+        }
+    }
+
     /// Sorts the lists a change holds.
     fn sort_lists(&mut self) {
         match self {
-            Change::FindingNew { current: ids, .. }
-            | Change::FindingResolved { baseline: ids, .. } => ids.sort(),
-            Change::ViolationNew { current: refs, .. }
-            | Change::ViolationResolved { baseline: refs, .. } => {
+            Change::FindingNew {
+                current: ids,
+                decisions,
+                ..
+            } => {
+                ids.sort();
+                sort_decisions(decisions);
+            }
+            Change::FindingResolved { baseline: ids, .. } => ids.sort(),
+            Change::ViolationNew {
+                current: refs,
+                decisions,
+                ..
+            } => {
+                refs.sort_by_cached_key(key);
+                refs.dedup();
+                sort_decisions(decisions);
+            }
+            Change::ViolationResolved { baseline: refs, .. } => {
                 refs.sort_by_cached_key(key);
                 refs.dedup();
             }

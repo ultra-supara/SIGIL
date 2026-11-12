@@ -53,3 +53,34 @@ fn every_cause_is_named_as_its_variant_and_ordered() {
     }
     assert_eq!(Cause::from_name("coverage"), None);
 }
+
+#[test]
+fn a_new_finding_and_a_new_violation_carry_their_current_decisions() {
+    let mut missing = compare_store();
+    blob_missing(&mut missing);
+    let diff = diff_of(&compare_store(), &missing);
+    let new = diff
+        .changes
+        .iter()
+        .find(|c| c.kind() == ChangeKind::FindingNew)
+        .unwrap();
+    assert_eq!(
+        new.decisions(),
+        Some(&[decision(Action::Warn, "default:model.blob_missing")][..])
+    );
+    let diff = diff_of(&binary_inspect(), &binary_denied());
+    let new = diff
+        .changes
+        .iter()
+        .find(|c| c.kind() == ChangeKind::ViolationNew)
+        .unwrap();
+    assert_eq!(
+        new.decisions(),
+        Some(&[decision(Action::Fail, "policy:components.deny.ggml-base")][..])
+    );
+    // No other kind carries decisions this way.
+    assert!(every_change()
+        .iter()
+        .filter(|c| !matches!(c.kind(), ChangeKind::FindingNew | ChangeKind::ViolationNew))
+        .all(|c| c.decisions().is_none()));
+}

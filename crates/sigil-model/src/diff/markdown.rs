@@ -246,6 +246,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             subject: key,
             at,
             current,
+            ..
         } => (
             2,
             vec![
@@ -294,6 +295,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             policy_rule,
             subject: key,
             current,
+            ..
         } => (
             3,
             vec![

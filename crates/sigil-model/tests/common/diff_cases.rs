@@ -878,6 +878,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Model(model.clone()),
             at: "#1".to_string(),
             current: vec![id(&format!("finding:model.blob_missing@{MODEL_M}#1"))],
+            decisions: vec![decision(Action::Warn, "default:model.blob_missing")],
         },
         Change::FindingResolved {
             rule: id("exposure.bind_public"),
@@ -907,6 +908,7 @@ pub fn every_change() -> Vec<Change> {
                 slice: slice.clone(),
                 component: id("ggml-base"),
             }],
+            decisions: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
         },
         Change::ViolationResolved {
             policy_rule: id("policy:capabilities.deny.posix.process_spawn"),

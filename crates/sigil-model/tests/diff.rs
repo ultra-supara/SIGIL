@@ -633,6 +633,7 @@ fn a_new_finding_is_reported_beside_partial_current_coverage() {
         subject: SubjectKey::Model(id(MODEL_M)),
         at: "#1".to_string(),
         current: vec![id(&format!("finding:model.blob_missing@{MODEL_M}#1"))],
+        decisions: vec![decision(Action::Warn, "default:model.blob_missing")],
     }));
 }
 
@@ -936,6 +937,7 @@ fn a_violation_is_new_or_resolved_on_its_placement() {
             slice,
             component: id("ggml-base"),
         }],
+        decisions: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
     }));
     let back = diff_of(&binary_denied(), &binary_inspect());
     assert!(back.changes.iter().any(|c| matches!(

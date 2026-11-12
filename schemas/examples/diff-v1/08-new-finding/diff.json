@@ -83,6 +83,14 @@
         "at": "#1",
         "current": [
           "finding:model.blob_missing@model:models/registry.ollama.ai/library/m/latest#1"
+        ],
+        "decisions": [
+          {
+            "action": "Warn",
+            "source": "default:model.blob_missing",
+            "reason": null,
+            "expires": null
+          }
         ]
       }
     }
