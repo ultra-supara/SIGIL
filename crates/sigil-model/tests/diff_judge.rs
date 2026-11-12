@@ -694,3 +694,37 @@ fn the_markdown_names_the_result_and_each_line_s_action() {
     );
     assert!(same.ends_with("No differences.\n"), "{same}");
 }
+
+#[test]
+fn a_cause_treated_as_warn_reads_warn_in_the_markdown() {
+    let (b, c) = (static_store(), compare_store());
+    let cause = diff_of(&b, &c).not_comparable[0].cause;
+    let rules = with_treatment(&builtin_rules(), cause, OqTreatment::Warn);
+    let md = markdown(&diff_under(&b, &c, &rules));
+    assert!(md.contains("| Item | Why | Treatment |"), "{md}");
+    assert!(md.contains(" | WARN |\n"), "{md}");
+    assert!(!md.contains(" | gap |\n"), "{md}");
+    assert!(
+        md.contains(&esc_md("Result: WARN + COMPLETE, under the policy ")),
+        "{md}"
+    );
+}
+
+#[test]
+fn an_incomplete_input_and_a_gap_are_both_named_in_the_result() {
+    let mut d = diff_of(&static_store(), &compare_store());
+    d.baseline.completeness = incomplete();
+    d.evaluation = builtin_rules().judge(
+        &d.baseline.completeness,
+        &d.current.completeness,
+        &d.changes,
+        &d.not_comparable,
+    );
+    let md = markdown(&d);
+    assert!(
+        md.contains(&esc_md(
+            "INCOMPLETE (the baseline is incomplete; 1 item not comparable, counted as a gap), under the policy "
+        )),
+        "{md}"
+    );
+}

@@ -1,6 +1,7 @@
-//! The Markdown of a [`Diff`]: a header naming both sessions, one section per kind of change,
-//! then what could not be judged. Every value is escaped ([`UntrustedText::markdown_inline`]),
-//! and the same `Diff` gives the same text.
+//! The Markdown of a [`Diff`]: a header naming both sessions and their completeness, the
+//! result under the compare policy, one section per kind of change with each line's action, then
+//! the items not comparable and how each counts. Every value is escaped
+//! ([`UntrustedText::markdown_inline`]), and the same `Diff` gives the same text.
 
 use crate::diff::{
     Cause, Change, CheckState, ComponentState, Diff, DiffCompleteness, DiffSide, Evaluation, Item,
