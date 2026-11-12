@@ -1273,7 +1273,7 @@ fn a_new_item_s_decisions_are_sorted_and_each_once() {
     };
     let warn = decision(Action::Warn, &format!("default:{rule}"));
     let fail = decision(Action::Fail, "policy:components.deny.ggml-base");
-    let mut sorted = vec![warn.clone(), fail.clone()];
+    let mut sorted = [warn.clone(), fail.clone()];
     sorted.sort_by_key(|d| serde_json::to_string(d).unwrap());
     let reversed: Vec<_> = sorted.iter().rev().cloned().collect();
     let messy = vec![reversed[0].clone(), sorted[0].clone(), reversed[0].clone()];
