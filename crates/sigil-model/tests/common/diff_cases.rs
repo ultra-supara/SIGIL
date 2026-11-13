@@ -745,6 +745,16 @@ pub fn waiver(rule: &str, reason: &str, expires: &str) -> PolicyDecision {
     }
 }
 
+/// The decision of an open question under `[open_questions] default = <treatment>`; `ignore`
+/// carries a reason, as validation requires.
+pub fn question_decision(treatment: OqTreatment) -> OpenQuestionDecision {
+    OpenQuestionDecision {
+        treatment,
+        source: id("policy:open_questions.default"),
+        reason: (treatment == OqTreatment::Ignore).then(|| "a test's reason".to_string()),
+    }
+}
+
 /// `s` with its inputs `binary-1` and `binary-2` numbered the other way round, as when the files
 /// are given in the other order.
 pub fn relabel_binary_inputs(s: &Session) -> Session {
@@ -969,6 +979,38 @@ pub fn every_change() -> Vec<Change> {
                 component: id("ggml-base"),
             }],
         },
+        Change::OpenQuestionNew {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Slice {
+                placement: path.clone(),
+                arch: Arch::X86_64,
+            },
+            at: "capability:posix.process_spawn@".to_string(),
+            current: vec![id(&format!("capability:posix.process_spawn@{slice}"))],
+            decisions: vec![question_decision(OqTreatment::Fail)],
+        },
+        Change::OpenQuestionResolved {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Slice {
+                placement: inst.clone(),
+                arch: Arch::X86_64,
+            },
+            at: "capability:posix.network@".to_string(),
+            baseline: vec![id(&format!("capability:posix.network@{slice}"))],
+        },
+        Change::OpenQuestionTreatmentChanged {
+            rule: id("loader.search_path_untrusted_creator"),
+            subject: SubjectKey::Other(Ref::Audit),
+            at: "oq:loader.search_path_untrusted_creator@cwd".to_string(),
+            baseline: vec![question_decision(OqTreatment::CountAsGap)],
+            current: vec![OpenQuestionDecision {
+                treatment: OqTreatment::Ignore,
+                source: id("policy:open_questions.default"),
+                reason: Some("reviewed in the 2026 audit".to_string()),
+            }],
+            baseline_questions: vec![id("oq:loader.search_path_untrusted_creator@cwd")],
+            current_questions: vec![id("oq:loader.search_path_untrusted_creator@cwd")],
+        },
         Change::ModelAdded {
             model: model.clone(),
             name: t("m:latest"),
@@ -1136,6 +1178,19 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
             Cause::Policy,
             &[],
             Side::Both,
+        ),
+        item(
+            Item::OpenQuestion {
+                rule: id(CAPABILITY_RULE),
+                subject: SubjectKey::Slice {
+                    placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+                    arch: Arch::X86_64,
+                },
+                at: "capability:posix.process_spawn@".to_string(),
+            },
+            Cause::Coverage,
+            &["binary.container"],
+            Side::Baseline,
         ),
         item(
             Item::Finding {

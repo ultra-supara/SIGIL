@@ -436,7 +436,8 @@ fn a_table_that_sigil_would_not_write_is_refused() {
 
 /// Review P2a: `sigil-diff/1` was revised before its first release. A diff that main wrote
 /// between #136 and PR-16b (no `evaluation`, no `completeness` per side, `FindingNew` without
-/// `decisions`) neither validates nor loads.
+/// `decisions`) neither validates nor loads. Nor does a diff whose table lacks the open
+/// questions' kinds (#138).
 #[test]
 fn a_diff_written_before_the_revision_of_v1_is_refused() {
     let base = example("05-loopback-to-wildcard");
@@ -461,6 +462,21 @@ fn a_diff_written_before_the_revision_of_v1_is_refused() {
     }
     assert_eq!(stripped, 1);
     both_reject(v, "a FindingNew without decisions");
+
+    // #138: a table of #137's 24 kinds, without the open questions'.
+    let mut v = base.clone();
+    for kind in [
+        "OpenQuestionNew",
+        "OpenQuestionResolved",
+        "OpenQuestionTreatmentChanged",
+    ] {
+        v["evaluation"]["changes"]
+            .as_object_mut()
+            .unwrap()
+            .remove(kind)
+            .unwrap();
+    }
+    both_reject(v, "a table of #137's kinds");
 
     let mut v = base;
     v.as_object_mut().unwrap().remove("evaluation");

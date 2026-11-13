@@ -1478,6 +1478,7 @@ fn sections_come_in_order_and_only_with_rows() {
         "Coverage",
         "Findings",
         "Policy violations",
+        "Open questions",
         "Models",
         "Installation",
         "Listeners",
@@ -1538,6 +1539,27 @@ fn every_change_renders_with_its_key_text() {
                 "2026-12-31",
                 "ggml-base in sha256:4141",
                 "ggml-base in sha256:4242",
+            ],
+        ),
+        (
+            "OpenQuestionNew",
+            &[
+                "binary.capability_call",
+                "capability:posix.process_spawn@",
+                "slice at",
+            ],
+        ),
+        (
+            "OpenQuestionResolved",
+            &["resolved", "capability:posix.network@"],
+        ),
+        (
+            "OpenQuestionTreatmentChanged",
+            &[
+                "treatment changed",
+                "count as gap",
+                "ignore",
+                "reviewed in the 2026 audit",
             ],
         ),
         ("ModelAdded", &["added"]),
@@ -1652,4 +1674,52 @@ fn a_held_model_s_finding_is_judged_by_its_manifest_s_stability() {
         "FindingResolved"
     ));
     assert!(has(&diff_of(&compare_store(), &malformed), "FindingNew"));
+}
+
+/// #138: a question change's lists are sorted, and each item once.
+#[test]
+fn a_question_change_s_lists_are_sorted_and_each_once() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    let q = |s: &str| -> OpenQuestionId { id(s) };
+    let fail = question_decision(OqTreatment::Fail);
+    let gap = question_decision(OqTreatment::CountAsGap);
+    diff.changes = vec![
+        Change::OpenQuestionNew {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Other(Ref::Audit),
+            at: String::new(),
+            current: vec![q("oq:b"), q("oq:a"), q("oq:b")],
+            decisions: vec![fail.clone(), gap.clone(), fail.clone()],
+        },
+        Change::OpenQuestionTreatmentChanged {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Other(Ref::Audit),
+            at: String::new(),
+            baseline: vec![fail.clone(), gap.clone(), fail.clone()],
+            current: vec![gap.clone()],
+            baseline_questions: vec![q("oq:b"), q("oq:a"), q("oq:b")],
+            current_questions: vec![q("oq:a")],
+        },
+    ];
+    diff.canonicalize();
+    let mut want = vec![fail, gap];
+    want.sort_by_cached_key(|d| serde_json::to_string(d).unwrap());
+    let Change::OpenQuestionNew {
+        current, decisions, ..
+    } = &diff.changes[0]
+    else {
+        panic!("{:?}", diff.changes);
+    };
+    assert_eq!(current, &[q("oq:a"), q("oq:b")]);
+    assert_eq!(decisions, &want);
+    let Change::OpenQuestionTreatmentChanged {
+        baseline,
+        baseline_questions,
+        ..
+    } = &diff.changes[1]
+    else {
+        panic!("{:?}", diff.changes);
+    };
+    assert_eq!(baseline, &want);
+    assert_eq!(baseline_questions, &[q("oq:a"), q("oq:b")]);
 }

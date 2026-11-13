@@ -28,10 +28,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::Arch;
 use crate::evidence::Ref;
-use crate::finding::{Completeness, PolicyDecision, Verdict};
+use crate::finding::{Completeness, OpenQuestionDecision, PolicyDecision, Verdict};
 use crate::id::{
-    ArtifactId, CheckId, ComponentKey, FindingId, InstanceId, ListenerId, ModelId, PolicyRuleRef,
-    RootId, RuleId, Sha256Hex, SliceId, Timestamp,
+    ArtifactId, CheckId, ComponentKey, FindingId, InstanceId, ListenerId, ModelId, OpenQuestionId,
+    PolicyRuleRef, RootId, RuleId, Sha256Hex, SliceId, Timestamp,
 };
 use crate::identity::IdentityStatus;
 use crate::listener::BindClass;
@@ -235,6 +235,12 @@ pub enum Item {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
     },
+    /// An open question, by rule, normalized subject and what tells it apart (#138).
+    OpenQuestion {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+    },
 }
 
 /// A difference that could not be judged, and why.
@@ -414,6 +420,32 @@ pub enum Change {
         baseline_subjects: Vec<Ref>,
         current_subjects: Vec<Ref>,
     },
+    /// An open question in the current session only (#138). `decisions` are the distinct
+    /// decisions of the current side's questions with this key, in canonical order (by JSON text).
+    OpenQuestionNew {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        current: Vec<OpenQuestionId>,
+        decisions: Vec<OpenQuestionDecision>,
+    },
+    OpenQuestionResolved {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        baseline: Vec<OpenQuestionId>,
+    },
+    /// An open question on both sides whose set of decisions differs: another treatment, source
+    /// or reason (#138). `baseline_questions` and `current_questions` are its IDs in each session.
+    OpenQuestionTreatmentChanged {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        baseline: Vec<OpenQuestionDecision>,
+        current: Vec<OpenQuestionDecision>,
+        baseline_questions: Vec<OpenQuestionId>,
+        current_questions: Vec<OpenQuestionId>,
+    },
     ModelAdded {
         model: ModelId,
         name: UntrustedText,
@@ -510,6 +542,9 @@ pub enum ChangeKind {
     ViolationNew,
     ViolationResolved,
     ViolationDecisionChanged,
+    OpenQuestionNew,
+    OpenQuestionResolved,
+    OpenQuestionTreatmentChanged,
     ModelAdded,
     ModelRemoved,
     LayerChanged,
@@ -527,7 +562,7 @@ pub enum ChangeKind {
 
 impl ChangeKind {
     /// Every kind, in declared order.
-    pub const ALL: [ChangeKind; 24] = [
+    pub const ALL: [ChangeKind; 27] = [
         ChangeKind::PolicyChanged,
         ChangeKind::VerdictChanged,
         ChangeKind::CompletenessChanged,
@@ -539,6 +574,9 @@ impl ChangeKind {
         ChangeKind::ViolationNew,
         ChangeKind::ViolationResolved,
         ChangeKind::ViolationDecisionChanged,
+        ChangeKind::OpenQuestionNew,
+        ChangeKind::OpenQuestionResolved,
+        ChangeKind::OpenQuestionTreatmentChanged,
         ChangeKind::ModelAdded,
         ChangeKind::ModelRemoved,
         ChangeKind::LayerChanged,
@@ -568,6 +606,9 @@ impl ChangeKind {
             ChangeKind::ViolationNew => "ViolationNew",
             ChangeKind::ViolationResolved => "ViolationResolved",
             ChangeKind::ViolationDecisionChanged => "ViolationDecisionChanged",
+            ChangeKind::OpenQuestionNew => "OpenQuestionNew",
+            ChangeKind::OpenQuestionResolved => "OpenQuestionResolved",
+            ChangeKind::OpenQuestionTreatmentChanged => "OpenQuestionTreatmentChanged",
             ChangeKind::ModelAdded => "ModelAdded",
             ChangeKind::ModelRemoved => "ModelRemoved",
             ChangeKind::LayerChanged => "LayerChanged",
@@ -605,6 +646,9 @@ impl Change {
             Change::ViolationNew { .. } => ChangeKind::ViolationNew,
             Change::ViolationResolved { .. } => ChangeKind::ViolationResolved,
             Change::ViolationDecisionChanged { .. } => ChangeKind::ViolationDecisionChanged,
+            Change::OpenQuestionNew { .. } => ChangeKind::OpenQuestionNew,
+            Change::OpenQuestionResolved { .. } => ChangeKind::OpenQuestionResolved,
+            Change::OpenQuestionTreatmentChanged { .. } => ChangeKind::OpenQuestionTreatmentChanged,
             Change::ModelAdded { .. } => ChangeKind::ModelAdded,
             Change::ModelRemoved { .. } => ChangeKind::ModelRemoved,
             Change::LayerChanged { .. } => ChangeKind::LayerChanged,
@@ -697,6 +741,34 @@ impl Change {
                 for refs in [baseline_subjects, current_subjects] {
                     refs.sort_by_cached_key(key);
                     refs.dedup();
+                }
+            }
+            Change::OpenQuestionNew {
+                current: ids,
+                decisions,
+                ..
+            } => {
+                ids.sort();
+                ids.dedup();
+                sort_decisions(decisions);
+            }
+            Change::OpenQuestionResolved { baseline: ids, .. } => {
+                ids.sort();
+                ids.dedup();
+            }
+            Change::OpenQuestionTreatmentChanged {
+                baseline,
+                current,
+                baseline_questions,
+                current_questions,
+                ..
+            } => {
+                for decisions in [baseline, current] {
+                    sort_decisions(decisions);
+                }
+                for ids in [baseline_questions, current_questions] {
+                    ids.sort();
+                    ids.dedup();
                 }
             }
             Change::ListenerAdded { listeners, .. } | Change::ListenerRemoved { listeners, .. } => {
@@ -792,8 +864,9 @@ fn key<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
-/// Decisions in canonical order (by their JSON text), each once.
-fn sort_decisions(decisions: &mut Vec<PolicyDecision>) {
+/// Decisions (a finding's, a violation's or an open question's) in canonical order (by their
+/// JSON text), each once.
+fn sort_decisions<T: Serialize + PartialEq>(decisions: &mut Vec<T>) {
     decisions.sort_by_cached_key(key);
     decisions.dedup();
 }

@@ -161,7 +161,9 @@ fn the_default_table_is_the_documented_one() {
             "FindingNew",
             "FindingDecisionChanged",
             "ViolationNew",
-            "ViolationDecisionChanged"
+            "ViolationDecisionChanged",
+            "OpenQuestionNew",
+            "OpenQuestionTreatmentChanged",
         ]
     );
     assert_eq!(
@@ -186,6 +188,7 @@ fn the_default_table_is_the_documented_one() {
             "CheckClosed",
             "FindingResolved",
             "ViolationResolved",
+            "OpenQuestionResolved",
             "ListenerRemoved",
             "BindNarrowed",
         ]
@@ -211,6 +214,8 @@ fn the_default_table_is_the_documented_one() {
                     | ChangeKind::FindingDecisionChanged
                     | ChangeKind::ViolationNew
                     | ChangeKind::ViolationDecisionChanged
+                    | ChangeKind::OpenQuestionNew
+                    | ChangeKind::OpenQuestionTreatmentChanged
             )
         );
     }
@@ -272,7 +277,7 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
             .into_iter()
             .filter(|k| k.takes_decided())
             .count(),
-        5
+        7
     );
     // No other kind, whatever its source.
     let mut table = with_action(&r, ChangeKind::LayerChanged, CompareAction::Warn)
@@ -1171,5 +1176,73 @@ fn an_incomplete_input_and_a_gap_are_both_named_in_the_result() {
             "INCOMPLETE (the baseline is incomplete; 1 item not comparable, counted as a gap), under the policy "
         )),
         "{md}"
+    );
+}
+
+fn question_new(treatments: &[OqTreatment]) -> Change {
+    Change::OpenQuestionNew {
+        rule: id(CAPABILITY_RULE),
+        subject: SubjectKey::Other(Ref::Audit),
+        at: "capability:posix.process_spawn@".to_string(),
+        current: vec![id("capability:posix.process_spawn@x")],
+        decisions: treatments.iter().map(|t| question_decision(*t)).collect(),
+    }
+}
+
+fn question_changed(baseline: OqTreatment, current: OqTreatment) -> Change {
+    Change::OpenQuestionTreatmentChanged {
+        rule: id(CAPABILITY_RULE),
+        subject: SubjectKey::Other(Ref::Audit),
+        at: "capability:posix.process_spawn@".to_string(),
+        baseline: vec![question_decision(baseline)],
+        current: vec![question_decision(current)],
+        baseline_questions: vec![id("capability:posix.process_spawn@x")],
+        current_questions: vec![id("capability:posix.process_spawn@y")],
+    }
+}
+
+/// #138: a question weighs its treatment (`fail`, `warn`; a gap or `ignore` nothing), new as a new
+/// finding does, changed as a changed decision does.
+#[test]
+fn an_open_question_weighs_its_treatment() {
+    use OqTreatment::{CountAsGap, Fail, Ignore, Warn};
+    let r = builtin_rules();
+    for (treatments, want) in [
+        (&[Fail][..], Action::Fail),
+        (&[Warn][..], Action::Warn),
+        (&[CountAsGap][..], Action::Ignore),
+        (&[Ignore][..], Action::Ignore),
+        (&[CountAsGap, Warn][..], Action::Warn),
+        (&[][..], Action::Fail),
+    ] {
+        assert_eq!(
+            r.weigh(&question_new(treatments)),
+            (want, true),
+            "{treatments:?}"
+        );
+    }
+    for (before, now, want) in [
+        (CountAsGap, Fail, Action::Fail),
+        (Warn, Fail, Action::Fail),
+        (CountAsGap, Warn, Action::Warn),
+        (Fail, CountAsGap, Action::Warn),
+        (CountAsGap, Ignore, Action::Warn),
+        (Ignore, CountAsGap, Action::Warn),
+        (Fail, Fail, Action::Warn),
+    ] {
+        assert_eq!(
+            r.weigh(&question_changed(before, now)),
+            (want, true),
+            "{before:?} -> {now:?}"
+        );
+    }
+    assert_eq!(
+        r.weigh(&change_of(ChangeKind::OpenQuestionResolved)),
+        (Action::Ignore, false)
+    );
+    let ignored = with_action(&r, ChangeKind::OpenQuestionNew, CompareAction::Ignore);
+    assert_eq!(
+        ignored.weigh(&question_new(&[Fail])),
+        (Action::Ignore, false)
     );
 }
