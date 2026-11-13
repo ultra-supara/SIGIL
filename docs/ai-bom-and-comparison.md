@@ -80,7 +80,8 @@ The browser viewer uses it through wasm (`crates/sigil-wasm`), after checking th
 
 `sigil compare` (#16) reports what changed between two saved sessions. It writes a versioned
 document (`sigil-diff/1`, [`schemas/diff-v1.schema.json`](../schemas/diff-v1.schema.json)) as
-canonical JSON, or its Markdown. It reads its two inputs and writes `--out`, nothing else.
+canonical JSON, or its Markdown. It reads its two inputs and the policy file `--policy` names, if
+any, and writes `--out`, nothing else.
 
 ```bash
 sigil inspect ollama --out baseline/session.json
@@ -90,10 +91,11 @@ sigil compare --baseline baseline/session.json --current out/session.json --form
 ```
 
 Each input is loaded and re-verified as `session render` does; a failure names the input and exits
-1. A usage error exits 2. Otherwise the exit code is 0 whether or not the sessions differ. A
-one-line summary goes to stderr ("1 change" for one):
-`compare: {N} changes, {M} not comparable (baseline sha256:…, current sha256:…)`. `--out` may not
-name either input. The same file as both inputs gives no differences.
+1, as a policy that does not load does. A usage error exits 2. A one-line summary goes to stderr
+("1 change" for one):
+`compare: {N} changes, {M} not comparable: {VERDICT} + {COMPLETENESS} under {policy} (sha256:…) (baseline sha256:…, current sha256:…)`.
+`--out` may not name an input: either session or the policy file. The same file as both inputs
+gives no differences.
 
 The diff names each session by the SHA-256 of its canonical JSON, as the AI-BOM does. Each change
 carries the IDs of its item in the session that holds it. Fixture pairs, with their diffs and
@@ -141,9 +143,47 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   - The layers of a manifest that is unstable on either side are not compared.
   - Text that came from the inspected system (model names, paths, rule subjects) stays untrusted
     in both documents, and the Markdown escapes it.
-- **Not compared yet:** hints and code facts, open questions, AI-BOM input. The policy part of
-  #16 is a follow-up: a `[compare]` section in `sigil-policy/1` and `--fail-on` with exit code 3.
-  Until then `sigil compare` only reports.
+- **Not compared yet:** hints and code facts, open questions, AI-BOM input. An open question
+  that the policy treats as `warn` or `fail` can show in the verdict: when it changes the
+  verdict, `VerdictChanged` carries it, and by default a verdict that got worse weighs what it
+  now is (below). A new `fail` question in a session that already fails gives no change.
+
+### Judging the differences
+
+Every diff is judged under a policy's `[compare]` section (#16): `--policy FILE`, or the
+built-in policy. Each change kind has an action (`fail`, `warn`, `ignore`, or for a new or
+changed finding or violation `decided`: what its decisions in the current session say; a changed
+decision weighs that only when it got heavier than the baseline's, and `warn` otherwise; a
+changed verdict, also `decided` by default, weighs the current verdict when it got worse, and
+nothing otherwise), and each cause of an item not comparable a treatment. The diff's
+`evaluation` records the policy, the whole table, and two results, as a session has: a verdict
+(`PASS`, `WARN`, `FAIL`) and a completeness (`INCOMPLETE` when either session is incomplete
+itself, or when an item not comparable counts as a gap, the default). Each side of the diff
+records its session's own completeness. A diff reads back only if it is consistent with itself:
+its table complete, with sources and reasons as SIGIL writes them, and its recorded verdict and
+completeness equal to a fresh judgment of its changes under that table. That does not prove
+which policy file made it: running `sigil compare --policy` with that file again does. The
+defaults and the format: [policy](policy.md#comparing-sessions-compare).
+
+| Code | Meaning |
+|---|---|
+| 0 | Compared, and neither 3 nor 4 applies, for example whether or not anything changed |
+| 1 | Execution error: an input that is not a valid session, or a policy that does not load |
+| 2 | Usage error, for example `--out` naming an input |
+| 3 | The diff's verdict reached `--fail-on` |
+| 4 | The diff is incomplete (an input is, or an item not comparable counts as a gap) and `--fail-on-incomplete` was given (3 takes precedence) |
+
+A CI step that fails on drift against a trusted baseline, and keeps the report:
+
+```bash
+sigil compare --baseline baseline/session.json --current out/session.json \
+  --policy org-policy.toml --fail-on fail --fail-on-incomplete --format md --out out/compare.md
+```
+
+**`sigil-diff/1` was revised before its first release** (#16, PR-16b). Diffs that main wrote
+between #136 and that change have no `evaluation`, no `completeness` per side, and no `decisions`
+on `FindingNew` and `ViolationNew`: they neither validate against `diff-v1.schema.json` nor load.
+Compare the two sessions again for a current diff.
 
 ## Runtime Comparison
 

@@ -194,12 +194,13 @@ cargo run --locked -q -p sigil-cli -- session render out/session.json \
   --format aibom --out out/aibom.json
 ```
 
-Compare two saved sessions with `sigil compare`. It reports what changed and what could not be judged, and exits 0 either way:
+Compare two saved sessions with `sigil compare`. It reports what changed and what could not be judged, and judges the changes under the policy's `[compare]` section (the built-in defaults without `--policy`): by default a replaced installation file, other bytes for the same model, or a wider bind fails. For CI, `--fail-on warn|fail` exits 3 when the comparison's verdict reaches that level, and `--fail-on-incomplete` exits 4 when the comparison is incomplete (a session that is incomplete itself, or an item that could not be judged):
 
 ```bash
 cargo run --locked -q -p sigil-cli -- inspect ollama --out out/current.json
 cargo run --locked -q -p sigil-cli -- compare --baseline out/session.json \
-  --current out/current.json --format md --out out/compare.md
+  --current out/current.json --fail-on fail --fail-on-incomplete \
+  --format md --out out/compare.md
 ```
 
 A difference is reported as not comparable, never as a removal, when the check that would have recorded the item was not closed on the side it is missing from, or when the two runs asked for different things. Only open/closed transitions of checks are reported. Committed example pairs are in [`schemas/examples/diff-v1/`](schemas/examples/diff-v1/).
@@ -240,7 +241,7 @@ Changes to the model or browser bindings also require rebuilding `site/viewer/pk
 
 ## What's next
 
-The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. Policy actions on comparisons (a `[compare]` policy section and `--fail-on`), GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
+The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. GGUF parsing, advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
 
 The legacy `lift` and `assess` commands and their IR/emulator were removed. See [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md) for the transition and the [roadmap](docs/sigil-overview.md#roadmap) for milestones.
 

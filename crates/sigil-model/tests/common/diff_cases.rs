@@ -18,13 +18,38 @@ pub fn example_tool() -> ToolInfo {
     }
 }
 
+/// The built-in policy's knowledge entry, as `sigil_engine::policy::Policy::builtin_default()`
+/// gives it: name `default`, version `sigil-policy/1`, and the SHA-256 of `default.toml`. The
+/// fixtures are judged under it, as `sigil compare` without `--policy` judges them; the CLI test
+/// `the_fixture_diffs_are_judged_under_the_built_in_policy` keeps the two equal.
+pub fn builtin_policy() -> KnowledgeRef {
+    KnowledgeRef {
+        kind: KnowledgeKind::Policy,
+        id: "default".to_string(),
+        version: "sigil-policy/1".to_string(),
+        sha256: id(&sha256_hex(include_str!(
+            "../../../sigil-engine/policies/default.toml"
+        ))),
+    }
+}
+
+/// The built-in policy's compare table: the defaults.
+pub fn builtin_rules() -> CompareRules {
+    CompareRules::defaults(builtin_policy())
+}
+
 /// The SHA-256 of `s`'s canonical JSON: what a diff names it by.
 pub fn session_sha256(s: &Session) -> Sha256Hex {
     id(&sha256_hex(s.to_canonical_json().unwrap()))
 }
 
-/// The diff of two valid sessions, as `sigil compare` makes it.
+/// The diff of two valid sessions, as `sigil compare` makes it without `--policy`.
 pub fn diff_of(baseline: &Session, current: &Session) -> Diff {
+    diff_under(baseline, current, &builtin_rules())
+}
+
+/// The diff of two valid sessions, judged under `rules`.
+pub fn diff_under(baseline: &Session, current: &Session, rules: &CompareRules) -> Diff {
     let b = ValidatedSession::new(baseline.clone())
         .unwrap_or_else(|e| panic!("baseline is not valid: {}", render(&e)));
     let c = ValidatedSession::new(current.clone())
@@ -35,18 +60,26 @@ pub fn diff_of(baseline: &Session, current: &Session) -> Diff {
         &c,
         session_sha256(current),
         example_tool(),
+        rules,
     )
+}
+
+/// A change's externally tagged variant name.
+pub fn tag(change: &Change) -> String {
+    match serde_json::to_value(change).unwrap() {
+        serde_json::Value::Object(m) => m.keys().next().unwrap().clone(),
+        other => panic!("a change is a struct variant: {other}"),
+    }
 }
 
 /// The kind (variant name) of each change, in order.
 pub fn kinds(d: &Diff) -> Vec<String> {
-    d.changes
-        .iter()
-        .map(|c| match serde_json::to_value(c).unwrap() {
-            serde_json::Value::Object(m) => m.keys().next().unwrap().clone(),
-            other => panic!("a change is a struct variant: {other}"),
-        })
-        .collect()
+    d.changes.iter().map(tag).collect()
+}
+
+/// `text` as `render::md::esc` writes it, for the characters these tests use.
+pub fn esc_md(text: &str) -> String {
+    t(text).markdown_inline()
 }
 
 /// Whether `d` has a change of `kind`.
@@ -878,6 +911,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Model(model.clone()),
             at: "#1".to_string(),
             current: vec![id(&format!("finding:model.blob_missing@{MODEL_M}#1"))],
+            decisions: vec![decision(Action::Warn, "default:model.blob_missing")],
         },
         Change::FindingResolved {
             rule: id("exposure.bind_public"),
@@ -907,6 +941,7 @@ pub fn every_change() -> Vec<Change> {
                 slice: slice.clone(),
                 component: id("ggml-base"),
             }],
+            decisions: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
         },
         Change::ViolationResolved {
             policy_rule: id("policy:capabilities.deny.posix.process_spawn"),

@@ -1268,6 +1268,47 @@ fn compare_reads_only_its_inputs_and_writes_only_its_out() {
     assert_clean(&r, &policy(&fx, &[&diff], &["runtime"]));
 }
 
+/// #16: `compare --policy` also reads the policy file, and nothing else under `target/`.
+#[test]
+fn compare_with_a_policy_reads_only_its_inputs_and_its_policy() {
+    if !require_tracer("compare_with_a_policy_reads_only_its_inputs_and_its_policy") {
+        return;
+    }
+    let fx = fixture();
+    let baseline = saved_session(&fx);
+    let current = fx.target.join("current.json");
+    std::fs::copy(&baseline, &current).unwrap();
+    let policy_file = fx.target.join("policy.toml");
+    std::fs::write(
+        &policy_file,
+        "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[compare.changes.LayerChanged]\n\
+         action = \"warn\"\n",
+    )
+    .unwrap();
+    let diff = fx.out.join("compare-policy/diff.json");
+    let args = os(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--policy",
+        &policy_file,
+        &"--fail-on",
+        &"fail",
+        &"--out",
+        &diff,
+    ]);
+    let r = run("compare-policy", &fx, &refs(&args));
+    assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(diff.is_file());
+    assert_read_under(&r, &baseline);
+    assert_read_under(&r, &current);
+    assert_read_under(&r, &policy_file);
+    assert_opened_only(&r, &fx.target, &[&baseline, &current, &policy_file]);
+    assert_clean(&r, &policy(&fx, &[&diff], &["runtime"]));
+}
+
 #[test]
 fn rules_reads_nothing() {
     if !require_tracer("rules_reads_nothing") {

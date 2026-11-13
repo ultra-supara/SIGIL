@@ -2,6 +2,7 @@
 //! that must be fatal rather than silently ignored.
 
 use sigil_engine::policy::{catalog, Policy, PolicyError, ScopeInput, TrustedPrincipal};
+use sigil_model::diff::{Cause, ChangeKind, CompareAction, CompareRules};
 use sigil_model::{Action, KnowledgeKind, Mode, OqTreatment, RuleId};
 
 fn ids<T: std::fmt::Display>(items: &[T]) -> Vec<String> {
@@ -470,6 +471,14 @@ fn the_documented_example_loads() {
     assert_eq!(policy.rules.len(), 2);
     assert_eq!(policy.deny.len(), 1);
     assert_eq!(policy.capabilities.len(), 1);
+    assert_eq!(
+        policy.compare.changes()[&ChangeKind::ModelAdded].action,
+        CompareAction::Ignore
+    );
+    assert_eq!(
+        policy.compare.not_comparable()[&Cause::Request].treatment,
+        OqTreatment::Warn
+    );
 }
 
 #[test]
@@ -763,4 +772,228 @@ fn scope_input_of_finds_binary_roots() {
     assert!(ScopeInput::of(&request).code);
     request.roots[0].id = sigil_model::RootId::new("models").unwrap();
     assert!(!ScopeInput::of(&request).binary);
+}
+
+// --- [compare] (#16, PR-16b) -------------------------------------------------------------------
+
+#[test]
+fn a_policy_without_compare_gets_the_default_table() {
+    let builtin = Policy::builtin_default().unwrap();
+    assert_eq!(builtin.compare, CompareRules::defaults(builtin.knowledge()));
+    let bare = Policy::load(HEAD).unwrap();
+    assert_eq!(bare.compare, CompareRules::defaults(bare.knowledge()));
+}
+
+#[test]
+fn compare_entries_override_the_defaults_with_their_source_and_reason() {
+    let text = format!(
+        "{HEAD}\n[compare.changes.ModelAdded]\naction = \"ignore\"\n\
+         reason = \"The ML team adds models daily\"\n\n\
+         [compare.changes.FindingNew]\naction = \"fail\"\n\n\
+         [compare.changes.ViolationNew]\naction = \"decided\"\n\n\
+         [compare.not_comparable.Request]\ntreatment = \"warn\"\n"
+    );
+    let policy = Policy::load(&text).unwrap();
+    let c = &policy.compare;
+    assert_eq!(c.policy(), &policy.knowledge());
+    let added = &c.changes()[&ChangeKind::ModelAdded];
+    assert_eq!(added.action, CompareAction::Ignore);
+    assert_eq!(added.source.as_str(), "policy:compare.changes.ModelAdded");
+    assert_eq!(
+        added.reason.as_deref(),
+        Some("The ML team adds models daily")
+    );
+    assert_eq!(
+        c.changes()[&ChangeKind::FindingNew].action,
+        CompareAction::Fail
+    );
+    let violation = &c.changes()[&ChangeKind::ViolationNew];
+    assert_eq!(violation.action, CompareAction::Decided);
+    assert_eq!(
+        violation.source.as_str(),
+        "policy:compare.changes.ViolationNew"
+    );
+    let request = &c.not_comparable()[&Cause::Request];
+    assert_eq!(request.treatment, OqTreatment::Warn);
+    assert_eq!(
+        request.source.as_str(),
+        "policy:compare.not_comparable.Request"
+    );
+    // Every other entry keeps its default.
+    let defaults = CompareRules::defaults(policy.knowledge());
+    for kind in ChangeKind::ALL {
+        if !matches!(
+            kind,
+            ChangeKind::ModelAdded | ChangeKind::FindingNew | ChangeKind::ViolationNew
+        ) {
+            assert_eq!(c.changes()[&kind], defaults.changes()[&kind], "{kind:?}");
+        }
+    }
+    for cause in [Cause::Coverage, Cause::Policy] {
+        assert_eq!(
+            c.not_comparable()[&cause],
+            defaults.not_comparable()[&cause]
+        );
+    }
+}
+
+#[test]
+fn a_changed_decision_may_be_decided() {
+    let text = format!(
+        "{HEAD}\n[compare.changes.FindingDecisionChanged]\naction = \"decided\"\n\n\
+         [compare.changes.ViolationDecisionChanged]\naction = \"decided\"\n"
+    );
+    let policy = Policy::load(&text).unwrap();
+    for kind in [
+        ChangeKind::FindingDecisionChanged,
+        ChangeKind::ViolationDecisionChanged,
+    ] {
+        let t = &policy.compare.changes()[&kind];
+        assert_eq!(t.action, CompareAction::Decided, "{kind:?}");
+        assert_eq!(
+            t.source.as_str(),
+            format!("policy:compare.changes.{}", kind.name())
+        );
+    }
+}
+
+#[test]
+fn a_verdict_change_may_be_decided() {
+    // Review P1 of PR #137: a worse verdict weighs what it now is, as a new open question that
+    // the policy treats as `fail` makes it.
+    let text = format!("{HEAD}\n[compare.changes.VerdictChanged]\naction = \"decided\"\n");
+    let policy = Policy::load(&text).unwrap();
+    let t = &policy.compare.changes()[&ChangeKind::VerdictChanged];
+    assert_eq!(t.action, CompareAction::Decided);
+    assert_eq!(t.source.as_str(), "policy:compare.changes.VerdictChanged");
+    assert_eq!(t.reason, None);
+}
+
+#[test]
+fn a_reason_on_an_entry_that_is_not_ignore_is_kept() {
+    // Review P3 of PR #137: a stored table must hold entries as the loader writes them, and the
+    // loader keeps a reason that `ignore` does not need, and an entry that restates a default.
+    let text = format!(
+        "{HEAD}\n[compare.changes.LayerChanged]\naction = \"warn\"\n\
+         reason = \"Upgrades are reviewed\"\n\n\
+         [compare.changes.FileContentChanged]\naction = \"fail\"\n\n\
+         [compare.not_comparable.Policy]\ntreatment = \"fail\"\nreason = \"One policy for all\"\n"
+    );
+    let policy = Policy::load(&text).unwrap();
+    let c = &policy.compare;
+    let layer = &c.changes()[&ChangeKind::LayerChanged];
+    assert_eq!(layer.action, CompareAction::Warn);
+    assert_eq!(layer.reason.as_deref(), Some("Upgrades are reviewed"));
+    let file = &c.changes()[&ChangeKind::FileContentChanged];
+    assert_eq!(file.action, CompareAction::Fail);
+    assert_eq!(
+        file.source.as_str(),
+        "policy:compare.changes.FileContentChanged"
+    );
+    let other = &c.not_comparable()[&Cause::Policy];
+    assert_eq!(other.treatment, OqTreatment::Fail);
+    assert_eq!(other.reason.as_deref(), Some("One policy for all"));
+    // The table reads back as it was built.
+    assert_eq!(
+        CompareRules::new(
+            c.policy().clone(),
+            c.changes().clone(),
+            c.not_comparable().clone()
+        )
+        .as_ref(),
+        Ok(c)
+    );
+}
+
+#[test]
+fn compare_changes_nothing_but_the_policy_s_hash() {
+    let plain = Policy::load(PLAN_EXAMPLE).unwrap();
+    let with = Policy::load(&format!(
+        "{PLAN_EXAMPLE}\n[compare.changes.ModelAdded]\naction = \"fail\"\n"
+    ))
+    .unwrap();
+    assert_ne!(with.sha256, plain.sha256);
+    assert_eq!(
+        with.compare.changes()[&ChangeKind::ModelAdded].action,
+        CompareAction::Fail
+    );
+    // Inspection, evaluation and verification read everything else, and it is the same.
+    let mut same = with.clone();
+    same.sha256 = plain.sha256.clone();
+    same.compare = plain.compare.clone();
+    assert_eq!(same, plain);
+}
+
+#[test]
+fn every_malformed_compare_entry_is_fatal() {
+    use PolicyError as E;
+    let cases: Vec<(String, Expect)> = vec![
+        (
+            format!("{HEAD}[compare.changes.LayerChanges]\naction = \"warn\"\n"),
+            |e| matches!(e, E::UnknownChangeKind(k) if k == "LayerChanges"),
+        ),
+        (
+            format!("{HEAD}[compare.not_comparable.Budget]\ntreatment = \"warn\"\n"),
+            |e| matches!(e, E::UnknownCause(c) if c == "Budget"),
+        ),
+        (
+            format!("{HEAD}[compare.changes.LayerChanged]\naction = \"decided\"\n"),
+            |e| matches!(e, E::DecidedNotAllowed(k) if k == "LayerChanged"),
+        ),
+        (
+            format!("{HEAD}[compare.changes.ModelAdded]\naction = \"ignore\"\n"),
+            |e| matches!(e, E::IgnoreWithoutReason { at } if at == "compare.changes.\"ModelAdded\""),
+        ),
+        (
+            format!("{HEAD}[compare.changes.ModelAdded]\naction = \"ignore\"\nreason = \"  \"\n"),
+            |e| matches!(e, E::IgnoreWithoutReason { .. }),
+        ),
+        (
+            format!("{HEAD}[compare.not_comparable.Policy]\ntreatment = \"ignore\"\n"),
+            |e| matches!(e, E::IgnoreWithoutReason { at } if at == "compare.not_comparable.\"Policy\""),
+        ),
+        (
+            format!(
+                "{HEAD}[compare.changes.ModelAdded]\naction = \"ignore\"\nreason = \"r\"\n\
+                 expires = \"2027-01-01\"\n"
+            ),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        (
+            format!(
+                "{HEAD}[compare.not_comparable.Coverage]\ntreatment = \"ignore\"\nreason = \"r\"\n\
+                 expires = \"2027-01-01\"\n"
+            ),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        (
+            format!("{HEAD}[compare.changes.ModelAdded]\naction = \"count_as_gap\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        (
+            format!("{HEAD}[compare.not_comparable.Coverage]\ntreatment = \"decided\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+        (format!("{HEAD}[compare]\nverdict = \"fail\"\n"), |e| {
+            matches!(e, E::Syntax(_))
+        }),
+        (
+            format!("{HEAD}[compare.changes]\nLayerChanged = \"fail\"\n"),
+            |e| matches!(e, E::Syntax(_)),
+        ),
+    ];
+    for (text, expect) in cases {
+        let e = fails(&text);
+        assert!(expect(&e), "unexpected error {e:?} for:\n{text}");
+    }
+    let shown = E::UnknownChangeKind("LayerChanges".to_string()).to_string();
+    assert!(shown.contains("sigil rules"), "{shown}");
+    let shown = E::DecidedNotAllowed("LayerChanged".to_string()).to_string();
+    assert!(
+        shown.contains(
+            "VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, and \
+             ViolationDecisionChanged only"
+        ),
+        "{shown}"
+    );
 }

@@ -378,6 +378,7 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
             subject: subject.clone(),
             at: at.clone(),
             current: j.pointers.clone(),
+            decisions: j.decisions.clone(),
         };
         let absence = finding_recorded(c, b, same_filter, rule, j);
         judge(found, absence, &j.item, Side::Baseline, new);
@@ -433,6 +434,7 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
             policy_rule: policy_rule.clone(),
             subject: subject.clone(),
             current: j.pointers.clone(),
+            decisions: j.decisions.clone(),
         };
         let root = j.root.as_ref();
         let absence = violation_recorded(b, same_policy, policy_rule, subject, root);
@@ -483,6 +485,41 @@ mod tests {
     fn listener(inode: u64) -> ListenerId {
         ListenerId::new(format!("listener:tcp/0.0.0.0:11434#{inode}"))
             .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn findings_of_one_key_hold_their_distinct_decisions_in_canonical_order() {
+        let item = Item::Finding {
+            rule: RuleId::new("model.blob_missing").unwrap_or_else(|e| panic!("{e}")),
+            subject: SubjectKey::Port(11434),
+            at: String::new(),
+        };
+        let scope = Ref::Root(RootId::new("root:r").unwrap_or_else(|e| panic!("{e}")));
+        let decision = |action, source: &str| PolicyDecision {
+            action,
+            source: PolicyRuleRef::new(source).unwrap_or_else(|e| panic!("{e}")),
+            reason: None,
+            expires: None,
+        };
+        let warn = decision(Action::Warn, "default:model.blob_missing");
+        let fail = decision(Action::Fail, "policy:model.blob_missing");
+        let mut out = BTreeMap::new();
+        for (n, d) in [&fail, &warn, &fail].into_iter().enumerate() {
+            let entry = Entry {
+                scope: &scope,
+                root: None,
+                pointer: n,
+                decision: d,
+            };
+            add(&mut out, item.clone(), entry);
+        }
+        let [(_, judged)] = out.iter().collect::<Vec<_>>()[..] else {
+            panic!("one key");
+        };
+        assert_eq!(judged.pointers, [0, 1, 2]);
+        let mut want = vec![warn, fail];
+        want.sort_by_cached_key(key);
+        assert_eq!(judged.decisions, want);
     }
 
     #[test]

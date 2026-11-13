@@ -400,6 +400,18 @@ string_id!(
     PolicyRuleRef,
     check_plain
 );
+
+impl PolicyRuleRef {
+    /// `<prefix><name>`, unchecked, for the sources of the built-in compare table
+    /// (`default:compare.<Kind>`). It skips [`PolicyRuleRef::new`]'s check, so the caller must
+    /// pass what `new` would accept: SIGIL's own static names, non-empty plain text without
+    /// control characters or surrounding whitespace, whose joined length is within
+    /// [`MAX_ID_LEN`]. A test checks every default source with `new`.
+    pub(crate) fn from_static(prefix: &'static str, name: &'static str) -> PolicyRuleRef {
+        PolicyRuleRef(format!("{prefix}{name}"))
+    }
+}
+
 string_id!(
     /// A requested audit scope, e.g. `backend_loader`.
     AuditScope,

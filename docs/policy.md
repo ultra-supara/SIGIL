@@ -6,8 +6,8 @@ from the analysis. The policy decides only what is done with them, and which che
 closed for the result to be complete.
 
 - **Status:** `crates/sigil-engine` loads and evaluates policies. `sigil inspect ollama --policy
-  FILE`, `sigil binary inspect --policy FILE`, and `sigil session verify --policy FILE` load one;
-  without `--policy`, the built-in default applies.
+  FILE`, `sigil binary inspect --policy FILE`, `sigil session verify --policy FILE`, and
+  `sigil compare --policy FILE` load one; without `--policy`, the built-in default applies.
 - **Source:** plan §4.7. The session it applies to is described in
   [`docs/session-model.md`](session-model.md).
 
@@ -55,6 +55,13 @@ reason    = "The RPC backend is outside the internal standard"
 feature = "posix.process_spawn"    # a key of the capability-import table
 action  = "fail"                   # fail | warn
 reason  = "The runtime must not start processes"
+
+[compare.changes.ModelAdded]       # a change kind of sigil-diff/1, for sigil compare
+action = "ignore"                  # fail | warn | ignore; decided: verdict, new or changed finding/violation
+reason = "The ML team adds models daily"   # required for ignore
+
+[compare.not_comparable.Request]   # Coverage | Request | Policy
+treatment = "warn"                 # count_as_gap | warn | fail | ignore
 ```
 
 A deny entry matches a component claim through the claim's component or any of its names: a file
@@ -95,6 +102,8 @@ INCOMPLETE, since the installation's checks are required and not run.
 Every table is optional. Without `[open_questions]`, open questions count as gaps. Without
 `[trust]`, root and the runtime user are trusted. Every list of `[scope]` is optional too: a policy
 written before `install_audit` existed loads unchanged, and adds nothing for an installation.
+Without `[compare]`, every change kind and cause of `sigil compare` has its default
+([comparing sessions](#comparing-sessions-compare)).
 
 **The scope rule.** The audit scope is `audit`, plus `observe_audit` in observe mode, plus
 `active_audit` when an active feature is requested, plus `install_audit` when the session has an
@@ -336,6 +345,90 @@ Validation does not check what a decision, a capability open question's ID, or a
 condition's reason should be given the recorded analysis; `session verify` does, by evaluating
 again.
 
+## Comparing sessions (`[compare]`)
+
+`sigil compare --policy FILE` (#16) judges the differences between two sessions under the
+policy's `[compare]` section; without `--policy`, under the built-in policy. A policy never
+changes what changed: the diff's changes and the items it could not compare are the same under
+any policy. It gives each change kind an action and each cause of an item not comparable a
+treatment, and the diff two results, as a session has:
+
+- **`verdict`:** the maximum action of the changes, and of the items not comparable treated as
+  `warn` or `fail`. `ignore` does not count. With none, it is `PASS`.
+- **`completeness`:** `INCOMPLETE` when either input session is incomplete itself (its recorded
+  completeness, which the diff copies into each side), or when an item not comparable is treated
+  as `count_as_gap` (the default). The diff names the incomplete inputs and counts the items.
+  Otherwise `COMPLETE`. What a session could not see, a comparison with it cannot see either.
+  Completeness never changes the verdict.
+
+`--fail-on warn|fail` exits 3 when the verdict reaches that level, and `--fail-on-incomplete` 4
+when the diff is incomplete and 3 does not apply
+([judging the differences](ai-bom-and-comparison.md#judging-the-differences)).
+
+**Default actions.** Drift that a single session's verdict cannot see fails; a change that
+weakens the baseline warns; improvements, and changes that follow from others, are ignored.
+`sigil rules` lists them.
+
+| Default | Change kinds |
+|---|---|
+| `fail` | `LayerChanged` (the same model, other bytes), `FileContentChanged` (an installed file replaced), `BindWidened` |
+| `decided` | `VerdictChanged` (only when worse), `FindingNew`, `FindingDecisionChanged` (`warn` unless heavier), `ViolationNew`, `ViolationDecisionChanged` (`warn` unless heavier) |
+| `warn` | `PolicyChanged`, `CheckOpened`, `ModelAdded`, `ModelRemoved`, `LicenseChanged`, `FileAdded`, `FileRemoved`, `ReleaseChanged`, `ComponentChanged`, `ListenerAdded` |
+| `ignore` | `CompletenessChanged`, `CheckClosed`, `FindingResolved`, `ViolationResolved`, `ListenerRemoved`, `BindNarrowed` |
+
+Every cause (`Coverage`, `Request`, `Policy`) counts as a gap by default.
+
+By default, an Ollama upgrade (`FileContentChanged`) or an updated model tag (`LayerChanged`)
+fails: against a trusted baseline, an intended update is approved by taking a new baseline.
+
+**`decided`.** A new finding or policy violation weighs what its decisions in the current
+session say: the maximum of their actions. A new finding of a rule the policy ignores is
+ignored; a new `fail` violation fails. A finding or violation whose decisions changed
+(`FindingDecisionChanged`, `ViolationDecisionChanged`) compares the maximum action of its
+decisions in the current session with that of its decisions in the baseline (a side without
+decisions counts as `fail`). When the current one is heavier, the change weighs it, and at
+least `warn`; otherwise it weighs `warn`. So ignore to `fail` and `warn` to `fail` fail, as a
+new `fail` finding does (an override that expired, say); ignore to `warn` warns; and a change
+that did not get heavier warns: `fail` to `fail` with another reason, source, or expiry (a
+rule's reason edited, or a rule moved from the built-in policy into a file), and a weakening
+such as `fail` to ignore. A decision that changed is never ignored under `decided`. The
+decisions are the sessions' own, made by the policies they were inspected with.
+
+A verdict that changed (`VerdictChanged`) weighs the current session's verdict when it is worse
+than the baseline's: `PASS` to `FAIL` and `WARN` to `FAIL` fail, `PASS` to `WARN` warns. A
+verdict that got better is ignored. Open questions are not compared yet, so a new open question
+that the policy treats as `fail` or `warn` (`[open_questions] default`) changes only the verdict;
+without this, a session that fails by an open question alone would give a diff that passes.
+Since `VerdictChanged` is `decided`, ignoring `FindingNew`, `ViolationNew`, or the
+decision-change kinds does not pass a diff whose new or changed item makes the session's verdict
+worse; for that, ignore `VerdictChanged` as well.
+
+Only these five kinds carry decisions or the verdict they gave, so only they take `decided`; a
+policy may give them `fail`, `warn`, or `ignore` instead. `decided` for any other kind does not
+load. The Markdown marks a line whose action its decisions or verdict gave "(as decided)".
+
+**What the diff records.** The diff's `evaluation` names the policy (its name and SHA-256, as a
+session records its policy) and holds the action of every change kind and the treatment of
+every cause, each with its source (`default:compare.<Kind>`, `policy:compare.changes.<Kind>`,
+`default:compare.not_comparable.<Cause>`, or `policy:compare.not_comparable.<Cause>`) and the
+policy's reason. Each change's action can be read from it. The Markdown names each side's
+completeness, the result, and each line's action. A reader checks a diff against itself: one
+whose table misses a kind or a cause, holds an entry SIGIL would not write (a default's source
+with another action or a reason, the source of another kind or cause, a policy's blank reason,
+or a policy's `ignore` without a reason), or whose recorded verdict or completeness is not what
+a fresh judgment gives, does not load. That does not prove which policy file made the diff:
+comparing the two sessions again with `--policy` and that file does.
+
+**`[compare]` and sessions.** Inspection, evaluation, and `session verify` ignore the content of
+`[compare]`. It is part of the file, though, and so of the SHA-256 a session records. Editing
+`[compare]` changes that digest: a session inspected before the edit no longer verifies against
+the edited file (`session verify` names the other digest). A session inspected
+after `[compare]` was edited records the new digest. Against a baseline inspected before, the
+diff then reports `PolicyChanged` (`warn` by default), and a violation on one side only is not
+comparable (cause `Policy`, a gap by default). Taking a new baseline clears both.
+
+Entries have no `expires`: a diff records no time to judge it at.
+
 ## What is fatal
 
 Loading fails, and nothing is evaluated, for:
@@ -346,13 +439,17 @@ Loading fails, and nothing is evaluated, for:
 - an empty `name`;
 - an unknown scope, check, rule, or assumption;
 - a malformed date;
-- `ignore` without a reason (rule or open questions);
+- `ignore` without a reason (rule, open questions, or a `[compare]` entry);
 - a principal other than `root`, `runtime`, or `uid:<n>`, and a group other than `gid:<n>`;
 - a component deny entry with `ignore`, without a reason, listed twice, or naming a component
   that is not in the component database
   ([runtime artifacts](runtime-artifacts.md#components));
 - a capability denial with `ignore`, without a reason, listed twice, or naming a key that is not
-  in the capability-import table (#51).
+  in the capability-import table (#51);
+- a `[compare.changes]` key that is not a change kind of `sigil-diff/1`, a
+  `[compare.not_comparable]` key other than `Coverage`, `Request`, or `Policy`, and `decided` for
+  a change kind other than `VerdictChanged`, `FindingNew`, `FindingDecisionChanged`,
+  `ViolationNew`, and `ViolationDecisionChanged` (#16).
 
 A typo never silently weakens a policy.
 
@@ -367,6 +464,7 @@ A typo never silently weakens a policy.
 - counts open questions as gaps;
 - accepts no assumption;
 - has no overrides;
+- has no `[compare]` section: every change kind and cause takes its default;
 - denies no component or capability.
 
 **Sessions from before PR-4d-3.** The expanded scope catalog adds `artifacts.dependencies`,

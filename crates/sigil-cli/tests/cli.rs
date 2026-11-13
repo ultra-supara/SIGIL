@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
-use sigil_model::diff::{Change, Diff, LicenseState};
+use sigil_model::diff::{
+    Change, ChangeKind, CompareAction, Diff, DiffCompleteness, LicenseState, Side,
+};
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
 use sigil_model::{
@@ -702,6 +704,39 @@ fn rules_lists_the_catalog() {
         "{}",
         r.stdout
     );
+    // #16 (PR-16b): the change kinds and causes a compare policy can name, with their defaults.
+    assert!(
+        r.stdout.contains(
+            "\nChanges a compare policy can act on ([compare.changes]), with their default \
+             action:\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    for (kind, action) in [
+        ("PolicyChanged", "warn"),
+        ("LayerChanged", "fail"),
+        ("VerdictChanged", "decided"),
+        ("FindingNew", "decided"),
+        ("FindingDecisionChanged", "decided"),
+        ("ViolationDecisionChanged", "decided"),
+        ("BindNarrowed", "ignore"),
+    ] {
+        let line = format!("  {kind:<25} {action}\n");
+        assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
+    }
+    assert!(
+        r.stdout.contains(
+            "Causes of an item not comparable ([compare.not_comparable]), with their default \
+             treatment:\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    for cause in ["Coverage", "Request", "Policy"] {
+        let line = format!("  {cause:<25} count_as_gap\n");
+        assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
+    }
 }
 
 #[test]
@@ -3914,6 +3949,37 @@ fn diff_case(case: &str) -> PathBuf {
 }
 
 #[test]
+fn the_fixture_diffs_are_judged_under_the_built_in_policy() {
+    let policy = sigil_engine::policy::Policy::builtin_default().unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/examples/diff-v1");
+    let mut n = 0;
+    for entry in fs::read_dir(dir).unwrap() {
+        let case = entry.unwrap().path();
+        let diff: Diff =
+            serde_json::from_str(&fs::read_to_string(case.join("diff.json")).unwrap()).unwrap();
+        assert_eq!(
+            diff.evaluation.policy(),
+            &policy.knowledge(),
+            "{}",
+            case.display()
+        );
+        assert_eq!(
+            diff.evaluation,
+            policy.compare.judge(
+                &diff.baseline.completeness,
+                &diff.current.completeness,
+                &diff.changes,
+                &diff.not_comparable
+            ),
+            "{}",
+            case.display()
+        );
+        n += 1;
+    }
+    assert_eq!(n, 10);
+}
+
+#[test]
 fn compare_writes_the_diff_of_two_saved_sessions() {
     let case = diff_case("05-loopback-to-wildcard");
     let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));
@@ -4085,4 +4151,393 @@ fn compare_of_two_inspections_reports_a_removed_license() {
         )),
         "{diff:#?}"
     );
+}
+
+// --- compare policies and exit codes (#16, PR-16b) ---------------------------------------------
+
+#[test]
+fn compare_exits_3_when_the_diff_s_verdict_reaches_fail_on() {
+    let case = diff_case("03-blob-digest-changed");
+    let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));
+    let plain = run(&[&"compare", &"--baseline", &baseline, &"--current", &current]);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    assert!(
+        plain.stderr.contains(
+            "compare: 1 change, 0 not comparable: FAIL + COMPLETE under default (sha256:"
+        ),
+        "{}",
+        plain.stderr
+    );
+    for level in ["fail", "warn"] {
+        let r = run(&[
+            &"compare",
+            &"--baseline",
+            &baseline,
+            &"--current",
+            &current,
+            &"--fail-on",
+            &level,
+        ]);
+        assert_eq!(r.code, 3, "--fail-on {level}: {}", r.stderr);
+        let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+        assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
+    }
+    let same = diff_case("01-identical").join("baseline.json");
+    let pass = run(&[
+        &"compare",
+        &"--baseline",
+        &same,
+        &"--current",
+        &same,
+        &"--fail-on",
+        &"warn",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(pass.code, 0, "{}", pass.stderr);
+    assert!(pass.stderr.contains("PASS + COMPLETE"), "{}", pass.stderr);
+}
+
+#[test]
+fn compare_fails_when_an_expired_override_lets_a_finding_fail() {
+    // User decision, 2026-11-13: one policy, one store with a tampered blob, and an override of
+    // its rule that expires between the two runs. The only difference is the finding's decision,
+    // ignore then FAIL, and the diff fails as it does for a new FAIL finding.
+    let d = store(true);
+    let weights = blob(d.path(), b"weights");
+    let hex = weights.strip_prefix("sha256:").unwrap();
+    fs::write(d.path().join(format!("blobs/sha256-{hex}")), b"tampered").unwrap();
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "waived.toml",
+        "schema = \"sigil-policy/1\"\nname = \"waived\"\n\n\
+         [rules.\"model.blob_digest_mismatch\"]\naction = \"ignore\"\n\
+         reason = \"re-pull scheduled\"\nexpires = \"2027-06-30\"\n",
+    );
+    let at = |time: &str| {
+        let r = inspect(d.path(), &[&"--policy", &policy, &"--policy-time", &time]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        r
+    };
+    let (waived, expired) = (at("2027-06-01T00:00:00Z"), at("2027-07-01T00:00:00Z"));
+    assert_eq!(session_of(&waived).outcome.verdict, Verdict::Pass);
+    assert_eq!(session_of(&expired).outcome.verdict, Verdict::Fail);
+    let pa = write(dir.path(), "a.json", &waived.stdout);
+    let pb = write(dir.path(), "b.json", &expired.stdout);
+    let compare = |baseline: &Path, current: &Path, level: &str| {
+        run(&[
+            &"compare",
+            &"--baseline",
+            &baseline,
+            &"--current",
+            &current,
+            &"--fail-on",
+            &level,
+        ])
+    };
+    let r = compare(&pa, &pb, "fail");
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("FAIL + COMPLETE under default (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let kinds: Vec<ChangeKind> = diff.changes.iter().map(Change::kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            ChangeKind::VerdictChanged,
+            ChangeKind::FindingDecisionChanged
+        ]
+    );
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (sigil_model::Action::Fail, true)
+    );
+    // The other way round, the override weakens the baseline: it warns, and never fails.
+    let r = compare(&pb, &pa, "fail");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(diff.evaluation.verdict(), Verdict::Warn);
+    assert_eq!(compare(&pb, &pa, "warn").code, 3);
+}
+
+#[test]
+fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
+    // Review P1 of PR #137: open questions are not compared, so a new one that the policy treats
+    // as `fail` shows only in the verdict. Both sessions read the same file, which imports
+    // `execve`; the current one's policy denies `posix.process_spawn`, and without `--code` that
+    // import is an open question, treated `fail`. The diff holds `PolicyChanged` (warn) and
+    // `VerdictChanged`, and fails as the current session does. Both require no binary check, so
+    // both are complete: before the fix the diff was WARN + COMPLETE, and exited 0.
+    let dir = TempDir::new().unwrap();
+    let head = "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[scope]\nbinary_audit = []\n\n\
+                [open_questions]\ndefault = \"fail\"\n";
+    let before = write(dir.path(), "before.toml", head);
+    let after = write(
+        dir.path(),
+        "after.toml",
+        &format!(
+            "{head}\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\n\
+             reason = \"no processes\"\n"
+        ),
+    );
+    let spawn = code_fixture("spawn.so");
+    let a = binary(&[&spawn, &"--policy", &before]);
+    let b = binary(&[&spawn, &"--policy", &after]);
+    assert_eq!((a.code, b.code), (0, 0), "{}\n{}", a.stderr, b.stderr);
+    let (sa, sb) = (session_of(&a), session_of(&b));
+    assert!(sa.open_questions.is_empty() && sb.policy_violations.is_empty());
+    assert_eq!(sb.open_questions.len(), 1);
+    assert_eq!(sb.findings, sa.findings);
+    assert_eq!(
+        (sa.outcome.verdict, sb.outcome.verdict),
+        (Verdict::Pass, Verdict::Fail)
+    );
+    assert_eq!(sa.outcome.completeness, Completeness::Complete);
+    assert_eq!(sb.outcome.completeness, Completeness::Complete);
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &pa,
+        &"--current",
+        &pb,
+        &"--policy",
+        &after,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("FAIL + COMPLETE under ci (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let kinds: Vec<ChangeKind> = diff.changes.iter().map(Change::kind).collect();
+    assert_eq!(
+        kinds,
+        [ChangeKind::PolicyChanged, ChangeKind::VerdictChanged]
+    );
+    assert!(diff.not_comparable.is_empty());
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (sigil_model::Action::Fail, true)
+    );
+}
+
+#[test]
+fn compare_exits_4_when_an_item_not_comparable_counts_as_a_gap() {
+    // Models m and n; the baseline inventoried m only, so n is not comparable (Request).
+    let d = store(true);
+    let weights = blob(d.path(), b"n weights");
+    let license = blob(d.path(), b"MIT");
+    manifest(
+        d.path(),
+        "registry.ollama.ai/library/n/latest",
+        &[
+            (MODEL_MEDIA, weights.as_str()),
+            (LICENSE_MEDIA, license.as_str()),
+        ],
+    );
+    let a = inspect(d.path(), &[&"--model", &"m:latest"]);
+    let b = inspect(d.path(), &[]);
+    assert_eq!((a.code, b.code), (0, 0), "{}\n{}", a.stderr, b.stderr);
+    let dir = TempDir::new().unwrap();
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let plain = run(&[&"compare", &"--baseline", &pa, &"--current", &pb]);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    let diff: Diff = serde_json::from_str(&plain.stdout).unwrap();
+    assert!(!diff.not_comparable.is_empty(), "{diff:#?}");
+    assert_ne!(diff.evaluation.verdict(), Verdict::Fail, "{diff:#?}");
+    let DiffCompleteness::Incomplete { not_comparable, .. } = diff.evaluation.completeness() else {
+        panic!("{diff:#?}");
+    };
+    assert_eq!(
+        usize::try_from(*not_comparable).unwrap(),
+        diff.not_comparable.len()
+    );
+    assert!(
+        plain
+            .stderr
+            .contains(" + INCOMPLETE under default (sha256:"),
+        "{}",
+        plain.stderr
+    );
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &pa,
+        &"--current",
+        &pb,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+}
+
+#[test]
+fn compare_exits_4_when_an_input_is_incomplete() {
+    // Review P1: case 10's current session is incomplete, so the comparison is too.
+    let case = diff_case("10-check-now-open");
+    let (baseline, current) = (case.join("baseline.json"), case.join("current.json"));
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &baseline,
+        &"--current",
+        &current,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("WARN + INCOMPLETE under default (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        diff.evaluation.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Current),
+            not_comparable: 0
+        }
+    );
+    // One incomplete session as both inputs: no changes, and still incomplete.
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &current,
+        &"--current",
+        &current,
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 4, "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("compare: 0 changes, 0 not comparable: PASS + INCOMPLETE under default"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        diff.evaluation.completeness(),
+        &DiffCompleteness::Incomplete {
+            inputs: Some(Side::Both),
+            not_comparable: 0
+        }
+    );
+    let r = run(&[&"compare", &"--baseline", &current, &"--current", &current]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}
+
+#[test]
+fn compare_judges_under_the_policy_s_compare_section() {
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "ci.toml",
+        "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[compare.changes.LayerChanged]\n\
+         action = \"ignore\"\nreason = \"The model is retrained nightly\"\n",
+    );
+    let case = diff_case("03-blob-digest-changed");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &case.join("baseline.json"),
+        &"--current",
+        &case.join("current.json"),
+        &"--policy",
+        &policy,
+        &"--fail-on",
+        &"warn",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(diff.evaluation.policy().id, "ci");
+    assert_eq!(diff.evaluation.verdict(), Verdict::Pass);
+    let layer = &diff.evaluation.changes()[&ChangeKind::LayerChanged];
+    assert_eq!(layer.action, CompareAction::Ignore);
+    assert_eq!(layer.source.as_str(), "policy:compare.changes.LayerChanged");
+    assert_eq!(
+        layer.reason.as_deref(),
+        Some("The model is retrained nightly")
+    );
+    assert!(
+        r.stderr.contains("PASS + COMPLETE under ci (sha256:"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn compare_names_a_policy_that_does_not_load() {
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "typo.toml",
+        "schema = \"sigil-policy/1\"\nname = \"t\"\n\n[compare.changes.LayerChanges]\n\
+         action = \"warn\"\n",
+    );
+    let s = diff_case("01-identical").join("baseline.json");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &s,
+        &"--current",
+        &s,
+        &"--policy",
+        &policy,
+    ]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(r.stderr.contains("typo.toml"), "{}", r.stderr);
+    assert!(r.stderr.contains("LayerChanges"), "{}", r.stderr);
+    assert!(r.stdout.is_empty());
+}
+
+#[test]
+fn compare_never_writes_its_policy() {
+    let dir = TempDir::new().unwrap();
+    let text = "schema = \"sigil-policy/1\"\nname = \"t\"\n";
+    let policy = write(dir.path(), "p.toml", text);
+    let s = diff_case("01-identical").join("baseline.json");
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &s,
+        &"--current",
+        &s,
+        &"--policy",
+        &policy,
+        &"--out",
+        &policy,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("is the input"), "{}", r.stderr);
+    assert_eq!(fs::read_to_string(&policy).unwrap(), text);
+    let link = dir.path().join("link.toml");
+    fs::hard_link(&policy, &link).unwrap();
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &s,
+        &"--current",
+        &s,
+        &"--policy",
+        &policy,
+        &"--out",
+        &link,
+    ]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("hard link"), "{}", r.stderr);
+    assert_eq!(fs::read_to_string(&policy).unwrap(), text);
 }

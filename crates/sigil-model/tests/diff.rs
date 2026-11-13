@@ -60,6 +60,13 @@ fn canonical_json_orders_changes_by_kind_then_text() {
             name: t("a:latest"),
         },
     ];
+    // Hand-made changes are judged again: a diff reads back only as judged.
+    diff.evaluation = builtin_rules().judge(
+        &diff.baseline.completeness,
+        &diff.current.completeness,
+        &diff.changes,
+        &diff.not_comparable,
+    );
     let json = diff.to_canonical_json().unwrap();
     assert!(json.ends_with("}\n"), "{json}");
     let back: Diff = serde_json::from_str(&json).unwrap();
@@ -69,6 +76,102 @@ fn canonical_json_orders_changes_by_kind_then_text() {
     };
     assert_eq!(name, &t("a:latest"));
     assert_eq!(back.to_canonical_json().unwrap(), json);
+}
+
+/// An incomplete outcome with two required checks open and two gaps, its lists in canonical
+/// order or reversed.
+fn incomplete(reversed: bool) -> Completeness {
+    let mut missing_required: Vec<CheckId> = ids(&["loader.search_paths", "model_store.license"]);
+    let mut gaps: Vec<OpenQuestionId> = vec![
+        id(&format!(
+            "oq:loader.search_path_untrusted_creator@cwd/{ROLE}"
+        )),
+        id(&format!(
+            "oq:loader.search_path_untrusted_creator@exe_dir/{ROLE}"
+        )),
+    ];
+    if reversed {
+        missing_required.reverse();
+        gaps.reverse();
+    }
+    Completeness::Incomplete {
+        missing_required,
+        gaps,
+    }
+}
+
+#[test]
+fn a_side_s_completeness_lists_are_written_in_canonical_order() {
+    let mut sorted = diff_of(&complete_pass(), &complete_pass());
+    sorted.baseline.completeness = incomplete(false);
+    sorted.current.completeness = incomplete(false);
+    sorted.evaluation = builtin_rules().judge(
+        &sorted.baseline.completeness,
+        &sorted.current.completeness,
+        &sorted.changes,
+        &sorted.not_comparable,
+    );
+    let mut canonical = sorted.clone();
+    canonical.canonicalize();
+    assert_eq!(canonical, sorted, "the sorted lists are canonical");
+    let mut reversed = sorted.clone();
+    reversed.baseline.completeness = incomplete(true);
+    reversed.current.completeness = incomplete(true);
+    assert_ne!(reversed, sorted);
+    assert_eq!(
+        reversed.to_canonical_json().unwrap(),
+        sorted.to_canonical_json().unwrap()
+    );
+    // A file with the lists reversed reads back, and is written back, in canonical order.
+    let back: Diff = serde_json::from_str(&serde_json::to_string(&reversed).unwrap()).unwrap();
+    assert_eq!(back, sorted);
+    assert_eq!(
+        back.to_canonical_json().unwrap(),
+        sorted.to_canonical_json().unwrap()
+    );
+}
+
+#[test]
+fn a_completeness_change_s_lists_are_written_in_canonical_order() {
+    let changes = |reversed: bool| {
+        vec![
+            Change::CompletenessChanged {
+                baseline: Completeness::Complete,
+                current: incomplete(reversed),
+            },
+            Change::CompletenessChanged {
+                baseline: incomplete(reversed),
+                current: Completeness::Complete,
+            },
+        ]
+    };
+    let mut sorted = diff_of(&complete_pass(), &complete_pass());
+    sorted.changes = changes(false);
+    sorted.evaluation = builtin_rules().judge(
+        &sorted.baseline.completeness,
+        &sorted.current.completeness,
+        &sorted.changes,
+        &sorted.not_comparable,
+    );
+    sorted.canonicalize();
+    let mut canonical = sorted.clone();
+    canonical.canonicalize();
+    assert_eq!(canonical, sorted, "the sorted lists are canonical");
+    let mut reversed = sorted.clone();
+    reversed.changes = changes(true);
+    reversed.changes.reverse();
+    assert_ne!(reversed, sorted);
+    assert_eq!(
+        reversed.to_canonical_json().unwrap(),
+        sorted.to_canonical_json().unwrap()
+    );
+    // A file with the lists reversed reads back, and is written back, in canonical order.
+    let back: Diff = serde_json::from_str(&serde_json::to_string(&reversed).unwrap()).unwrap();
+    assert_eq!(back, sorted);
+    assert_eq!(
+        back.to_canonical_json().unwrap(),
+        sorted.to_canonical_json().unwrap()
+    );
 }
 
 #[test]
@@ -633,6 +736,7 @@ fn a_new_finding_is_reported_beside_partial_current_coverage() {
         subject: SubjectKey::Model(id(MODEL_M)),
         at: "#1".to_string(),
         current: vec![id(&format!("finding:model.blob_missing@{MODEL_M}#1"))],
+        decisions: vec![decision(Action::Warn, "default:model.blob_missing")],
     }));
 }
 
@@ -936,6 +1040,7 @@ fn a_violation_is_new_or_resolved_on_its_placement() {
             slice,
             component: id("ggml-base"),
         }],
+        decisions: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
     }));
     let back = diff_of(&binary_denied(), &binary_inspect());
     assert!(back.changes.iter().any(|c| matches!(
@@ -1263,6 +1368,41 @@ fn a_decision_change_s_pointers_are_sorted_and_each_once() {
 }
 
 #[test]
+fn a_new_item_s_decisions_are_sorted_and_each_once() {
+    let rule = "model.license_missing";
+    let claim = Ref::Component {
+        slice: SliceId::from_parts(&id(&format!("sha256:{}", hex(0x11))), Arch::X86_64, 0),
+        component: id("ggml-base"),
+    };
+    let warn = decision(Action::Warn, &format!("default:{rule}"));
+    let fail = decision(Action::Fail, "policy:components.deny.ggml-base");
+    let mut sorted = [warn.clone(), fail.clone()];
+    sorted.sort_by_key(|d| serde_json::to_string(d).unwrap());
+    let reversed: Vec<_> = sorted.iter().rev().cloned().collect();
+    let messy = vec![reversed[0].clone(), sorted[0].clone(), reversed[0].clone()];
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    diff.changes = vec![
+        Change::FindingNew {
+            rule: id(rule),
+            subject: SubjectKey::Model(id(MODEL_M)),
+            at: String::new(),
+            current: vec![],
+            decisions: messy.clone(),
+        },
+        Change::ViolationNew {
+            policy_rule: id("policy:components.deny.ggml-base"),
+            subject: SubjectKey::Other(claim),
+            current: vec![],
+            decisions: messy,
+        },
+    ];
+    diff.canonicalize();
+    for change in &diff.changes {
+        assert_eq!(change.decisions(), Some(&sorted[..]), "{change:?}");
+    }
+}
+
+#[test]
 fn one_change_is_not_called_changes() {
     let mut diff = diff_of(&compare_store(), &compare_store());
     diff.changes = vec![Change::ModelAdded {
@@ -1435,11 +1575,6 @@ fn every_change_renders_with_its_key_text() {
             assert!(md.contains(&esc_md(key)), "{kind}: {key}\n{md}");
         }
     }
-}
-
-/// `text` as `render::md::esc` writes it, for the characters these tests use.
-fn esc_md(text: &str) -> String {
-    t(text).markdown_inline()
 }
 
 #[test]

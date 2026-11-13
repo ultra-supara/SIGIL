@@ -7,27 +7,30 @@
 | Mode | observe | observe |
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
+| Completeness | INCOMPLETE | COMPLETE |
+
+Result\: PASS \+ INCOMPLETE \(the baseline is incomplete\)\, under the policy default sigil\-policy\/1 \(sha256\:61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123\)\.
 
 4 changes\, 0 not comparable\.
 
 ## Outcome
 
-| What | Baseline | Current |
-|---|---|---|
-| verdict | WARN | PASS |
-| completeness | INCOMPLETE | COMPLETE |
+| Action | What | Baseline | Current |
+|---|---|---|---|
+| ignored \(as decided\) | verdict | WARN | PASS |
+| ignored | completeness | INCOMPLETE | COMPLETE |
 
 ## Coverage
 
-| Change | Check | Baseline | Current |
-|---|---|---|---|
-| closed | model\_store\.integrity | Partial 1 \(required\) | Complete 1 \(required\) |
+| Action | Change | Check | Baseline | Current |
+|---|---|---|---|---|
+| ignored | closed | model\_store\.integrity | Partial 1 \(required\) | Complete 1 \(required\) |
 
 Only open/closed transitions are reported. A check open on both sides whose states or gaps changed is not.
 
 ## Findings
 
-| Change | Rule | Subject | Findings |
-|---|---|---|---|
-| resolved | model\.blob\_missing | model\:models\/registry\.ollama\.ai\/library\/m\/latest\#1 | finding\:model\.blob\_missing\@model\:models\/registry\.ollama\.ai\/library\/m\/latest\#1 |
+| Action | Change | Rule | Subject | Findings |
+|---|---|---|---|---|
+| ignored | resolved | model\.blob\_missing | model\:models\/registry\.ollama\.ai\/library\/m\/latest\#1 | finding\:model\.blob\_missing\@model\:models\/registry\.ollama\.ai\/library\/m\/latest\#1 |
 

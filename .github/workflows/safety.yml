@@ -53,14 +53,18 @@ jobs:
       - name: Build-time bans (crates)
         run: cargo deny check bans
       - name: Syscall safety tests and negative controls
-        run: cargo test -p sigil-cli --test safety
+        # The cached target/ may hold trace directories of an earlier run, which the count below
+        # would take for this run's.
+        run: |
+          rm -rf target/tmp/safety-traces
+          cargo test -p sigil-cli --test safety
       - name: Check that the negative controls and CLI cases produced traces
         run: |
           n=$(ls -d target/tmp/safety-traces/control-* | wc -l)
           c=$(ls -d target/tmp/safety-traces/* | wc -l)
           echo "negative-control traces: $n, all traced cases: $c"
           test "$n" -ge 16
-          test "$c" -ge 33
+          test "$c" -ge 52
       - name: Upload syscall traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -7,12 +7,15 @@
 | Mode | observe | observe |
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
+| Completeness | COMPLETE | COMPLETE |
+
+Result\: WARN \+ COMPLETE\, under the policy default sigil\-policy\/1 \(sha256\:61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123\)\.
 
 1 change\, 0 not comparable\.
 
 ## Models
 
-| Change | Model | Baseline | Current |
-|---|---|---|---|
-| added | model\:models\/registry\.ollama\.ai\/library\/n\/latest | absent | n\:latest |
+| Action | Change | Model | Baseline | Current |
+|---|---|---|---|---|
+| WARN | added | model\:models\/registry\.ollama\.ai\/library\/n\/latest | absent | n\:latest |
 

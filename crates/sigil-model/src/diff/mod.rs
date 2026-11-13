@@ -13,6 +13,7 @@
 
 mod compare;
 mod files;
+mod judge;
 mod judged;
 mod listeners;
 mod markdown;
@@ -21,6 +22,7 @@ mod outcome;
 mod scope;
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,11 +41,17 @@ use crate::session::{KnowledgeRef, Mode, ToolInfo};
 use crate::text::UntrustedText;
 
 pub use compare::compare;
+pub use judge::{
+    ChangeTreatment, CompareAction, CompareRules, DiffCompleteness, Evaluation,
+    NotComparableTreatment, RulesError,
+};
 pub use markdown::markdown;
 
-/// What changed between two sessions (`sigil-diff/1`).
+/// What changed between two sessions (`sigil-diff/1`). It is read through a record of the same
+/// fields (unknown fields refused): a document whose recorded verdict or completeness is not
+/// what its own evaluation gives does not load ([`DiffError`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "DiffRecord")]
 pub struct Diff {
     pub schema: DiffSchema,
     /// The SIGIL that compared.
@@ -54,6 +62,83 @@ pub struct Diff {
     pub changes: Vec<Change>,
     /// Differences that could not be judged.
     pub not_comparable: Vec<NotComparable>,
+    /// How the changes, the items not comparable and the two inputs' completeness were judged
+    /// (#16, PR-16b).
+    pub evaluation: Evaluation,
+}
+
+/// The JSON form of a [`Diff`], before its result is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiffRecord {
+    schema: DiffSchema,
+    tool: ToolInfo,
+    baseline: DiffSide,
+    current: DiffSide,
+    changes: Vec<Change>,
+    not_comparable: Vec<NotComparable>,
+    evaluation: Evaluation,
+}
+
+/// Why a document is not a diff as SIGIL writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffError {
+    /// The recorded verdict and completeness are not what the recorded evaluation's table gives
+    /// for the recorded changes, items not comparable and inputs.
+    Judgment {
+        recorded: (Verdict, DiffCompleteness),
+        judged: (Verdict, DiffCompleteness),
+    },
+}
+
+impl fmt::Display for DiffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DiffError::Judgment { recorded, judged } => write!(
+                f,
+                "the recorded result {:?} + {:?} is not what its evaluation gives: {:?} + {:?}",
+                recorded.0, recorded.1, judged.0, judged.1
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DiffError {}
+
+impl TryFrom<DiffRecord> for Diff {
+    type Error = DiffError;
+
+    /// The record in canonical order, if its evaluation's table gives the recorded result.
+    fn try_from(record: DiffRecord) -> Result<Diff, DiffError> {
+        let mut diff = Diff {
+            schema: record.schema,
+            tool: record.tool,
+            baseline: record.baseline,
+            current: record.current,
+            changes: record.changes,
+            not_comparable: record.not_comparable,
+            evaluation: record.evaluation,
+        };
+        diff.canonicalize();
+        let judged = diff.evaluation.rules().judge(
+            &diff.baseline.completeness,
+            &diff.current.completeness,
+            &diff.changes,
+            &diff.not_comparable,
+        );
+        if judged.verdict() != diff.evaluation.verdict()
+            || judged.completeness() != diff.evaluation.completeness()
+        {
+            return Err(DiffError::Judgment {
+                recorded: (
+                    diff.evaluation.verdict(),
+                    diff.evaluation.completeness().clone(),
+                ),
+                judged: (judged.verdict(), judged.completeness().clone()),
+            });
+        }
+        Ok(diff)
+    }
 }
 
 /// The diff schema version. Only `sigil-diff/1` is accepted.
@@ -75,6 +160,9 @@ pub struct DiffSide {
     pub started_at: Timestamp,
     /// The policy applied: the session's knowledge entry of kind `Policy`.
     pub policy: Option<KnowledgeRef>,
+    /// The session's own completeness, as recorded (`outcome.completeness`). An incomplete
+    /// input makes the diff incomplete.
+    pub completeness: Completeness,
 }
 
 /// Where a file was found, as a key that survives a new run.
@@ -164,8 +252,9 @@ pub struct NotComparable {
     pub open_in: Side,
 }
 
-/// Why a difference could not be judged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Why a difference could not be judged. Ordered as declared: the keys of a diff's evaluation
+/// and of a policy's `[compare.not_comparable]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Cause {
     /// A check is open on `open_in`.
     Coverage,
@@ -174,6 +263,25 @@ pub enum Cause {
     Request,
     /// The two sessions applied different policies.
     Policy,
+}
+
+impl Cause {
+    /// Every cause, in declared order.
+    pub const ALL: [Cause; 3] = [Cause::Coverage, Cause::Request, Cause::Policy];
+
+    /// The variant name, as the JSON and a policy write it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Cause::Coverage => "Coverage",
+            Cause::Request => "Request",
+            Cause::Policy => "Policy",
+        }
+    }
+
+    /// The cause named `name`, if any.
+    pub fn from_name(name: &str) -> Option<Cause> {
+        Cause::ALL.into_iter().find(|c| c.name() == name)
+    }
 }
 
 /// One side of a comparison, or both.
@@ -256,11 +364,14 @@ pub enum Change {
         baseline: CheckState,
         current: CheckState,
     },
+    /// A finding in the current session only. `decisions` are the distinct decisions of the
+    /// current side's findings with this key, in canonical order (by JSON text).
     FindingNew {
         rule: RuleId,
         subject: SubjectKey,
         at: String,
         current: Vec<FindingId>,
+        decisions: Vec<PolicyDecision>,
     },
     FindingResolved {
         rule: RuleId,
@@ -280,10 +391,13 @@ pub enum Change {
         baseline_findings: Vec<FindingId>,
         current_findings: Vec<FindingId>,
     },
+    /// A policy violation in the current session only. `decisions` are the distinct decisions of
+    /// the current side's violations with this key, in canonical order (by JSON text).
     ViolationNew {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
         current: Vec<Ref>,
+        decisions: Vec<PolicyDecision>,
     },
     ViolationResolved {
         policy_rule: PolicyRuleRef,
@@ -380,44 +494,178 @@ pub enum Change {
     },
 }
 
+/// The kind of a [`Change`]: its variant without its fields, in the order `Change` declares
+/// them (the canonical order). Serialized as the variant name: the keys of a diff's evaluation
+/// and of a policy's `[compare.changes]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ChangeKind {
+    PolicyChanged,
+    VerdictChanged,
+    CompletenessChanged,
+    CheckOpened,
+    CheckClosed,
+    FindingNew,
+    FindingResolved,
+    FindingDecisionChanged,
+    ViolationNew,
+    ViolationResolved,
+    ViolationDecisionChanged,
+    ModelAdded,
+    ModelRemoved,
+    LayerChanged,
+    LicenseChanged,
+    FileAdded,
+    FileRemoved,
+    FileContentChanged,
+    ReleaseChanged,
+    ComponentChanged,
+    ListenerAdded,
+    ListenerRemoved,
+    BindWidened,
+    BindNarrowed,
+}
+
+impl ChangeKind {
+    /// Every kind, in declared order.
+    pub const ALL: [ChangeKind; 24] = [
+        ChangeKind::PolicyChanged,
+        ChangeKind::VerdictChanged,
+        ChangeKind::CompletenessChanged,
+        ChangeKind::CheckOpened,
+        ChangeKind::CheckClosed,
+        ChangeKind::FindingNew,
+        ChangeKind::FindingResolved,
+        ChangeKind::FindingDecisionChanged,
+        ChangeKind::ViolationNew,
+        ChangeKind::ViolationResolved,
+        ChangeKind::ViolationDecisionChanged,
+        ChangeKind::ModelAdded,
+        ChangeKind::ModelRemoved,
+        ChangeKind::LayerChanged,
+        ChangeKind::LicenseChanged,
+        ChangeKind::FileAdded,
+        ChangeKind::FileRemoved,
+        ChangeKind::FileContentChanged,
+        ChangeKind::ReleaseChanged,
+        ChangeKind::ComponentChanged,
+        ChangeKind::ListenerAdded,
+        ChangeKind::ListenerRemoved,
+        ChangeKind::BindWidened,
+        ChangeKind::BindNarrowed,
+    ];
+
+    /// The variant name, as the JSON and a policy write it.
+    pub fn name(self) -> &'static str {
+        match self {
+            ChangeKind::PolicyChanged => "PolicyChanged",
+            ChangeKind::VerdictChanged => "VerdictChanged",
+            ChangeKind::CompletenessChanged => "CompletenessChanged",
+            ChangeKind::CheckOpened => "CheckOpened",
+            ChangeKind::CheckClosed => "CheckClosed",
+            ChangeKind::FindingNew => "FindingNew",
+            ChangeKind::FindingResolved => "FindingResolved",
+            ChangeKind::FindingDecisionChanged => "FindingDecisionChanged",
+            ChangeKind::ViolationNew => "ViolationNew",
+            ChangeKind::ViolationResolved => "ViolationResolved",
+            ChangeKind::ViolationDecisionChanged => "ViolationDecisionChanged",
+            ChangeKind::ModelAdded => "ModelAdded",
+            ChangeKind::ModelRemoved => "ModelRemoved",
+            ChangeKind::LayerChanged => "LayerChanged",
+            ChangeKind::LicenseChanged => "LicenseChanged",
+            ChangeKind::FileAdded => "FileAdded",
+            ChangeKind::FileRemoved => "FileRemoved",
+            ChangeKind::FileContentChanged => "FileContentChanged",
+            ChangeKind::ReleaseChanged => "ReleaseChanged",
+            ChangeKind::ComponentChanged => "ComponentChanged",
+            ChangeKind::ListenerAdded => "ListenerAdded",
+            ChangeKind::ListenerRemoved => "ListenerRemoved",
+            ChangeKind::BindWidened => "BindWidened",
+            ChangeKind::BindNarrowed => "BindNarrowed",
+        }
+    }
+
+    /// The kind named `name`, if any.
+    pub fn from_name(name: &str) -> Option<ChangeKind> {
+        ChangeKind::ALL.into_iter().find(|k| k.name() == name)
+    }
+}
+
 impl Change {
+    /// The change's kind.
+    pub fn kind(&self) -> ChangeKind {
+        match self {
+            Change::PolicyChanged { .. } => ChangeKind::PolicyChanged,
+            Change::VerdictChanged { .. } => ChangeKind::VerdictChanged,
+            Change::CompletenessChanged { .. } => ChangeKind::CompletenessChanged,
+            Change::CheckOpened { .. } => ChangeKind::CheckOpened,
+            Change::CheckClosed { .. } => ChangeKind::CheckClosed,
+            Change::FindingNew { .. } => ChangeKind::FindingNew,
+            Change::FindingResolved { .. } => ChangeKind::FindingResolved,
+            Change::FindingDecisionChanged { .. } => ChangeKind::FindingDecisionChanged,
+            Change::ViolationNew { .. } => ChangeKind::ViolationNew,
+            Change::ViolationResolved { .. } => ChangeKind::ViolationResolved,
+            Change::ViolationDecisionChanged { .. } => ChangeKind::ViolationDecisionChanged,
+            Change::ModelAdded { .. } => ChangeKind::ModelAdded,
+            Change::ModelRemoved { .. } => ChangeKind::ModelRemoved,
+            Change::LayerChanged { .. } => ChangeKind::LayerChanged,
+            Change::LicenseChanged { .. } => ChangeKind::LicenseChanged,
+            Change::FileAdded { .. } => ChangeKind::FileAdded,
+            Change::FileRemoved { .. } => ChangeKind::FileRemoved,
+            Change::FileContentChanged { .. } => ChangeKind::FileContentChanged,
+            Change::ReleaseChanged { .. } => ChangeKind::ReleaseChanged,
+            Change::ComponentChanged { .. } => ChangeKind::ComponentChanged,
+            Change::ListenerAdded { .. } => ChangeKind::ListenerAdded,
+            Change::ListenerRemoved { .. } => ChangeKind::ListenerRemoved,
+            Change::BindWidened { .. } => ChangeKind::BindWidened,
+            Change::BindNarrowed { .. } => ChangeKind::BindNarrowed,
+        }
+    }
+
     /// The kind's position in the declaration: the first part of the canonical order.
     fn rank(&self) -> u8 {
+        self.kind() as u8
+    }
+
+    /// The current session's decisions a change carries: a new finding's or policy violation's,
+    /// and the current side of a changed decision (`FindingDecisionChanged`,
+    /// `ViolationDecisionChanged`). `None` for every other kind, `VerdictChanged` included: it
+    /// carries the verdicts the decisions gave ([`ChangeKind::takes_decided`]).
+    pub fn decisions(&self) -> Option<&[PolicyDecision]> {
         match self {
-            Change::PolicyChanged { .. } => 0,
-            Change::VerdictChanged { .. } => 1,
-            Change::CompletenessChanged { .. } => 2,
-            Change::CheckOpened { .. } => 3,
-            Change::CheckClosed { .. } => 4,
-            Change::FindingNew { .. } => 5,
-            Change::FindingResolved { .. } => 6,
-            Change::FindingDecisionChanged { .. } => 7,
-            Change::ViolationNew { .. } => 8,
-            Change::ViolationResolved { .. } => 9,
-            Change::ViolationDecisionChanged { .. } => 10,
-            Change::ModelAdded { .. } => 11,
-            Change::ModelRemoved { .. } => 12,
-            Change::LayerChanged { .. } => 13,
-            Change::LicenseChanged { .. } => 14,
-            Change::FileAdded { .. } => 15,
-            Change::FileRemoved { .. } => 16,
-            Change::FileContentChanged { .. } => 17,
-            Change::ReleaseChanged { .. } => 18,
-            Change::ComponentChanged { .. } => 19,
-            Change::ListenerAdded { .. } => 20,
-            Change::ListenerRemoved { .. } => 21,
-            Change::BindWidened { .. } => 22,
-            Change::BindNarrowed { .. } => 23,
+            Change::FindingNew { decisions, .. }
+            | Change::ViolationNew { decisions, .. }
+            | Change::FindingDecisionChanged {
+                current: decisions, ..
+            }
+            | Change::ViolationDecisionChanged {
+                current: decisions, ..
+            } => Some(decisions),
+            _ => None,
         }
     }
 
     /// Sorts the lists a change holds.
     fn sort_lists(&mut self) {
         match self {
-            Change::FindingNew { current: ids, .. }
-            | Change::FindingResolved { baseline: ids, .. } => ids.sort(),
-            Change::ViolationNew { current: refs, .. }
-            | Change::ViolationResolved { baseline: refs, .. } => {
+            Change::FindingNew {
+                current: ids,
+                decisions,
+                ..
+            } => {
+                ids.sort();
+                sort_decisions(decisions);
+            }
+            Change::FindingResolved { baseline: ids, .. } => ids.sort(),
+            Change::ViolationNew {
+                current: refs,
+                decisions,
+                ..
+            } => {
+                refs.sort_by_cached_key(key);
+                refs.dedup();
+                sort_decisions(decisions);
+            }
+            Change::ViolationResolved { baseline: refs, .. } => {
                 refs.sort_by_cached_key(key);
                 refs.dedup();
             }
@@ -482,27 +730,23 @@ impl Change {
                     state.versions.dedup();
                 }
             }
+            Change::CompletenessChanged { baseline, current } => {
+                sort_completeness(baseline);
+                sort_completeness(current);
+            }
             _ => {}
         }
     }
 }
 
 impl Diff {
-    /// Puts the lists in canonical order: changes by kind, in declared order, then by their
-    /// JSON text; non-comparable items by their JSON text; the lists inside each sorted.
-    /// Idempotent.
+    /// Puts the lists in canonical order: each side's completeness lists sorted, as a session's
+    /// are; changes by kind, in declared order, then by their JSON text; non-comparable items by
+    /// their JSON text; the lists inside each sorted. Idempotent.
     pub fn canonicalize(&mut self) {
-        for change in &mut self.changes {
-            change.sort_lists();
-        }
-        self.changes.sort_by_cached_key(|c| (c.rank(), key(c)));
-        self.changes.dedup();
-        for item in &mut self.not_comparable {
-            item.checks.sort();
-            item.checks.dedup();
-        }
-        self.not_comparable.sort_by_cached_key(key);
-        self.not_comparable.dedup();
+        sort_completeness(&mut self.baseline.completeness);
+        sort_completeness(&mut self.current.completeness);
+        canonicalize_lists(&mut self.changes, &mut self.not_comparable);
     }
 
     /// The diff as SIGIL writes it: canonical order, pretty JSON, a final newline.
@@ -513,6 +757,34 @@ impl Diff {
         json.push('\n');
         Ok(json)
     }
+}
+
+/// A completeness's lists sorted, as `Session::canonicalize` sorts the outcome's.
+fn sort_completeness(completeness: &mut Completeness) {
+    if let Completeness::Incomplete {
+        missing_required,
+        gaps,
+    } = completeness
+    {
+        missing_required.sort();
+        gaps.sort();
+    }
+}
+
+/// A diff's changes and items not comparable in canonical order ([`Diff::canonicalize`]), each
+/// once.
+fn canonicalize_lists(changes: &mut Vec<Change>, not_comparable: &mut Vec<NotComparable>) {
+    for change in changes.iter_mut() {
+        change.sort_lists();
+    }
+    changes.sort_by_cached_key(|c| (c.rank(), key(c)));
+    changes.dedup();
+    for item in not_comparable.iter_mut() {
+        item.checks.sort();
+        item.checks.dedup();
+    }
+    not_comparable.sort_by_cached_key(key);
+    not_comparable.dedup();
 }
 
 /// A value's JSON text: a total, deterministic order and map key for types without `Ord`.

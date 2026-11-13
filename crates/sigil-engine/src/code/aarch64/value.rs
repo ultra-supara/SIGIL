@@ -266,8 +266,8 @@ impl A64State {
         self.sp.weight() + self.regs.iter().map(Value::weight).sum::<u64>()
     }
     fn call(&mut self, pc: u64) {
-        for n in 0..18 {
-            self.regs[n] = Value::Unknown(Why::ClobberedByCall);
+        for reg in &mut self.regs[..18] {
+            *reg = Value::Unknown(Why::ClobberedByCall);
         }
         self.regs[0] = Value::Return(pc);
         // x18 is platform-defined, not a portable callee-saved location.

@@ -13,10 +13,10 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 - ELF and Mach-O container facts and capability-import hints, ELF signatures and component claims, and conditional ELF dependency candidates. `--code` records direct capability-import call sites in x86-64 and AArch64 ELF and in arm64 and x86-64 Mach-O, thin or universal, in standalone and installation inspections. See the [support matrix](support-matrix.md).
 - Observe mode: the runtime's listening sockets, attributed through `/proc` fd tables, with network-namespace checks. `hidepid` and permission gaps are reported as incompleteness.
 - The active API probe (`--active api-probe`): one `GET /api/version` to a literal address, off by default.
-- Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, and denied components and capabilities.
+- Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, denied components and capabilities, and the actions on a comparison's changes.
 - The session (`sigil-session/1`): the one record of a run, with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): a compact projection of the session that names it by SHA-256.
-- Comparison (`sigil compare`, `sigil-diff/1`): what changed between two sessions, each change pointing at its evidence, and what could not be judged.
+- Comparison (`sigil compare`, `sigil-diff/1`): what changed between two sessions, each change pointing at its evidence, and what could not be compared; the changes are judged under the policy's `[compare]` section with exit codes for CI.
 - The browser viewer (`sigil-wasm`), which renders sessions and AI-BOM v2 with the CLI's own renderers.
 - The CLI: `inspect ollama`, `binary inspect`, `session render`, `session verify`, `compare`, `explain`, and `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path.
@@ -27,7 +27,6 @@ How to run it: the [Ollama guide](ollama-inspection.md).
 
 - Analysis beyond direct call sites and backend-loader analysis (see the Roadmap).
 - Runtimes other than Ollama.
-- Policy actions on comparisons (a `[compare]` policy section and `--fail-on`).
 
 ## Inspection model
 
@@ -59,4 +58,4 @@ Verdict and completeness are independent: a run can be `PASS` and `INCOMPLETE`. 
 | M4 | A decision record for an active lab (dynamic tracing, kept in a separate tool) | Planned |
 | M5 | Other runtimes: llama.cpp server ([#18](https://github.com/ultra-supara/SIGIL/issues/18), [#52](https://github.com/ultra-supara/SIGIL/issues/52)), LM Studio, llamafile | Planned |
 
-`sigil compare` reports what changed against a trusted baseline (digest drift, a missing license, wider exposure, new findings): [AI-BOM and comparison](ai-bom-and-comparison.md). Policy actions on those changes are a follow-up to #16.
+`sigil compare` reports what changed against a trusted baseline (digest drift, a missing license, wider exposure, new findings), and judges it under the policy's `[compare]` section: [AI-BOM and comparison](ai-bom-and-comparison.md).

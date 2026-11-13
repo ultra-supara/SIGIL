@@ -7,12 +7,15 @@
 | Mode | observe | observe |
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
+| Completeness | COMPLETE | COMPLETE |
+
+Result\: FAIL \+ COMPLETE\, under the policy default sigil\-policy\/1 \(sha256\:61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123\)\.
 
 1 change\, 0 not comparable\.
 
 ## Models
 
-| Change | Model | Baseline | Current |
-|---|---|---|---|
-| layer application\/vnd\.ollama\.image\.model \#0 | model\:models\/registry\.ollama\.ai\/library\/m\/latest | sha256\:1212121212121212121212121212121212121212121212121212121212121212 | sha256\:1414141414141414141414141414141414141414141414141414141414141414 |
+| Action | Change | Model | Baseline | Current |
+|---|---|---|---|---|
+| FAIL | layer application\/vnd\.ollama\.image\.model \#0 | model\:models\/registry\.ollama\.ai\/library\/m\/latest | sha256\:1212121212121212121212121212121212121212121212121212121212121212 | sha256\:1414141414141414141414141414141414141414141414141414141414141414 |
 

@@ -19,7 +19,8 @@
       "id": "default",
       "version": "1",
       "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
-    }
+    },
+    "completeness": "Complete"
   },
   "current": {
     "sha256": "7a644e85c5a5a3243db3bc6e63426f2929f0855074bc3ab9cccf2182f53a822a",
@@ -35,7 +36,8 @@
       "id": "default",
       "version": "1",
       "sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
-    }
+    },
+    "completeness": "Complete"
   },
   "changes": [
     {
@@ -53,6 +55,14 @@
         "at": "",
         "current": [
           "finding:exposure.bind_public@listener:tcp/0.0.0.0:11434#7002"
+        ],
+        "decisions": [
+          {
+            "action": "Warn",
+            "source": "default:exposure.bind_public",
+            "reason": null,
+            "expires": null
+          }
         ]
       }
     },
@@ -70,5 +80,154 @@
       }
     }
   ],
-  "not_comparable": []
+  "not_comparable": [],
+  "evaluation": {
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "sigil-policy/1",
+      "sha256": "61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123"
+    },
+    "changes": {
+      "PolicyChanged": {
+        "action": "Warn",
+        "source": "default:compare.PolicyChanged",
+        "reason": null
+      },
+      "VerdictChanged": {
+        "action": "Decided",
+        "source": "default:compare.VerdictChanged",
+        "reason": null
+      },
+      "CompletenessChanged": {
+        "action": "Ignore",
+        "source": "default:compare.CompletenessChanged",
+        "reason": null
+      },
+      "CheckOpened": {
+        "action": "Warn",
+        "source": "default:compare.CheckOpened",
+        "reason": null
+      },
+      "CheckClosed": {
+        "action": "Ignore",
+        "source": "default:compare.CheckClosed",
+        "reason": null
+      },
+      "FindingNew": {
+        "action": "Decided",
+        "source": "default:compare.FindingNew",
+        "reason": null
+      },
+      "FindingResolved": {
+        "action": "Ignore",
+        "source": "default:compare.FindingResolved",
+        "reason": null
+      },
+      "FindingDecisionChanged": {
+        "action": "Decided",
+        "source": "default:compare.FindingDecisionChanged",
+        "reason": null
+      },
+      "ViolationNew": {
+        "action": "Decided",
+        "source": "default:compare.ViolationNew",
+        "reason": null
+      },
+      "ViolationResolved": {
+        "action": "Ignore",
+        "source": "default:compare.ViolationResolved",
+        "reason": null
+      },
+      "ViolationDecisionChanged": {
+        "action": "Decided",
+        "source": "default:compare.ViolationDecisionChanged",
+        "reason": null
+      },
+      "ModelAdded": {
+        "action": "Warn",
+        "source": "default:compare.ModelAdded",
+        "reason": null
+      },
+      "ModelRemoved": {
+        "action": "Warn",
+        "source": "default:compare.ModelRemoved",
+        "reason": null
+      },
+      "LayerChanged": {
+        "action": "Fail",
+        "source": "default:compare.LayerChanged",
+        "reason": null
+      },
+      "LicenseChanged": {
+        "action": "Warn",
+        "source": "default:compare.LicenseChanged",
+        "reason": null
+      },
+      "FileAdded": {
+        "action": "Warn",
+        "source": "default:compare.FileAdded",
+        "reason": null
+      },
+      "FileRemoved": {
+        "action": "Warn",
+        "source": "default:compare.FileRemoved",
+        "reason": null
+      },
+      "FileContentChanged": {
+        "action": "Fail",
+        "source": "default:compare.FileContentChanged",
+        "reason": null
+      },
+      "ReleaseChanged": {
+        "action": "Warn",
+        "source": "default:compare.ReleaseChanged",
+        "reason": null
+      },
+      "ComponentChanged": {
+        "action": "Warn",
+        "source": "default:compare.ComponentChanged",
+        "reason": null
+      },
+      "ListenerAdded": {
+        "action": "Warn",
+        "source": "default:compare.ListenerAdded",
+        "reason": null
+      },
+      "ListenerRemoved": {
+        "action": "Ignore",
+        "source": "default:compare.ListenerRemoved",
+        "reason": null
+      },
+      "BindWidened": {
+        "action": "Fail",
+        "source": "default:compare.BindWidened",
+        "reason": null
+      },
+      "BindNarrowed": {
+        "action": "Ignore",
+        "source": "default:compare.BindNarrowed",
+        "reason": null
+      }
+    },
+    "not_comparable": {
+      "Coverage": {
+        "treatment": "CountAsGap",
+        "source": "default:compare.not_comparable.Coverage",
+        "reason": null
+      },
+      "Request": {
+        "treatment": "CountAsGap",
+        "source": "default:compare.not_comparable.Request",
+        "reason": null
+      },
+      "Policy": {
+        "treatment": "CountAsGap",
+        "source": "default:compare.not_comparable.Policy",
+        "reason": null
+      }
+    },
+    "verdict": "Fail",
+    "completeness": "Complete"
+  }
 }

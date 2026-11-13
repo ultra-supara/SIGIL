@@ -7,20 +7,23 @@
 | Mode | observe | observe |
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
+| Completeness | COMPLETE | INCOMPLETE |
+
+Result\: WARN \+ INCOMPLETE \(the current session is incomplete\)\, under the policy default sigil\-policy\/1 \(sha256\:61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123\)\.
 
 2 changes\, 0 not comparable\.
 
 ## Outcome
 
-| What | Baseline | Current |
-|---|---|---|
-| completeness | COMPLETE | INCOMPLETE |
+| Action | What | Baseline | Current |
+|---|---|---|---|
+| ignored | completeness | COMPLETE | INCOMPLETE |
 
 ## Coverage
 
-| Change | Check | Baseline | Current |
-|---|---|---|---|
-| opened | model\_store\.license | Complete 1 \(required\) | Partial 1 \(required\) |
+| Action | Change | Check | Baseline | Current |
+|---|---|---|---|---|
+| WARN | opened | model\_store\.license | Complete 1 \(required\) | Partial 1 \(required\) |
 
 Only open/closed transitions are reported. A check open on both sides whose states or gaps changed is not.
 

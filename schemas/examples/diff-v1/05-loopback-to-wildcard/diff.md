@@ -7,24 +7,27 @@
 | Mode | observe | observe |
 | Started | 2026\-10\-07T07\:00\:00Z | 2026\-10\-07T07\:00\:00Z |
 | Policy | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) | default 1 \(sha256\:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3\) |
+| Completeness | COMPLETE | COMPLETE |
+
+Result\: FAIL \+ COMPLETE\, under the policy default sigil\-policy\/1 \(sha256\:61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123\)\.
 
 3 changes\, 0 not comparable\.
 
 ## Outcome
 
-| What | Baseline | Current |
-|---|---|---|
-| verdict | PASS | WARN |
+| Action | What | Baseline | Current |
+|---|---|---|---|
+| WARN \(as decided\) | verdict | PASS | WARN |
 
 ## Findings
 
-| Change | Rule | Subject | Findings |
-|---|---|---|---|
-| new | exposure\.bind\_public | port 11434 | finding\:exposure\.bind\_public\@listener\:tcp\/0\.0\.0\.0\:11434\#7002 |
+| Action | Change | Rule | Subject | Findings |
+|---|---|---|---|---|
+| WARN \(as decided\) | new | exposure\.bind\_public | port 11434 | finding\:exposure\.bind\_public\@listener\:tcp\/0\.0\.0\.0\:11434\#7002 |
 
 ## Listeners
 
-| Change | Port | Baseline | Current |
-|---|---|---|---|
-| bind widened | 11434 | loopback | wildcard |
+| Action | Change | Port | Baseline | Current |
+|---|---|---|---|---|
+| FAIL | bind widened | 11434 | loopback | wildcard |
 

@@ -617,6 +617,17 @@ mod tests {
         assert_eq!(fs::read(p.join(&name)).unwrap(), b"doc");
     }
 
+    /// Whether `err` is the refusal of a write that met a protected input at the target: put
+    /// back after the exchange, or, without the exchange, an existing file not replaced. Any
+    /// other error (one before the exchange) is not.
+    fn refused_as_an_input(err: &str) -> bool {
+        err == "it is an input of this run; not replaced"
+            || err.starts_with(
+                "this file system cannot exchange files, so an existing output is not replaced \
+                 while inputs are protected",
+            )
+    }
+
     /// The input whose inode is protected is what the exchange displaced: it is put back.
     #[test]
     fn a_protected_inode_is_not_replaced() {
@@ -625,7 +636,9 @@ mod tests {
         fs::write(&input, b"input bytes").unwrap();
         let target = p.join("out.json");
         fs::hard_link(&input, &target).unwrap();
-        assert!(write(&target, b"doc", &[inode(&input)]).is_err());
+        let err = write(&target, b"doc", &[inode(&input)]).unwrap_err();
+        assert!(refused_as_an_input(&err), "{err}");
+        assert_eq!(fs::read(&input).unwrap(), b"input bytes");
         assert_eq!(fs::read(&target).unwrap(), b"input bytes");
         assert_eq!(inode(&target), inode(&input));
         assert_eq!(
@@ -633,6 +646,28 @@ mod tests {
             ["input.bin", "out.json"],
             "no temporary file left"
         );
+    }
+
+    /// PR-16b review (P3): an input renamed onto `--out` after it was read and the target was
+    /// pinned is what the write would displace. It stays at `--out`, whole, and no temporary
+    /// file is left: with the exchange it is displaced and put back, and without it a run that
+    /// protects inputs never replaces an existing file.
+    #[test]
+    fn an_input_renamed_onto_the_target_after_the_pin_is_not_replaced() {
+        let (_d, p) = dir();
+        let input = p.join("policy.toml");
+        fs::write(&input, b"schema = \"sigil-policy/1\"\n").unwrap();
+        let read = inode(&input);
+        let target = Target::pin(&p.join("diff.json"), vec![]).unwrap();
+        fs::rename(&input, p.join("diff.json")).unwrap();
+        let err = target.write(b"doc", &[read]).unwrap_err();
+        assert!(refused_as_an_input(&err), "{err}");
+        assert_eq!(
+            fs::read(p.join("diff.json")).unwrap(),
+            b"schema = \"sigil-policy/1\"\n"
+        );
+        assert_eq!(inode(&p.join("diff.json")), read);
+        assert_eq!(names(&p), ["diff.json"], "no temporary file left");
     }
 
     /// A directory put at `--out` after it was pinned: exchanged, then put back.
