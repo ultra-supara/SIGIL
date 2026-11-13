@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::diff::{
-    Change, ChangeKind, CompareAction, Diff, DiffCompleteness, LicenseState, Side,
+    Cause, Change, ChangeKind, CompareAction, Diff, DiffCompleteness, Item, LicenseState, Side,
 };
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
@@ -826,9 +826,12 @@ fn rules_lists_the_catalog() {
         ("FindingNew", "decided"),
         ("FindingDecisionChanged", "decided"),
         ("ViolationDecisionChanged", "decided"),
+        ("OpenQuestionNew", "decided"),
+        ("OpenQuestionResolved", "ignore"),
+        ("OpenQuestionTreatmentChanged", "decided"),
         ("BindNarrowed", "ignore"),
     ] {
-        let line = format!("  {kind:<25} {action}\n");
+        let line = format!("  {kind:<28} {action}\n");
         assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
     }
     assert!(
@@ -840,7 +843,7 @@ fn rules_lists_the_catalog() {
         r.stdout
     );
     for cause in ["Coverage", "Request", "Policy"] {
-        let line = format!("  {cause:<25} count_as_gap\n");
+        let line = format!("  {cause:<28} count_as_gap\n");
         assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
     }
 }
@@ -4082,7 +4085,7 @@ fn the_fixture_diffs_are_judged_under_the_built_in_policy() {
         );
         n += 1;
     }
-    assert_eq!(n, 10);
+    assert_eq!(n, 11);
 }
 
 #[test]
@@ -4371,12 +4374,11 @@ fn compare_fails_when_an_expired_override_lets_a_finding_fail() {
 
 #[test]
 fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
-    // Review P1 of PR #137: open questions are not compared, so a new one that the policy treats
-    // as `fail` shows only in the verdict. Both sessions read the same file, which imports
-    // `execve`; the current one's policy denies `posix.process_spawn`, and without `--code` that
-    // import is an open question, treated `fail`. The diff holds `PolicyChanged` (warn) and
-    // `VerdictChanged`, and fails as the current session does. Both require no binary check, so
-    // both are complete: before the fix the diff was WARN + COMPLETE, and exited 0.
+    // Review P1 of PR #137, then #138. Both sessions read the same file, which imports `execve`;
+    // the current one's policy denies `posix.process_spawn`, and without `--code` that import is
+    // an open question, treated `fail`. Open questions are compared now, but under two policies
+    // the question on one side only is not comparable (cause `Policy`): a gap. The worse verdict
+    // (`VerdictChanged`, decided) still fails the diff, which is incomplete too.
     let dir = TempDir::new().unwrap();
     let head = "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[scope]\nbinary_audit = []\n\n\
                 [open_questions]\ndefault = \"fail\"\n";
@@ -4419,7 +4421,7 @@ fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
     ]);
     assert_eq!(r.code, 3, "{}", r.stderr);
     assert!(
-        r.stderr.contains("FAIL + COMPLETE under ci (sha256:"),
+        r.stderr.contains("FAIL + INCOMPLETE under ci (sha256:"),
         "{}",
         r.stderr
     );
@@ -4429,10 +4431,98 @@ fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
         kinds,
         [ChangeKind::PolicyChanged, ChangeKind::VerdictChanged]
     );
-    assert!(diff.not_comparable.is_empty());
+    assert_eq!(diff.not_comparable.len(), 1, "{:?}", diff.not_comparable);
+    let n = &diff.not_comparable[0];
+    assert!(
+        matches!(&n.item, Item::OpenQuestion { at, .. } if at == "capability:posix.process_spawn@"),
+        "{n:?}"
+    );
+    assert_eq!((n.cause, n.open_in), (Cause::Policy, Side::Both));
     assert_eq!(
         diff.evaluation.weigh(&diff.changes[1]),
         (sigil_model::Action::Fail, true)
+    );
+}
+
+#[test]
+fn compare_fails_on_a_new_open_question_in_a_session_that_already_fails() {
+    // #138: one policy denies `posix.network` and `posix.process_spawn` and treats open questions
+    // as `fail`; without `--code`, each denied import is an open question. The file at one path
+    // imports `connect` in the baseline (net-plt-gcc.so), `connect` and `execve` in the current
+    // one (spawn.so). The baseline already fails by its network question, so the verdict does
+    // not change: only the new process_spawn question can fail the comparison. Before #138 the
+    // diff held a `FileContentChanged` alone (`warn` under this policy) and exited 0.
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "ci.toml",
+        "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[scope]\nbinary_audit = []\n\n\
+         [open_questions]\ndefault = \"fail\"\n\n\
+         [[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\n\
+         reason = \"no connections\"\n\n\
+         [[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\n\
+         reason = \"no processes\"\n\n\
+         [compare.changes.FileContentChanged]\naction = \"warn\"\n\
+         reason = \"the file is replaced on purpose here\"\n",
+    );
+    let lib = dir.path().join("lib.so");
+    fs::copy(code_fixture("net-plt-gcc.so"), &lib).unwrap();
+    let a = binary(&[&lib, &"--policy", &policy]);
+    fs::copy(code_fixture("spawn.so"), &lib).unwrap();
+    let b = binary(&[&lib, &"--policy", &policy]);
+    assert_eq!((a.code, b.code), (0, 0), "{}\n{}", a.stderr, b.stderr);
+    let (sa, sb) = (session_of(&a), session_of(&b));
+    assert_eq!((sa.open_questions.len(), sb.open_questions.len()), (1, 2));
+    assert_eq!(
+        (sa.outcome.verdict, sb.outcome.verdict),
+        (Verdict::Fail, Verdict::Fail)
+    );
+    assert_eq!(sa.outcome.completeness, Completeness::Complete);
+    assert_eq!(sb.outcome.completeness, Completeness::Complete);
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &pa,
+        &"--current",
+        &pb,
+        &"--policy",
+        &policy,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("FAIL + COMPLETE under ci (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let kinds: Vec<ChangeKind> = diff.changes.iter().map(Change::kind).collect();
+    // The network question keys alike in both files although its slice ID changed.
+    assert_eq!(
+        kinds,
+        [ChangeKind::OpenQuestionNew, ChangeKind::FileContentChanged]
+    );
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+    let Change::OpenQuestionNew {
+        rule, at, current, ..
+    } = &diff.changes[0]
+    else {
+        panic!("{:?}", diff.changes[0]);
+    };
+    assert_eq!(rule.as_str(), "binary.capability_call");
+    assert_eq!(at, "capability:posix.process_spawn@");
+    assert_eq!(current.len(), 1);
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[0]),
+        (sigil_model::Action::Fail, true)
+    );
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (sigil_model::Action::Warn, false)
     );
 }
 

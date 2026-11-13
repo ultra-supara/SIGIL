@@ -1671,6 +1671,7 @@ fn rules() -> Result<(), Failure> {
     text.push_str(
         "\nChanges a compare policy can act on ([compare.changes]), with their default action:\n",
     );
+    // The name column fits the longest kind, `OpenQuestionTreatmentChanged`.
     for kind in ChangeKind::ALL {
         let action = match kind.default_action() {
             CompareAction::Fail => "fail",
@@ -1678,7 +1679,7 @@ fn rules() -> Result<(), Failure> {
             CompareAction::Ignore => "ignore",
             CompareAction::Decided => "decided",
         };
-        text.push_str(&format!("  {:<25} {action}\n", kind.name()));
+        text.push_str(&format!("  {:<28} {action}\n", kind.name()));
     }
     text.push_str(
         "Causes of an item not comparable ([compare.not_comparable]), with their default \
@@ -1691,7 +1692,7 @@ fn rules() -> Result<(), Failure> {
             OqTreatment::Fail => "fail",
             OqTreatment::Ignore => "ignore",
         };
-        text.push_str(&format!("  {:<25} {treatment}\n", cause.name()));
+        text.push_str(&format!("  {:<28} {treatment}\n", cause.name()));
     }
     emit(&text, None, &[])
 }

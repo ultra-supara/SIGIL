@@ -168,6 +168,21 @@
         "source": "default:compare.ViolationDecisionChanged",
         "reason": null
       },
+      "OpenQuestionNew": {
+        "action": "Decided",
+        "source": "default:compare.OpenQuestionNew",
+        "reason": null
+      },
+      "OpenQuestionResolved": {
+        "action": "Ignore",
+        "source": "default:compare.OpenQuestionResolved",
+        "reason": null
+      },
+      "OpenQuestionTreatmentChanged": {
+        "action": "Decided",
+        "source": "default:compare.OpenQuestionTreatmentChanged",
+        "reason": null
+      },
       "ModelAdded": {
         "action": "Warn",
         "source": "default:compare.ModelAdded",

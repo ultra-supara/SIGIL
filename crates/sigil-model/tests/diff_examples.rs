@@ -103,6 +103,7 @@ fn each_case_reports_its_own_kind_exactly_once_and_these_kinds() {
             ],
         ),
         ("10-check-now-open", &["CompletenessChanged", "CheckOpened"]),
+        ("11-new-open-question", &["OpenQuestionNew"]),
     ];
     for case in diff_cases() {
         let diff = diff_of(&case.baseline, &case.current);

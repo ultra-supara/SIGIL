@@ -611,6 +611,7 @@ fn a_claim_that_turns_conflicting_is_a_component_change() {
     let Change::ComponentChanged {
         placement,
         arch,
+        macho,
         component,
         baseline,
         current,
@@ -620,6 +621,8 @@ fn a_claim_that_turns_conflicting_is_a_component_change() {
     };
     assert_eq!(placement, &ggml_at("lib/ollama/libggml-base.so.0.13.1"));
     assert_eq!((*arch, component.as_str()), (Arch::X86_64, "ggml-base"));
+    // An ELF slice has no Mach-O CPU.
+    assert_eq!(*macho, None);
     let (baseline, current) = (baseline.as_ref().unwrap(), current.as_ref().unwrap());
     assert_eq!(baseline.status, IdentityStatus::ReferenceMatched);
     assert_eq!(current.status, IdentityStatus::Conflicting);
@@ -638,6 +641,7 @@ fn a_claim_gone_where_identity_was_not_closed_is_not_comparable() {
             item: Item::Component {
                 placement: ggml_at("lib/ollama/libggml.so.0.13.1"),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml"),
             },
             cause: Cause::Coverage,
@@ -957,6 +961,7 @@ fn claims_and_violations_of_a_binary_input_named_on_one_side_are_a_request_diffe
         request(Item::Component {
             placement: placement.clone(),
             arch: Arch::X86_64,
+            macho: None,
             component: id("ggml-base"),
         }),
         request(Item::Violation {
@@ -964,6 +969,7 @@ fn claims_and_violations_of_a_binary_input_named_on_one_side_are_a_request_diffe
             subject: SubjectKey::Component {
                 placement: placement.clone(),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
         }),
@@ -1029,6 +1035,7 @@ fn a_violation_is_new_or_resolved_on_its_placement() {
     let subject = SubjectKey::Component {
         placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
         arch: Arch::X86_64,
+        macho: None,
         component: id("ggml-base"),
     };
     let slice = binary_inspect().components[0].subject.clone();
@@ -1068,6 +1075,7 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
                 subject: SubjectKey::Component {
                     placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                     arch: Arch::X86_64,
+                    macho: None,
                     component: id("ggml-base"),
                 },
             },
@@ -1097,6 +1105,7 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
                 subject: SubjectKey::Slice {
                     placement: Placement::Path(t("/home/user/src/suspicious_kernel-gcc-O2.o")),
                     arch: Arch::X86_64,
+                    macho: None,
                 },
             },
             cause: Cause::Coverage,
@@ -1179,6 +1188,7 @@ fn a_deny_rule_removed_from_the_policy_is_not_a_resolved_violation() {
                 subject: SubjectKey::Component {
                     placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                     arch: Arch::X86_64,
+                    macho: None,
                     component: id("ggml-base"),
                 },
             },
@@ -1213,6 +1223,7 @@ fn sessions_that_record_no_policy_did_not_apply_the_same_one() {
             subject: SubjectKey::Component {
                 placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
         },
@@ -1238,6 +1249,7 @@ fn an_action_changed_by_the_policy_is_a_violation_decision_change() {
     let subject = SubjectKey::Component {
         placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
         arch: Arch::X86_64,
+        macho: None,
         component: id("ggml-base"),
     };
     let diff = diff_of(&binary_denied(), &warned);
@@ -1478,6 +1490,7 @@ fn sections_come_in_order_and_only_with_rows() {
         "Coverage",
         "Findings",
         "Policy violations",
+        "Open questions",
         "Models",
         "Installation",
         "Listeners",
@@ -1540,6 +1553,27 @@ fn every_change_renders_with_its_key_text() {
                 "ggml-base in sha256:4242",
             ],
         ),
+        (
+            "OpenQuestionNew",
+            &[
+                "binary.capability_call",
+                "capability:posix.process_spawn@",
+                "slice at",
+            ],
+        ),
+        (
+            "OpenQuestionResolved",
+            &["resolved", "capability:posix.network@"],
+        ),
+        (
+            "OpenQuestionTreatmentChanged",
+            &[
+                "treatment changed",
+                "count as gap",
+                "ignore",
+                "reviewed in the 2026 audit",
+            ],
+        ),
         ("ModelAdded", &["added"]),
         ("ModelRemoved", &["removed"]),
         ("LayerChanged", &["layer"]),
@@ -1575,6 +1609,32 @@ fn every_change_renders_with_its_key_text() {
             assert!(md.contains(&esc_md(key)), "{kind}: {key}\n{md}");
         }
     }
+}
+
+/// #138: an open question's ID part and its subject are told apart in Markdown, in a change row
+/// and in a not-comparable item.
+#[test]
+fn a_question_s_key_and_subject_are_separated_in_markdown() {
+    let base = diff_of(&compare_store(), &compare_store());
+    let key = esc_md("capability:posix.process_spawn@ on x86_64 slice at ");
+    let mut change = base.clone();
+    change.changes = every_change()
+        .into_iter()
+        .filter(|c| matches!(c, Change::OpenQuestionNew { .. }))
+        .collect();
+    let md = markdown(&change);
+    assert!(md.contains(&key), "{md}");
+    let mut gap = base;
+    gap.not_comparable = every_not_comparable()
+        .into_iter()
+        .filter(|n| matches!(n.item, Item::OpenQuestion { .. }))
+        .collect();
+    let md = markdown(&gap);
+    assert!(md.contains(&key), "{md}");
+    assert!(
+        md.contains(&esc_md("/home/user/Downloads/libggml-base.so")),
+        "{md}"
+    );
 }
 
 #[test]
@@ -1652,4 +1712,52 @@ fn a_held_model_s_finding_is_judged_by_its_manifest_s_stability() {
         "FindingResolved"
     ));
     assert!(has(&diff_of(&compare_store(), &malformed), "FindingNew"));
+}
+
+/// #138: a question change's lists are sorted, and each item once.
+#[test]
+fn a_question_change_s_lists_are_sorted_and_each_once() {
+    let mut diff = diff_of(&compare_store(), &compare_store());
+    let q = |s: &str| -> OpenQuestionId { id(s) };
+    let fail = question_decision(OqTreatment::Fail);
+    let gap = question_decision(OqTreatment::CountAsGap);
+    diff.changes = vec![
+        Change::OpenQuestionNew {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Other(Ref::Audit),
+            at: String::new(),
+            current: vec![q("oq:b"), q("oq:a"), q("oq:b")],
+            decisions: vec![fail.clone(), gap.clone(), fail.clone()],
+        },
+        Change::OpenQuestionTreatmentChanged {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Other(Ref::Audit),
+            at: String::new(),
+            baseline: vec![fail.clone(), gap.clone(), fail.clone()],
+            current: vec![gap.clone()],
+            baseline_questions: vec![q("oq:b"), q("oq:a"), q("oq:b")],
+            current_questions: vec![q("oq:a")],
+        },
+    ];
+    diff.canonicalize();
+    let mut want = vec![fail, gap];
+    want.sort_by_cached_key(|d| serde_json::to_string(d).unwrap());
+    let Change::OpenQuestionNew {
+        current, decisions, ..
+    } = &diff.changes[0]
+    else {
+        panic!("{:?}", diff.changes);
+    };
+    assert_eq!(current, &[q("oq:a"), q("oq:b")]);
+    assert_eq!(decisions, &want);
+    let Change::OpenQuestionTreatmentChanged {
+        baseline,
+        baseline_questions,
+        ..
+    } = &diff.changes[1]
+    else {
+        panic!("{:?}", diff.changes);
+    };
+    assert_eq!(baseline, &want);
+    assert_eq!(baseline_questions, &[q("oq:a"), q("oq:b")]);
 }

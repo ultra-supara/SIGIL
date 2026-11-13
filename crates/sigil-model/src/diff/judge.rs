@@ -13,7 +13,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::diff::{Cause, Change, ChangeKind, NotComparable, Side};
-use crate::finding::{Action, Completeness, OqTreatment, PolicyDecision, Verdict};
+use crate::finding::{
+    Action, Completeness, OpenQuestionDecision, OqTreatment, PolicyDecision, Verdict,
+};
 use crate::id::PolicyRuleRef;
 use crate::session::KnowledgeRef;
 
@@ -26,8 +28,11 @@ pub enum CompareAction {
     /// What the change's own decisions (the current session's) say: the maximum of their
     /// actions. A changed decision weighs that only when it is heavier than the baseline's, and
     /// at least `Warn`; otherwise `Warn`. A changed verdict, which the decisions gave, weighs the
-    /// current verdict when it is worse than the baseline's; otherwise nothing. Only for the
-    /// kinds that carry decisions or a verdict ([`ChangeKind::takes_decided`]).
+    /// current verdict when it is worse than the baseline's; otherwise nothing. An open
+    /// question's decision weighs its treatment: `Fail` and `Warn` as those actions, `CountAsGap`
+    /// and `Ignore` as nothing (a gap counts toward completeness); new and changed questions
+    /// follow new findings and changed decisions. Only for the kinds that carry decisions or a
+    /// verdict ([`ChangeKind::takes_decided`]).
     Decided,
 }
 
@@ -208,8 +213,8 @@ impl ChangeKind {
     /// changes that follow from others, are ignored; a new finding or violation, and a changed
     /// decision, weigh what the current session decides (a changed decision only when that got
     /// heavier, and at least `Warn`), so an override that expires fails as a new `fail` finding
-    /// does; a verdict that got worse weighs what it now is, so a new open question that the
-    /// policy treats as `fail` (open questions are not compared) fails too.
+    /// does; a verdict that got worse weighs what it now is, and a new or changed open question
+    /// weighs its treatment (#138).
     pub fn default_action(self) -> CompareAction {
         use ChangeKind as K;
         match self {
@@ -218,7 +223,9 @@ impl ChangeKind {
             | K::FindingNew
             | K::FindingDecisionChanged
             | K::ViolationNew
-            | K::ViolationDecisionChanged => CompareAction::Decided,
+            | K::ViolationDecisionChanged
+            | K::OpenQuestionNew
+            | K::OpenQuestionTreatmentChanged => CompareAction::Decided,
             K::PolicyChanged
             | K::CheckOpened
             | K::ModelAdded
@@ -233,14 +240,17 @@ impl ChangeKind {
             | K::CheckClosed
             | K::FindingResolved
             | K::ViolationResolved
+            | K::OpenQuestionResolved
             | K::ListenerRemoved
             | K::BindNarrowed => CompareAction::Ignore,
         }
     }
 
     /// Whether `Decided` applies to the kind: its changes carry the current session's decisions
-    /// ([`Change::decisions`]: a new finding or violation, a changed decision), or the verdict
-    /// they gave (`VerdictChanged`).
+    /// (a new finding, violation or open question, a changed decision or treatment), or the
+    /// verdict they gave (`VerdictChanged`). Findings and violations carry `PolicyDecision`s,
+    /// through [`Change::decisions`]; `OpenQuestionNew` and `OpenQuestionTreatmentChanged` carry
+    /// their own `OpenQuestionDecision`s.
     pub fn takes_decided(self) -> bool {
         matches!(
             self,
@@ -249,6 +259,8 @@ impl ChangeKind {
                 | ChangeKind::FindingDecisionChanged
                 | ChangeKind::ViolationNew
                 | ChangeKind::ViolationDecisionChanged
+                | ChangeKind::OpenQuestionNew
+                | ChangeKind::OpenQuestionTreatmentChanged
         )
     }
 }
@@ -376,7 +388,8 @@ impl CompareRules {
     /// weighs that action, at least `Warn`, only when it is heavier than the baseline's (by the
     /// same rule); otherwise `Warn`: another reason, source or expiry, or a weakening, warns. A
     /// changed verdict weighs the current verdict when it is worse than the baseline's (`Fail`
-    /// or `Warn`), and nothing when it is the same or better.
+    /// or `Warn`), and nothing when it is the same or better. An open question weighs its
+    /// treatment ([`CompareAction::Decided`]).
     pub fn weigh(&self, change: &Change) -> (Action, bool) {
         // Every kind has an entry (`new`, `defaults`). The fallback is never taken, and it would
         // not make a change lighter.
@@ -516,10 +529,19 @@ fn decided_weight(change: &Change) -> Action {
             Action::Ignore
         };
     }
-    let now = decided(change.decisions().unwrap_or(&[]));
-    match baseline_decisions(change) {
+    let (now, before) = match change {
+        Change::OpenQuestionNew { decisions, .. } => (treated(decisions), None),
+        Change::OpenQuestionTreatmentChanged {
+            baseline, current, ..
+        } => (treated(current), Some(treated(baseline))),
+        _ => (
+            decided(change.decisions().unwrap_or(&[])),
+            baseline_decisions(change).map(decided),
+        ),
+    };
+    match before {
         None => now,
-        Some(before) if verdict_of(now) > verdict_of(decided(before)) => heavier(now, Action::Warn),
+        Some(before) if verdict_of(now) > verdict_of(before) => heavier(now, Action::Warn),
         Some(_) => Action::Warn,
     }
 }
@@ -537,9 +559,24 @@ fn baseline_decisions(change: &Change) -> Option<&[PolicyDecision]> {
 /// The maximum action of `decisions`, ordered as the verdicts they give (`Ignore < Warn <
 /// Fail`). Without any, `Fail`.
 fn decided(decisions: &[PolicyDecision]) -> Action {
-    decisions
-        .iter()
-        .map(|d| d.action)
+    strongest(decisions.iter().map(|d| d.action))
+}
+
+/// The maximum weight of an open question's decisions (#138): `fail` and `warn` weigh as those
+/// actions; `count_as_gap` and `ignore` weigh nothing, since a gap counts toward completeness,
+/// not the verdict. Without any, `Fail`.
+fn treated(decisions: &[OpenQuestionDecision]) -> Action {
+    strongest(decisions.iter().map(|d| match d.treatment {
+        OqTreatment::Fail => Action::Fail,
+        OqTreatment::Warn => Action::Warn,
+        OqTreatment::CountAsGap | OqTreatment::Ignore => Action::Ignore,
+    }))
+}
+
+/// The heaviest of `actions` (`Ignore < Warn < Fail`); `Fail` without any: an item whose
+/// decisions are unknown is never lighter than it could be.
+fn strongest(actions: impl Iterator<Item = Action>) -> Action {
+    actions
         .max_by_key(|a| verdict_of(*a))
         .unwrap_or(Action::Fail)
 }

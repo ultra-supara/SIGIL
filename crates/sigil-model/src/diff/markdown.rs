@@ -3,18 +3,21 @@
 //! the items not comparable and how each counts. Every value is escaped
 //! ([`UntrustedText::markdown_inline`]), and the same `Diff` gives the same text.
 
+use crate::artifact::Arch;
 use crate::diff::{
     Cause, Change, CheckState, ComponentState, Diff, DiffCompleteness, DiffSide, Evaluation, Item,
-    LicenseState, NotComparable, Placement, ReleaseState, Side, SubjectKey,
+    LicenseState, MachOCpu, NotComparable, Placement, ReleaseState, Side, SubjectKey,
 };
 use crate::evidence::Ref;
-use crate::finding::{Action, OqTreatment, PolicyDecision};
+use crate::finding::{Action, OpenQuestionDecision, OqTreatment, PolicyDecision};
 use crate::id::ArtifactId;
 use crate::listener::BindClass;
 use crate::model::LayerRole;
 use crate::render::aibom::ReleaseBasisKind;
 use crate::render::md::{esc, joined, section, table};
-use crate::render::{action, completeness, identity_status, mode, subject, verdict, Shown};
+use crate::render::{
+    action, completeness, identity_status, mode, subject, treatment, verdict, Shown,
+};
 use crate::session::KnowledgeRef;
 use crate::text::UntrustedText;
 
@@ -26,7 +29,7 @@ struct Section {
 
 /// In the order of [`Change`]'s declaration. The first column is the line's weight under the
 /// diff's evaluation.
-const SECTIONS: [Section; 7] = [
+const SECTIONS: [Section; 8] = [
     Section {
         title: "Outcome",
         header: &["Action", "What", "Baseline", "Current"],
@@ -48,6 +51,10 @@ const SECTIONS: [Section; 7] = [
             "Subject",
             "In the session",
         ],
+    },
+    Section {
+        title: "Open questions",
+        header: &["Action", "Change", "Rule", "Subject", "Open questions"],
     },
     Section {
         title: "Models",
@@ -89,7 +96,7 @@ pub fn markdown(diff: &Diff) -> String {
         d.not_comparable.len()
     )));
     out.push_str("\n\n");
-    let mut rows: [Vec<Vec<String>>; 7] = Default::default();
+    let mut rows: [Vec<Vec<String>>; 8] = Default::default();
     for change in &d.changes {
         let (n, cells) = row(change);
         let mut line = vec![weighed(&d.evaluation, change)];
@@ -229,11 +236,20 @@ fn decisions_change(
     baseline: (&[PolicyDecision], String),
     current: (&[PolicyDecision], String),
 ) -> String {
-    let side = |name: &str, (d, on): (&[PolicyDecision], String)| {
+    sides_change(
+        what,
+        (decisions(baseline.0), baseline.1),
+        (decisions(current.0), current.1),
+    )
+}
+
+/// [`decisions_change`] of decisions already shown (escaped): an open question's treatments too.
+fn sides_change(what: &str, baseline: (String, String), current: (String, String)) -> String {
+    let side = |name: &str, (d, on): (String, String)| {
         format!(
             "{}{}{}{}{}",
             esc(&format!("{name}: ")),
-            decisions(d),
+            d,
             esc(&format!(" [{what}: ")),
             on,
             esc("]")
@@ -245,6 +261,25 @@ fn decisions_change(
         esc("; "),
         side("current", current)
     )
+}
+
+/// The escaped cell of an open question's decisions: each treatment and its source, with the
+/// reason when present.
+fn treatments(d: &[OpenQuestionDecision]) -> String {
+    if d.is_empty() {
+        return esc("none");
+    }
+    d.iter()
+        .map(|d| {
+            let mut text = esc(&format!("{} ({})", treatment(&d.treatment), d.source));
+            if let Some(reason) = &d.reason {
+                text.push_str(&esc(", reason: "));
+                text.push_str(&esc(reason));
+            }
+            text
+        })
+        .collect::<Vec<_>>()
+        .join(&esc("; "))
 }
 
 fn decisions(d: &[PolicyDecision]) -> String {
@@ -417,8 +452,58 @@ fn row(change: &Change) -> (usize, Vec<String>) {
                 ),
             ],
         ),
-        Change::ModelAdded { model, name } => (
+        Change::OpenQuestionNew {
+            rule,
+            subject: key,
+            at,
+            current,
+            ..
+        } => (
             4,
+            vec![
+                esc("new"),
+                esc(rule.as_str()),
+                question_on(key, at).markdown(),
+                cell(current, ", "),
+            ],
+        ),
+        Change::OpenQuestionResolved {
+            rule,
+            subject: key,
+            at,
+            baseline,
+        } => (
+            4,
+            vec![
+                esc("resolved"),
+                esc(rule.as_str()),
+                question_on(key, at).markdown(),
+                cell(baseline, ", "),
+            ],
+        ),
+        Change::OpenQuestionTreatmentChanged {
+            rule,
+            subject: key,
+            at,
+            baseline,
+            current,
+            baseline_questions,
+            current_questions,
+        } => (
+            4,
+            vec![
+                esc("treatment changed"),
+                esc(rule.as_str()),
+                question_on(key, at).markdown(),
+                sides_change(
+                    "questions",
+                    (treatments(baseline), cell(baseline_questions, ", ")),
+                    (treatments(current), cell(current_questions, ", ")),
+                ),
+            ],
+        ),
+        Change::ModelAdded { model, name } => (
+            5,
             vec![
                 esc("added"),
                 esc(model.as_str()),
@@ -427,7 +512,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             ],
         ),
         Change::ModelRemoved { model, name } => (
-            4,
+            5,
             vec![
                 esc("removed"),
                 esc(model.as_str()),
@@ -443,7 +528,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             baseline,
             current,
         } => (
-            4,
+            5,
             vec![
                 layer(*role, media_type.as_ref(), *ordinal).markdown(),
                 esc(model.as_str()),
@@ -456,7 +541,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             baseline,
             current,
         } => (
-            4,
+            5,
             vec![
                 esc("license"),
                 esc(model.as_str()),
@@ -467,7 +552,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
         Change::FileAdded {
             placement, content, ..
         } => (
-            5,
+            6,
             vec![
                 esc("file added"),
                 place(placement).markdown(),
@@ -478,7 +563,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
         Change::FileRemoved {
             placement, content, ..
         } => (
-            5,
+            6,
             vec![
                 esc("file removed"),
                 place(placement).markdown(),
@@ -492,7 +577,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             current_content,
             ..
         } => (
-            5,
+            6,
             vec![
                 esc("content changed"),
                 place(placement).markdown(),
@@ -505,7 +590,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             baseline,
             current,
         } => (
-            5,
+            6,
             vec![
                 esc("release"),
                 esc(product.as_str()),
@@ -516,20 +601,24 @@ fn row(change: &Change) -> (usize, Vec<String>) {
         Change::ComponentChanged {
             placement,
             arch,
+            macho,
             component,
             baseline,
             current,
         } => (
-            5,
+            6,
             vec![
-                esc(&format!("component {component} ({})", arch.name())),
+                esc(&format!(
+                    "component {component} ({})",
+                    claimed_on(*arch, macho.as_ref())
+                )),
                 place(placement).markdown(),
                 component_state(baseline.as_ref()).markdown(),
                 component_state(current.as_ref()).markdown(),
             ],
         ),
         Change::ListenerAdded { port, class, .. } => (
-            6,
+            7,
             vec![
                 esc("listener added"),
                 esc(&port.to_string()),
@@ -538,7 +627,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             ],
         ),
         Change::ListenerRemoved { port, class, .. } => (
-            6,
+            7,
             vec![
                 esc("listener removed"),
                 esc(&port.to_string()),
@@ -552,7 +641,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             current,
             ..
         } => (
-            6,
+            7,
             vec![
                 esc("bind widened"),
                 esc(&port.to_string()),
@@ -566,7 +655,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             current,
             ..
         } => (
-            6,
+            7,
             vec![
                 esc("bind narrowed"),
                 esc(&port.to_string()),
@@ -622,6 +711,15 @@ fn on(key: &SubjectKey, at: &str) -> String {
     subject_key(key).and(at).markdown()
 }
 
+/// An open question's key: its ID without the slice ID, ` on `, and what it is about. The ID
+/// part is a prefix (`capability:posix.process_spawn@`), so it cannot be run into the subject.
+fn question_on(key: &SubjectKey, at: &str) -> Shown {
+    if at.is_empty() {
+        return subject_key(key);
+    }
+    Shown::own(format!("{at} on ")).and_shown(subject_key(key))
+}
+
 fn subject_key(key: &SubjectKey) -> Shown {
     match key {
         SubjectKey::Model(m) => Shown::own(m.as_str()),
@@ -631,13 +729,44 @@ fn subject_key(key: &SubjectKey) -> Shown {
         SubjectKey::Component {
             placement,
             arch,
+            macho,
             component,
-        } => Shown::own(format!("{component} ({}) at ", arch.name())).and_shown(place(placement)),
-        SubjectKey::Slice { placement, arch } => {
-            Shown::own(format!("{} slice at ", arch.name())).and_shown(place(placement))
-        }
+        } => claim(placement, *arch, macho.as_ref(), component.as_str()),
+        SubjectKey::Slice {
+            placement,
+            arch,
+            macho,
+        } => Shown::own(format!("{} at ", slice_on(*arch, macho.as_ref())))
+            .and_shown(place(placement)),
         SubjectKey::Other(r) => Shown::own(subject(r)),
     }
+}
+
+/// A Mach-O slice's CPU, which tells apart two slices of one fat file with one architecture.
+fn cpu(m: &MachOCpu) -> String {
+    format!("Mach-O CPU {}, subtype {}", m.cpu_type, m.cpu_subtype)
+}
+
+/// A slice at its placement: `<arch> slice`, with its Mach-O CPU in brackets when it has one.
+fn slice_on(arch: Arch, macho: Option<&MachOCpu>) -> String {
+    match macho {
+        Some(m) => format!("{} slice ({})", arch.name(), cpu(m)),
+        None => format!("{} slice", arch.name()),
+    }
+}
+
+/// Which slice a component claim is on, at its placement: its architecture, and its Mach-O CPU
+/// when it has one.
+fn claimed_on(arch: Arch, macho: Option<&MachOCpu>) -> String {
+    match macho {
+        Some(m) => format!("{}, {}", arch.name(), cpu(m)),
+        None => arch.name().to_string(),
+    }
+}
+
+/// A component claim's key: `<component> (<slice>) at <placement>`.
+fn claim(placement: &Placement, arch: Arch, macho: Option<&MachOCpu>, component: &str) -> Shown {
+    Shown::own(format!("{component} ({}) at ", claimed_on(arch, macho))).and_shown(place(placement))
 }
 
 fn place(p: &Placement) -> Shown {
@@ -735,8 +864,9 @@ fn item(i: &Item) -> Shown {
         Item::Component {
             placement,
             arch,
+            macho,
             component,
-        } => Shown::own(format!("{component} ({}) at ", arch.name())).and_shown(place(placement)),
+        } => claim(placement, *arch, macho.as_ref(), component.as_str()),
         Item::Port { port } => Shown::own(format!("port {port}")),
         Item::Finding {
             rule,
@@ -749,6 +879,11 @@ fn item(i: &Item) -> Shown {
             policy_rule,
             subject: key,
         } => Shown::own(format!("{policy_rule} on ")).and_shown(subject_key(key)),
+        Item::OpenQuestion {
+            rule,
+            subject: key,
+            at,
+        } => Shown::own(format!("open question {rule} ")).and_shown(question_on(key, at)),
     }
 }
 

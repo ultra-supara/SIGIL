@@ -745,6 +745,130 @@ pub fn waiver(rule: &str, reason: &str, expires: &str) -> PolicyDecision {
     }
 }
 
+/// The decision of an open question under `[open_questions] default = <treatment>`; `ignore`
+/// carries a reason, as validation requires.
+pub fn question_decision(treatment: OqTreatment) -> OpenQuestionDecision {
+    OpenQuestionDecision {
+        treatment,
+        source: id("policy:open_questions.default"),
+        reason: (treatment == OqTreatment::Ignore).then(|| "a test's reason".to_string()),
+    }
+}
+
+/// Every open question is treated `treatment` now, as under a policy whose `[open_questions]`
+/// default says so; the outcome follows.
+pub fn treat_questions(s: &mut Session, treatment: OqTreatment) {
+    for q in &mut s.open_questions {
+        q.decision = question_decision(treatment);
+    }
+    settle(s);
+}
+
+/// Example 18 before its file imported `execve`: no `posix.process_spawn` import, hint or open
+/// question. Its `posix.network` violation remains: FAIL + COMPLETE. Synthetic, as example 18 is:
+/// the facts are edited, not the file's bytes.
+pub fn spawn_unimported(s: &mut Session) {
+    if let ContainerFacts::Elf(elf) = &mut s.binaries[0].container {
+        elf.imports.retain(|i| i.name != t("execve"));
+    }
+    s.hints
+        .retain(|h| h.feature.as_str() != "posix.process_spawn");
+    s.open_questions.clear();
+    settle(s);
+}
+
+/// `s` with the kernel input rebuilt: every occurrence of its SHA-256 replaced by `byte×32`, so
+/// its artifact and slice IDs change and its placement does not.
+pub fn rehashed_kernel(s: &Session, byte: u8) -> Session {
+    let text = serde_json::to_string(s)
+        .unwrap()
+        .replace(KERNEL_HEX, &hex(byte));
+    serde_json::from_str(&text).unwrap()
+}
+
+/// `s` with the kernel input read from `path` (same file name, another directory), as a binary
+/// inspection of another file: its placement changes, its instance ID does not.
+pub fn moved_kernel(s: &Session, path: &str) -> Session {
+    let text = serde_json::to_string(s)
+        .unwrap()
+        .replace("/home/user/src/suspicious_kernel-gcc-O2.o", path);
+    serde_json::from_str(&text).unwrap()
+}
+
+/// The installed `bin/ollama` of [`installed_spawn`], as [`add_binary`] names it.
+pub const INSTALLED_EXE: &str = "inst:bin/ollama";
+
+/// An installation whose `bin/ollama` imports `execve` (a `posix.process_spawn` hint), under a
+/// policy that denies `posix.process_spawn` and treats open questions as `fail`, without code
+/// analysis: an open question at the fixed-root placement [`INSTALLED_EXE`]. Discovery and
+/// `artifacts.container` are complete: FAIL + COMPLETE. Synthetic.
+pub fn installed_spawn() -> Session {
+    let mut s = base(&["artifacts.discovery", "artifacts.container"]);
+    add_capability_table(&mut s);
+    let exe = add_binary(&mut s, &hex(0x3c), "bin/ollama", Arch::X86_64, 1020);
+    s.binaries.push(BinaryFacts {
+        slice: exe.slice.clone(),
+        container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
+            interp: None,
+            soname: None,
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![],
+            stripped: Some(false),
+            exports: 0,
+            imports: vec![ElfImport {
+                name: t("execve"),
+                version: None,
+                weak: false,
+            }],
+            data: vec![],
+            returns: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    s.hints.push(FeatureHint {
+        subject: exe.slice.clone(),
+        feature: id("posix.process_spawn"),
+        signal: Signal::Import,
+        value: t("execve"),
+        at: Loc::Symbol(t("execve")),
+    });
+    s.open_questions.push(OpenQuestion {
+        id: id(&format!("capability:posix.process_spawn@{}", exe.slice)),
+        rule: id(CAPABILITY_RULE),
+        subject: Ref::Slice(exe.slice.clone()),
+        conditions: vec![Condition {
+            id: id("calls:posix.process_spawn"),
+            state: CondState::Unknown {
+                reason: UnknownReason::NotModeled {
+                    what: "calls of imports: code analysis was not run".into(),
+                },
+                evidence: None,
+            },
+            unresolved: vec![],
+        }],
+        evidence: vec![EvidenceRef::Code {
+            slice: exe.slice,
+            loc: Loc::Symbol(t("execve")),
+        }],
+        decision: question_decision(OqTreatment::Fail),
+    });
+    s.coverage.extend([
+        complete("artifacts.discovery"),
+        coverage(
+            "artifacts.container",
+            Ref::Root(id(INSTALL_ROOT)),
+            CoverageState::Complete,
+        ),
+    ]);
+    settle(&mut s);
+    s
+}
+
 /// `s` with its inputs `binary-1` and `binary-2` numbered the other way round, as when the files
 /// are given in the other order.
 pub fn relabel_binary_inputs(s: &Session) -> Session {
@@ -785,6 +909,10 @@ fn with(mut s: Session, edit: impl FnOnce(&mut Session)) -> Session {
 }
 
 /// The fixture pairs (spec "Tests"): each case's own kind occurs exactly once in its diff.
+///
+/// Case 11 is the capability-policy session of example 18 before and after its file imported
+/// `execve` (#138): both FAIL by the network violation, the current one with a `fail` question
+/// too, so only `OpenQuestionNew` can fail the diff.
 pub fn diff_cases() -> Vec<DiffCase> {
     vec![
         case("01-identical", None, compare_store(), compare_store()),
@@ -842,8 +970,28 @@ pub fn diff_cases() -> Vec<DiffCase> {
             compare_store(),
             with(compare_store(), license_unstable),
         ),
+        case(
+            "11-new-open-question",
+            Some("OpenQuestionNew"),
+            with(capability_policy(), spawn_unimported),
+            with(capability_policy(), |s| {
+                treat_questions(s, OqTreatment::Fail)
+            }),
+        ),
     ]
 }
+
+/// The Mach-O CPU of an x86_64h slice: CPU type x86_64, subtype 8.
+pub const X86_64H: MachOCpu = MachOCpu {
+    cpu_type: 0x0100_0007,
+    cpu_subtype: 8,
+};
+
+/// The Mach-O CPU of an arm64e slice: CPU type arm64, subtype 2.
+pub const ARM64E: MachOCpu = MachOCpu {
+    cpu_type: 0x0100_000c,
+    cpu_subtype: 2,
+};
 
 /// One change of every kind, for the schema's samples and the Markdown's sections.
 pub fn every_change() -> Vec<Change> {
@@ -935,6 +1083,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Component {
                 placement: path.clone(),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
             current: vec![Ref::Component {
@@ -948,6 +1097,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Slice {
                 placement: content,
                 arch: Arch::Aarch64,
+                macho: Some(ARM64E),
             },
             baseline: vec![Ref::Slice(slice.clone())],
         },
@@ -956,6 +1106,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Component {
                 placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
             baseline: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
@@ -968,6 +1119,40 @@ pub fn every_change() -> Vec<Change> {
                 slice: SliceId::from_parts(&a2, Arch::X86_64, 0),
                 component: id("ggml-base"),
             }],
+        },
+        Change::OpenQuestionNew {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Slice {
+                placement: path.clone(),
+                arch: Arch::X86_64,
+                macho: None,
+            },
+            at: "capability:posix.process_spawn@".to_string(),
+            current: vec![id(&format!("capability:posix.process_spawn@{slice}"))],
+            decisions: vec![question_decision(OqTreatment::Fail)],
+        },
+        Change::OpenQuestionResolved {
+            rule: id(CAPABILITY_RULE),
+            subject: SubjectKey::Slice {
+                placement: inst.clone(),
+                arch: Arch::X86_64,
+                macho: None,
+            },
+            at: "capability:posix.network@".to_string(),
+            baseline: vec![id(&format!("capability:posix.network@{slice}"))],
+        },
+        Change::OpenQuestionTreatmentChanged {
+            rule: id("loader.search_path_untrusted_creator"),
+            subject: SubjectKey::Other(Ref::Audit),
+            at: "oq:loader.search_path_untrusted_creator@cwd".to_string(),
+            baseline: vec![question_decision(OqTreatment::CountAsGap)],
+            current: vec![OpenQuestionDecision {
+                treatment: OqTreatment::Ignore,
+                source: id("policy:open_questions.default"),
+                reason: Some("reviewed in the 2026 audit".to_string()),
+            }],
+            baseline_questions: vec![id("oq:loader.search_path_untrusted_creator@cwd")],
+            current_questions: vec![id("oq:loader.search_path_untrusted_creator@cwd")],
         },
         Change::ModelAdded {
             model: model.clone(),
@@ -1026,15 +1211,28 @@ pub fn every_change() -> Vec<Change> {
             }),
         },
         Change::ComponentChanged {
-            placement: inst,
+            placement: inst.clone(),
             arch: Arch::X86_64,
+            macho: None,
             component: id("ggml"),
             baseline: Some(ComponentState {
-                slice,
+                slice: slice.clone(),
                 status: IdentityStatus::NameOnly,
                 versions: vec![t("0.13.1")],
             }),
             current: None,
+        },
+        Change::ComponentChanged {
+            placement: inst,
+            arch: Arch::X86_64,
+            macho: Some(X86_64H),
+            component: id("ggml"),
+            baseline: None,
+            current: Some(ComponentState {
+                slice,
+                status: IdentityStatus::NameOnly,
+                versions: vec![t("0.13.1")],
+            }),
         },
         Change::ListenerAdded {
             port: 8080,
@@ -1106,11 +1304,23 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
             Item::Component {
                 placement: place.clone(),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml"),
             },
             Cause::Coverage,
             &["artifacts.identity"],
             Side::Current,
+        ),
+        item(
+            Item::Component {
+                placement: place.clone(),
+                arch: Arch::X86_64,
+                macho: Some(X86_64H),
+                component: id("ggml"),
+            },
+            Cause::Coverage,
+            &["artifacts.identity"],
+            Side::Baseline,
         ),
         item(
             Item::Port { port: 11434 },
@@ -1136,6 +1346,20 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
             Cause::Policy,
             &[],
             Side::Both,
+        ),
+        item(
+            Item::OpenQuestion {
+                rule: id(CAPABILITY_RULE),
+                subject: SubjectKey::Slice {
+                    placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
+                    arch: Arch::X86_64,
+                    macho: None,
+                },
+                at: "capability:posix.process_spawn@".to_string(),
+            },
+            Cause::Coverage,
+            &["binary.container"],
+            Side::Baseline,
         ),
         item(
             Item::Finding {

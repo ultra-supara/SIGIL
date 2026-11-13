@@ -5,7 +5,8 @@
 //! every line traces back to evidence there.
 //!
 //! - **Keys.** Items are matched by what survives a new run: model IDs (manifest paths),
-//!   [`Placement`]s, ports, and rules with a normalized [`SubjectKey`]. Listener inodes,
+//!   [`Placement`]s, ports, and rules with a normalized [`SubjectKey`]. A slice is keyed by its
+//!   placement, its architecture and, in a Mach-O file, its [`MachOCpu`]. Listener inodes,
 //!   `binary-<n>` roots and slice IDs are pointers, never keys.
 //! - **Comparability.** Saying that something is absent on one side needs the check that would
 //!   have recorded it to be closed on that side; otherwise the item is [`NotComparable`], never
@@ -24,14 +25,14 @@ mod scope;
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::artifact::Arch;
 use crate::evidence::Ref;
-use crate::finding::{Completeness, PolicyDecision, Verdict};
+use crate::finding::{Completeness, OpenQuestionDecision, PolicyDecision, Verdict};
 use crate::id::{
-    ArtifactId, CheckId, ComponentKey, FindingId, InstanceId, ListenerId, ModelId, PolicyRuleRef,
-    RootId, RuleId, Sha256Hex, SliceId, Timestamp,
+    ArtifactId, CheckId, ComponentKey, FindingId, InstanceId, ListenerId, ModelId, OpenQuestionId,
+    PolicyRuleRef, RootId, RuleId, Sha256Hex, SliceId, Timestamp,
 };
 use crate::identity::IdentityStatus;
 use crate::listener::BindClass;
@@ -177,7 +178,59 @@ pub enum Placement {
     Content(ArtifactId),
 }
 
-/// What a finding or policy violation is about, with its run-dependent IDs replaced by keys.
+/// A Mach-O slice's CPU as lipo tells two slices apart: the CPU type, and the subtype without
+/// its capability bits ([`crate::macho_architecture`]).
+///
+/// Two slices of one fat file can share an [`Arch`] (x86_64 and x86_64h, arm64 and arm64e), so
+/// a Mach-O slice's key holds it too. It is the slice's own header's, so a thin file that becomes
+/// fat keeps its slice's key, and it does not depend on content, so a rebuild keeps it too. It is
+/// read through a record of the same fields (unknown fields refused): a subtype with capability
+/// bits does not load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "MachOCpuRecord")]
+pub struct MachOCpu {
+    pub cpu_type: i32,
+    pub cpu_subtype: u32,
+}
+
+/// The JSON form of a [`MachOCpu`], before its subtype is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MachOCpuRecord {
+    cpu_type: i32,
+    cpu_subtype: u32,
+}
+
+impl TryFrom<MachOCpuRecord> for MachOCpu {
+    type Error = String;
+
+    /// The record, if its subtype has no capability bits (the top byte), as SIGIL writes it.
+    fn try_from(r: MachOCpuRecord) -> Result<MachOCpu, String> {
+        if r.cpu_subtype & crate::binary::CPU_SUBTYPE_MASK != 0 {
+            return Err(format!(
+                "Mach-O CPU subtype {:#x} has capability bits: a key holds it without them",
+                r.cpu_subtype
+            ));
+        }
+        Ok(MachOCpu {
+            cpu_type: r.cpu_type,
+            cpu_subtype: r.cpu_subtype,
+        })
+    }
+}
+
+/// Reads an `Option` field that must be present, `null` when it is `None`: serde alone would
+/// read a missing one as `None`.
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+/// What a finding, policy violation or open question is about, with its run-dependent IDs
+/// replaced by keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum SubjectKey {
@@ -187,16 +240,24 @@ pub enum SubjectKey {
     Placement(Placement),
     /// A listener, by port.
     Port(u16),
-    /// A component claim, by where its slice was found.
+    /// A component claim, by where its slice was found and which slice it is there.
     Component {
         placement: Placement,
         arch: Arch,
+        /// The slice's Mach-O CPU; `None` for an ELF slice, or one whose container facts were
+        /// not recorded.
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
         component: ComponentKey,
     },
-    /// A slice, by where it was found.
+    /// A slice, by where it was found and which slice it is there.
     Slice {
         placement: Placement,
         arch: Arch,
+        /// The slice's Mach-O CPU; `None` for an ELF slice, or one whose container facts were
+        /// not recorded.
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
     },
     /// Any other subject, as recorded.
     Other(Ref),
@@ -218,9 +279,12 @@ pub enum Item {
     Release {
         product: ComponentKey,
     },
+    /// A component claim, keyed as [`SubjectKey::Component`].
     Component {
         placement: Placement,
         arch: Arch,
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
         component: ComponentKey,
     },
     Port {
@@ -234,6 +298,12 @@ pub enum Item {
     Violation {
         policy_rule: PolicyRuleRef,
         subject: SubjectKey,
+    },
+    /// An open question, by rule, normalized subject and what tells it apart (#138).
+    OpenQuestion {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
     },
 }
 
@@ -414,6 +484,32 @@ pub enum Change {
         baseline_subjects: Vec<Ref>,
         current_subjects: Vec<Ref>,
     },
+    /// An open question in the current session only (#138). `decisions` are the distinct
+    /// decisions of the current side's questions with this key, in canonical order (by JSON text).
+    OpenQuestionNew {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        current: Vec<OpenQuestionId>,
+        decisions: Vec<OpenQuestionDecision>,
+    },
+    OpenQuestionResolved {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        baseline: Vec<OpenQuestionId>,
+    },
+    /// An open question on both sides whose set of decisions differs: another treatment, source
+    /// or reason (#138). `baseline_questions` and `current_questions` are its IDs in each session.
+    OpenQuestionTreatmentChanged {
+        rule: RuleId,
+        subject: SubjectKey,
+        at: String,
+        baseline: Vec<OpenQuestionDecision>,
+        current: Vec<OpenQuestionDecision>,
+        baseline_questions: Vec<OpenQuestionId>,
+        current_questions: Vec<OpenQuestionId>,
+    },
     ModelAdded {
         model: ModelId,
         name: UntrustedText,
@@ -459,11 +555,13 @@ pub enum Change {
         baseline: Option<ReleaseState>,
         current: Option<ReleaseState>,
     },
-    /// A claim, by placement, architecture and component: its status or versions changed, or
-    /// it is on one side only.
+    /// A claim, keyed as [`Item::Component`] (placement, architecture, Mach-O CPU and
+    /// component): its status or versions changed, or it is on one side only.
     ComponentChanged {
         placement: Placement,
         arch: Arch,
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
         component: ComponentKey,
         baseline: Option<ComponentState>,
         current: Option<ComponentState>,
@@ -510,6 +608,9 @@ pub enum ChangeKind {
     ViolationNew,
     ViolationResolved,
     ViolationDecisionChanged,
+    OpenQuestionNew,
+    OpenQuestionResolved,
+    OpenQuestionTreatmentChanged,
     ModelAdded,
     ModelRemoved,
     LayerChanged,
@@ -527,7 +628,7 @@ pub enum ChangeKind {
 
 impl ChangeKind {
     /// Every kind, in declared order.
-    pub const ALL: [ChangeKind; 24] = [
+    pub const ALL: [ChangeKind; 27] = [
         ChangeKind::PolicyChanged,
         ChangeKind::VerdictChanged,
         ChangeKind::CompletenessChanged,
@@ -539,6 +640,9 @@ impl ChangeKind {
         ChangeKind::ViolationNew,
         ChangeKind::ViolationResolved,
         ChangeKind::ViolationDecisionChanged,
+        ChangeKind::OpenQuestionNew,
+        ChangeKind::OpenQuestionResolved,
+        ChangeKind::OpenQuestionTreatmentChanged,
         ChangeKind::ModelAdded,
         ChangeKind::ModelRemoved,
         ChangeKind::LayerChanged,
@@ -568,6 +672,9 @@ impl ChangeKind {
             ChangeKind::ViolationNew => "ViolationNew",
             ChangeKind::ViolationResolved => "ViolationResolved",
             ChangeKind::ViolationDecisionChanged => "ViolationDecisionChanged",
+            ChangeKind::OpenQuestionNew => "OpenQuestionNew",
+            ChangeKind::OpenQuestionResolved => "OpenQuestionResolved",
+            ChangeKind::OpenQuestionTreatmentChanged => "OpenQuestionTreatmentChanged",
             ChangeKind::ModelAdded => "ModelAdded",
             ChangeKind::ModelRemoved => "ModelRemoved",
             ChangeKind::LayerChanged => "LayerChanged",
@@ -605,6 +712,9 @@ impl Change {
             Change::ViolationNew { .. } => ChangeKind::ViolationNew,
             Change::ViolationResolved { .. } => ChangeKind::ViolationResolved,
             Change::ViolationDecisionChanged { .. } => ChangeKind::ViolationDecisionChanged,
+            Change::OpenQuestionNew { .. } => ChangeKind::OpenQuestionNew,
+            Change::OpenQuestionResolved { .. } => ChangeKind::OpenQuestionResolved,
+            Change::OpenQuestionTreatmentChanged { .. } => ChangeKind::OpenQuestionTreatmentChanged,
             Change::ModelAdded { .. } => ChangeKind::ModelAdded,
             Change::ModelRemoved { .. } => ChangeKind::ModelRemoved,
             Change::LayerChanged { .. } => ChangeKind::LayerChanged,
@@ -629,7 +739,9 @@ impl Change {
     /// The current session's decisions a change carries: a new finding's or policy violation's,
     /// and the current side of a changed decision (`FindingDecisionChanged`,
     /// `ViolationDecisionChanged`). `None` for every other kind, `VerdictChanged` included: it
-    /// carries the verdicts the decisions gave ([`ChangeKind::takes_decided`]).
+    /// carries the verdicts the decisions gave ([`ChangeKind::takes_decided`]). Only findings and
+    /// violations carry `PolicyDecision`s; `OpenQuestionNew` and `OpenQuestionTreatmentChanged`
+    /// carry their own `OpenQuestionDecision`s, so they are `None` here too.
     pub fn decisions(&self) -> Option<&[PolicyDecision]> {
         match self {
             Change::FindingNew { decisions, .. }
@@ -697,6 +809,34 @@ impl Change {
                 for refs in [baseline_subjects, current_subjects] {
                     refs.sort_by_cached_key(key);
                     refs.dedup();
+                }
+            }
+            Change::OpenQuestionNew {
+                current: ids,
+                decisions,
+                ..
+            } => {
+                ids.sort();
+                ids.dedup();
+                sort_decisions(decisions);
+            }
+            Change::OpenQuestionResolved { baseline: ids, .. } => {
+                ids.sort();
+                ids.dedup();
+            }
+            Change::OpenQuestionTreatmentChanged {
+                baseline,
+                current,
+                baseline_questions,
+                current_questions,
+                ..
+            } => {
+                for decisions in [baseline, current] {
+                    sort_decisions(decisions);
+                }
+                for ids in [baseline_questions, current_questions] {
+                    ids.sort();
+                    ids.dedup();
                 }
             }
             Change::ListenerAdded { listeners, .. } | Change::ListenerRemoved { listeners, .. } => {
@@ -792,8 +932,9 @@ fn key<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
-/// Decisions in canonical order (by their JSON text), each once.
-fn sort_decisions(decisions: &mut Vec<PolicyDecision>) {
+/// Decisions (a finding's, a violation's or an open question's) in canonical order (by their
+/// JSON text), each once.
+fn sort_decisions<T: Serialize + PartialEq>(decisions: &mut Vec<T>) {
     decisions.sort_by_cached_key(key);
     decisions.dedup();
 }

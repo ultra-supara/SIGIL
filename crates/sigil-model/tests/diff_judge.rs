@@ -161,7 +161,9 @@ fn the_default_table_is_the_documented_one() {
             "FindingNew",
             "FindingDecisionChanged",
             "ViolationNew",
-            "ViolationDecisionChanged"
+            "ViolationDecisionChanged",
+            "OpenQuestionNew",
+            "OpenQuestionTreatmentChanged",
         ]
     );
     assert_eq!(
@@ -186,6 +188,7 @@ fn the_default_table_is_the_documented_one() {
             "CheckClosed",
             "FindingResolved",
             "ViolationResolved",
+            "OpenQuestionResolved",
             "ListenerRemoved",
             "BindNarrowed",
         ]
@@ -211,6 +214,8 @@ fn the_default_table_is_the_documented_one() {
                     | ChangeKind::FindingDecisionChanged
                     | ChangeKind::ViolationNew
                     | ChangeKind::ViolationDecisionChanged
+                    | ChangeKind::OpenQuestionNew
+                    | ChangeKind::OpenQuestionTreatmentChanged
             )
         );
     }
@@ -272,7 +277,7 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
             .into_iter()
             .filter(|k| k.takes_decided())
             .count(),
-        5
+        7
     );
     // No other kind, whatever its source.
     let mut table = with_action(&r, ChangeKind::LayerChanged, CompareAction::Warn)
@@ -699,9 +704,10 @@ fn decided_weighs_a_changed_decision_only_when_it_got_heavier() {
 
 #[test]
 fn decided_weighs_a_worse_verdict_as_what_it_now_is() {
-    // Review P1 of PR #137 (user decision, 2026-11-13): open questions are not compared, so a new
-    // one that the policy treats as `fail` shows only in the verdict. A verdict that got worse
-    // weighs what it now is; one that stayed or got better is ignored.
+    // Review P1 of PR #137 (user decision, 2026-11-13): a new open question that the policy treats
+    // as `fail` makes the verdict worse. Since #138 the question is compared too, but it is not
+    // always judged (another policy, a check left open); the verdict's change catches it then. A
+    // verdict that got worse weighs what it now is; one that stayed or got better is ignored.
     use Verdict::{Fail, Pass, Warn};
     let r = builtin_rules();
     let cases = [
@@ -743,9 +749,10 @@ fn decided_weighs_a_worse_verdict_as_what_it_now_is() {
 
 #[test]
 fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
-    // Review P1 of PR #137: example 7 without its open question, then with it treated `fail`.
-    // The sessions differ only in the question and the verdict it gives. The question is not
-    // compared, so the diff holds the verdict's change alone, and it fails as the session does.
+    // Review P1 of PR #137, then #138: example 7 without its open question, then with it treated
+    // `fail`. The sessions differ only in the question and the verdict it gives. The question is
+    // the analysis's and the baseline is complete, so it is compared (#138): the diff holds the
+    // verdict's change and the new question, both decided, and fails as the session does.
     let mut current = open_question();
     for q in &mut current.open_questions {
         q.decision.treatment = OqTreatment::Fail;
@@ -756,27 +763,46 @@ fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
     settle(&mut baseline);
     assert_eq!(current.outcome.completeness, Completeness::Complete);
     let diff = diff_of(&baseline, &current);
+    assert_eq!(kinds(&diff), ["VerdictChanged", "OpenQuestionNew"]);
     assert_eq!(
-        diff.changes,
-        [Change::VerdictChanged {
+        diff.changes[0],
+        Change::VerdictChanged {
             baseline: Verdict::Pass,
             current: Verdict::Fail
-        }]
+        }
     );
     assert!(diff.not_comparable.is_empty());
+    // Both weigh FAIL as decided: the verdict's change, whose row the Markdown reads so, and the
+    // question.
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[0]),
+        (Action::Fail, true)
+    );
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (Action::Fail, true)
+    );
     assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
     assert_eq!(diff.evaluation.completeness(), &DiffCompleteness::Complete);
     let md = markdown(&diff);
     assert!(
-        md.contains(&format!("\n| {} | ", esc_md("FAIL (as decided)"))),
+        md.contains(&format!(
+            "\n| {} | {} | ",
+            esc_md("FAIL (as decided)"),
+            esc_md("verdict")
+        )),
         "{md}"
     );
-    // Under an explicit `ignore`, it passes.
+    // Under an explicit `ignore` of the verdict's change, the question still fails it; with the
+    // new question ignored too, it passes.
     let lenient = with_action(
         &builtin_rules(),
         ChangeKind::VerdictChanged,
         CompareAction::Ignore,
     );
+    let diff = diff_under(&baseline, &current, &lenient);
+    assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
+    let lenient = with_action(&lenient, ChangeKind::OpenQuestionNew, CompareAction::Ignore);
     let diff = diff_under(&baseline, &current, &lenient);
     assert_eq!(diff.evaluation.verdict(), Verdict::Pass);
 }
@@ -1171,5 +1197,73 @@ fn an_incomplete_input_and_a_gap_are_both_named_in_the_result() {
             "INCOMPLETE (the baseline is incomplete; 1 item not comparable, counted as a gap), under the policy "
         )),
         "{md}"
+    );
+}
+
+fn question_new(treatments: &[OqTreatment]) -> Change {
+    Change::OpenQuestionNew {
+        rule: id(CAPABILITY_RULE),
+        subject: SubjectKey::Other(Ref::Audit),
+        at: "capability:posix.process_spawn@".to_string(),
+        current: vec![id("capability:posix.process_spawn@x")],
+        decisions: treatments.iter().map(|t| question_decision(*t)).collect(),
+    }
+}
+
+fn question_changed(baseline: OqTreatment, current: OqTreatment) -> Change {
+    Change::OpenQuestionTreatmentChanged {
+        rule: id(CAPABILITY_RULE),
+        subject: SubjectKey::Other(Ref::Audit),
+        at: "capability:posix.process_spawn@".to_string(),
+        baseline: vec![question_decision(baseline)],
+        current: vec![question_decision(current)],
+        baseline_questions: vec![id("capability:posix.process_spawn@x")],
+        current_questions: vec![id("capability:posix.process_spawn@y")],
+    }
+}
+
+/// #138: a question weighs its treatment (`fail`, `warn`; a gap or `ignore` nothing), new as a new
+/// finding does, changed as a changed decision does.
+#[test]
+fn an_open_question_weighs_its_treatment() {
+    use OqTreatment::{CountAsGap, Fail, Ignore, Warn};
+    let r = builtin_rules();
+    for (treatments, want) in [
+        (&[Fail][..], Action::Fail),
+        (&[Warn][..], Action::Warn),
+        (&[CountAsGap][..], Action::Ignore),
+        (&[Ignore][..], Action::Ignore),
+        (&[CountAsGap, Warn][..], Action::Warn),
+        (&[][..], Action::Fail),
+    ] {
+        assert_eq!(
+            r.weigh(&question_new(treatments)),
+            (want, true),
+            "{treatments:?}"
+        );
+    }
+    for (before, now, want) in [
+        (CountAsGap, Fail, Action::Fail),
+        (Warn, Fail, Action::Fail),
+        (CountAsGap, Warn, Action::Warn),
+        (Fail, CountAsGap, Action::Warn),
+        (CountAsGap, Ignore, Action::Warn),
+        (Ignore, CountAsGap, Action::Warn),
+        (Fail, Fail, Action::Warn),
+    ] {
+        assert_eq!(
+            r.weigh(&question_changed(before, now)),
+            (want, true),
+            "{before:?} -> {now:?}"
+        );
+    }
+    assert_eq!(
+        r.weigh(&change_of(ChangeKind::OpenQuestionResolved)),
+        (Action::Ignore, false)
+    );
+    let ignored = with_action(&r, ChangeKind::OpenQuestionNew, CompareAction::Ignore);
+    assert_eq!(
+        ignored.weigh(&question_new(&[Fail])),
+        (Action::Ignore, false)
     );
 }

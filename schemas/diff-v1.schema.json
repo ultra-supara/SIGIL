@@ -508,6 +508,142 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "OpenQuestionNew"
+          ],
+          "properties": {
+            "OpenQuestionNew": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at",
+                "current",
+                "decisions"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "current": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionId"
+                  }
+                },
+                "decisions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionDecision"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "OpenQuestionResolved"
+          ],
+          "properties": {
+            "OpenQuestionResolved": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at",
+                "baseline"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "baseline": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "OpenQuestionTreatmentChanged"
+          ],
+          "properties": {
+            "OpenQuestionTreatmentChanged": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at",
+                "baseline",
+                "current",
+                "baseline_questions",
+                "current_questions"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "baseline": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionDecision"
+                  }
+                },
+                "current": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionDecision"
+                  }
+                },
+                "baseline_questions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionId"
+                  }
+                },
+                "current_questions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/OpenQuestionId"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
             "ModelAdded"
           ],
           "properties": {
@@ -812,6 +948,7 @@
               "required": [
                 "placement",
                 "arch",
+                "macho",
                 "component",
                 "baseline",
                 "current"
@@ -822,6 +959,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "component": {
                   "$ref": "#/$defs/ComponentKey"
@@ -1051,8 +1198,29 @@
         }
       ]
     },
+    "MachOCpu": {
+      "description": "A Mach-O slice's CPU as lipo tells two slices apart: the CPU type, and the subtype without its capability bits (the top byte). Two slices of one fat file can share an Arch (x86_64 and x86_64h, arm64 and arm64e); a Mach-O slice's key holds its CPU too.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu_type",
+        "cpu_subtype"
+      ],
+      "properties": {
+        "cpu_type": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cpu_subtype": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        }
+      }
+    },
     "SubjectKey": {
-      "description": "What a finding or policy violation is about, with run-dependent IDs replaced by keys.",
+      "description": "What a finding, policy violation or open question is about, with run-dependent IDs replaced by keys. A slice, and a component claim on one, is keyed by where it was found, its arch and its macho: its MachOCpu in a Mach-O file, null for an ELF slice or one whose container facts were not recorded.",
       "oneOf": [
         {
           "type": "object",
@@ -1117,6 +1285,7 @@
               "required": [
                 "placement",
                 "arch",
+                "macho",
                 "component"
               ],
               "properties": {
@@ -1125,6 +1294,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "component": {
                   "$ref": "#/$defs/ComponentKey"
@@ -1145,7 +1324,8 @@
               "additionalProperties": false,
               "required": [
                 "placement",
-                "arch"
+                "arch",
+                "macho"
               ],
               "properties": {
                 "placement": {
@@ -1153,6 +1333,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             }
@@ -1272,6 +1462,7 @@
               "required": [
                 "placement",
                 "arch",
+                "macho",
                 "component"
               ],
               "properties": {
@@ -1280,6 +1471,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "component": {
                   "$ref": "#/$defs/ComponentKey"
@@ -1360,6 +1561,35 @@
                 },
                 "subject": {
                   "$ref": "#/$defs/SubjectKey"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "OpenQuestion"
+          ],
+          "properties": {
+            "OpenQuestion": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule",
+                "subject",
+                "at"
+              ],
+              "properties": {
+                "rule": {
+                  "$ref": "#/$defs/RuleId"
+                },
+                "subject": {
+                  "$ref": "#/$defs/SubjectKey"
+                },
+                "at": {
+                  "type": "string"
                 }
               }
             }
@@ -1710,6 +1940,33 @@
       "maxLength": 1024,
       "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]([^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?$"
     },
+    "OpenQuestionDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treatment",
+        "source",
+        "reason"
+      ],
+      "properties": {
+        "treatment": {
+          "$ref": "#/$defs/OqTreatment"
+        },
+        "source": {
+          "$ref": "#/$defs/PolicyRuleRef"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "PolicyDecision": {
       "type": "object",
       "additionalProperties": false,
@@ -2046,7 +2303,7 @@
       ]
     },
     "Evaluation": {
-      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions, the current session's (Fail when it has none); a FindingDecisionChanged or ViolationDecisionChanged weighs that action, at least Warn, only when it is heavier than the baseline's maximum (by the same rule), and Warn otherwise; a VerdictChanged weighs the current verdict when it is worse than the baseline's (Fail or Warn), and nothing otherwise. verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
+      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions, the current session's (Fail when it has none); a FindingDecisionChanged or ViolationDecisionChanged weighs that action, at least Warn, only when it is heavier than the baseline's maximum (by the same rule), and Warn otherwise; a VerdictChanged weighs the current verdict when it is worse than the baseline's (Fail or Warn), and nothing otherwise. An open question's decision weighs its treatment: Fail and Warn as those actions, CountAsGap and Ignore as nothing; OpenQuestionNew and OpenQuestionTreatmentChanged follow FindingNew and FindingDecisionChanged. verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2075,6 +2332,9 @@
             "ViolationNew",
             "ViolationResolved",
             "ViolationDecisionChanged",
+            "OpenQuestionNew",
+            "OpenQuestionResolved",
+            "OpenQuestionTreatmentChanged",
             "ModelAdded",
             "ModelRemoved",
             "LayerChanged",
@@ -2121,6 +2381,15 @@
               "$ref": "#/$defs/ChangeTreatment"
             },
             "ViolationDecisionChanged": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "OpenQuestionNew": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "OpenQuestionResolved": {
+              "$ref": "#/$defs/ChangeTreatment"
+            },
+            "OpenQuestionTreatmentChanged": {
               "$ref": "#/$defs/ChangeTreatment"
             },
             "ModelAdded": {
@@ -2285,7 +2554,7 @@
       }
     },
     "CompareAction": {
-      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say; a changed decision weighs that only when it got heavier, at least Warn, and Warn otherwise; a changed verdict weighs the current verdict when it is worse than the baseline's, and nothing otherwise; VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only.",
+      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say; a changed decision weighs that only when it got heavier, at least Warn, and Warn otherwise; a changed verdict weighs the current verdict when it is worse than the baseline's, and nothing otherwise; an open question's decision weighs its treatment (Fail and Warn as those actions, CountAsGap and Ignore as nothing) by the same rules; VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, ViolationDecisionChanged, OpenQuestionNew, and OpenQuestionTreatmentChanged only.",
       "type": "string",
       "enum": [
         "Fail",

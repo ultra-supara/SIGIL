@@ -35,7 +35,7 @@ fn schema() -> Value {
 fn registered() -> Vec<(&'static str, schema_check::Probe)> {
     registry![
         Diff => "Diff", DiffSchema => "DiffSchema", DiffSide => "DiffSide", Change => "Change",
-        Placement => "Placement", SubjectKey => "SubjectKey", Item => "Item",
+        Placement => "Placement", MachOCpu => "MachOCpu", SubjectKey => "SubjectKey", Item => "Item",
         NotComparable => "NotComparable", Cause => "Cause", Side => "Side", LicenseState => "LicenseState",
         ReleaseState => "ReleaseState", ComponentState => "ComponentState",
         CheckState => "CheckState", BindClass => "BindClass",
@@ -72,7 +72,7 @@ fn every_fixture_diff_validates_against_the_schema() {
     let schema = schema();
     let validator = validator_for(&schema, "Diff");
     let all = examples();
-    assert_eq!(all.len(), 10);
+    assert_eq!(all.len(), 11);
     for (name, value) in all {
         assert_valid_against(&validator, &value, &name);
     }
@@ -436,7 +436,8 @@ fn a_table_that_sigil_would_not_write_is_refused() {
 
 /// Review P2a: `sigil-diff/1` was revised before its first release. A diff that main wrote
 /// between #136 and PR-16b (no `evaluation`, no `completeness` per side, `FindingNew` without
-/// `decisions`) neither validates nor loads.
+/// `decisions`) neither validates nor loads. Nor does a diff whose table lacks the open
+/// questions' kinds (#138).
 #[test]
 fn a_diff_written_before_the_revision_of_v1_is_refused() {
     let base = example("05-loopback-to-wildcard");
@@ -462,6 +463,21 @@ fn a_diff_written_before_the_revision_of_v1_is_refused() {
     assert_eq!(stripped, 1);
     both_reject(v, "a FindingNew without decisions");
 
+    // #138: a table of #137's 24 kinds, without the open questions'.
+    let mut v = base.clone();
+    for kind in [
+        "OpenQuestionNew",
+        "OpenQuestionResolved",
+        "OpenQuestionTreatmentChanged",
+    ] {
+        v["evaluation"]["changes"]
+            .as_object_mut()
+            .unwrap()
+            .remove(kind)
+            .unwrap();
+    }
+    both_reject(v, "a table of #137's kinds");
+
     let mut v = base;
     v.as_object_mut().unwrap().remove("evaluation");
     for side in ["baseline", "current"] {
@@ -473,4 +489,117 @@ fn a_diff_written_before_the_revision_of_v1_is_refused() {
         }
     }
     both_reject(v, "a diff of PR-16a's shape");
+}
+
+/// The review of #141: a slice's key, and a component claim's, holds the slice's Mach-O CPU, null
+/// for an ELF slice. A key written without it, as before the revision, is refused by both.
+#[test]
+fn a_slice_key_without_its_mach_o_cpu_is_refused() {
+    // A question on a slice (fixture 11) and a component claim (fixture 07).
+    for (name, kind, path) in [
+        (
+            "11-new-open-question",
+            "OpenQuestionNew",
+            &["subject", "Slice"][..],
+        ),
+        ("07-claim-conflicting", "ComponentChanged", &[][..]),
+    ] {
+        let mut v = example(name);
+        let changes = v["changes"].as_array_mut().unwrap();
+        let change = changes
+            .iter_mut()
+            .find_map(|c| c.get_mut(kind))
+            .unwrap_or_else(|| panic!("no {kind} in {name}"));
+        let key = path.iter().fold(change, |v, k| &mut v[*k]);
+        assert_eq!(key.get("macho"), Some(&Value::Null), "{name}");
+        key.as_object_mut().unwrap().remove("macho");
+        both_reject(v, &format!("a {kind} key without macho"));
+    }
+    // A slice key of an x86_64h slice loads; with the subtype's capability bits kept
+    // (`CPU_SUBTYPE_LIB64`), which lipo does not compare and SIGIL never writes, it does not.
+    let with_cpu = |subtype: u32| {
+        let mut v = example("11-new-open-question");
+        let change = v["changes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find_map(|c| c.get_mut("OpenQuestionNew"))
+            .unwrap();
+        change["subject"]["Slice"]["macho"] = json!({"cpu_type": 16777223, "cpu_subtype": subtype});
+        v
+    };
+    let v = with_cpu(8);
+    assert_valid_against(
+        &validator_for(&schema(), "Diff"),
+        &v,
+        "an x86_64h slice key",
+    );
+    serde_json::from_value::<Diff>(v).unwrap();
+    both_reject(with_cpu(0x8000_0008), "a subtype with capability bits");
+    // An item not comparable: a component claim, and a violation on one.
+    let validator = validator_for(&schema(), "NotComparable");
+    let component = json!({
+        "placement": {"Instance": "inst:install/bin/ollama"},
+        "arch": "x86_64",
+        "macho": null,
+        "component": "ggml"
+    });
+    let items = [
+        json!({"Component": component}),
+        json!({"Violation": {
+            "policy_rule": "policy:components.deny.ggml",
+            "subject": {"Component": component}
+        }}),
+    ];
+    for item in items {
+        let with = |macho: Option<Value>| {
+            let mut item = item.clone();
+            let key = match item.get_mut("Component") {
+                Some(key) => key,
+                None => &mut item["Violation"]["subject"]["Component"],
+            };
+            match macho {
+                Some(m) => key["macho"] = m,
+                None => {
+                    key.as_object_mut().unwrap().remove("macho");
+                }
+            }
+            json!({
+                "item": item,
+                "cause": "Coverage",
+                "checks": ["artifacts.identity"],
+                "open_in": "Current"
+            })
+        };
+        for macho in [
+            Value::Null,
+            json!({"cpu_type": 16777223, "cpu_subtype": 8}),
+            json!({"cpu_type": -1, "cpu_subtype": 16777215}),
+        ] {
+            let v = with(Some(macho));
+            assert_valid_against(&validator, &v, "a key with macho");
+            serde_json::from_value::<NotComparable>(v).unwrap();
+        }
+        let v = with(None);
+        assert!(!validator.is_valid(&v), "schema accepted {v}");
+        assert!(
+            serde_json::from_value::<NotComparable>(v.clone()).is_err(),
+            "serde accepted {v}"
+        );
+        // The subtype without its capability bits: the top byte is clear.
+        for subtype in [0x0100_0000_u32, 0x8000_0008] {
+            let v = with(Some(json!({"cpu_type": 16777223, "cpu_subtype": subtype})));
+            assert!(!validator.is_valid(&v), "schema accepted {v}");
+            let err = serde_json::from_value::<NotComparable>(v.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("capability bits"), "serde accepted {v}: {err}");
+        }
+        let v = with(Some(json!({"cpu_type": 16777223})));
+        assert!(!validator.is_valid(&v), "schema accepted {v}");
+        assert!(
+            serde_json::from_value::<NotComparable>(v.clone()).is_err(),
+            "serde accepted {v}"
+        );
+    }
 }

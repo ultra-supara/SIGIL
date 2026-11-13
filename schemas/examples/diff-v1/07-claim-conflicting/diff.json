@@ -46,6 +46,7 @@
           "Instance": "inst:lib/ollama/libggml-base.so.0.13.1"
         },
         "arch": "x86_64",
+        "macho": null,
         "component": "ggml-base",
         "baseline": {
           "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",
@@ -127,6 +128,21 @@
       "ViolationDecisionChanged": {
         "action": "Decided",
         "source": "default:compare.ViolationDecisionChanged",
+        "reason": null
+      },
+      "OpenQuestionNew": {
+        "action": "Decided",
+        "source": "default:compare.OpenQuestionNew",
+        "reason": null
+      },
+      "OpenQuestionResolved": {
+        "action": "Ignore",
+        "source": "default:compare.OpenQuestionResolved",
+        "reason": null
+      },
+      "OpenQuestionTreatmentChanged": {
+        "action": "Decided",
+        "source": "default:compare.OpenQuestionTreatmentChanged",
         "reason": null
       },
       "ModelAdded": {

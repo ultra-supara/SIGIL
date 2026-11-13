@@ -1,18 +1,27 @@
-//! Findings and policy violations: new, resolved, or decided otherwise, by rule and normalized
-//! subject.
+//! Findings, policy violations and open questions: new, resolved, or decided otherwise, by rule
+//! and normalized subject.
 
 use std::collections::BTreeMap;
 
+use serde::Serialize;
+
 use super::compare::{checks, policy_of, Found};
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for_under, not_named_in, placement,
-    placements_of, root_at, root_of, same_model_filter, scope_of, CODE, IDENTITY, INVENTORY,
+    arch_and_cpu, checks_at, closed_everywhere, closed_for_under, not_named_in, placement,
+    placements_of, root_at, root_of, same_model_filter, scope_of, CODE, CONTAINER, IDENTITY,
+    INVENTORY,
 };
 use super::{key, sort_decisions};
-use crate::diff::{Change, Item, Placement, Side, SubjectKey};
+use crate::artifact::Arch;
+use crate::diff::{Change, Item, MachOCpu, Placement, Side, SubjectKey};
 use crate::evidence::Ref;
-use crate::finding::{Completeness, Finding, PolicyDecision, CAPABILITY_DENY_PREFIX};
-use crate::id::{CheckId, FindingId, InstanceId, PolicyRuleRef, RootId, RuleId};
+use crate::finding::{
+    Completeness, Finding, OpenQuestion, OpenQuestionDecision, PolicyDecision,
+    CAPABILITY_DENY_PREFIX, CAPABILITY_RULE,
+};
+use crate::id::{
+    CheckId, FindingId, InstanceId, OpenQuestionId, PolicyRuleRef, RootId, RuleId, SliceId,
+};
 use crate::session::Session;
 
 const INTEGRITY: &str = "model_store.integrity";
@@ -36,7 +45,8 @@ fn model_checks(rule: &str) -> &'static [&'static str] {
 }
 
 /// What a subject is about, as keys that survive a new run. A slice found at several places
-/// gives one key per placement.
+/// gives one key per placement; at each, its architecture and Mach-O CPU tell it apart from the
+/// other slices of its file.
 fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
     let other = || vec![SubjectKey::Other(subject.clone())];
     match subject {
@@ -52,26 +62,38 @@ fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
             .iter()
             .find(|l| l.id == *id)
             .map_or_else(other, |l| vec![SubjectKey::Port(l.port)]),
-        Ref::Component { slice, component } => match arch_of(s, slice) {
-            Some(arch) => placements_of(s, &slice.artifact())
-                .into_iter()
-                .map(|placement| SubjectKey::Component {
-                    placement,
-                    arch,
-                    component: component.clone(),
-                })
-                .collect(),
-            None => other(),
-        },
-        Ref::Slice(slice) => match arch_of(s, slice) {
-            Some(arch) => placements_of(s, &slice.artifact())
-                .into_iter()
-                .map(|placement| SubjectKey::Slice { placement, arch })
-                .collect(),
-            None => other(),
-        },
+        Ref::Component { slice, component } => {
+            slice_keys(s, slice, |placement, arch, macho| SubjectKey::Component {
+                placement,
+                arch,
+                macho,
+                component: component.clone(),
+            })
+            .unwrap_or_else(other)
+        }
+        Ref::Slice(slice) => slice_keys(s, slice, |placement, arch, macho| SubjectKey::Slice {
+            placement,
+            arch,
+            macho,
+        })
+        .unwrap_or_else(other),
         _ => other(),
     }
+}
+
+/// The keys `key` makes of a slice of `s`, one per placement of its file, from the placement and
+/// what tells the slice apart there ([`arch_and_cpu`]). `None` when `s` holds no such slice.
+fn slice_keys(
+    s: &Session,
+    slice: &SliceId,
+    key: impl Fn(Placement, Arch, Option<MachOCpu>) -> SubjectKey,
+) -> Option<Vec<SubjectKey>> {
+    let (arch, macho) = arch_and_cpu(s, slice)?;
+    let keys = placements_of(s, &slice.artifact())
+        .into_iter()
+        .map(|placement| key(placement, arch, macho))
+        .collect();
+    Some(keys)
 }
 
 /// What tells apart findings of one rule on one subject (a layer, `#1`): the ID after
@@ -80,10 +102,21 @@ fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
 /// of a run- or content-dependent ID of the subject (its listener or slice ID) is removed too,
 /// so a new socket or a new slice after an upgrade keeps the key.
 fn at(f: &Finding) -> String {
-    let id = f.id.as_str();
-    let prefix = format!("finding:{}@", f.rule);
-    let rest = id.strip_prefix(prefix.as_str()).unwrap_or(id);
-    let (own, volatile) = match &f.subject {
+    at_of(f.id.as_str(), &format!("finding:{}@", f.rule), &f.subject)
+}
+
+/// What tells apart open questions of one rule on one subject (#138): the question's ID without
+/// the subject's run- or content-dependent ID text, so a capability question
+/// `capability:<feature>@<slice>` keys as `capability:<feature>@` and a rebuilt file keeps it.
+fn question_at(q: &OpenQuestion) -> String {
+    at_of(q.id.as_str(), "", &q.subject)
+}
+
+/// [`at`] of an ID: after `prefix` (the whole ID without it), without the subject's own ID in
+/// front, and every other occurrence of the subject's run- or content-dependent ID removed.
+fn at_of(id: &str, prefix: &str, subject: &Ref) -> String {
+    let rest = id.strip_prefix(prefix).unwrap_or(id);
+    let (own, volatile) = match subject {
         Ref::Model(m) => (Some(m.as_str()), None),
         Ref::Instance(i) => (Some(i.as_str()), None),
         Ref::Root(r) => (Some(r.as_str()), None),
@@ -101,24 +134,28 @@ fn at(f: &Finding) -> String {
 /// One judged item on one side: what it is, the scope its absence is judged over and the root
 /// this side recorded for that scope (the other side may not hold it), the pointers to it in the
 /// session, and its distinct decisions in canonical order.
-struct Judged<P> {
+struct Judged<P, D = PolicyDecision> {
     item: Item,
     scope: Ref,
     root: Option<RootId>,
     pointers: Vec<P>,
-    decisions: Vec<PolicyDecision>,
+    decisions: Vec<D>,
 }
 
-/// One finding or violation of an item, as [`add`] adds it.
-struct Entry<'s, P> {
+/// One finding, violation or open question of an item, as [`add`] adds it.
+struct Entry<'s, P, D = PolicyDecision> {
     scope: &'s Ref,
     root: Option<RootId>,
     pointer: P,
-    decision: &'s PolicyDecision,
+    decision: &'s D,
 }
 
-/// Adds one finding or violation to the item `item` of `out`.
-fn add<P>(out: &mut BTreeMap<String, Judged<P>>, item: Item, entry: Entry<'_, P>) {
+/// Adds one finding, violation or open question to the item `item` of `out`.
+fn add<P, D: Clone + PartialEq + Serialize>(
+    out: &mut BTreeMap<String, Judged<P, D>>,
+    item: Item,
+    entry: Entry<'_, P, D>,
+) {
     let judged = out.entry(key(&item)).or_insert_with(|| Judged {
         item,
         scope: entry.scope.clone(),
@@ -167,6 +204,29 @@ fn violations(s: &Session) -> BTreeMap<String, Judged<Ref>> {
                 root,
                 pointer: v.subject.clone(),
                 decision: &v.decision,
+            };
+            add(&mut out, item, entry);
+        }
+    }
+    out
+}
+
+fn questions(s: &Session) -> BTreeMap<String, Judged<OpenQuestionId, OpenQuestionDecision>> {
+    let mut out = BTreeMap::new();
+    for q in &s.open_questions {
+        let at = question_at(q);
+        for subject in subject_keys(s, &q.subject) {
+            let root = placement_of(&subject).and_then(|p| root_at(s, p));
+            let item = Item::OpenQuestion {
+                rule: q.rule.clone(),
+                subject,
+                at: at.clone(),
+            };
+            let entry = Entry {
+                scope: &q.subject,
+                root,
+                pointer: q.id.clone(),
+                decision: &q.decision,
             };
             add(&mut out, item, entry);
         }
@@ -323,6 +383,41 @@ fn violation_recorded(
     Absence::closed(closed, checks(names))
 }
 
+/// Whether `absent` would have recorded an open question of `rule` about `subject` (#138). A
+/// capability question (`binary.capability_call`) exists only under a denial and an
+/// `[open_questions]` treatment, so it is judged only under the policy the present side applied
+/// (`same_policy`), as a violation is. A placement the absent run did not name is a difference of
+/// request. Then it needs the placement's container check closed, under the root the present side
+/// recorded there: the imports are read there, and an import list cut short leaves it open. Code
+/// coverage does not bear on it: an import without a confirmed call is always a question, and a
+/// confirmed call is a violation, judged on its own. A question of any other rule is the
+/// analysis's: it needs a `Complete` absent side, as a finding of another rule does, whatever the
+/// policies.
+fn question_recorded(
+    absent: &Session,
+    same_policy: bool,
+    rule: &RuleId,
+    subject: &SubjectKey,
+    root: Option<&RootId>,
+) -> Absence {
+    if rule.as_str() != CAPABILITY_RULE {
+        return complete(absent);
+    }
+    if !same_policy {
+        return Absence::OtherPolicy;
+    }
+    if let Some(named) = placement_of(subject).and_then(|p| not_named_in(absent, p, root)) {
+        return Absence::NotAsked(checks(named));
+    }
+    let Some(p) = placement_of(subject) else {
+        return Absence::Open(checks(&CONTAINER));
+    };
+    let names = checks_at(p, &CONTAINER);
+    let closed =
+        scope_of(absent, p).is_some_and(|scope| closed_for_under(absent, names, &scope, root));
+    Absence::closed(closed, checks(names))
+}
+
 /// An item on one side only: `change` when the other side would have recorded it, otherwise not
 /// comparable for the reason `absence` gives, on `side`.
 fn judge(found: &mut Found, absence: Absence, item: &Item, side: Side, change: Change) {
@@ -440,13 +535,60 @@ pub(super) fn compare(b: &Session, c: &Session, found: &mut Found) {
         let absence = violation_recorded(b, same_policy, policy_rule, subject, root);
         judge(found, absence, &j.item, Side::Baseline, new);
     }
+    let (was, is) = (questions(b), questions(c));
+    for (k, j) in &was {
+        let Item::OpenQuestion { rule, subject, at } = &j.item else {
+            continue;
+        };
+        match is.get(k) {
+            Some(now) if j.decisions != now.decisions => {
+                found.changes.push(Change::OpenQuestionTreatmentChanged {
+                    rule: rule.clone(),
+                    subject: subject.clone(),
+                    at: at.clone(),
+                    baseline: j.decisions.clone(),
+                    current: now.decisions.clone(),
+                    baseline_questions: j.pointers.clone(),
+                    current_questions: now.pointers.clone(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                let resolved = Change::OpenQuestionResolved {
+                    rule: rule.clone(),
+                    subject: subject.clone(),
+                    at: at.clone(),
+                    baseline: j.pointers.clone(),
+                };
+                let absence = question_recorded(c, same_policy, rule, subject, j.root.as_ref());
+                judge(found, absence, &j.item, Side::Current, resolved);
+            }
+        }
+    }
+    for (k, j) in &is {
+        let Item::OpenQuestion { rule, subject, at } = &j.item else {
+            continue;
+        };
+        if was.contains_key(k) {
+            continue;
+        }
+        let new = Change::OpenQuestionNew {
+            rule: rule.clone(),
+            subject: subject.clone(),
+            at: at.clone(),
+            current: j.pointers.clone(),
+            decisions: j.decisions.clone(),
+        };
+        let absence = question_recorded(b, same_policy, rule, subject, j.root.as_ref());
+        judge(found, absence, &j.item, Side::Baseline, new);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::artifact::Arch;
-    use crate::finding::{Action, FindingKind, Severity};
+    use crate::finding::{Action, FindingKind, OqTreatment, Severity};
     use crate::id::{ArtifactId, ComponentKey, ListenerId, SliceId};
 
     fn finding(rule: &str, subject: Ref, id: &str) -> Finding {
@@ -545,6 +687,33 @@ mod tests {
             at(&finding("binary.example", subject, &id))
         };
         assert_eq!(key(slice(0x11)), "/ggml");
+        assert_eq!(key(slice(0x11)), key(slice(0x22)));
+    }
+
+    #[test]
+    fn a_capability_question_s_slice_id_does_not_reach_the_key() {
+        let key = |s: SliceId| {
+            let (Ok(id), Ok(rule), Ok(source)) = (
+                OpenQuestionId::new(format!("capability:posix.process_spawn@{s}")),
+                RuleId::new(CAPABILITY_RULE),
+                PolicyRuleRef::new("policy:open_questions.default"),
+            ) else {
+                panic!("valid IDs");
+            };
+            question_at(&OpenQuestion {
+                id,
+                rule,
+                subject: Ref::Slice(s),
+                conditions: vec![],
+                evidence: vec![],
+                decision: OpenQuestionDecision {
+                    treatment: OqTreatment::CountAsGap,
+                    source,
+                    reason: None,
+                },
+            })
+        };
+        assert_eq!(key(slice(0x11)), "capability:posix.process_spawn@");
         assert_eq!(key(slice(0x11)), key(slice(0x22)));
     }
 

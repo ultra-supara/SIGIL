@@ -59,7 +59,7 @@ pub const DYNSYM_UNREAD_GAPS: [&str; 3] = [
 ];
 
 /// The capability bits of a Mach-O CPU subtype (`CPU_SUBTYPE_MASK`).
-const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
+pub(crate) const CPU_SUBTYPE_MASK: u32 = 0xff00_0000;
 
 /// A Mach-O architecture as lipo compares two: the CPU type, and the subtype without its
 /// capability bits.
