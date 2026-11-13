@@ -515,6 +515,27 @@ fn a_slice_key_without_its_mach_o_cpu_is_refused() {
         key.as_object_mut().unwrap().remove("macho");
         both_reject(v, &format!("a {kind} key without macho"));
     }
+    // A slice key of an x86_64h slice loads; with the subtype's capability bits kept
+    // (`CPU_SUBTYPE_LIB64`), which lipo does not compare and SIGIL never writes, it does not.
+    let with_cpu = |subtype: u32| {
+        let mut v = example("11-new-open-question");
+        let change = v["changes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find_map(|c| c.get_mut("OpenQuestionNew"))
+            .unwrap();
+        change["subject"]["Slice"]["macho"] = json!({"cpu_type": 16777223, "cpu_subtype": subtype});
+        v
+    };
+    let v = with_cpu(8);
+    assert_valid_against(
+        &validator_for(&schema(), "Diff"),
+        &v,
+        "an x86_64h slice key",
+    );
+    serde_json::from_value::<Diff>(v).unwrap();
+    both_reject(with_cpu(0x8000_0008), "a subtype with capability bits");
     // An item not comparable: a component claim, and a violation on one.
     let validator = validator_for(&schema(), "NotComparable");
     let component = json!({
@@ -566,10 +587,14 @@ fn a_slice_key_without_its_mach_o_cpu_is_refused() {
             "serde accepted {v}"
         );
         // The subtype without its capability bits: the top byte is clear.
-        let v = with(Some(
-            json!({"cpu_type": 16777223, "cpu_subtype": 2147483656_u64}),
-        ));
-        assert!(!validator.is_valid(&v), "schema accepted {v}");
+        for subtype in [0x0100_0000_u32, 0x8000_0008] {
+            let v = with(Some(json!({"cpu_type": 16777223, "cpu_subtype": subtype})));
+            assert!(!validator.is_valid(&v), "schema accepted {v}");
+            let err = serde_json::from_value::<NotComparable>(v.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("capability bits"), "serde accepted {v}: {err}");
+        }
         let v = with(Some(json!({"cpu_type": 16777223})));
         assert!(!validator.is_valid(&v), "schema accepted {v}");
         assert!(

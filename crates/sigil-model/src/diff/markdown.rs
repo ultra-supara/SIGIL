@@ -736,10 +736,8 @@ fn subject_key(key: &SubjectKey) -> Shown {
             placement,
             arch,
             macho,
-        } => {
-            let cpu = macho.map_or_else(String::new, |m| format!(" ({})", cpu(&m)));
-            Shown::own(format!("{} slice{cpu} at ", arch.name())).and_shown(place(placement))
-        }
+        } => Shown::own(format!("{} at ", slice_on(*arch, macho.as_ref())))
+            .and_shown(place(placement)),
         SubjectKey::Other(r) => Shown::own(subject(r)),
     }
 }
@@ -747,6 +745,14 @@ fn subject_key(key: &SubjectKey) -> Shown {
 /// A Mach-O slice's CPU, which tells apart two slices of one fat file with one architecture.
 fn cpu(m: &MachOCpu) -> String {
     format!("Mach-O CPU {}, subtype {}", m.cpu_type, m.cpu_subtype)
+}
+
+/// A slice at its placement: `<arch> slice`, with its Mach-O CPU in brackets when it has one.
+fn slice_on(arch: Arch, macho: Option<&MachOCpu>) -> String {
+    match macho {
+        Some(m) => format!("{} slice ({})", arch.name(), cpu(m)),
+        None => format!("{} slice", arch.name()),
+    }
 }
 
 /// Which slice a component claim is on, at its placement: its architecture, and its Mach-O CPU

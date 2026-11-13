@@ -183,12 +183,40 @@ pub enum Placement {
 ///
 /// Two slices of one fat file can share an [`Arch`] (x86_64 and x86_64h, arm64 and arm64e), so
 /// a Mach-O slice's key holds it too. It is the slice's own header's, so a thin file that becomes
-/// fat keeps its slice's key, and it does not depend on content, so a rebuild keeps it too.
+/// fat keeps its slice's key, and it does not depend on content, so a rebuild keeps it too. It is
+/// read through a record of the same fields (unknown fields refused): a subtype with capability
+/// bits does not load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "MachOCpuRecord")]
 pub struct MachOCpu {
     pub cpu_type: i32,
     pub cpu_subtype: u32,
+}
+
+/// The JSON form of a [`MachOCpu`], before its subtype is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MachOCpuRecord {
+    cpu_type: i32,
+    cpu_subtype: u32,
+}
+
+impl TryFrom<MachOCpuRecord> for MachOCpu {
+    type Error = String;
+
+    /// The record, if its subtype has no capability bits (the top byte), as SIGIL writes it.
+    fn try_from(r: MachOCpuRecord) -> Result<MachOCpu, String> {
+        if r.cpu_subtype & crate::binary::CPU_SUBTYPE_MASK != 0 {
+            return Err(format!(
+                "Mach-O CPU subtype {:#x} has capability bits: a key holds it without them",
+                r.cpu_subtype
+            ));
+        }
+        Ok(MachOCpu {
+            cpu_type: r.cpu_type,
+            cpu_subtype: r.cpu_subtype,
+        })
+    }
 }
 
 /// Reads an `Option` field that must be present, `null` when it is `None`: serde alone would

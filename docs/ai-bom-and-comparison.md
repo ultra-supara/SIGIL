@@ -120,18 +120,18 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 
   Listener inodes, `binary-<n>` numbers and slice IDs are pointers, not keys. A restart, files
   given in another order are not changes. An upgraded file is one `FileContentChanged`; its
-  claims keep their key (placement, arch, component), so a new slice ID alone is no claim change.
-  Its open questions keep their key too: a capability question
-  (`capability:<feature>@<slice>`) keys as `capability:<feature>@` on the placement and arch of
-  its slice.
+  claims keep their key (placement, arch, Mach-O CPU `macho`, component), so a new slice ID alone
+  is no claim change. Its open questions keep their key too: a capability question
+  (`capability:<feature>@<slice>`) keys as `capability:<feature>@` on the placement, arch and
+  Mach-O CPU of its slice.
 
   A slice is keyed by its placement, its arch and, in a Mach-O file, its CPU type and subtype
-  (`macho`, `null` for an ELF slice). Two slices of one fat file can have one arch: x86_64 and
-  x86_64h, or arm64 and arm64e. Their findings, violations, open questions and claims are their
-  own. The CPU is the slice's own header's, without the subtype's capability bits, so a thin file
-  that becomes fat keeps its slice's key. Two slices that lipo cannot tell apart (one CPU type
-  and subtype) share a key. SIGIL records such a file with a fat gap, which keeps its container
-  check open.
+  (`macho`). `macho` is `null` for an ELF slice, and for a Mach-O slice whose container facts
+  were not recorded. Two slices of one fat file can have one arch: x86_64 and x86_64h, or arm64
+  and arm64e. Their findings, violations, open questions and claims are their own. The CPU is
+  the slice's own header's, without the subtype's capability bits, so a thin file that becomes
+  fat keeps its slice's key. Two slices that lipo cannot tell apart (one CPU type and subtype)
+  share a key. SIGIL records such a file with a fat gap, which keeps its container check open.
 - **Comparability.** Saying that something is absent on one side needs the check that would
   have recorded it to be closed on that side. Otherwise the item is *not comparable*, never
   removed or resolved. The diff's `not_comparable` lists it with a `cause`, the checks, and the

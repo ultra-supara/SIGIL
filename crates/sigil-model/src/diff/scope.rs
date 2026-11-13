@@ -179,19 +179,22 @@ pub(crate) fn not_named_in(
     (!held).then_some(checks)
 }
 
-/// The architecture of a slice of `s`.
-pub(crate) fn arch_of(s: &Session, slice: &SliceId) -> Option<Arch> {
-    s.artifacts
+/// What tells a slice of `s` apart from the other slices of its file, as its keys hold it: its
+/// architecture, and its Mach-O CPU ([`macho_of`]). `None` when `s` holds no such slice.
+pub(crate) fn arch_and_cpu(s: &Session, slice: &SliceId) -> Option<(Arch, Option<MachOCpu>)> {
+    let arch = s
+        .artifacts
         .iter()
         .flat_map(|a| &a.slices)
-        .find(|sl| sl.id == *slice)
-        .map(|sl| sl.arch)
+        .find(|sl| sl.id == *slice)?
+        .arch;
+    Some((arch, macho_of(s, slice)))
 }
 
 /// The Mach-O CPU of a slice of `s`, from its own header as `s` recorded it: what tells apart two
 /// slices of one fat file with one architecture (x86_64 and x86_64h). `None` for an ELF slice,
 /// and for a slice whose container facts `s` did not record.
-pub(crate) fn macho_of(s: &Session, slice: &SliceId) -> Option<MachOCpu> {
+fn macho_of(s: &Session, slice: &SliceId) -> Option<MachOCpu> {
     let facts = s.binaries.iter().find(|b| b.slice == *slice)?;
     match &facts.container {
         ContainerFacts::MachO(m) => {

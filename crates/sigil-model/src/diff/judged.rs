@@ -7,18 +7,21 @@ use serde::Serialize;
 
 use super::compare::{checks, policy_of, Found};
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for_under, macho_of, not_named_in, placement,
+    arch_and_cpu, checks_at, closed_everywhere, closed_for_under, not_named_in, placement,
     placements_of, root_at, root_of, same_model_filter, scope_of, CODE, CONTAINER, IDENTITY,
     INVENTORY,
 };
 use super::{key, sort_decisions};
-use crate::diff::{Change, Item, Placement, Side, SubjectKey};
+use crate::artifact::Arch;
+use crate::diff::{Change, Item, MachOCpu, Placement, Side, SubjectKey};
 use crate::evidence::Ref;
 use crate::finding::{
     Completeness, Finding, OpenQuestion, OpenQuestionDecision, PolicyDecision,
     CAPABILITY_DENY_PREFIX, CAPABILITY_RULE,
 };
-use crate::id::{CheckId, FindingId, InstanceId, OpenQuestionId, PolicyRuleRef, RootId, RuleId};
+use crate::id::{
+    CheckId, FindingId, InstanceId, OpenQuestionId, PolicyRuleRef, RootId, RuleId, SliceId,
+};
 use crate::session::Session;
 
 const INTEGRITY: &str = "model_store.integrity";
@@ -59,37 +62,38 @@ fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
             .iter()
             .find(|l| l.id == *id)
             .map_or_else(other, |l| vec![SubjectKey::Port(l.port)]),
-        Ref::Component { slice, component } => match arch_of(s, slice) {
-            Some(arch) => {
-                let macho = macho_of(s, slice);
-                placements_of(s, &slice.artifact())
-                    .into_iter()
-                    .map(|placement| SubjectKey::Component {
-                        placement,
-                        arch,
-                        macho,
-                        component: component.clone(),
-                    })
-                    .collect()
-            }
-            None => other(),
-        },
-        Ref::Slice(slice) => match arch_of(s, slice) {
-            Some(arch) => {
-                let macho = macho_of(s, slice);
-                placements_of(s, &slice.artifact())
-                    .into_iter()
-                    .map(|placement| SubjectKey::Slice {
-                        placement,
-                        arch,
-                        macho,
-                    })
-                    .collect()
-            }
-            None => other(),
-        },
+        Ref::Component { slice, component } => {
+            slice_keys(s, slice, |placement, arch, macho| SubjectKey::Component {
+                placement,
+                arch,
+                macho,
+                component: component.clone(),
+            })
+            .unwrap_or_else(other)
+        }
+        Ref::Slice(slice) => slice_keys(s, slice, |placement, arch, macho| SubjectKey::Slice {
+            placement,
+            arch,
+            macho,
+        })
+        .unwrap_or_else(other),
         _ => other(),
     }
+}
+
+/// The keys `key` makes of a slice of `s`, one per placement of its file, from the placement and
+/// what tells the slice apart there ([`arch_and_cpu`]). `None` when `s` holds no such slice.
+fn slice_keys(
+    s: &Session,
+    slice: &SliceId,
+    key: impl Fn(Placement, Arch, Option<MachOCpu>) -> SubjectKey,
+) -> Option<Vec<SubjectKey>> {
+    let (arch, macho) = arch_and_cpu(s, slice)?;
+    let keys = placements_of(s, &slice.artifact())
+        .into_iter()
+        .map(|placement| key(placement, arch, macho))
+        .collect();
+    Some(keys)
 }
 
 /// What tells apart findings of one rule on one subject (a layer, `#1`): the ID after
