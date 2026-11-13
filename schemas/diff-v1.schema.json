@@ -2046,7 +2046,7 @@
       ]
     },
     "Evaluation": {
-      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions (Fail when it has none). verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
+      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions, the current session's (Fail when it has none), and for FindingDecisionChanged and ViolationDecisionChanged never less than Warn. verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2249,7 +2249,7 @@
       }
     },
     "CompareAction": {
-      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say; FindingNew and ViolationNew only.",
+      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say, a changed decision never less than Warn; FindingNew, FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only.",
       "type": "string",
       "enum": [
         "Fail",

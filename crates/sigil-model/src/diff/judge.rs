@@ -24,7 +24,8 @@ pub enum CompareAction {
     Warn,
     Ignore,
     /// What the change's own decisions (the current session's) say: the maximum of their
-    /// actions. Only for the kinds that carry decisions ([`ChangeKind::takes_decided`]).
+    /// actions, and for a changed decision never less than `Warn`. Only for the kinds that carry
+    /// decisions ([`ChangeKind::takes_decided`]).
     Decided,
 }
 
@@ -150,17 +151,19 @@ impl std::error::Error for RulesError {}
 impl ChangeKind {
     /// The action of the kind when the policy does not name it. Drift that a single session's
     /// verdict cannot see fails; a change that weakens the baseline warns; improvements, and
-    /// changes that follow from others, are ignored; a new finding or violation weighs what its
-    /// own decisions say.
+    /// changes that follow from others, are ignored; a new finding or violation, and a changed
+    /// decision, weigh what the current session decides (a changed decision at least `Warn`), so
+    /// an override that expires fails as a new `fail` finding does.
     pub fn default_action(self) -> CompareAction {
         use ChangeKind as K;
         match self {
             K::LayerChanged | K::FileContentChanged | K::BindWidened => CompareAction::Fail,
-            K::FindingNew | K::ViolationNew => CompareAction::Decided,
+            K::FindingNew
+            | K::FindingDecisionChanged
+            | K::ViolationNew
+            | K::ViolationDecisionChanged => CompareAction::Decided,
             K::PolicyChanged
             | K::CheckOpened
-            | K::FindingDecisionChanged
-            | K::ViolationDecisionChanged
             | K::ModelAdded
             | K::ModelRemoved
             | K::LicenseChanged
@@ -179,9 +182,28 @@ impl ChangeKind {
         }
     }
 
-    /// Whether the kind's changes carry decisions, so that `Decided` applies.
+    /// Whether the kind's changes carry the current session's decisions ([`Change::decisions`]),
+    /// so that `Decided` applies: a new finding or violation, and a changed decision.
     pub fn takes_decided(self) -> bool {
-        matches!(self, ChangeKind::FindingNew | ChangeKind::ViolationNew)
+        matches!(
+            self,
+            ChangeKind::FindingNew
+                | ChangeKind::FindingDecisionChanged
+                | ChangeKind::ViolationNew
+                | ChangeKind::ViolationDecisionChanged
+        )
+    }
+
+    /// The least a change of the kind weighs when `Decided`: `Warn` for a changed decision, so
+    /// that a weakening (`Fail` to `Ignore`) still warns; `Ignore` for a new item, whose ignored
+    /// decisions stay ignored.
+    fn decided_floor(self) -> Action {
+        match self {
+            ChangeKind::FindingDecisionChanged | ChangeKind::ViolationDecisionChanged => {
+                Action::Warn
+            }
+            _ => Action::Ignore,
+        }
     }
 }
 
@@ -269,8 +291,9 @@ impl CompareRules {
     }
 
     /// What `change` weighs: its kind's action, or for `Decided` the maximum action of its own
-    /// decisions (`Fail` without any: an item whose decisions are unknown is never lighter than
-    /// it could be), and whether its decisions gave it.
+    /// decisions, the current session's (`Fail` without any: an item whose decisions are unknown
+    /// is never lighter than it could be), and for a changed decision never less than `Warn`;
+    /// and whether its decisions gave it.
     pub fn weigh(&self, change: &Change) -> (Action, bool) {
         // Every kind has an entry (`new`, `defaults`). The fallback is never taken, and it would
         // not make a change lighter.
@@ -282,7 +305,10 @@ impl CompareRules {
             CompareAction::Fail => (Action::Fail, false),
             CompareAction::Warn => (Action::Warn, false),
             CompareAction::Ignore => (Action::Ignore, false),
-            CompareAction::Decided => (decided(change.decisions().unwrap_or(&[])), true),
+            CompareAction::Decided => {
+                let own = decided(change.decisions().unwrap_or(&[]));
+                (heavier(own, change.kind().decided_floor()), true)
+            }
         }
     }
 
@@ -394,6 +420,15 @@ fn decided(decisions: &[PolicyDecision]) -> Action {
         .map(|d| d.action)
         .max_by_key(|a| verdict_of(*a))
         .unwrap_or(Action::Fail)
+}
+
+/// The heavier of two actions (`Ignore < Warn < Fail`).
+fn heavier(a: Action, b: Action) -> Action {
+    if verdict_of(a) >= verdict_of(b) {
+        a
+    } else {
+        b
+    }
 }
 
 fn verdict_of(action: Action) -> Verdict {

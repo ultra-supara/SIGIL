@@ -141,7 +141,7 @@
         "reason": null
       },
       "FindingDecisionChanged": {
-        "action": "Warn",
+        "action": "Decided",
         "source": "default:compare.FindingDecisionChanged",
         "reason": null
       },
@@ -156,7 +156,7 @@
         "reason": null
       },
       "ViolationDecisionChanged": {
-        "action": "Warn",
+        "action": "Decided",
         "source": "default:compare.ViolationDecisionChanged",
         "reason": null
       },

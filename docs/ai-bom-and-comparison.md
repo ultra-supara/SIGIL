@@ -148,9 +148,9 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 ### Judging the differences
 
 Every diff is judged under a policy's `[compare]` section (#16): `--policy FILE`, or the
-built-in policy. Each change kind has an action (`fail`, `warn`, `ignore`, or for a new finding
-or violation `decided`: what its own decisions say), and each cause of an item not comparable a
-treatment. The diff's `evaluation` records the policy, the whole table, and two results, as a
+built-in policy. Each change kind has an action (`fail`, `warn`, `ignore`, or for a new or
+changed finding or violation `decided`: what its decisions in the current session say, a changed
+decision at least `warn`), and each cause of an item not comparable a treatment. The diff's `evaluation` records the policy, the whole table, and two results, as a
 session has: a verdict (`PASS`, `WARN`, `FAIL`) and a completeness (`INCOMPLETE` when either
 session is incomplete itself, or when an item not comparable counts as a gap, the default). Each
 side of the diff records its session's own completeness. A diff reads back only if its recorded

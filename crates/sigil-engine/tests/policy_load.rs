@@ -838,6 +838,26 @@ fn compare_entries_override_the_defaults_with_their_source_and_reason() {
 }
 
 #[test]
+fn a_changed_decision_may_be_decided() {
+    let text = format!(
+        "{HEAD}\n[compare.changes.FindingDecisionChanged]\naction = \"decided\"\n\n\
+         [compare.changes.ViolationDecisionChanged]\naction = \"decided\"\n"
+    );
+    let policy = Policy::load(&text).unwrap();
+    for kind in [
+        ChangeKind::FindingDecisionChanged,
+        ChangeKind::ViolationDecisionChanged,
+    ] {
+        let t = &policy.compare.changes()[&kind];
+        assert_eq!(t.action, CompareAction::Decided, "{kind:?}");
+        assert_eq!(
+            t.source.as_str(),
+            format!("policy:compare.changes.{}", kind.name())
+        );
+    }
+}
+
+#[test]
 fn compare_changes_nothing_but_the_policy_s_hash() {
     let plain = Policy::load(PLAN_EXAMPLE).unwrap();
     let with = Policy::load(&format!(
@@ -921,5 +941,10 @@ fn every_malformed_compare_entry_is_fatal() {
     let shown = E::UnknownChangeKind("LayerChanges".to_string()).to_string();
     assert!(shown.contains("sigil rules"), "{shown}");
     let shown = E::DecidedNotAllowed("LayerChanged".to_string()).to_string();
-    assert!(shown.contains("FindingNew and ViolationNew"), "{shown}");
+    assert!(
+        shown.contains(
+            "FindingNew, FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only"
+        ),
+        "{shown}"
+    );
 }

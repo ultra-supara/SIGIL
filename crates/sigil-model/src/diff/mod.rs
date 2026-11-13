@@ -626,13 +626,19 @@ impl Change {
         self.kind() as u8
     }
 
-    /// The decisions a new finding or policy violation carries (the current session's); `None`
-    /// for every other kind.
+    /// The current session's decisions a change carries: a new finding's or policy violation's,
+    /// and the current side of a changed decision (`FindingDecisionChanged`,
+    /// `ViolationDecisionChanged`). `None` for every other kind ([`ChangeKind::takes_decided`]).
     pub fn decisions(&self) -> Option<&[PolicyDecision]> {
         match self {
-            Change::FindingNew { decisions, .. } | Change::ViolationNew { decisions, .. } => {
-                Some(decisions)
+            Change::FindingNew { decisions, .. }
+            | Change::ViolationNew { decisions, .. }
+            | Change::FindingDecisionChanged {
+                current: decisions, ..
             }
+            | Change::ViolationDecisionChanged {
+                current: decisions, ..
+            } => Some(decisions),
             _ => None,
         }
     }

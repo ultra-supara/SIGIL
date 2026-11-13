@@ -717,6 +717,8 @@ fn rules_lists_the_catalog() {
         ("PolicyChanged", "warn"),
         ("LayerChanged", "fail"),
         ("FindingNew", "decided"),
+        ("FindingDecisionChanged", "decided"),
+        ("ViolationDecisionChanged", "decided"),
         ("BindNarrowed", "ignore"),
     ] {
         let line = format!("  {kind:<25} {action}\n");
@@ -4192,6 +4194,72 @@ fn compare_exits_3_when_the_diff_s_verdict_reaches_fail_on() {
     ]);
     assert_eq!(pass.code, 0, "{}", pass.stderr);
     assert!(pass.stderr.contains("PASS + COMPLETE"), "{}", pass.stderr);
+}
+
+#[test]
+fn compare_fails_when_an_expired_override_lets_a_finding_fail() {
+    // User decision, 2026-11-13: one policy, one store with a tampered blob, and an override of
+    // its rule that expires between the two runs. The only difference is the finding's decision,
+    // ignore then FAIL, and the diff fails as it does for a new FAIL finding.
+    let d = store(true);
+    let weights = blob(d.path(), b"weights");
+    let hex = weights.strip_prefix("sha256:").unwrap();
+    fs::write(d.path().join(format!("blobs/sha256-{hex}")), b"tampered").unwrap();
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "waived.toml",
+        "schema = \"sigil-policy/1\"\nname = \"waived\"\n\n\
+         [rules.\"model.blob_digest_mismatch\"]\naction = \"ignore\"\n\
+         reason = \"re-pull scheduled\"\nexpires = \"2027-06-30\"\n",
+    );
+    let at = |time: &str| {
+        let r = inspect(d.path(), &[&"--policy", &policy, &"--policy-time", &time]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        r
+    };
+    let (waived, expired) = (at("2027-06-01T00:00:00Z"), at("2027-07-01T00:00:00Z"));
+    assert_eq!(session_of(&waived).outcome.verdict, Verdict::Pass);
+    assert_eq!(session_of(&expired).outcome.verdict, Verdict::Fail);
+    let pa = write(dir.path(), "a.json", &waived.stdout);
+    let pb = write(dir.path(), "b.json", &expired.stdout);
+    let compare = |baseline: &Path, current: &Path, level: &str| {
+        run(&[
+            &"compare",
+            &"--baseline",
+            &baseline,
+            &"--current",
+            &current,
+            &"--fail-on",
+            &level,
+        ])
+    };
+    let r = compare(&pa, &pb, "fail");
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("FAIL + COMPLETE under default (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let kinds: Vec<ChangeKind> = diff.changes.iter().map(Change::kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            ChangeKind::VerdictChanged,
+            ChangeKind::FindingDecisionChanged
+        ]
+    );
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (sigil_model::Action::Fail, true)
+    );
+    // The other way round, the override weakens the baseline: it warns, and never fails.
+    let r = compare(&pb, &pa, "fail");
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(diff.evaluation.verdict(), Verdict::Warn);
+    assert_eq!(compare(&pb, &pa, "warn").code, 3);
 }
 
 #[test]
