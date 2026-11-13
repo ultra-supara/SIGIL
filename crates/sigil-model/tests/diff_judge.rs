@@ -356,20 +356,18 @@ fn decided_weighs_the_item_s_own_decisions() {
     );
 }
 
-/// A decision change of `kind` for one item: decided `baseline` before and `current` now, each
-/// decision an action and its reason.
-fn decision_change(
-    kind: ChangeKind,
-    baseline: &[(Action, &str)],
-    current: &[(Action, &str)],
-) -> Change {
+/// One side's decisions of an item, each an action and its reason.
+type Decisions<'a> = &'a [(Action, &'a str)];
+
+/// A decision change of `kind` for one item: decided `baseline` before and `current` now.
+fn decision_change(kind: ChangeKind, baseline: Decisions, current: Decisions) -> Change {
     let rule = "model.blob_digest_mismatch";
     let policy_rule = "policy:components.deny.ggml-base";
     let source = match kind {
         ChangeKind::FindingDecisionChanged => format!("policy:rules.{rule}"),
         _ => policy_rule.to_string(),
     };
-    let says = |decisions: &[(Action, &str)]| -> Vec<PolicyDecision> {
+    let says = |decisions: Decisions| -> Vec<PolicyDecision> {
         decisions
             .iter()
             .map(|(action, reason)| PolicyDecision {
@@ -410,7 +408,7 @@ fn decided_weighs_a_changed_decision_only_when_it_got_heavier() {
     // that did not get heavier (another reason, source or expiry; a weakening) warns.
     use Action::{Fail, Ignore, Warn};
     let r = builtin_rules();
-    let cases: [(&[(Action, &str)], &[(Action, &str)], Action); 8] = [
+    let cases: [(Decisions, Decisions, Action); 8] = [
         // ignore to FAIL: an override that expired.
         (&[(Ignore, "waived")], &[(Fail, "override expired")], Fail),
         (&[(Warn, "tolerated")], &[(Fail, "denied")], Fail),
