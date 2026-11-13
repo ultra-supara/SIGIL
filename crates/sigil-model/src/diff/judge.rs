@@ -24,8 +24,9 @@ pub enum CompareAction {
     Warn,
     Ignore,
     /// What the change's own decisions (the current session's) say: the maximum of their
-    /// actions, and for a changed decision never less than `Warn`. Only for the kinds that carry
-    /// decisions ([`ChangeKind::takes_decided`]).
+    /// actions. A changed decision weighs that only when it is heavier than the baseline's, and
+    /// at least `Warn`; otherwise `Warn`. Only for the kinds that carry decisions
+    /// ([`ChangeKind::takes_decided`]).
     Decided,
 }
 
@@ -152,8 +153,9 @@ impl ChangeKind {
     /// The action of the kind when the policy does not name it. Drift that a single session's
     /// verdict cannot see fails; a change that weakens the baseline warns; improvements, and
     /// changes that follow from others, are ignored; a new finding or violation, and a changed
-    /// decision, weigh what the current session decides (a changed decision at least `Warn`), so
-    /// an override that expires fails as a new `fail` finding does.
+    /// decision, weigh what the current session decides (a changed decision only when that got
+    /// heavier, and at least `Warn`), so an override that expires fails as a new `fail` finding
+    /// does.
     pub fn default_action(self) -> CompareAction {
         use ChangeKind as K;
         match self {
@@ -192,18 +194,6 @@ impl ChangeKind {
                 | ChangeKind::ViolationNew
                 | ChangeKind::ViolationDecisionChanged
         )
-    }
-
-    /// The least a change of the kind weighs when `Decided`: `Warn` for a changed decision, so
-    /// that a weakening (`Fail` to `Ignore`) still warns; `Ignore` for a new item, whose ignored
-    /// decisions stay ignored.
-    fn decided_floor(self) -> Action {
-        match self {
-            ChangeKind::FindingDecisionChanged | ChangeKind::ViolationDecisionChanged => {
-                Action::Warn
-            }
-            _ => Action::Ignore,
-        }
     }
 }
 
@@ -292,8 +282,9 @@ impl CompareRules {
 
     /// What `change` weighs: its kind's action, or for `Decided` the maximum action of its own
     /// decisions, the current session's (`Fail` without any: an item whose decisions are unknown
-    /// is never lighter than it could be), and for a changed decision never less than `Warn`;
-    /// and whether its decisions gave it.
+    /// is never lighter than it could be); and whether its decisions gave it. A changed decision
+    /// weighs that action, at least `Warn`, only when it is heavier than the baseline's (by the
+    /// same rule); otherwise `Warn`: another reason, source or expiry, or a weakening, warns.
     pub fn weigh(&self, change: &Change) -> (Action, bool) {
         // Every kind has an entry (`new`, `defaults`). The fallback is never taken, and it would
         // not make a change lighter.
@@ -306,8 +297,15 @@ impl CompareRules {
             CompareAction::Warn => (Action::Warn, false),
             CompareAction::Ignore => (Action::Ignore, false),
             CompareAction::Decided => {
-                let own = decided(change.decisions().unwrap_or(&[]));
-                (heavier(own, change.kind().decided_floor()), true)
+                let now = decided(change.decisions().unwrap_or(&[]));
+                let action = match baseline_decisions(change) {
+                    None => now,
+                    Some(before) if verdict_of(now) > verdict_of(decided(before)) => {
+                        heavier(now, Action::Warn)
+                    }
+                    Some(_) => Action::Warn,
+                };
+                (action, true)
             }
         }
     }
@@ -410,6 +408,16 @@ impl Evaluation {
 
 fn is_incomplete(c: &Completeness) -> bool {
     matches!(c, Completeness::Incomplete { .. })
+}
+
+/// The baseline's decisions of a changed decision (`FindingDecisionChanged`,
+/// `ViolationDecisionChanged`); `None` for every other kind.
+fn baseline_decisions(change: &Change) -> Option<&[PolicyDecision]> {
+    match change {
+        Change::FindingDecisionChanged { baseline, .. }
+        | Change::ViolationDecisionChanged { baseline, .. } => Some(baseline),
+        _ => None,
+    }
 }
 
 /// The maximum action of `decisions`, ordered as the verdicts they give (`Ignore < Warn <

@@ -6,7 +6,8 @@
 //! changes between two sessions (`[compare]`, #16). Loading is strict: an unknown key, rule,
 //! scope, check, assumption, denied component, denied capability, change kind, or cause, a
 //! malformed date, `ignore` without a reason, and `decided` for a change kind other than
-//! `FindingNew` and `ViolationNew` are all fatal, so a typo never silently weakens a policy.
+//! `FindingNew`, `FindingDecisionChanged`, `ViolationNew`, and `ViolationDecisionChanged` are all
+//! fatal, so a typo never silently weakens a policy.
 //!
 //! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
 //! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy

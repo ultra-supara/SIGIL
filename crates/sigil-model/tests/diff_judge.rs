@@ -356,71 +356,121 @@ fn decided_weighs_the_item_s_own_decisions() {
     );
 }
 
-/// A finding of `rule` decided `baseline` before and `current` now.
-fn finding_decision_changed(
-    rule: &str,
-    baseline: PolicyDecision,
-    current: PolicyDecision,
+/// A decision change of `kind` for one item: decided `baseline` before and `current` now, each
+/// decision an action and its reason.
+fn decision_change(
+    kind: ChangeKind,
+    baseline: &[(Action, &str)],
+    current: &[(Action, &str)],
 ) -> Change {
+    let rule = "model.blob_digest_mismatch";
+    let policy_rule = "policy:components.deny.ggml-base";
+    let source = match kind {
+        ChangeKind::FindingDecisionChanged => format!("policy:rules.{rule}"),
+        _ => policy_rule.to_string(),
+    };
+    let says = |decisions: &[(Action, &str)]| -> Vec<PolicyDecision> {
+        decisions
+            .iter()
+            .map(|(action, reason)| PolicyDecision {
+                action: *action,
+                source: id(&source),
+                reason: Some(reason.to_string()),
+                expires: None,
+            })
+            .collect()
+    };
     let finding: FindingId = id(&format!("finding:{rule}@{MODEL_M}#1"));
-    Change::FindingDecisionChanged {
-        rule: id(rule),
-        subject: SubjectKey::Model(id(MODEL_M)),
-        at: "#1".to_string(),
-        baseline: vec![baseline],
-        current: vec![current],
-        baseline_findings: vec![finding.clone()],
-        current_findings: vec![finding],
+    match kind {
+        ChangeKind::FindingDecisionChanged => Change::FindingDecisionChanged {
+            rule: id(rule),
+            subject: SubjectKey::Model(id(MODEL_M)),
+            at: "#1".to_string(),
+            baseline: says(baseline),
+            current: says(current),
+            baseline_findings: vec![finding.clone()],
+            current_findings: vec![finding],
+        },
+        ChangeKind::ViolationDecisionChanged => Change::ViolationDecisionChanged {
+            policy_rule: id(policy_rule),
+            subject: SubjectKey::Port(11434),
+            baseline: says(baseline),
+            current: says(current),
+            baseline_subjects: vec![],
+            current_subjects: vec![],
+        },
+        other => panic!("{other:?} is not a decision change"),
     }
 }
 
 #[test]
-fn decided_weighs_a_changed_decision_by_its_current_side_and_never_below_warn() {
+fn decided_weighs_a_changed_decision_only_when_it_got_heavier() {
     // User decision, 2026-11-13: an override that expires turns an ignored finding into a FAIL,
-    // and the diff fails, as it does for a new FAIL finding.
+    // and the diff fails, as it does for a new FAIL finding. Controller's refinement: a change
+    // that did not get heavier (another reason, source or expiry; a weakening) warns.
+    use Action::{Fail, Ignore, Warn};
     let r = builtin_rules();
-    let rule = "model.blob_digest_mismatch";
-    let waived = waiver(rule, "re-pull scheduled", "2026-12-31");
-    let failed = decision(Action::Fail, &format!("default:{rule}"));
-    let expired = finding_decision_changed(rule, waived.clone(), failed.clone());
-    assert_eq!(expired.decisions(), Some(std::slice::from_ref(&failed)));
-    assert_eq!(r.weigh(&expired), (Action::Fail, true));
-    assert_eq!(
-        judged(&r, std::slice::from_ref(&expired), &[]).verdict(),
-        Verdict::Fail
+    let cases: [(&[(Action, &str)], &[(Action, &str)], Action); 8] = [
+        // ignore to FAIL: an override that expired.
+        (&[(Ignore, "waived")], &[(Fail, "override expired")], Fail),
+        (&[(Warn, "tolerated")], &[(Fail, "denied")], Fail),
+        // FAIL to FAIL with another reason: a rule's reason edited, or moved into a file.
+        (&[(Fail, "denied")], &[(Fail, "denied, reworded")], Warn),
+        // A weakening warns, and a decision that changed is never ignored.
+        (&[(Fail, "denied")], &[(Ignore, "waived")], Warn),
+        (&[(Warn, "tolerated")], &[(Ignore, "waived")], Warn),
+        (&[(Ignore, "waived")], &[(Warn, "tolerated")], Warn),
+        // A side without decisions counts as FAIL, as a new item without any does.
+        (&[(Ignore, "waived")], &[], Fail),
+        (&[], &[(Fail, "denied")], Warn),
+    ];
+    for kind in [
+        ChangeKind::FindingDecisionChanged,
+        ChangeKind::ViolationDecisionChanged,
+    ] {
+        for (baseline, current, weight) in cases {
+            let change = decision_change(kind, baseline, current);
+            let what = format!("{kind:?}: {baseline:?} to {current:?}");
+            assert_eq!(r.weigh(&change), (weight, true), "{what}");
+            let verdict = match weight {
+                Fail => Verdict::Fail,
+                Warn => Verdict::Warn,
+                Ignore => Verdict::Pass,
+            };
+            assert_eq!(
+                judged(&r, std::slice::from_ref(&change), &[]).verdict(),
+                verdict,
+                "{what}"
+            );
+        }
+    }
+    // `decisions()` is the current side.
+    let expired = decision_change(
+        ChangeKind::FindingDecisionChanged,
+        &[(Ignore, "waived")],
+        &[(Fail, "override expired")],
     );
-    // A weakening (FAIL to ignore) still warns: a decision that changed is never ignored.
-    let waiving = finding_decision_changed(rule, failed, waived);
-    assert_eq!(r.weigh(&waiving), (Action::Warn, true));
-    assert_eq!(
-        judged(&r, std::slice::from_ref(&waiving), &[]).verdict(),
-        Verdict::Warn
-    );
-    let policy_rule = "policy:components.deny.ggml-base";
-    let violation = Change::ViolationDecisionChanged {
-        policy_rule: id(policy_rule),
-        subject: SubjectKey::Port(11434),
-        baseline: vec![decision(Action::Fail, policy_rule)],
-        current: vec![decision(Action::Warn, policy_rule)],
-        baseline_subjects: vec![],
-        current_subjects: vec![],
+    let Change::FindingDecisionChanged { current, .. } = &expired else {
+        unreachable!()
     };
-    assert_eq!(r.weigh(&violation), (Action::Warn, true));
+    assert_eq!(expired.decisions(), Some(&current[..]));
     // A new item has no floor: what its decisions ignore stays ignored.
-    assert_eq!(
-        r.weigh(&finding_new(&[Action::Ignore])),
-        (Action::Ignore, true)
-    );
+    assert_eq!(r.weigh(&finding_new(&[Ignore])), (Ignore, true));
     // A policy may weigh decision changes itself.
     let lenient = with_action(
         &r,
         ChangeKind::FindingDecisionChanged,
         CompareAction::Ignore,
     );
-    assert_eq!(lenient.weigh(&expired), (Action::Ignore, false));
+    assert_eq!(lenient.weigh(&expired), (Ignore, false));
     // The Markdown says the decisions gave the weight.
+    let reworded = decision_change(
+        ChangeKind::ViolationDecisionChanged,
+        &[(Fail, "denied")],
+        &[(Fail, "denied, reworded")],
+    );
     let mut d = diff_of(&compare_store(), &compare_store());
-    d.changes = vec![expired, waiving, violation];
+    d.changes = vec![expired, reworded];
     d.evaluation = r.judge(
         &d.baseline.completeness,
         &d.current.completeness,
