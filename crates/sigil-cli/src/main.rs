@@ -1609,6 +1609,12 @@ fn session_out(out: Option<&Path>, session: &Path) -> Result<Option<out::Target>
 }
 
 fn render(args: &RenderArgs) -> Result<(), Failure> {
+    render_output(args)?.write()
+}
+
+/// `session render` up to the write (#142): the document, and the session's inode as it was
+/// read, which the write must not replace.
+fn render_output(args: &RenderArgs) -> Result<Output, Failure> {
     let target = session_out(args.out.as_deref(), &args.session)?;
     let (checked, read) = load_session_with_identity(&args.session)?;
     let session = checked.as_session();
@@ -1619,10 +1625,19 @@ fn render(args: &RenderArgs) -> Result<(), Failure> {
     };
     // The session as it was read, never a later lookup of its path: a session moved to `--out`
     // after the read is put back, not replaced (#139).
-    emit(&document, target.as_ref(), &[read])
+    Ok(Output {
+        document,
+        target,
+        protected: vec![read],
+    })
 }
 
 fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
+    explain_output(args)?.write()
+}
+
+/// `explain` up to the write (#142): the text, and the session's inode as it was read.
+fn explain_output(args: &ExplainArgs) -> Result<Output, Failure> {
     let target = session_out(args.out.as_deref(), &args.session)?;
     let (checked, read) = load_session_with_identity(&args.session)?;
     let session = checked.as_session();
@@ -1641,7 +1656,11 @@ fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
     };
     text.push('\n');
     // As in `render`: the session's inode as read is protected (#139).
-    emit(&text, target.as_ref(), &[read])
+    Ok(Output {
+        document: text,
+        target,
+        protected: vec![read],
+    })
 }
 
 fn rules() -> Result<(), Failure> {
@@ -1836,6 +1855,22 @@ fn load_session_with_identity(path: &Path) -> Result<(ValidatedSession, (u64, u6
 }
 
 // --- output -----------------------------------------------------------------------------------
+
+/// A document ready to write (#142): where (`None`: stdout), and the inodes the write must not
+/// replace (the inputs, as they were read). A command that reads files builds one, then writes
+/// it; a test can move an input onto `--out` in between.
+struct Output {
+    document: String,
+    target: Option<out::Target>,
+    protected: Vec<(u64, u64)>,
+}
+
+impl Output {
+    /// Writes the document ([`emit`]).
+    fn write(&self) -> Result<(), Failure> {
+        emit(&self.document, self.target.as_ref(), &self.protected)
+    }
+}
 
 /// Writes `document` to `out`, a target pinned by [`check_out`] or [`check_out_not_inputs`], or to
 /// stdout. An existing file there is replaced, never written through, and a file whose `dev:ino`
@@ -2049,6 +2084,104 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["b.json", "diff.json"], "no temporary file left");
+    }
+
+    /// `sigil <args>`, parsed by the command line itself (#142): a test of a command's output
+    /// goes through that command's own arguments.
+    fn command(args: &[&str]) -> super::Command {
+        use clap::Parser;
+        match super::Cli::try_parse_from(std::iter::once("sigil").chain(args.iter().copied())) {
+            Ok(cli) => cli.command,
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    /// The value of a step that succeeded; its message otherwise (`Failure` has no `Debug`).
+    fn ok<T>(result: Result<T, super::Failure>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(super::Failure::Usage(m) | super::Failure::Run(m)) => panic!("{m}"),
+        }
+    }
+
+    /// The `dev:ino` of the file at `path`.
+    fn inode(path: &std::path::Path) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(path).unwrap();
+        (m.dev(), m.ino())
+    }
+
+    /// `path` as an argument (the temporary directories are UTF-8).
+    fn arg(path: &std::path::Path) -> &str {
+        path.to_str().unwrap()
+    }
+
+    /// `side` (`baseline` or `current`) of diff example 05, a saved session the CLI tests compare
+    /// and render, copied to `dir`.
+    fn saved(dir: &std::path::Path, side: &str) -> std::path::PathBuf {
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/examples/diff-v1/05-loopback-to-wildcard")
+            .join(format!("{side}.json"));
+        let path = dir.join(format!("{side}.json"));
+        std::fs::copy(example, &path).unwrap();
+        path
+    }
+
+    /// #142: `input`, which a command read to build `built`, moved onto `--out` (`out`) after the
+    /// read, as another process could. The write is refused as meeting an input, and `out` keeps
+    /// the input's bytes: it was put back, not replaced.
+    fn put_back_when_moved_onto_out(
+        built: &super::Output,
+        input: &std::path::Path,
+        out: &std::path::Path,
+    ) {
+        let bytes = std::fs::read(input).unwrap();
+        std::fs::rename(input, out).unwrap();
+        match built.write() {
+            Ok(()) => panic!("the write replaced {}", input.display()),
+            Err(super::Failure::Usage(m)) => panic!("{m}"),
+            Err(super::Failure::Run(m)) => {
+                let why = m
+                    .split_once(" cannot be written: ")
+                    .map_or("", |(_, why)| why);
+                assert!(super::out::refused_as_an_input(why), "{m}");
+            }
+        }
+        assert_eq!(std::fs::read(out).unwrap(), bytes);
+    }
+
+    /// #142: `session render` protects the session as it read it: moved onto `--out` after the
+    /// read, the session is put back, not replaced.
+    #[test]
+    fn render_protects_the_session_it_read() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let (session, out) = (saved(&p, "baseline"), p.join("report.md"));
+        let super::Command::Session {
+            command: super::SessionCommand::Render(args),
+        } = command(&["session", "render", arg(&session), "--out", arg(&out)])
+        else {
+            panic!("not `session render`");
+        };
+        let built = ok(super::render_output(&args));
+        assert_eq!(built.protected, [inode(&session)]);
+        put_back_when_moved_onto_out(&built, &session, &out);
+    }
+
+    /// #142: as `session render`, `explain`.
+    #[test]
+    fn explain_protects_the_session_it_read() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let (session, out) = (saved(&p, "baseline"), p.join("verdict.txt"));
+        let super::Command::Explain(args) =
+            command(&["explain", arg(&session), "--verdict", "--out", arg(&out)])
+        else {
+            panic!("not `explain`");
+        };
+        let built = ok(super::explain_output(&args));
+        assert_eq!(built.protected, [inode(&session)]);
+        put_back_when_moved_onto_out(&built, &session, &out);
     }
 
     #[test]
