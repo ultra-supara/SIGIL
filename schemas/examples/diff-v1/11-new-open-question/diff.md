@@ -17,5 +17,5 @@ Result\: FAIL \+ COMPLETE\, under the policy default sigil\-policy\/1 \(sha256\:
 
 | Action | Change | Rule | Subject | Open questions |
 |---|---|---|---|---|
-| FAIL \(as decided\) | new | binary\.capability\_call | x86\_64 slice at \/home\/user\/src\/suspicious\_kernel\-gcc\-O2\.ocapability\:posix\.process\_spawn\@ | capability\:posix\.process\_spawn\@sha256\:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a\#x86\_64\@0 |
+| FAIL \(as decided\) | new | binary\.capability\_call | capability\:posix\.process\_spawn\@ on x86\_64 slice at \/home\/user\/src\/suspicious\_kernel\-gcc\-O2\.o | capability\:posix\.process\_spawn\@sha256\:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a\#x86\_64\@0 |
 

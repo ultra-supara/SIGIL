@@ -1599,6 +1599,32 @@ fn every_change_renders_with_its_key_text() {
     }
 }
 
+/// #138: an open question's ID part and its subject are told apart in Markdown, in a change row
+/// and in a not-comparable item.
+#[test]
+fn a_question_s_key_and_subject_are_separated_in_markdown() {
+    let base = diff_of(&compare_store(), &compare_store());
+    let key = esc_md("capability:posix.process_spawn@ on x86_64 slice at ");
+    let mut change = base.clone();
+    change.changes = every_change()
+        .into_iter()
+        .filter(|c| matches!(c, Change::OpenQuestionNew { .. }))
+        .collect();
+    let md = markdown(&change);
+    assert!(md.contains(&key), "{md}");
+    let mut gap = base;
+    gap.not_comparable = every_not_comparable()
+        .into_iter()
+        .filter(|n| matches!(n.item, Item::OpenQuestion { .. }))
+        .collect();
+    let md = markdown(&gap);
+    assert!(md.contains(&key), "{md}");
+    assert!(
+        md.contains(&esc_md("/home/user/Downloads/libggml-base.so")),
+        "{md}"
+    );
+}
+
 #[test]
 fn every_cause_renders_its_reason() {
     let mut diff = diff_of(&compare_store(), &compare_store());

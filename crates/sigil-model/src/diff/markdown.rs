@@ -462,7 +462,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             vec![
                 esc("new"),
                 esc(rule.as_str()),
-                on(key, at),
+                question_on(key, at).markdown(),
                 cell(current, ", "),
             ],
         ),
@@ -476,7 +476,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             vec![
                 esc("resolved"),
                 esc(rule.as_str()),
-                on(key, at),
+                question_on(key, at).markdown(),
                 cell(baseline, ", "),
             ],
         ),
@@ -493,7 +493,7 @@ fn row(change: &Change) -> (usize, Vec<String>) {
             vec![
                 esc("treatment changed"),
                 esc(rule.as_str()),
-                on(key, at),
+                question_on(key, at).markdown(),
                 sides_change(
                     "questions",
                     (treatments(baseline), cell(baseline_questions, ", ")),
@@ -706,6 +706,15 @@ fn on(key: &SubjectKey, at: &str) -> String {
     subject_key(key).and(at).markdown()
 }
 
+/// An open question's key: its ID without the slice ID, ` on `, and what it is about. The ID
+/// part is a prefix (`capability:posix.process_spawn@`), so it cannot be run into the subject.
+fn question_on(key: &SubjectKey, at: &str) -> Shown {
+    if at.is_empty() {
+        return subject_key(key);
+    }
+    Shown::own(format!("{at} on ")).and_shown(subject_key(key))
+}
+
 fn subject_key(key: &SubjectKey) -> Shown {
     match key {
         SubjectKey::Model(m) => Shown::own(m.as_str()),
@@ -837,9 +846,7 @@ fn item(i: &Item) -> Shown {
             rule,
             subject: key,
             at,
-        } => Shown::own(format!("open question {rule} on "))
-            .and_shown(subject_key(key))
-            .and(at.as_str()),
+        } => Shown::own(format!("open question {rule} ")).and_shown(question_on(key, at)),
     }
 }
 
