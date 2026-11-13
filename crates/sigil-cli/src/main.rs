@@ -414,12 +414,13 @@ fn main() -> ExitCode {
 
 /// `--out` is kept out of the models dir, `--install-dir`, and with `--service-unit` the
 /// installation and the unit's directory, by path and by the `dev:ino` the unit's reads saw
-/// (PR-4d-1).
+/// (PR-4d-1). It is not the `--policy` file either (#143 review P2-1).
 fn ollama_out(
     out: &Path,
     models_dir: &Path,
     install_dir: Option<&Path>,
     unit: Option<&UnitFacts>,
+    policy: Option<&Path>,
 ) -> Result<out::Target, Failure> {
     let mut roots = vec![(models_dir, "models")];
     if let Some(dir) = install_dir {
@@ -429,7 +430,8 @@ fn ollama_out(
         roots.push((u.prefix.as_path(), "install"));
         roots.push((u.dir.as_path(), "service-unit"));
     }
-    let mut target = check_out(out, &roots)?;
+    let files: Vec<NotOut> = policy.map(NotOut::policy).into_iter().collect();
+    let mut target = check_out(out, &roots, &files)?;
     if let Some(u) = unit {
         for (id, name) in [(u.prefix_id, "install"), (u.dir_id, "service-unit")] {
             target
@@ -441,6 +443,18 @@ fn ollama_out(
 }
 
 fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
+    conclude(
+        ollama_concluded(args)?,
+        args.out.as_deref(),
+        args.fail_on,
+        args.fail_on_incomplete,
+    )
+}
+
+/// `inspect ollama` up to the write (#143 review P2-1): the store (and in observe mode the
+/// runtime) read into a session, `--out` kept out of the scan roots and off the `--policy` file,
+/// and the document with the policy file's inode as read protected (none without `--policy`).
+fn ollama_concluded(args: &OllamaArgs) -> Result<Concluded, Failure> {
     let started_at = now()?;
     let mode = match args.mode {
         ModeArg::Static => Mode::Static,
@@ -489,10 +503,11 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
             &models_dir,
             args.install_dir.as_deref(),
             unit.as_deref(),
+            args.policy.as_deref(),
         )?),
         None => None,
     };
-    let policy = load_policy(args.policy.as_deref())?;
+    let (policy, policy_read) = load_policy_as_read(args.policy.as_deref())?;
 
     let store = StoreRequest {
         deps_budgets: given.deps,
@@ -545,11 +560,12 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         InspectError::Input(message) => Failure::Run(message),
         other => Failure::Run(shown(&other.to_string())),
     })?;
-    conclude(
-        concluded(session, args.format, target, vec![])?,
-        args.out.as_deref(),
-        args.fail_on,
-        args.fail_on_incomplete,
+    // `--out` is kept out of the scan roots, so only the policy file as read is protected.
+    concluded(
+        session,
+        args.format,
+        target,
+        policy_read.into_iter().collect(),
     )
 }
 
@@ -670,16 +686,16 @@ fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
 
 /// `binary inspect` up to the write (#142): the inputs read into a session, `--out` checked
 /// against them before the read and as read, and the document with the inputs' inodes as read
-/// protected.
+/// protected, then the `--policy` file's (#143 review P2-1).
 fn binary_concluded(args: &BinaryArgs) -> Result<Concluded, Failure> {
     let started_at = now()?;
     let policy_time = policy_time(&args.policy_time, &started_at)?;
     let (budgets, deps_budgets) = binary_budgets(&args.budgets, args.code)?;
     let target = match &args.out {
-        Some(out) => Some(check_binary_out(out, &args.paths)?),
+        Some(out) => Some(check_binary_out(out, &args.paths, args.policy.as_deref())?),
         None => None,
     };
-    let policy = load_policy(args.policy.as_deref())?;
+    let (policy, policy_read) = load_policy_as_read(args.policy.as_deref())?;
     let observation = host::meta(Mode::Static, Path::new("/proc"), started_at);
     let session = binary_session(
         &BinaryRequest {
@@ -702,7 +718,9 @@ fn binary_concluded(args: &BinaryArgs) -> Result<Concluded, Failure> {
     if let (Some(t), Some(out)) = (&target, &args.out) {
         check_out_against_inputs(t.path(), out, &session)?;
     }
-    let protected = protected_inodes(&session);
+    // The inputs, then the policy file, as they were read.
+    let mut protected = protected_inodes(&session);
+    protected.extend(policy_read);
     let format = match args.format {
         BinaryFormat::Session => DocFormat::Session,
         BinaryFormat::Md => DocFormat::Md,
@@ -746,10 +764,20 @@ fn binary_budgets(given: &[String], code: bool) -> Result<(NamedBudgets, DepsBud
 
 /// `--out` of `binary inspect` (spec §3, D4). It must not be an input: each input is a scan root
 /// that is a file, compared after resolution. It must not be a hard link of one either, compared
-/// by `dev:ino`. The write itself never opens an existing file (`out::Target`), but refusing says
-/// what went wrong. The output is pinned with no directory roots: the inputs are files.
-fn check_binary_out(out: &Path, inputs: &[PathBuf]) -> Result<out::Target, Failure> {
-    check_out_not_inputs(out, inputs, "SIGIL never writes a scan root")
+/// by `dev:ino`. Nor the `--policy` file, likewise (#143 review P2-1). The write itself never
+/// opens an existing file (`out::Target`), but refusing says what went wrong. The output is
+/// pinned with no directory roots: the inputs are files.
+fn check_binary_out(
+    out: &Path,
+    inputs: &[PathBuf],
+    policy: Option<&Path>,
+) -> Result<out::Target, Failure> {
+    let mut files: Vec<NotOut> = inputs
+        .iter()
+        .map(|path| NotOut::input(path, "SIGIL never writes a scan root"))
+        .collect();
+    files.extend(policy.map(NotOut::policy));
+    check_out_not_files(out, &files)
 }
 
 /// `--out` that is none of `inputs`, after resolution or as a hard link (`dev:ino`); `never`
@@ -759,33 +787,87 @@ fn check_out_not_inputs(
     inputs: &[PathBuf],
     never: &str,
 ) -> Result<out::Target, Failure> {
-    use std::os::unix::fs::MetadataExt;
+    let files: Vec<NotOut> = inputs
+        .iter()
+        .map(|path| NotOut::input(path, never))
+        .collect();
+    check_out_not_files(out, &files)
+}
+
+/// A file a run reads, which `--out` must not be: its path, what it is to the run (`input`,
+/// `policy file`), and why SIGIL never writes it.
+struct NotOut<'a> {
+    path: &'a Path,
+    what: &'a str,
+    never: &'a str,
+}
+
+impl<'a> NotOut<'a> {
+    /// An input; `never` says why it is never written.
+    fn input(path: &'a Path, never: &'a str) -> Self {
+        NotOut {
+            path,
+            what: "input",
+            never,
+        }
+    }
+
+    /// The `--policy` file (#143 review P2-1).
+    fn policy(path: &'a Path) -> Self {
+        NotOut {
+            path,
+            what: "policy file",
+            never: "SIGIL never writes a policy it reads",
+        }
+    }
+}
+
+/// `--out` that is none of `files` ([`out_is_none_of`]), pinned with no directory roots: the
+/// files are files.
+fn check_out_not_files(out: &Path, files: &[NotOut]) -> Result<out::Target, Failure> {
     let target =
         resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
-    let existing = existing_inode(out, &target)?;
-    for input in inputs {
-        // An input that cannot be resolved is the command's own error (exit 1), later.
-        let Ok(canonical) = fs::canonicalize(input) else {
+    out_is_none_of(out, &target, files)?;
+    pin(out, &target, vec![])
+}
+
+/// `--out`, resolved to `target`, is none of `files`: not one after resolution (a symlink to one
+/// included), and not a hard link of one (`dev:ino`). Refused with a usage error that names the
+/// file.
+fn out_is_none_of(out: &Path, target: &Path, files: &[NotOut]) -> Result<(), Failure> {
+    use std::os::unix::fs::MetadataExt;
+    // Nothing to compare (`inspect ollama` without `--policy`): no lookup at `--out` either.
+    if files.is_empty() {
+        return Ok(());
+    }
+    let existing = existing_inode(out, target)?;
+    for file in files {
+        // A file that cannot be resolved is the command's own error (exit 1), later.
+        let Ok(canonical) = fs::canonicalize(file.path) else {
             continue;
         };
         if target == canonical {
             return Err(Failure::Usage(format!(
-                "--out {} is the input {}; {never}",
+                "--out {} is the {} {}; {}",
                 shown_path(out),
-                shown_path(input)
+                file.what,
+                shown_path(file.path),
+                file.never
             )));
         }
         if let (Some(e), Ok(m)) = (existing, fs::metadata(&canonical)) {
             if e == (m.dev(), m.ino()) {
                 return Err(Failure::Usage(format!(
-                    "--out {} is a hard link of the input {}; {never}",
+                    "--out {} is a hard link of the {} {}; {}",
                     shown_path(out),
-                    shown_path(input)
+                    file.what,
+                    shown_path(file.path),
+                    file.never
                 )));
             }
         }
     }
-    pin(out, &target, vec![])
+    Ok(())
 }
 
 /// The `dev:ino` of the file at `target`, `None` when there is none. Any other error is reported:
@@ -1066,11 +1148,15 @@ fn budgets(
 }
 
 /// `--out` must not lie inside a scan root, given with its name (`models`, `install`) (C-5):
-/// SIGIL never writes under a scan root. Returns the output pinned ([`out::Target::pin`]): the
-/// document is written through its directory's fd, which must stay out of the scan roots by
-/// `dev:ino`, so neither a symlink swapped in at `--out` nor a directory renamed later
-/// redirects the write.
-fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<out::Target, Failure> {
+/// SIGIL never writes under a scan root. Nor may it be one of `files` ([`out_is_none_of`]).
+/// Returns the output pinned ([`out::Target::pin`]): the document is written through its
+/// directory's fd, which must stay out of the scan roots by `dev:ino`, so neither a symlink
+/// swapped in at `--out` nor a directory renamed later redirects the write.
+fn check_out(
+    out: &Path,
+    roots: &[(&Path, &str)],
+    files: &[NotOut],
+) -> Result<out::Target, Failure> {
     use std::os::unix::fs::MetadataExt;
     let target =
         resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
@@ -1090,6 +1176,7 @@ fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<out::Target, Failure
             ids.push((m.dev(), m.ino()));
         }
     }
+    out_is_none_of(out, &target, files)?;
     pin(out, &target, ids)
 }
 
@@ -1144,9 +1231,21 @@ fn load_policy(path: Option<&Path>) -> Result<Policy, Failure> {
     parse_policy(path, &text)
 }
 
-/// A policy file `compare` reads, with the `dev:ino` of the file it was read from (`fstat` on the
-/// descriptor), as for its sessions: `--out` never replaces it, even one moved there after the
-/// read.
+/// `--policy` as read, with its `dev:ino` for the write to protect ([`load_policy_with_identity`]),
+/// or the built-in policy, with none.
+fn load_policy_as_read(path: Option<&Path>) -> Result<(Policy, Option<(u64, u64)>), Failure> {
+    match path {
+        Some(path) => {
+            let (policy, read) = load_policy_with_identity(path)?;
+            Ok((policy, Some(read)))
+        }
+        None => Ok((load_policy(None)?, None)),
+    }
+}
+
+/// A policy file a command that writes `--out` reads (`compare`, `binary inspect`, `inspect
+/// ollama`), with the `dev:ino` of the file it was read from (`fstat` on the descriptor), as for
+/// `compare`'s sessions: `--out` never replaces it, even one moved there after the read.
 fn load_policy_with_identity(path: &Path) -> Result<(Policy, (u64, u64)), Failure> {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
@@ -1806,13 +1905,7 @@ fn compare_output(args: &CompareArgs) -> Result<(Output, sigil_model::diff::Diff
         )?),
         None => None,
     };
-    let (policy, policy_read) = match &args.policy {
-        Some(path) => {
-            let (policy, read) = load_policy_with_identity(path)?;
-            (policy, Some(read))
-        }
-        None => (load_policy(None)?, None),
-    };
+    let (policy, policy_read) = load_policy_as_read(args.policy.as_deref())?;
     let (baseline, baseline_read) = load_session_with_identity(&args.baseline)?;
     reverify(baseline.as_session(), &args.baseline)?;
     let (current, current_read) = load_session_with_identity(&args.current)?;
@@ -2025,7 +2118,7 @@ mod tests {
             std::fs::create_dir(p.join(renamed)).unwrap();
             let before = std::fs::read_dir(&moved).unwrap().count();
             let out = moved.join("r.md");
-            let refused = super::ollama_out(&out, &p.join("models"), None, Some(&facts));
+            let refused = super::ollama_out(&out, &p.join("models"), None, Some(&facts), None);
             let Err(super::Failure::Usage(message)) = refused else {
                 panic!("{name}: --out in the moved directory was not refused");
             };
@@ -2170,6 +2263,20 @@ mod tests {
         path
     }
 
+    /// A `--policy` file in `dir`: a copy of the text the built-in policy loads.
+    fn policy_file(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("policy.toml");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../sigil-engine/policies/default.toml"
+            ),
+            &path,
+        )
+        .unwrap();
+        path
+    }
+
     /// #142: `input`, which a command read to build `built`, moved onto `--out` (`out`) after the
     /// read, as another process could. The write is refused as meeting an input, and `out` keeps
     /// the input's bytes: it was put back, not replaced.
@@ -2235,15 +2342,7 @@ mod tests {
             let d = tempfile::TempDir::new().unwrap();
             let p = std::fs::canonicalize(d.path()).unwrap();
             let (baseline, current) = (saved(&p, "baseline"), saved(&p, "current"));
-            let policy = p.join("policy.toml");
-            std::fs::copy(
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../sigil-engine/policies/default.toml"
-                ),
-                &policy,
-            )
-            .unwrap();
+            let policy = policy_file(&p);
             let out = p.join("diff.json");
             let super::Command::Compare(args) = command(&[
                 "compare",
@@ -2301,6 +2400,64 @@ mod tests {
         // In the order the session records them: `binary-1`, then `binary-2`.
         assert_eq!(built.output.protected, [inode(&first), inode(&second)]);
         put_back_when_moved_onto_out(&built.output, &second, &out);
+    }
+
+    /// #143 review P2-1: `binary inspect` protects the `--policy` file as it read it, after the
+    /// inputs: moved onto `--out` after the read, the policy is put back, not replaced.
+    #[test]
+    fn binary_inspect_protects_the_policy_it_read() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let (input, policy, out) = (p.join("input.bin"), policy_file(&p), p.join("report.json"));
+        std::fs::write(&input, b"not a binary").unwrap();
+        let super::Command::Binary {
+            command: super::BinaryCommand::Inspect(args),
+        } = command(&[
+            "binary",
+            "inspect",
+            arg(&input),
+            "--policy",
+            arg(&policy),
+            "--out",
+            arg(&out),
+        ])
+        else {
+            panic!("not `binary inspect`");
+        };
+        let built = ok(super::binary_concluded(&args));
+        assert_eq!(built.output.protected, [inode(&input), inode(&policy)]);
+        put_back_when_moved_onto_out(&built.output, &policy, &out);
+    }
+
+    /// #143 review P2-1: `inspect ollama` protects the `--policy` file as it read it: moved onto
+    /// `--out` after the read, the policy is put back, not replaced. Without `--policy` it
+    /// protects nothing: its `--out` is kept out of the scan roots. An empty model store is enough
+    /// for a session.
+    #[test]
+    fn inspect_protects_the_policy_it_read() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let models = p.join("models");
+        std::fs::create_dir(&models).unwrap();
+        let (policy, out) = (policy_file(&p), p.join("report.json"));
+        let inspect = |policy: Option<&std::path::Path>| {
+            let mut args = vec!["inspect", "ollama", "--mode", "static"];
+            args.extend(["--models-dir", arg(&models), "--out", arg(&out)]);
+            if let Some(policy) = policy {
+                args.extend(["--policy", arg(policy)]);
+            }
+            let super::Command::Inspect {
+                target: super::InspectTarget::Ollama(args),
+            } = command(&args)
+            else {
+                panic!("not `inspect ollama`");
+            };
+            ok(super::ollama_concluded(&args))
+        };
+        assert_eq!(inspect(None).output.protected, []);
+        let built = inspect(Some(&policy));
+        assert_eq!(built.output.protected, [inode(&policy)]);
+        put_back_when_moved_onto_out(&built.output, &policy, &out);
     }
 
     #[test]

@@ -2539,6 +2539,51 @@ fn out_on_an_input_is_refused_before_the_read() {
     );
 }
 
+/// #143 review P2-1: `--out` naming the `--policy` file, a symlink to it, or a hard link of it is
+/// refused before anything is read (exit 2), by `binary inspect` and `inspect ollama` alike, and
+/// the policy keeps its bytes. An `--out` next to it is written.
+#[test]
+fn out_on_the_policy_file_is_refused_and_the_policy_kept() {
+    use std::os::unix::fs::symlink;
+    let d = inputs();
+    let so = d.path().join("libdata.so");
+    let models = TempDir::new().unwrap();
+    let p = TempDir::new().unwrap();
+    let policy = p.path().join("policy.toml");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../sigil-engine/policies/default.toml"),
+        &policy,
+    )
+    .unwrap();
+    let before = sha_of(&policy);
+    let link = p.path().join("link.toml");
+    symlink(&policy, &link).unwrap();
+    let hard = p.path().join("hard.json");
+    fs::hard_link(&policy, &hard).unwrap();
+    for command in ["binary inspect", "inspect ollama"] {
+        let with_out = |out: &Path| match command {
+            "binary inspect" => binary(&[&so, &"--policy", &policy, &"--out", &out]),
+            _ => inspect(models.path(), &[&"--policy", &policy, &"--out", &out]),
+        };
+        for out in [&policy, &link, &hard] {
+            let r = with_out(out);
+            assert_eq!(r.code, 2, "{command} --out {}: {}", out.display(), r.stderr);
+            assert!(
+                r.stderr.contains("the policy file"),
+                "{command} --out {}: {}",
+                out.display(),
+                r.stderr
+            );
+            assert_eq!(sha_of(&policy), before, "{command} --out {}", out.display());
+        }
+        let next = p.path().join(format!("{}.json", command.replace(' ', "-")));
+        let r = with_out(&next);
+        assert_eq!(r.code, 0, "{command}: {}", r.stderr);
+        assert!(next.exists(), "{command}");
+        assert_eq!(sha_of(&policy), before, "{command}");
+    }
+}
+
 /// A partial input: its summary line, and a `missing` line naming only the entries that keep the
 /// check open.
 #[test]
