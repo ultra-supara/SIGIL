@@ -729,6 +729,10 @@ impl Change {
                     state.versions.dedup();
                 }
             }
+            Change::CompletenessChanged { baseline, current } => {
+                sort_completeness(baseline);
+                sort_completeness(current);
+            }
             _ => {}
         }
     }
