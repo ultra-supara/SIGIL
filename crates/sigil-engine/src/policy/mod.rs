@@ -5,9 +5,9 @@
 //! is trusted, which components and capabilities are denied, and how `sigil compare` treats the
 //! changes between two sessions (`[compare]`, #16). Loading is strict: an unknown key, rule,
 //! scope, check, assumption, denied component, denied capability, change kind, or cause, a
-//! malformed date, `ignore` without a reason, and `decided` for a change kind other than
-//! `VerdictChanged`, `FindingNew`, `FindingDecisionChanged`, `ViolationNew`, and
-//! `ViolationDecisionChanged` are all fatal, so a typo never silently weakens a policy.
+//! malformed date, `ignore` without a reason, and `decided` for a change kind that carries
+//! neither decisions nor a verdict (`ChangeKind::takes_decided`) are all fatal, so a typo never
+//! silently weakens a policy.
 //!
 //! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
 //! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy
@@ -351,11 +351,20 @@ impl fmt::Display for PolicyError {
                 f,
                 "compare.not_comparable {c:?}: not a cause (Coverage, Request, or Policy)"
             ),
-            DecidedNotAllowed(k) => write!(
-                f,
-                "compare.changes {k:?}: \"decided\" applies to VerdictChanged, FindingNew, \
-                 FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only"
-            ),
+            DecidedNotAllowed(k) => {
+                // The kinds the model lets decide, so a new one cannot leave this list stale.
+                let kinds: Vec<&str> = ChangeKind::ALL
+                    .into_iter()
+                    .filter(|kind| kind.takes_decided())
+                    .map(ChangeKind::name)
+                    .collect();
+                let (last, rest) = kinds.split_last().map_or(("", &[][..]), |(l, r)| (*l, r));
+                write!(
+                    f,
+                    "compare.changes {k:?}: \"decided\" applies to {}, and {last} only",
+                    rest.join(", ")
+                )
+            }
             CompareTable(m) => write!(f, "the compare table is invalid: {m}"),
         }
     }

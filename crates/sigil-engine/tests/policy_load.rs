@@ -870,6 +870,33 @@ fn a_verdict_change_may_be_decided() {
 }
 
 #[test]
+fn an_open_question_change_may_be_decided() {
+    // #138: a new open question and a changed treatment carry the current side's decisions.
+    let text = format!(
+        "{HEAD}\n[compare.changes.OpenQuestionNew]\naction = \"decided\"\n\n\
+         [compare.changes.OpenQuestionTreatmentChanged]\naction = \"decided\"\n"
+    );
+    let policy = Policy::load(&text).unwrap();
+    for kind in [
+        ChangeKind::OpenQuestionNew,
+        ChangeKind::OpenQuestionTreatmentChanged,
+    ] {
+        let t = &policy.compare.changes()[&kind];
+        assert_eq!(t.action, CompareAction::Decided, "{kind:?}");
+        assert_eq!(
+            t.source.as_str(),
+            format!("policy:compare.changes.{}", kind.name())
+        );
+    }
+    let resolved =
+        format!("{HEAD}\n[compare.changes.OpenQuestionResolved]\naction = \"decided\"\n");
+    assert!(matches!(
+        fails(&resolved),
+        PolicyError::DecidedNotAllowed(name) if name == "OpenQuestionResolved"
+    ));
+}
+
+#[test]
 fn a_reason_on_an_entry_that_is_not_ignore_is_kept() {
     // Review P3 of PR #137: a stored table must hold entries as the loader writes them, and the
     // loader keeps a reason that `ignore` does not need, and an entry that restates a default.
@@ -991,8 +1018,8 @@ fn every_malformed_compare_entry_is_fatal() {
     let shown = E::DecidedNotAllowed("LayerChanged".to_string()).to_string();
     assert!(
         shown.contains(
-            "VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, and \
-             ViolationDecisionChanged only"
+            "VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, \
+             ViolationDecisionChanged, OpenQuestionNew, and OpenQuestionTreatmentChanged only"
         ),
         "{shown}"
     );
