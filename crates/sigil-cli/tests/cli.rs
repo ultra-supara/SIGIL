@@ -703,6 +703,52 @@ fn render_and_explain_write_an_out_that_is_not_the_session() {
     assert_eq!(fs::read(&path).unwrap(), before);
 }
 
+/// #142, #143 review P2-2: `--out`'s help says that an input (the `--policy` file included) is
+/// never replaced, and what becomes of another existing file: replaced, or refused on a file
+/// system that cannot exchange files, where any protected input means no replacement.
+#[test]
+fn out_help_says_an_input_is_never_replaced() {
+    let session =
+        "Write here instead of stdout (not the session, which is never replaced; another \
+         existing file is replaced, or refused on a file system that cannot exchange files)";
+    for (command, text) in [
+        (
+            &["binary", "inspect"][..],
+            "Write the document here instead of stdout (none of the inputs, the --policy file \
+             included, which are never replaced; another existing file is replaced, or refused \
+             on a file system that cannot exchange files)",
+        ),
+        (&["session", "render"][..], session),
+        (&["explain"][..], session),
+        (
+            &["compare"][..],
+            "Write here instead of stdout (none of the inputs, which are never replaced; another \
+             existing file is replaced, or refused on a file system that cannot exchange files)",
+        ),
+        (
+            &["inspect", "ollama"][..],
+            "Write the document here instead of stdout (outside the models and install \
+             directories, and not the --policy file, which is never replaced)",
+        ),
+    ] {
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = command
+            .iter()
+            .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+            .collect();
+        args.push(&"--help");
+        let r = run(&args);
+        assert_eq!(r.code, 0, "{command:?}: {}", r.stderr);
+        // Whatever the help's line breaks, the words come in order.
+        let help = r.stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains(text), "{command:?}:\n{}", r.stdout);
+        assert!(
+            !help.contains("an existing file is replaced"),
+            "{command:?}:\n{}",
+            r.stdout
+        );
+    }
+}
+
 #[test]
 fn explain_a_known_finding() {
     // #21: the finding, its evidence, the rule that fired, and the remediation.
@@ -2498,6 +2544,51 @@ fn out_on_an_input_is_refused_before_the_read() {
         "{}",
         r.stderr
     );
+}
+
+/// #143 review P2-1: `--out` naming the `--policy` file, a symlink to it, or a hard link of it is
+/// refused before anything is read (exit 2), by `binary inspect` and `inspect ollama` alike, and
+/// the policy keeps its bytes. An `--out` next to it is written.
+#[test]
+fn out_on_the_policy_file_is_refused_and_the_policy_kept() {
+    use std::os::unix::fs::symlink;
+    let d = inputs();
+    let so = d.path().join("libdata.so");
+    let models = TempDir::new().unwrap();
+    let p = TempDir::new().unwrap();
+    let policy = p.path().join("policy.toml");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../sigil-engine/policies/default.toml"),
+        &policy,
+    )
+    .unwrap();
+    let before = sha_of(&policy);
+    let link = p.path().join("link.toml");
+    symlink(&policy, &link).unwrap();
+    let hard = p.path().join("hard.json");
+    fs::hard_link(&policy, &hard).unwrap();
+    for command in ["binary inspect", "inspect ollama"] {
+        let with_out = |out: &Path| match command {
+            "binary inspect" => binary(&[&so, &"--policy", &policy, &"--out", &out]),
+            _ => inspect(models.path(), &[&"--policy", &policy, &"--out", &out]),
+        };
+        for out in [&policy, &link, &hard] {
+            let r = with_out(out);
+            assert_eq!(r.code, 2, "{command} --out {}: {}", out.display(), r.stderr);
+            assert!(
+                r.stderr.contains("the policy file"),
+                "{command} --out {}: {}",
+                out.display(),
+                r.stderr
+            );
+            assert_eq!(sha_of(&policy), before, "{command} --out {}", out.display());
+        }
+        let next = p.path().join(format!("{}.json", command.replace(' ', "-")));
+        let r = with_out(&next);
+        assert_eq!(r.code, 0, "{command}: {}", r.stderr);
+        assert!(next.exists(), "{command}");
+        assert_eq!(sha_of(&policy), before, "{command}");
+    }
 }
 
 /// A partial input: its summary line, and a `missing` line naming only the entries that keep the

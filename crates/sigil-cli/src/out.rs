@@ -345,13 +345,26 @@ fn changed(at: &Path, e: Errno) -> String {
     }
 }
 
+/// Whether `err`, an error of [`Target::write`], is the refusal of a write that met a protected
+/// input at the target: put back after the exchange, or, without the exchange, an existing file
+/// not replaced. Any other error (one before the exchange) is not. For tests, here and in
+/// `main.rs` (#142).
+#[cfg(test)]
+pub(crate) fn refused_as_an_input(err: &str) -> bool {
+    err == "it is an input of this run; not replaced"
+        || err.starts_with(
+            "this file system cannot exchange files, so an existing output is not replaced \
+             while inputs are protected",
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
-    use super::{temp_name, Target};
+    use super::{refused_as_an_input, temp_name, Target};
 
     /// A temporary directory by its canonical path, as `check_out` gives targets.
     fn dir() -> (tempfile::TempDir, PathBuf) {
@@ -615,17 +628,6 @@ mod tests {
         let name = format!("{}.json", "a".repeat(250));
         write(&p.join(&name), b"doc", &[]).unwrap();
         assert_eq!(fs::read(p.join(&name)).unwrap(), b"doc");
-    }
-
-    /// Whether `err` is the refusal of a write that met a protected input at the target: put
-    /// back after the exchange, or, without the exchange, an existing file not replaced. Any
-    /// other error (one before the exchange) is not.
-    fn refused_as_an_input(err: &str) -> bool {
-        err == "it is an input of this run; not replaced"
-            || err.starts_with(
-                "this file system cannot exchange files, so an existing output is not replaced \
-                 while inputs are protected",
-            )
     }
 
     /// The input whose inode is protected is what the exchange displaced: it is put back.

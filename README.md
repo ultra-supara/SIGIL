@@ -63,7 +63,7 @@ cargo run --locked -q -p sigil-cli -- session render out/session.json --out out/
 
 The store defaults to `$OLLAMA_MODELS`, then `~/.ollama/models`. Use `--models-dir /path/to/models` to select another store, including one owned by a system service. Static inspection needs only the files; Ollama does not need to be running.
 
-The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store, installation, and service unit's directory, and separate from binary inputs. `session render`, `explain` and `compare` never write a session (or policy) they read; an `--out` naming one is refused.
+The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store, installation, and service unit's directory, and separate from binary inputs and the policy file. `session render`, `explain` and `compare` never write a session (or policy) they read; `binary inspect` never writes its inputs or its `--policy` file, and `inspect ollama` never writes its `--policy` file. An `--out` naming one is refused.
 
 ### Include the installation or runtime
 
@@ -212,7 +212,7 @@ The [browser viewer](https://ultra-supara.github.io/SIGIL/viewer/) opens session
 - **Read-only access to inspected files.** Reads are anchored and bounded; hashing streams large model blobs. Inspected binaries are never executed, loaded, or memory-mapped.
 - **No subprocesses.** Runtime observation reads allowlisted `/proc` entries directly.
 - **No network I/O during static or observe inspection.** The optional active probe makes one connection to its requested address. There is no telemetry or report upload.
-- **Controlled output.** Only the requested `--out` is written; an existing output is replaced by rename, and output files are created readable by their owner only.
+- **Controlled output.** Only the requested `--out` is written; an existing output is replaced by an exchange, never written through, and never one of the run's inputs (on a file system that cannot exchange files, a run that protects inputs refuses it instead), and output files are created readable by their owner only.
 - **Deterministic decisions.** Findings come from analyzers and decisions from policy rules; no LLM participates in the verdict path.
 
 Build-time API restrictions and syscall tests check these contracts over the exercised paths. They are not a runtime sandbox. See [architecture and safety](docs/architecture-and-safety.md) and [ADR-002](docs/adr/ADR-002-execution-modes.md) for the guarantees and their limits.
