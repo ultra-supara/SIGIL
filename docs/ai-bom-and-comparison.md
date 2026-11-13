@@ -124,6 +124,14 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   Its open questions keep their key too: a capability question
   (`capability:<feature>@<slice>`) keys as `capability:<feature>@` on the placement and arch of
   its slice.
+
+  A slice is keyed by its placement, its arch and, in a Mach-O file, its CPU type and subtype
+  (`macho`, `null` for an ELF slice). Two slices of one fat file can have one arch: x86_64 and
+  x86_64h, or arm64 and arm64e. Their findings, violations, open questions and claims are their
+  own. The CPU is the slice's own header's, without the subtype's capability bits, so a thin file
+  that becomes fat keeps its slice's key. Two slices that lipo cannot tell apart (one CPU type
+  and subtype) share a key. SIGIL records such a file with a fat gap, which keeps its container
+  check open.
 - **Comparability.** Saying that something is absent on one side needs the check that would
   have recorded it to be closed on that side. Otherwise the item is *not comparable*, never
   removed or resolved. The diff's `not_comparable` lists it with a `cause`, the checks, and the
