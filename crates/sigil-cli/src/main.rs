@@ -2011,8 +2011,7 @@ struct Output {
 }
 
 impl Output {
-    /// Writes the document to its target, pinned by [`check_out`] or [`check_out_not_inputs`],
-    /// or to stdout. An existing file there is replaced, never written through, and a file whose
+    /// Writes the document to its target, pinned by the command's `--out` check, or to stdout. An existing file there is replaced, never written through, and a file whose
     /// `dev:ino` is in `protected` is not replaced ([`out::Target::write`]).
     fn write(&self) -> Result<(), Failure> {
         match &self.target {
