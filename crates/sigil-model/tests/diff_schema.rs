@@ -351,7 +351,7 @@ fn a_table_that_sigil_would_not_write_is_refused() {
     assert!(validator.is_valid(&v), "the schema cannot see the default");
     refused(
         v.clone(),
-        "LayerChanged has the default's source but not its action",
+        "LayerChanged has the default's source but is not the default",
     );
     // Under the policy's source, without a reason.
     v["evaluation"]["changes"]["LayerChanged"]["source"] =
@@ -378,7 +378,16 @@ fn a_table_that_sigil_would_not_write_is_refused() {
     assert!(validator.is_valid(&v), "the schema cannot see sources");
     refused(
         v,
-        "LayerChanged has the default's source but not its action",
+        "LayerChanged has the default's source but is not the default",
+    );
+
+    // The default's source with a reason.
+    let mut v = base.clone();
+    v["evaluation"]["changes"]["LayerChanged"]["reason"] = json!("why");
+    assert!(validator.is_valid(&v));
+    refused(
+        v,
+        "LayerChanged has the default's source but is not the default",
     );
 
     // A policy's source that names another kind.
@@ -387,6 +396,29 @@ fn a_table_that_sigil_would_not_write_is_refused() {
         json!("policy:compare.changes.ModelAdded");
     assert!(validator.is_valid(&v));
     refused(v, "the source of LayerChanged is neither");
+
+    // A policy's entry with a blank reason, whatever its action.
+    let mut v = base.clone();
+    v["evaluation"]["changes"]["LayerChanged"] = json!({
+        "action": "Fail",
+        "source": "policy:compare.changes.LayerChanged",
+        "reason": " "
+    });
+    refused(v, "LayerChanged has a blank reason");
+
+    // A cause: the default's source with another treatment, and a source of another cause.
+    let mut v = base.clone();
+    v["evaluation"]["not_comparable"]["Coverage"]["treatment"] = json!("Warn");
+    assert!(validator.is_valid(&v));
+    refused(
+        v,
+        "Coverage has the default's source but is not the default",
+    );
+    let mut v = base.clone();
+    v["evaluation"]["not_comparable"]["Policy"]["source"] =
+        json!("policy:compare.not_comparable.Coverage");
+    assert!(validator.is_valid(&v));
+    refused(v, "the source of Policy is neither");
 
     // An ignored cause without a reason.
     let mut v = base;

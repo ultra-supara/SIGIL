@@ -144,8 +144,9 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   - Text that came from the inspected system (model names, paths, rule subjects) stays untrusted
     in both documents, and the Markdown escapes it.
 - **Not compared yet:** hints and code facts, open questions, AI-BOM input. An open question
-  that the policy treats as `warn` or `fail` still shows in the verdict, so `VerdictChanged`
-  carries it, and by default a verdict that got worse weighs what it now is (below).
+  that the policy treats as `warn` or `fail` can show in the verdict: when it changes the
+  verdict, `VerdictChanged` carries it, and by default a verdict that got worse weighs what it
+  now is (below). A new `fail` question in a session that already fails gives no change.
 
 ### Judging the differences
 

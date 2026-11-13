@@ -399,6 +399,9 @@ than the baseline's: `PASS` to `FAIL` and `WARN` to `FAIL` fail, `PASS` to `WARN
 verdict that got better is ignored. Open questions are not compared yet, so a new open question
 that the policy treats as `fail` or `warn` (`[open_questions] default`) changes only the verdict;
 without this, a session that fails by an open question alone would give a diff that passes.
+Since `VerdictChanged` is `decided`, ignoring `FindingNew`, `ViolationNew`, or the
+decision-change kinds does not pass a diff whose new or changed item makes the session's verdict
+worse; for that, ignore `VerdictChanged` as well.
 
 Only these five kinds carry decisions or the verdict they gave, so only they take `decided`; a
 policy may give them `fail`, `warn`, or `ignore` instead. `decided` for any other kind does not
@@ -411,10 +414,10 @@ every cause, each with its source (`default:compare.<Kind>`, `policy:compare.cha
 policy's reason. Each change's action can be read from it. The Markdown names each side's
 completeness, the result, and each line's action. A reader checks a diff against itself: one
 whose table misses a kind or a cause, holds an entry SIGIL would not write (a default's source
-with another action or a reason, the source of another kind or cause, or a policy's `ignore`
-without a reason), or whose recorded verdict or completeness is not what a fresh judgment gives,
-does not load. That does not prove which policy file made the diff: comparing the two sessions
-again with `--policy` and that file does.
+with another action or a reason, the source of another kind or cause, a policy's blank reason,
+or a policy's `ignore` without a reason), or whose recorded verdict or completeness is not what
+a fresh judgment gives, does not load. That does not prove which policy file made the diff:
+comparing the two sessions again with `--policy` and that file does.
 
 **`[compare]` and sessions.** Inspection, evaluation, and `session verify` ignore the content of
 `[compare]`. It is part of the file, though, and so of the SHA-256 a session records. Editing

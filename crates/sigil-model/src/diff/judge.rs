@@ -121,7 +121,7 @@ impl From<Evaluation> for EvaluationRecord {
 /// applies; each entry is the default (its source `default:compare.<Kind>` or
 /// `default:compare.not_comparable.<Cause>`, the default action or treatment, no reason) or the
 /// policy's (`policy:compare.changes.<Kind>` or `policy:compare.not_comparable.<Cause>`), whose
-/// `Ignore` has a reason that is not blank.
+/// reason is never blank, and given for `Ignore`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompareRules {
     policy: KnowledgeRef,
@@ -148,6 +148,10 @@ pub enum RulesError {
     NotDefault(ChangeKind),
     /// A cause's entry has the default's source, but another treatment, or a reason.
     CauseNotDefault(Cause),
+    /// A policy's entry for a kind with a reason that is blank: the loader drops one.
+    BlankReason(ChangeKind),
+    /// A policy's entry for a cause with a reason that is blank: the loader drops one.
+    CauseBlankReason(Cause),
 }
 
 impl fmt::Display for RulesError {
@@ -178,16 +182,20 @@ impl fmt::Display for RulesError {
             ),
             RulesError::NotDefault(k) => write!(
                 f,
-                "{} has the default's source but not its action ({:?}, without a reason)",
+                "{} has the default's source but is not the default as SIGIL writes it ({:?}, \
+                 without a reason)",
                 k.name(),
                 k.default_action()
             ),
             RulesError::CauseNotDefault(c) => write!(
                 f,
-                "{} has the default's source but not its treatment ({:?}, without a reason)",
+                "{} has the default's source but is not the default as SIGIL writes it ({:?}, \
+                 without a reason)",
                 c.name(),
                 c.default_treatment()
             ),
+            RulesError::BlankReason(k) => write!(f, "{} has a blank reason", k.name()),
+            RulesError::CauseBlankReason(c) => write!(f, "{} has a blank reason", c.name()),
         }
     }
 }
@@ -264,9 +272,9 @@ const POLICY_CAUSE: &str = "policy:compare.not_comparable.";
 impl CompareRules {
     /// A table, if it is complete and as SIGIL writes it: every kind and every cause; `Decided`
     /// only where it applies; each entry the default (its source, the default action or
-    /// treatment, no reason) or the policy's (its source, and for `Ignore` a reason that is not
-    /// blank). It says nothing of which policy file made the table: only loading that file again
-    /// does.
+    /// treatment, no reason) or the policy's (its source, and a reason that is never blank, and
+    /// given for `Ignore`). It says nothing of which policy file made the table: only loading
+    /// that file again does.
     pub fn new(
         policy: KnowledgeRef,
         changes: BTreeMap<ChangeKind, ChangeTreatment>,
@@ -288,6 +296,8 @@ impl CompareRules {
                 return Err(RulesError::Source(kind));
             } else if t.action == CompareAction::Ignore && !given(t.reason.as_deref()) {
                 return Err(RulesError::IgnoredWithoutReason(kind));
+            } else if blank(t.reason.as_deref()) {
+                return Err(RulesError::BlankReason(kind));
             }
         }
         for cause in Cause::ALL {
@@ -303,6 +313,8 @@ impl CompareRules {
                 return Err(RulesError::CauseSource(cause));
             } else if t.treatment == OqTreatment::Ignore && !given(t.reason.as_deref()) {
                 return Err(RulesError::CauseIgnoredWithoutReason(cause));
+            } else if blank(t.reason.as_deref()) {
+                return Err(RulesError::CauseBlankReason(cause));
             }
         }
         Ok(CompareRules {
@@ -479,6 +491,11 @@ impl Evaluation {
 /// Whether `reason` is given and not blank (as a session's `Ignore` needs one).
 fn given(reason: Option<&str>) -> bool {
     reason.is_some_and(|r| !r.trim().is_empty())
+}
+
+/// Whether `reason` is given but blank: the loader never writes one.
+fn blank(reason: Option<&str>) -> bool {
+    reason.is_some_and(|r| r.trim().is_empty())
 }
 
 /// Whether `source` is `prefix` followed by `name`.

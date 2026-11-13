@@ -252,20 +252,37 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
         CompareRules::new(builtin_policy(), decided, causes.clone()),
         Err(RulesError::Decided(ChangeKind::LayerChanged))
     );
-    // A changed decision carries the current side's decisions, and a changed verdict what they
-    // gave, so they may be decided too.
-    for kind in [
-        ChangeKind::VerdictChanged,
-        ChangeKind::FindingDecisionChanged,
-        ChangeKind::ViolationDecisionChanged,
-    ] {
-        let mut table = changes.clone();
-        table.get_mut(&kind).unwrap().action = CompareAction::Decided;
-        assert!(
-            CompareRules::new(builtin_policy(), table, causes.clone()).is_ok(),
+    // A new or changed finding or violation carries the current side's decisions, and a changed
+    // verdict what they gave, so a policy may decide them: each starts as a policy's `Warn`.
+    for kind in ChangeKind::ALL.into_iter().filter(|k| k.takes_decided()) {
+        let warned = with_action(&r, kind, CompareAction::Warn);
+        let mut table = warned.changes().clone();
+        let entry = table.get_mut(&kind).unwrap();
+        assert_eq!(entry.action, CompareAction::Warn, "{kind:?}");
+        entry.action = CompareAction::Decided;
+        let decided = CompareRules::new(builtin_policy(), table, causes.clone());
+        assert_eq!(
+            decided.map(|t| t.changes()[&kind].action),
+            Ok(CompareAction::Decided),
             "{kind:?}"
         );
     }
+    assert_eq!(
+        ChangeKind::ALL
+            .into_iter()
+            .filter(|k| k.takes_decided())
+            .count(),
+        5
+    );
+    // No other kind, whatever its source.
+    let mut table = with_action(&r, ChangeKind::LayerChanged, CompareAction::Warn)
+        .changes()
+        .clone();
+    table.get_mut(&ChangeKind::LayerChanged).unwrap().action = CompareAction::Decided;
+    assert_eq!(
+        CompareRules::new(builtin_policy(), table, causes.clone()),
+        Err(RulesError::Decided(ChangeKind::LayerChanged))
+    );
     assert_eq!(CompareRules::new(builtin_policy(), changes, causes), Ok(r));
     assert_eq!(
         RulesError::MissingKind(ChangeKind::BindNarrowed).to_string(),
@@ -332,6 +349,31 @@ fn a_table_holds_sources_and_reasons_as_sigil_writes_them() {
             "{source}"
         );
     }
+    // A policy's reason is never blank, whatever its action: the loader drops a blank one.
+    for action in [CompareAction::Fail, CompareAction::Warn] {
+        assert_eq!(
+            kinds(&|t| {
+                t.action = action;
+                t.source = id("policy:compare.changes.LayerChanged");
+                t.reason = Some(" \t".to_string());
+            }),
+            Err(RulesError::BlankReason(layer)),
+            "{action:?}"
+        );
+    }
+    let mut table = changes.clone();
+    table.insert(
+        ChangeKind::FindingNew,
+        ChangeTreatment {
+            action: CompareAction::Decided,
+            source: id("policy:compare.changes.FindingNew"),
+            reason: Some(String::new()),
+        },
+    );
+    assert_eq!(
+        CompareRules::new(builtin_policy(), table, causes.clone()),
+        Err(RulesError::BlankReason(ChangeKind::FindingNew))
+    );
     // What a policy writes: its source, any action, a reason (required for `Ignore`).
     for (action, reason) in [
         (
@@ -366,6 +408,18 @@ fn a_table_holds_sources_and_reasons_as_sigil_writes_them() {
         Err(RulesError::CauseNotDefault(Cause::Coverage))
     );
     assert_eq!(
+        causes_with(Cause::Coverage, &|t| t.reason = Some("why".to_string())),
+        Err(RulesError::CauseNotDefault(Cause::Coverage))
+    );
+    assert_eq!(
+        causes_with(Cause::Policy, &|t| {
+            t.treatment = OqTreatment::Fail;
+            t.source = id("policy:compare.not_comparable.Policy");
+            t.reason = Some(" ".to_string());
+        }),
+        Err(RulesError::CauseBlankReason(Cause::Policy))
+    );
+    assert_eq!(
         causes_with(Cause::Policy, &|t| {
             t.source = id("policy:compare.not_comparable.Coverage");
         }),
@@ -389,12 +443,21 @@ fn a_table_holds_sources_and_reasons_as_sigil_writes_them() {
         ),
         (
             RulesError::NotDefault(layer),
-            "LayerChanged has the default's source but not its action (Fail, without a reason)",
+            "LayerChanged has the default's source but is not the default as SIGIL writes it \
+             (Fail, without a reason)",
         ),
         (
             RulesError::CauseNotDefault(Cause::Coverage),
-            "Coverage has the default's source but not its treatment (CountAsGap, without a \
-             reason)",
+            "Coverage has the default's source but is not the default as SIGIL writes it \
+             (CountAsGap, without a reason)",
+        ),
+        (
+            RulesError::BlankReason(layer),
+            "LayerChanged has a blank reason",
+        ),
+        (
+            RulesError::CauseBlankReason(Cause::Policy),
+            "Policy has a blank reason",
         ),
         (
             RulesError::Source(layer),
