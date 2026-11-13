@@ -542,11 +542,8 @@ fn inspect_ollama(args: &OllamaArgs) -> Result<u8, Failure> {
         other => Failure::Run(shown(&other.to_string())),
     })?;
     conclude(
-        session,
-        args.format,
-        target.as_ref(),
+        concluded(session, args.format, target, vec![])?,
         args.out.as_deref(),
-        &[],
         args.fail_on,
         args.fail_on_incomplete,
     )
@@ -569,19 +566,24 @@ fn tool_info() -> ToolInfo {
     }
 }
 
-/// The end of an inspection: the finish time, the document (`aibom` gives the session's hash for
-/// the summary), the summary, and the exit code (3 for `--fail-on`, else 4 for
-/// `--fail-on-incomplete`). `protected`: inodes the write must not replace (the inputs).
-#[allow(clippy::too_many_arguments)]
-fn conclude(
+/// An inspection ready to write (#142): the session with its finish time, its document with the
+/// inodes the write must not replace, and the hash of a session written only as its AI-BOM (for
+/// the summary).
+struct Concluded {
+    session: Session,
+    output: Output,
+    unsaved: Option<Sha256Hex>,
+}
+
+/// The end of an inspection up to the write: the finish time, and the document (`aibom` gives
+/// the session's hash for the summary). `protected`: inodes the write must not replace (the
+/// inputs).
+fn concluded(
     mut session: Session,
     format: DocFormat,
-    target: Option<&out::Target>,
-    out: Option<&Path>,
-    protected: &[(u64, u64)],
-    fail_on: Option<FailOn>,
-    fail_on_incomplete: bool,
-) -> Result<u8, Failure> {
+    target: Option<out::Target>,
+    protected: Vec<(u64, u64)>,
+) -> Result<Concluded, Failure> {
     let finished = now()?;
     if finished > session.observation.started_at {
         session.observation.finished_at = finished;
@@ -596,14 +598,33 @@ fn conclude(
             json
         }
     };
-    emit(&document, target, protected)?;
-    summary(&session, out, unsaved.as_ref());
+    Ok(Concluded {
+        session,
+        output: Output {
+            document,
+            target,
+            protected,
+        },
+        unsaved,
+    })
+}
+
+/// The end of an inspection: its [`Concluded`] document written, the summary, and the exit code
+/// (3 for `--fail-on`, else 4 for `--fail-on-incomplete`).
+fn conclude(
+    c: Concluded,
+    out: Option<&Path>,
+    fail_on: Option<FailOn>,
+    fail_on_incomplete: bool,
+) -> Result<u8, Failure> {
+    c.output.write()?;
+    summary(&c.session, out, c.unsaved.as_ref());
     let incomplete = matches!(
-        session.outcome.completeness,
+        c.session.outcome.completeness,
         Completeness::Incomplete { .. }
     );
     Ok(exit_code(
-        session.outcome.verdict,
+        c.session.outcome.verdict,
         incomplete,
         fail_on,
         fail_on_incomplete,
@@ -635,6 +656,18 @@ fn exit_code(
 // --- binary inspect ---------------------------------------------------------------------------
 
 fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
+    conclude(
+        binary_concluded(args)?,
+        args.out.as_deref(),
+        args.fail_on,
+        args.fail_on_incomplete,
+    )
+}
+
+/// `binary inspect` up to the write (#142): the inputs read into a session, `--out` checked
+/// against them before the read and as read, and the document with the inputs' inodes as read
+/// protected.
+fn binary_concluded(args: &BinaryArgs) -> Result<Concluded, Failure> {
     let started_at = now()?;
     let policy_time = policy_time(&args.policy_time, &started_at)?;
     let (budgets, deps_budgets) = binary_budgets(&args.budgets, args.code)?;
@@ -670,15 +703,7 @@ fn inspect_binary(args: &BinaryArgs) -> Result<u8, Failure> {
         BinaryFormat::Session => DocFormat::Session,
         BinaryFormat::Md => DocFormat::Md,
     };
-    conclude(
-        session,
-        format,
-        target.as_ref(),
-        args.out.as_deref(),
-        &protected,
-        args.fail_on,
-        args.fail_on_incomplete,
-    )
+    concluded(session, format, target, protected)
 }
 
 /// The budgets of `binary inspect`, by the names the session records. With `code` (`--code`),
@@ -2242,6 +2267,26 @@ mod tests {
             };
             put_back_when_moved_onto_out(&built, input, &out);
         }
+    }
+
+    /// #142: `binary inspect` protects each input as it read it: moved onto `--out` after the
+    /// read, the input is put back, not replaced. Any regular file is an input (recorded as
+    /// unsupported).
+    #[test]
+    fn binary_inspect_protects_its_inputs_as_it_read_them() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = std::fs::canonicalize(d.path()).unwrap();
+        let (input, out) = (p.join("input.bin"), p.join("report.json"));
+        std::fs::write(&input, b"not a binary").unwrap();
+        let super::Command::Binary {
+            command: super::BinaryCommand::Inspect(args),
+        } = command(&["binary", "inspect", arg(&input), "--out", arg(&out)])
+        else {
+            panic!("not `binary inspect`");
+        };
+        let built = ok(super::binary_concluded(&args));
+        assert_eq!(built.output.protected, [inode(&input)]);
+        put_back_when_moved_onto_out(&built.output, &input, &out);
     }
 
     #[test]
