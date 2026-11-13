@@ -67,7 +67,7 @@
         "reason": null
       },
       "VerdictChanged": {
-        "action": "Ignore",
+        "action": "Decided",
         "source": "default:compare.VerdictChanged",
         "reason": null
       },

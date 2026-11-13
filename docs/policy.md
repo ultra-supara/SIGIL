@@ -57,7 +57,7 @@ action  = "fail"                   # fail | warn
 reason  = "The runtime must not start processes"
 
 [compare.changes.ModelAdded]       # a change kind of sigil-diff/1, for sigil compare
-action = "ignore"                  # fail | warn | ignore; decided: new or changed finding/violation
+action = "ignore"                  # fail | warn | ignore; decided: verdict, new or changed finding/violation
 reason = "The ML team adds models daily"   # required for ignore
 
 [compare.not_comparable.Request]   # Coverage | Request | Policy
@@ -372,9 +372,9 @@ weakens the baseline warns; improvements, and changes that follow from others, a
 | Default | Change kinds |
 |---|---|
 | `fail` | `LayerChanged` (the same model, other bytes), `FileContentChanged` (an installed file replaced), `BindWidened` |
-| `decided` | `FindingNew`, `FindingDecisionChanged` (`warn` unless heavier), `ViolationNew`, `ViolationDecisionChanged` (`warn` unless heavier) |
+| `decided` | `VerdictChanged` (only when worse), `FindingNew`, `FindingDecisionChanged` (`warn` unless heavier), `ViolationNew`, `ViolationDecisionChanged` (`warn` unless heavier) |
 | `warn` | `PolicyChanged`, `CheckOpened`, `ModelAdded`, `ModelRemoved`, `LicenseChanged`, `FileAdded`, `FileRemoved`, `ReleaseChanged`, `ComponentChanged`, `ListenerAdded` |
-| `ignore` | `VerdictChanged`, `CompletenessChanged`, `CheckClosed`, `FindingResolved`, `ViolationResolved`, `ListenerRemoved`, `BindNarrowed` |
+| `ignore` | `CompletenessChanged`, `CheckClosed`, `FindingResolved`, `ViolationResolved`, `ListenerRemoved`, `BindNarrowed` |
 
 Every cause (`Coverage`, `Request`, `Policy`) counts as a gap by default.
 
@@ -392,10 +392,17 @@ new `fail` finding does (an override that expired, say); ignore to `warn` warns;
 that did not get heavier warns: `fail` to `fail` with another reason, source, or expiry (a
 rule's reason edited, or a rule moved from the built-in policy into a file), and a weakening
 such as `fail` to ignore. A decision that changed is never ignored under `decided`. The
-decisions are the sessions' own, made by the policies they were inspected with. Only these four
-kinds carry decisions, so only they take `decided`; a policy may give them `fail`, `warn`, or
-`ignore` instead. `decided` for any other kind does not load. The Markdown marks a line whose
-action its decisions gave "(as decided)".
+decisions are the sessions' own, made by the policies they were inspected with.
+
+A verdict that changed (`VerdictChanged`) weighs the current session's verdict when it is worse
+than the baseline's: `PASS` to `FAIL` and `WARN` to `FAIL` fail, `PASS` to `WARN` warns. A
+verdict that got better is ignored. Open questions are not compared yet, so a new open question
+that the policy treats as `fail` or `warn` (`[open_questions] default`) changes only the verdict;
+without this, a session that fails by an open question alone would give a diff that passes.
+
+Only these five kinds carry decisions or the verdict they gave, so only they take `decided`; a
+policy may give them `fail`, `warn`, or `ignore` instead. `decided` for any other kind does not
+load. The Markdown marks a line whose action its decisions or verdict gave "(as decided)".
 
 **What the diff records.** The diff's `evaluation` names the policy (its name and SHA-256, as a
 session records its policy) and holds the action of every change kind and the treatment of
@@ -435,8 +442,8 @@ Loading fails, and nothing is evaluated, for:
   in the capability-import table (#51);
 - a `[compare.changes]` key that is not a change kind of `sigil-diff/1`, a
   `[compare.not_comparable]` key other than `Coverage`, `Request`, or `Policy`, and `decided` for
-  a change kind other than `FindingNew`, `FindingDecisionChanged`, `ViolationNew`, and
-  `ViolationDecisionChanged` (#16).
+  a change kind other than `VerdictChanged`, `FindingNew`, `FindingDecisionChanged`,
+  `ViolationNew`, and `ViolationDecisionChanged` (#16).
 
 A typo never silently weakens a policy.
 

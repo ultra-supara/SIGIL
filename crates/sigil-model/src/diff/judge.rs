@@ -25,8 +25,9 @@ pub enum CompareAction {
     Ignore,
     /// What the change's own decisions (the current session's) say: the maximum of their
     /// actions. A changed decision weighs that only when it is heavier than the baseline's, and
-    /// at least `Warn`; otherwise `Warn`. Only for the kinds that carry decisions
-    /// ([`ChangeKind::takes_decided`]).
+    /// at least `Warn`; otherwise `Warn`. A changed verdict, which the decisions gave, weighs the
+    /// current verdict when it is worse than the baseline's; otherwise nothing. Only for the
+    /// kinds that carry decisions or a verdict ([`ChangeKind::takes_decided`]).
     Decided,
 }
 
@@ -69,9 +70,9 @@ pub enum DiffCompleteness {
 
 /// How a diff was judged: the policy's complete table, and the result. Built by
 /// [`CompareRules::judge`]. Read back through [`CompareRules::new`]: a document whose table
-/// misses a kind or a cause, or gives `Decided` to a kind without decisions, does not load. The
-/// JSON form is flat: `policy`, `changes` and `not_comparable` (the table), then `verdict` and
-/// `completeness`.
+/// misses a kind or a cause, or gives `Decided` to a kind that cannot be decided, does not load.
+/// The JSON form is flat: `policy`, `changes` and `not_comparable` (the table), then `verdict`
+/// and `completeness`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "EvaluationRecord", into = "EvaluationRecord")]
 pub struct Evaluation {
@@ -129,7 +130,7 @@ pub struct CompareRules {
 pub enum RulesError {
     MissingKind(ChangeKind),
     MissingCause(Cause),
-    /// `Decided` for a kind whose changes carry no decisions.
+    /// `Decided` for a kind whose changes carry no decisions and no verdict.
     Decided(ChangeKind),
 }
 
@@ -140,7 +141,7 @@ impl fmt::Display for RulesError {
             RulesError::MissingCause(c) => write!(f, "no treatment for {}", c.name()),
             RulesError::Decided(k) => write!(
                 f,
-                "{} carries no decisions, so it cannot be decided",
+                "{} carries no decisions and no verdict, so it cannot be decided",
                 k.name()
             ),
         }
@@ -155,12 +156,14 @@ impl ChangeKind {
     /// changes that follow from others, are ignored; a new finding or violation, and a changed
     /// decision, weigh what the current session decides (a changed decision only when that got
     /// heavier, and at least `Warn`), so an override that expires fails as a new `fail` finding
-    /// does.
+    /// does; a verdict that got worse weighs what it now is, so a new open question that the
+    /// policy treats as `fail` (open questions are not compared) fails too.
     pub fn default_action(self) -> CompareAction {
         use ChangeKind as K;
         match self {
             K::LayerChanged | K::FileContentChanged | K::BindWidened => CompareAction::Fail,
-            K::FindingNew
+            K::VerdictChanged
+            | K::FindingNew
             | K::FindingDecisionChanged
             | K::ViolationNew
             | K::ViolationDecisionChanged => CompareAction::Decided,
@@ -174,8 +177,7 @@ impl ChangeKind {
             | K::ReleaseChanged
             | K::ComponentChanged
             | K::ListenerAdded => CompareAction::Warn,
-            K::VerdictChanged
-            | K::CompletenessChanged
+            K::CompletenessChanged
             | K::CheckClosed
             | K::FindingResolved
             | K::ViolationResolved
@@ -184,12 +186,14 @@ impl ChangeKind {
         }
     }
 
-    /// Whether the kind's changes carry the current session's decisions ([`Change::decisions`]),
-    /// so that `Decided` applies: a new finding or violation, and a changed decision.
+    /// Whether `Decided` applies to the kind: its changes carry the current session's decisions
+    /// ([`Change::decisions`]: a new finding or violation, a changed decision), or the verdict
+    /// they gave (`VerdictChanged`).
     pub fn takes_decided(self) -> bool {
         matches!(
             self,
-            ChangeKind::FindingNew
+            ChangeKind::VerdictChanged
+                | ChangeKind::FindingNew
                 | ChangeKind::FindingDecisionChanged
                 | ChangeKind::ViolationNew
                 | ChangeKind::ViolationDecisionChanged
@@ -284,7 +288,9 @@ impl CompareRules {
     /// decisions, the current session's (`Fail` without any: an item whose decisions are unknown
     /// is never lighter than it could be); and whether its decisions gave it. A changed decision
     /// weighs that action, at least `Warn`, only when it is heavier than the baseline's (by the
-    /// same rule); otherwise `Warn`: another reason, source or expiry, or a weakening, warns.
+    /// same rule); otherwise `Warn`: another reason, source or expiry, or a weakening, warns. A
+    /// changed verdict weighs the current verdict when it is worse than the baseline's (`Fail`
+    /// or `Warn`), and nothing when it is the same or better.
     pub fn weigh(&self, change: &Change) -> (Action, bool) {
         // Every kind has an entry (`new`, `defaults`). The fallback is never taken, and it would
         // not make a change lighter.
@@ -296,17 +302,7 @@ impl CompareRules {
             CompareAction::Fail => (Action::Fail, false),
             CompareAction::Warn => (Action::Warn, false),
             CompareAction::Ignore => (Action::Ignore, false),
-            CompareAction::Decided => {
-                let now = decided(change.decisions().unwrap_or(&[]));
-                let action = match baseline_decisions(change) {
-                    None => now,
-                    Some(before) if verdict_of(now) > verdict_of(decided(before)) => {
-                        heavier(now, Action::Warn)
-                    }
-                    Some(_) => Action::Warn,
-                };
-                (action, true)
-            }
+            CompareAction::Decided => (decided_weight(change), true),
         }
     }
 
@@ -410,6 +406,23 @@ fn is_incomplete(c: &Completeness) -> bool {
     matches!(c, Completeness::Incomplete { .. })
 }
 
+/// What `change` weighs under `Decided` ([`CompareRules::weigh`]).
+fn decided_weight(change: &Change) -> Action {
+    if let Change::VerdictChanged { baseline, current } = change {
+        return if current > baseline {
+            action_of(*current)
+        } else {
+            Action::Ignore
+        };
+    }
+    let now = decided(change.decisions().unwrap_or(&[]));
+    match baseline_decisions(change) {
+        None => now,
+        Some(before) if verdict_of(now) > verdict_of(decided(before)) => heavier(now, Action::Warn),
+        Some(_) => Action::Warn,
+    }
+}
+
 /// The baseline's decisions of a changed decision (`FindingDecisionChanged`,
 /// `ViolationDecisionChanged`); `None` for every other kind.
 fn baseline_decisions(change: &Change) -> Option<&[PolicyDecision]> {
@@ -436,6 +449,15 @@ fn heavier(a: Action, b: Action) -> Action {
         a
     } else {
         b
+    }
+}
+
+/// The action a verdict weighs (`Pass` weighs nothing).
+fn action_of(verdict: Verdict) -> Action {
+    match verdict {
+        Verdict::Fail => Action::Fail,
+        Verdict::Warn => Action::Warn,
+        Verdict::Pass => Action::Ignore,
     }
 }
 

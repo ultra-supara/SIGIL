@@ -6,8 +6,8 @@
 //! changes between two sessions (`[compare]`, #16). Loading is strict: an unknown key, rule,
 //! scope, check, assumption, denied component, denied capability, change kind, or cause, a
 //! malformed date, `ignore` without a reason, and `decided` for a change kind other than
-//! `FindingNew`, `FindingDecisionChanged`, `ViolationNew`, and `ViolationDecisionChanged` are all
-//! fatal, so a typo never silently weakens a policy.
+//! `VerdictChanged`, `FindingNew`, `FindingDecisionChanged`, `ViolationNew`, and
+//! `ViolationDecisionChanged` are all fatal, so a typo never silently weakens a policy.
 //!
 //! The session assembler records the policy's inputs to the analysis ([`Policy::scope`],
 //! [`Policy::acceptance`]). [`evaluate`] then applies the policy's decisions, and refuses a policy
@@ -275,8 +275,8 @@ pub enum PolicyError {
     UnknownChangeKind(String),
     /// A `[compare.not_comparable]` key that is not a cause.
     UnknownCause(String),
-    /// `decided` for a change kind whose changes carry no decisions (any but a new or changed
-    /// finding or violation).
+    /// `decided` for a change kind whose changes carry no decisions and no verdict (any but a
+    /// changed verdict, and a new or changed finding or violation).
     DecidedNotAllowed(String),
     /// The resolved compare table is invalid (a SIGIL bug: the defaults cover every entry, and
     /// `decided` is refused above where it does not apply).
@@ -352,8 +352,8 @@ impl fmt::Display for PolicyError {
             ),
             DecidedNotAllowed(k) => write!(
                 f,
-                "compare.changes {k:?}: \"decided\" applies to FindingNew, FindingDecisionChanged, \
-                 ViolationNew, and ViolationDecisionChanged only"
+                "compare.changes {k:?}: \"decided\" applies to VerdictChanged, FindingNew, \
+                 FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only"
             ),
             CompareTable(m) => write!(f, "the compare table is invalid: {m}"),
         }

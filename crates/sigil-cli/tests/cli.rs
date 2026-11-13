@@ -716,6 +716,7 @@ fn rules_lists_the_catalog() {
     for (kind, action) in [
         ("PolicyChanged", "warn"),
         ("LayerChanged", "fail"),
+        ("VerdictChanged", "decided"),
         ("FindingNew", "decided"),
         ("FindingDecisionChanged", "decided"),
         ("ViolationDecisionChanged", "decided"),
@@ -4260,6 +4261,73 @@ fn compare_fails_when_an_expired_override_lets_a_finding_fail() {
     let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(diff.evaluation.verdict(), Verdict::Warn);
     assert_eq!(compare(&pb, &pa, "warn").code, 3);
+}
+
+#[test]
+fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
+    // Review P1 of PR #137: open questions are not compared, so a new one that the policy treats
+    // as `fail` shows only in the verdict. Both sessions read the same file, which imports
+    // `execve`; the current one's policy denies `posix.process_spawn`, and without `--code` that
+    // import is an open question, treated `fail`. The diff holds `PolicyChanged` (warn) and
+    // `VerdictChanged`, and fails as the current session does. Both require no binary check, so
+    // both are complete: before the fix the diff was WARN + COMPLETE, and exited 0.
+    let dir = TempDir::new().unwrap();
+    let head = "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[scope]\nbinary_audit = []\n\n\
+                [open_questions]\ndefault = \"fail\"\n";
+    let before = write(dir.path(), "before.toml", head);
+    let after = write(
+        dir.path(),
+        "after.toml",
+        &format!(
+            "{head}\n[[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\n\
+             reason = \"no processes\"\n"
+        ),
+    );
+    let spawn = code_fixture("spawn.so");
+    let a = binary(&[&spawn, &"--policy", &before]);
+    let b = binary(&[&spawn, &"--policy", &after]);
+    assert_eq!((a.code, b.code), (0, 0), "{}\n{}", a.stderr, b.stderr);
+    let (sa, sb) = (session_of(&a), session_of(&b));
+    assert!(sa.open_questions.is_empty() && sb.policy_violations.is_empty());
+    assert_eq!(sb.open_questions.len(), 1);
+    assert_eq!(sb.findings, sa.findings);
+    assert_eq!(
+        (sa.outcome.verdict, sb.outcome.verdict),
+        (Verdict::Pass, Verdict::Fail)
+    );
+    assert_eq!(sa.outcome.completeness, Completeness::Complete);
+    assert_eq!(sb.outcome.completeness, Completeness::Complete);
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &pa,
+        &"--current",
+        &pb,
+        &"--policy",
+        &after,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("FAIL + COMPLETE under ci (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let kinds: Vec<ChangeKind> = diff.changes.iter().map(Change::kind).collect();
+    assert_eq!(
+        kinds,
+        [ChangeKind::PolicyChanged, ChangeKind::VerdictChanged]
+    );
+    assert!(diff.not_comparable.is_empty());
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (sigil_model::Action::Fail, true)
+    );
 }
 
 #[test]

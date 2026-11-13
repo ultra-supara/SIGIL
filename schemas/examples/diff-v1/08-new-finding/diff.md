@@ -17,7 +17,7 @@ Result\: WARN \+ INCOMPLETE \(the current session is incomplete\)\, under the po
 
 | Action | What | Baseline | Current |
 |---|---|---|---|
-| ignored | verdict | PASS | WARN |
+| WARN \(as decided\) | verdict | PASS | WARN |
 | ignored | completeness | COMPLETE | INCOMPLETE |
 
 ## Coverage

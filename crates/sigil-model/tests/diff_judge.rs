@@ -141,6 +141,7 @@ fn the_default_table_is_the_documented_one() {
     assert_eq!(
         by(CompareAction::Decided),
         [
+            "VerdictChanged",
             "FindingNew",
             "FindingDecisionChanged",
             "ViolationNew",
@@ -165,7 +166,6 @@ fn the_default_table_is_the_documented_one() {
     assert_eq!(
         by(CompareAction::Ignore),
         [
-            "VerdictChanged",
             "CompletenessChanged",
             "CheckClosed",
             "FindingResolved",
@@ -190,7 +190,8 @@ fn the_default_table_is_the_documented_one() {
             kind.takes_decided(),
             matches!(
                 kind,
-                ChangeKind::FindingNew
+                ChangeKind::VerdictChanged
+                    | ChangeKind::FindingNew
                     | ChangeKind::FindingDecisionChanged
                     | ChangeKind::ViolationNew
                     | ChangeKind::ViolationDecisionChanged
@@ -235,8 +236,10 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
         CompareRules::new(builtin_policy(), decided, causes.clone()),
         Err(RulesError::Decided(ChangeKind::LayerChanged))
     );
-    // A changed decision carries the current side's decisions, so it may be decided too.
+    // A changed decision carries the current side's decisions, and a changed verdict what they
+    // gave, so they may be decided too.
     for kind in [
+        ChangeKind::VerdictChanged,
         ChangeKind::FindingDecisionChanged,
         ChangeKind::ViolationDecisionChanged,
     ] {
@@ -258,7 +261,7 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
     );
     assert_eq!(
         RulesError::Decided(ChangeKind::LayerChanged).to_string(),
-        "LayerChanged carries no decisions, so it cannot be decided"
+        "LayerChanged carries no decisions and no verdict, so it cannot be decided"
     );
 }
 
@@ -486,6 +489,90 @@ fn decided_weighs_a_changed_decision_only_when_it_got_heavier() {
 }
 
 #[test]
+fn decided_weighs_a_worse_verdict_as_what_it_now_is() {
+    // Review P1 of PR #137 (user decision, 2026-11-13): open questions are not compared, so a new
+    // one that the policy treats as `fail` shows only in the verdict. A verdict that got worse
+    // weighs what it now is; one that stayed or got better is ignored.
+    use Verdict::{Fail, Pass, Warn};
+    let r = builtin_rules();
+    let cases = [
+        (Pass, Fail, Action::Fail),
+        (Warn, Fail, Action::Fail),
+        (Pass, Warn, Action::Warn),
+        (Fail, Warn, Action::Ignore),
+        (Fail, Pass, Action::Ignore),
+        (Warn, Pass, Action::Ignore),
+        (Warn, Warn, Action::Ignore),
+    ];
+    for (baseline, current, weight) in cases {
+        let change = Change::VerdictChanged { baseline, current };
+        let what = format!("{baseline:?} to {current:?}");
+        assert_eq!(r.weigh(&change), (weight, true), "{what}");
+        let verdict = if weight == Action::Ignore {
+            Pass
+        } else {
+            current
+        };
+        assert_eq!(
+            judged(&r, std::slice::from_ref(&change), &[]).verdict(),
+            verdict,
+            "{what}"
+        );
+    }
+    // A policy may still ignore it.
+    let lenient = with_action(&r, ChangeKind::VerdictChanged, CompareAction::Ignore);
+    let worse = Change::VerdictChanged {
+        baseline: Pass,
+        current: Fail,
+    };
+    assert_eq!(lenient.weigh(&worse), (Action::Ignore, false));
+    assert_eq!(
+        judged(&lenient, std::slice::from_ref(&worse), &[]).verdict(),
+        Pass
+    );
+}
+
+#[test]
+fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
+    // Review P1 of PR #137: example 7 without its open question, then with it treated `fail`.
+    // The sessions differ only in the question and the verdict it gives. The question is not
+    // compared, so the diff holds the verdict's change alone, and it fails as the session does.
+    let mut current = open_question();
+    for q in &mut current.open_questions {
+        q.decision.treatment = OqTreatment::Fail;
+    }
+    settle(&mut current);
+    let mut baseline = current.clone();
+    baseline.open_questions.clear();
+    settle(&mut baseline);
+    assert_eq!(current.outcome.completeness, Completeness::Complete);
+    let diff = diff_of(&baseline, &current);
+    assert_eq!(
+        diff.changes,
+        [Change::VerdictChanged {
+            baseline: Verdict::Pass,
+            current: Verdict::Fail
+        }]
+    );
+    assert!(diff.not_comparable.is_empty());
+    assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
+    assert_eq!(diff.evaluation.completeness(), &DiffCompleteness::Complete);
+    let md = markdown(&diff);
+    assert!(
+        md.contains(&format!("\n| {} | ", esc_md("FAIL (as decided)"))),
+        "{md}"
+    );
+    // Under an explicit `ignore`, it passes.
+    let lenient = with_action(
+        &builtin_rules(),
+        ChangeKind::VerdictChanged,
+        CompareAction::Ignore,
+    );
+    let diff = diff_under(&baseline, &current, &lenient);
+    assert_eq!(diff.evaluation.verdict(), Verdict::Pass);
+}
+
+#[test]
 fn each_treatment_of_an_item_not_comparable() {
     let r = builtin_rules();
     let items = [
@@ -675,7 +762,10 @@ fn an_evaluation_reads_back_only_with_a_complete_table() {
     let err = serde_json::from_value::<Evaluation>(misplaced)
         .unwrap_err()
         .to_string();
-    assert!(err.contains("LayerChanged carries no decisions"), "{err}");
+    assert!(
+        err.contains("LayerChanged carries no decisions and no verdict"),
+        "{err}"
+    );
     let mut extra = json;
     extra["extra"] = serde_json::json!(1);
     assert!(serde_json::from_value::<Evaluation>(extra).is_err());

@@ -17,7 +17,7 @@ Result\: FAIL \+ COMPLETE\, under the policy default sigil\-policy\/1 \(sha256\:
 
 | Action | What | Baseline | Current |
 |---|---|---|---|
-| ignored | verdict | PASS | WARN |
+| WARN \(as decided\) | verdict | PASS | WARN |
 
 ## Findings
 

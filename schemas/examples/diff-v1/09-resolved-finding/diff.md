@@ -17,7 +17,7 @@ Result\: PASS \+ INCOMPLETE \(the baseline is incomplete\)\, under the policy de
 
 | Action | What | Baseline | Current |
 |---|---|---|---|
-| ignored | verdict | WARN | PASS |
+| ignored \(as decided\) | verdict | WARN | PASS |
 | ignored | completeness | INCOMPLETE | COMPLETE |
 
 ## Coverage

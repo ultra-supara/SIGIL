@@ -858,6 +858,18 @@ fn a_changed_decision_may_be_decided() {
 }
 
 #[test]
+fn a_verdict_change_may_be_decided() {
+    // Review P1 of PR #137: a worse verdict weighs what it now is, as a new open question that
+    // the policy treats as `fail` makes it.
+    let text = format!("{HEAD}\n[compare.changes.VerdictChanged]\naction = \"decided\"\n");
+    let policy = Policy::load(&text).unwrap();
+    let t = &policy.compare.changes()[&ChangeKind::VerdictChanged];
+    assert_eq!(t.action, CompareAction::Decided);
+    assert_eq!(t.source.as_str(), "policy:compare.changes.VerdictChanged");
+    assert_eq!(t.reason, None);
+}
+
+#[test]
 fn compare_changes_nothing_but_the_policy_s_hash() {
     let plain = Policy::load(PLAN_EXAMPLE).unwrap();
     let with = Policy::load(&format!(
@@ -943,7 +955,8 @@ fn every_malformed_compare_entry_is_fatal() {
     let shown = E::DecidedNotAllowed("LayerChanged".to_string()).to_string();
     assert!(
         shown.contains(
-            "FindingNew, FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only"
+            "VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, and \
+             ViolationDecisionChanged only"
         ),
         "{shown}"
     );

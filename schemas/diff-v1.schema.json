@@ -2046,7 +2046,7 @@
       ]
     },
     "Evaluation": {
-      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions, the current session's (Fail when it has none); a FindingDecisionChanged or ViolationDecisionChanged weighs that action, at least Warn, only when it is heavier than the baseline's maximum (by the same rule), and Warn otherwise. verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
+      "description": "How a diff was judged (#16, PR-16b): the compare policy (its knowledge entry, as a session records its policy), the action of every change kind and the treatment of every cause after the policy's entries, and the result. A change weighs its kind's action; for Decided, the maximum action of its decisions, the current session's (Fail when it has none); a FindingDecisionChanged or ViolationDecisionChanged weighs that action, at least Warn, only when it is heavier than the baseline's maximum (by the same rule), and Warn otherwise; a VerdictChanged weighs the current verdict when it is worse than the baseline's (Fail or Warn), and nothing otherwise. verdict is the maximum of the changes' weights and of the items not comparable treated Warn or Fail, Pass without any. completeness is Incomplete when an input is incomplete or an item not comparable is treated CountAsGap.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2249,7 +2249,7 @@
       }
     },
     "CompareAction": {
-      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say; a changed decision weighs that only when it got heavier, at least Warn, and Warn otherwise; FindingNew, FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only.",
+      "description": "What the changes of one kind weigh. Decided: what the change's own decisions (the current session's) say; a changed decision weighs that only when it got heavier, at least Warn, and Warn otherwise; a changed verdict weighs the current verdict when it is worse than the baseline's, and nothing otherwise; VerdictChanged, FindingNew, FindingDecisionChanged, ViolationNew, and ViolationDecisionChanged only.",
       "type": "string",
       "enum": [
         "Fail",
