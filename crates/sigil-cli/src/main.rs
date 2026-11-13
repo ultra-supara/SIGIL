@@ -1600,8 +1600,8 @@ fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
         ))
     })?;
     // The policy time is the session's own, as is the analysis: say which one was used.
-    emit(
-        &format!(
+    Output {
+        document: format!(
             "verified: {} is what the policy {} ({}) gives at {}: {} + {}\n",
             shown_path(&args.session),
             shown(&policy.name),
@@ -1610,9 +1610,10 @@ fn verify_session(args: &VerifyArgs) -> Result<(), Failure> {
             sigil_model::render::verdict(session.outcome.verdict),
             sigil_model::render::completeness(&session.outcome.completeness)
         ),
-        None,
-        &[],
-    )
+        target: None,
+        protected: vec![],
+    }
+    .write()
 }
 
 /// The first five of `errors`, shown for a terminal and joined, then how many more there are.
@@ -1742,7 +1743,12 @@ fn rules() -> Result<(), Failure> {
         };
         text.push_str(&format!("  {:<28} {treatment}\n", cause.name()));
     }
-    emit(&text, None, &[])
+    Output {
+        document: text,
+        target: None,
+        protected: vec![],
+    }
+    .write()
 }
 
 // --- compare ----------------------------------------------------------------------------------
@@ -1900,8 +1906,9 @@ fn load_session_with_identity(path: &Path) -> Result<(ValidatedSession, (u64, u6
 // --- output -----------------------------------------------------------------------------------
 
 /// A document ready to write (#142): where (`None`: stdout), and the inodes the write must not
-/// replace (the inputs, as they were read). A command that reads files builds one, then writes
-/// it; a test can move an input onto `--out` in between.
+/// replace (the inputs, as they were read). Every command writes its document through one, and
+/// [`Output::write`] is the only write: what a command built is what it writes. A command that
+/// reads files builds one, then writes it; a test can move an input onto `--out` in between.
 struct Output {
     document: String,
     target: Option<out::Target>,
@@ -1909,34 +1916,27 @@ struct Output {
 }
 
 impl Output {
-    /// Writes the document ([`emit`]).
+    /// Writes the document to its target, pinned by [`check_out`] or [`check_out_not_inputs`],
+    /// or to stdout. An existing file there is replaced, never written through, and a file whose
+    /// `dev:ino` is in `protected` is not replaced ([`out::Target::write`]).
     fn write(&self) -> Result<(), Failure> {
-        emit(&self.document, self.target.as_ref(), &self.protected)
-    }
-}
-
-/// Writes `document` to `out`, a target pinned by [`check_out`] or [`check_out_not_inputs`], or to
-/// stdout. An existing file there is replaced, never written through, and a file whose `dev:ino`
-/// is in `protected` is not replaced ([`out::Target::write`]).
-fn emit(
-    document: &str,
-    out: Option<&out::Target>,
-    protected: &[(u64, u64)],
-) -> Result<(), Failure> {
-    match out {
-        Some(target) => target.write(document.as_bytes(), protected).map_err(|e| {
-            Failure::Run(format!(
-                "--out {} cannot be written: {}",
-                shown_path(target.path()),
-                shown(&e)
-            ))
-        }),
-        None => {
-            let mut stdout = std::io::stdout().lock();
-            stdout
-                .write_all(document.as_bytes())
-                .and_then(|()| stdout.flush())
-                .map_err(|e| Failure::Run(format!("stdout: {e}")))
+        match &self.target {
+            Some(target) => target
+                .write(self.document.as_bytes(), &self.protected)
+                .map_err(|e| {
+                    Failure::Run(format!(
+                        "--out {} cannot be written: {}",
+                        shown_path(target.path()),
+                        shown(&e)
+                    ))
+                }),
+            None => {
+                let mut stdout = std::io::stdout().lock();
+                stdout
+                    .write_all(self.document.as_bytes())
+                    .and_then(|()| stdout.flush())
+                    .map_err(|e| Failure::Run(format!("stdout: {e}")))
+            }
         }
     }
 }
@@ -2159,8 +2159,8 @@ mod tests {
         path.to_str().unwrap()
     }
 
-    /// `side` (`baseline` or `current`) of diff example 05, a saved session the CLI tests compare
-    /// and render, copied to `dir`.
+    /// `side` (`baseline` or `current`) of diff example 05, copied to `dir`: a saved session that
+    /// loads and re-verifies, which the CLI tests compare.
     fn saved(dir: &std::path::Path, side: &str) -> std::path::PathBuf {
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../schemas/examples/diff-v1/05-loopback-to-wildcard")
@@ -2273,24 +2273,34 @@ mod tests {
         }
     }
 
-    /// #142: `binary inspect` protects each input as it read it: moved onto `--out` after the
-    /// read, the input is put back, not replaced. Any regular file is an input (recorded as
-    /// unsupported).
+    /// #142: `binary inspect` protects each input as it read it, not only the first: the second
+    /// of two, moved onto `--out` after the read, is put back, not replaced. Any regular file is
+    /// an input (recorded as unsupported).
     #[test]
     fn binary_inspect_protects_its_inputs_as_it_read_them() {
         let d = tempfile::TempDir::new().unwrap();
         let p = std::fs::canonicalize(d.path()).unwrap();
-        let (input, out) = (p.join("input.bin"), p.join("report.json"));
-        std::fs::write(&input, b"not a binary").unwrap();
+        let (first, second) = (p.join("first.bin"), p.join("second.bin"));
+        let out = p.join("report.json");
+        std::fs::write(&first, b"not a binary").unwrap();
+        std::fs::write(&second, b"not a binary either").unwrap();
         let super::Command::Binary {
             command: super::BinaryCommand::Inspect(args),
-        } = command(&["binary", "inspect", arg(&input), "--out", arg(&out)])
+        } = command(&[
+            "binary",
+            "inspect",
+            arg(&first),
+            arg(&second),
+            "--out",
+            arg(&out),
+        ])
         else {
             panic!("not `binary inspect`");
         };
         let built = ok(super::binary_concluded(&args));
-        assert_eq!(built.output.protected, [inode(&input)]);
-        put_back_when_moved_onto_out(&built.output, &input, &out);
+        // In the order the session records them: `binary-1`, then `binary-2`.
+        assert_eq!(built.output.protected, [inode(&first), inode(&second)]);
+        put_back_when_moved_onto_out(&built.output, &second, &out);
     }
 
     #[test]
