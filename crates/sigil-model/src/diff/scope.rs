@@ -1,9 +1,11 @@
 //! Comparability and placement keys (spec "Comparability", "Placement keys").
 
 use crate::artifact::{Arch, FileInstance, InstanceContent};
-use crate::binary::{ARTIFACTS_CODE, ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY};
+use crate::binary::{
+    macho_architecture, ContainerFacts, ARTIFACTS_CODE, ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY,
+};
 use crate::binary_input::{is_binary_root, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY};
-use crate::diff::Placement;
+use crate::diff::{MachOCpu, Placement};
 use crate::evidence::Ref;
 use crate::id::{ArtifactId, RootId, SliceId};
 use crate::reference::{INSTALL_ROOT, SERVICE_UNIT_ROOT};
@@ -184,6 +186,23 @@ pub(crate) fn arch_of(s: &Session, slice: &SliceId) -> Option<Arch> {
         .flat_map(|a| &a.slices)
         .find(|sl| sl.id == *slice)
         .map(|sl| sl.arch)
+}
+
+/// The Mach-O CPU of a slice of `s`, from its own header as `s` recorded it: what tells apart two
+/// slices of one fat file with one architecture (x86_64 and x86_64h). `None` for an ELF slice,
+/// and for a slice whose container facts `s` did not record.
+pub(crate) fn macho_of(s: &Session, slice: &SliceId) -> Option<MachOCpu> {
+    let facts = s.binaries.iter().find(|b| b.slice == *slice)?;
+    match &facts.container {
+        ContainerFacts::MachO(m) => {
+            let (cpu_type, cpu_subtype) = macho_architecture(m.cpu_type, m.cpu_subtype);
+            Some(MachOCpu {
+                cpu_type,
+                cpu_subtype,
+            })
+        }
+        ContainerFacts::Elf(_) => None,
+    }
 }
 
 #[cfg(test)]

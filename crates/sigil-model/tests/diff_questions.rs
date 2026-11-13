@@ -19,6 +19,7 @@ fn spawn_key() -> (RuleId, SubjectKey, String) {
         SubjectKey::Slice {
             placement: kernel(),
             arch: Arch::X86_64,
+            macho: None,
         },
         "capability:posix.process_spawn@".to_string(),
     )
@@ -215,6 +216,7 @@ fn an_installed_file_s_question_needs_artifacts_container_closed() {
         subject: SubjectKey::Slice {
             placement: Placement::Instance(id(INSTALLED_EXE)),
             arch: Arch::X86_64,
+            macho: None,
         },
         at,
     };

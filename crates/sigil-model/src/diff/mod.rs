@@ -5,7 +5,8 @@
 //! every line traces back to evidence there.
 //!
 //! - **Keys.** Items are matched by what survives a new run: model IDs (manifest paths),
-//!   [`Placement`]s, ports, and rules with a normalized [`SubjectKey`]. Listener inodes,
+//!   [`Placement`]s, ports, and rules with a normalized [`SubjectKey`]. A slice is keyed by its
+//!   placement, its architecture and, in a Mach-O file, its [`MachOCpu`]. Listener inodes,
 //!   `binary-<n>` roots and slice IDs are pointers, never keys.
 //! - **Comparability.** Saying that something is absent on one side needs the check that would
 //!   have recorded it to be closed on that side; otherwise the item is [`NotComparable`], never
@@ -24,7 +25,7 @@ mod scope;
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::artifact::Arch;
 use crate::evidence::Ref;
@@ -177,6 +178,29 @@ pub enum Placement {
     Content(ArtifactId),
 }
 
+/// A Mach-O slice's CPU as lipo tells two slices apart: the CPU type, and the subtype without
+/// its capability bits ([`crate::macho_architecture`]).
+///
+/// Two slices of one fat file can share an [`Arch`] (x86_64 and x86_64h, arm64 and arm64e), so
+/// a Mach-O slice's key holds it too. It is the slice's own header's, so a thin file that becomes
+/// fat keeps its slice's key, and it does not depend on content, so a rebuild keeps it too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachOCpu {
+    pub cpu_type: i32,
+    pub cpu_subtype: u32,
+}
+
+/// Reads an `Option` field that must be present, `null` when it is `None`: serde alone would
+/// read a missing one as `None`.
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 /// What a finding, policy violation or open question is about, with its run-dependent IDs
 /// replaced by keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,16 +212,24 @@ pub enum SubjectKey {
     Placement(Placement),
     /// A listener, by port.
     Port(u16),
-    /// A component claim, by where its slice was found.
+    /// A component claim, by where its slice was found and which slice it is there.
     Component {
         placement: Placement,
         arch: Arch,
+        /// The slice's Mach-O CPU; `None` for an ELF slice, or one whose container facts were
+        /// not recorded.
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
         component: ComponentKey,
     },
-    /// A slice, by where it was found.
+    /// A slice, by where it was found and which slice it is there.
     Slice {
         placement: Placement,
         arch: Arch,
+        /// The slice's Mach-O CPU; `None` for an ELF slice, or one whose container facts were
+        /// not recorded.
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
     },
     /// Any other subject, as recorded.
     Other(Ref),
@@ -219,9 +251,12 @@ pub enum Item {
     Release {
         product: ComponentKey,
     },
+    /// A component claim, keyed as [`SubjectKey::Component`].
     Component {
         placement: Placement,
         arch: Arch,
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
         component: ComponentKey,
     },
     Port {
@@ -492,11 +527,13 @@ pub enum Change {
         baseline: Option<ReleaseState>,
         current: Option<ReleaseState>,
     },
-    /// A claim, by placement, architecture and component: its status or versions changed, or
-    /// it is on one side only.
+    /// A claim, keyed as [`Item::Component`] (placement, architecture, Mach-O CPU and
+    /// component): its status or versions changed, or it is on one side only.
     ComponentChanged {
         placement: Placement,
         arch: Arch,
+        #[serde(deserialize_with = "nullable")]
+        macho: Option<MachOCpu>,
         component: ComponentKey,
         baseline: Option<ComponentState>,
         current: Option<ComponentState>,

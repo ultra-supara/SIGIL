@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::compare::{checks, open_in, Found};
 use super::key;
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for_under, named_file_checks, not_named_in,
-    placement, placements_of, root_at, scope_of, IDENTITY,
+    arch_of, checks_at, closed_everywhere, closed_for_under, macho_of, named_file_checks,
+    not_named_in, placement, placements_of, root_at, scope_of, IDENTITY,
 };
 use crate::artifact::{FileInstance, InstanceContent};
 use crate::binary_input::{is_binary_root, BINARY_CONTAINER};
@@ -184,7 +184,8 @@ fn releases(b: &Session, c: &Session, found: &mut Found) {
 
 // --- component claims -------------------------------------------------------------------------
 
-/// A claim, keyed by where its slice was found, with the root the session recorded there.
+/// A claim, keyed by where its slice was found and which slice it is there (its architecture and
+/// Mach-O CPU), with the root the session recorded there.
 struct Claim {
     item: Item,
     state: ComponentState,
@@ -197,6 +198,7 @@ fn claims(s: &Session) -> BTreeMap<String, Claim> {
         let Some(arch) = arch_of(s, &claim.subject) else {
             continue;
         };
+        let macho = macho_of(s, &claim.subject);
         let mut versions: Vec<_> = claim.versions.iter().map(|v| v.value.clone()).collect();
         versions.sort();
         versions.dedup();
@@ -205,6 +207,7 @@ fn claims(s: &Session) -> BTreeMap<String, Claim> {
             let item = Item::Component {
                 placement,
                 arch,
+                macho,
                 component: claim.component.clone(),
             };
             let state = ComponentState {
@@ -233,6 +236,7 @@ fn components(b: &Session, c: &Session, found: &mut Found) {
         let Item::Component {
             placement,
             arch,
+            macho,
             component,
         } = item
         else {
@@ -265,6 +269,7 @@ fn components(b: &Session, c: &Session, found: &mut Found) {
         found.changes.push(Change::ComponentChanged {
             placement: placement.clone(),
             arch: *arch,
+            macho: *macho,
             component: component.clone(),
             baseline: before.map(|x| x.state.clone()),
             current: after.map(|x| x.state.clone()),

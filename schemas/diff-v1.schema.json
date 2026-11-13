@@ -948,6 +948,7 @@
               "required": [
                 "placement",
                 "arch",
+                "macho",
                 "component",
                 "baseline",
                 "current"
@@ -958,6 +959,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "component": {
                   "$ref": "#/$defs/ComponentKey"
@@ -1187,8 +1198,29 @@
         }
       ]
     },
+    "MachOCpu": {
+      "description": "A Mach-O slice's CPU as lipo tells two slices apart: the CPU type, and the subtype without its capability bits (the top byte). Two slices of one fat file can share an Arch (x86_64 and x86_64h, arm64 and arm64e); a Mach-O slice's key holds its CPU too.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu_type",
+        "cpu_subtype"
+      ],
+      "properties": {
+        "cpu_type": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "cpu_subtype": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        }
+      }
+    },
     "SubjectKey": {
-      "description": "What a finding or policy violation is about, with run-dependent IDs replaced by keys.",
+      "description": "What a finding, policy violation or open question is about, with run-dependent IDs replaced by keys. A slice, and a component claim on one, is keyed by where it was found, its arch and its macho: its MachOCpu in a Mach-O file, null for an ELF slice or one whose container facts were not recorded.",
       "oneOf": [
         {
           "type": "object",
@@ -1253,6 +1285,7 @@
               "required": [
                 "placement",
                 "arch",
+                "macho",
                 "component"
               ],
               "properties": {
@@ -1261,6 +1294,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "component": {
                   "$ref": "#/$defs/ComponentKey"
@@ -1281,7 +1324,8 @@
               "additionalProperties": false,
               "required": [
                 "placement",
-                "arch"
+                "arch",
+                "macho"
               ],
               "properties": {
                 "placement": {
@@ -1289,6 +1333,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             }
@@ -1408,6 +1462,7 @@
               "required": [
                 "placement",
                 "arch",
+                "macho",
                 "component"
               ],
               "properties": {
@@ -1416,6 +1471,16 @@
                 },
                 "arch": {
                   "$ref": "#/$defs/Arch"
+                },
+                "macho": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/MachOCpu"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "component": {
                   "$ref": "#/$defs/ComponentKey"

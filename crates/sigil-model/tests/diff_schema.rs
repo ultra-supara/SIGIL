@@ -35,7 +35,7 @@ fn schema() -> Value {
 fn registered() -> Vec<(&'static str, schema_check::Probe)> {
     registry![
         Diff => "Diff", DiffSchema => "DiffSchema", DiffSide => "DiffSide", Change => "Change",
-        Placement => "Placement", SubjectKey => "SubjectKey", Item => "Item",
+        Placement => "Placement", MachOCpu => "MachOCpu", SubjectKey => "SubjectKey", Item => "Item",
         NotComparable => "NotComparable", Cause => "Cause", Side => "Side", LicenseState => "LicenseState",
         ReleaseState => "ReleaseState", ComponentState => "ComponentState",
         CheckState => "CheckState", BindClass => "BindClass",
@@ -489,4 +489,92 @@ fn a_diff_written_before_the_revision_of_v1_is_refused() {
         }
     }
     both_reject(v, "a diff of PR-16a's shape");
+}
+
+/// The review of #141: a slice's key, and a component claim's, holds the slice's Mach-O CPU, null
+/// for an ELF slice. A key written without it, as before the revision, is refused by both.
+#[test]
+fn a_slice_key_without_its_mach_o_cpu_is_refused() {
+    // A question on a slice (fixture 11) and a component claim (fixture 07).
+    for (name, kind, path) in [
+        (
+            "11-new-open-question",
+            "OpenQuestionNew",
+            &["subject", "Slice"][..],
+        ),
+        ("07-claim-conflicting", "ComponentChanged", &[][..]),
+    ] {
+        let mut v = example(name);
+        let changes = v["changes"].as_array_mut().unwrap();
+        let change = changes
+            .iter_mut()
+            .find_map(|c| c.get_mut(kind))
+            .unwrap_or_else(|| panic!("no {kind} in {name}"));
+        let key = path.iter().fold(change, |v, k| &mut v[*k]);
+        assert_eq!(key.get("macho"), Some(&Value::Null), "{name}");
+        key.as_object_mut().unwrap().remove("macho");
+        both_reject(v, &format!("a {kind} key without macho"));
+    }
+    // An item not comparable: a component claim, and a violation on one.
+    let validator = validator_for(&schema(), "NotComparable");
+    let component = json!({
+        "placement": {"Instance": "inst:install/bin/ollama"},
+        "arch": "x86_64",
+        "macho": null,
+        "component": "ggml"
+    });
+    let items = [
+        json!({"Component": component}),
+        json!({"Violation": {
+            "policy_rule": "policy:components.deny.ggml",
+            "subject": {"Component": component}
+        }}),
+    ];
+    for item in items {
+        let with = |macho: Option<Value>| {
+            let mut item = item.clone();
+            let key = match item.get_mut("Component") {
+                Some(key) => key,
+                None => &mut item["Violation"]["subject"]["Component"],
+            };
+            match macho {
+                Some(m) => key["macho"] = m,
+                None => {
+                    key.as_object_mut().unwrap().remove("macho");
+                }
+            }
+            json!({
+                "item": item,
+                "cause": "Coverage",
+                "checks": ["artifacts.identity"],
+                "open_in": "Current"
+            })
+        };
+        for macho in [
+            Value::Null,
+            json!({"cpu_type": 16777223, "cpu_subtype": 8}),
+            json!({"cpu_type": -1, "cpu_subtype": 16777215}),
+        ] {
+            let v = with(Some(macho));
+            assert_valid_against(&validator, &v, "a key with macho");
+            serde_json::from_value::<NotComparable>(v).unwrap();
+        }
+        let v = with(None);
+        assert!(!validator.is_valid(&v), "schema accepted {v}");
+        assert!(
+            serde_json::from_value::<NotComparable>(v.clone()).is_err(),
+            "serde accepted {v}"
+        );
+        // The subtype without its capability bits: the top byte is clear.
+        let v = with(Some(
+            json!({"cpu_type": 16777223, "cpu_subtype": 2147483656_u64}),
+        ));
+        assert!(!validator.is_valid(&v), "schema accepted {v}");
+        let v = with(Some(json!({"cpu_type": 16777223})));
+        assert!(!validator.is_valid(&v), "schema accepted {v}");
+        assert!(
+            serde_json::from_value::<NotComparable>(v.clone()).is_err(),
+            "serde accepted {v}"
+        );
+    }
 }

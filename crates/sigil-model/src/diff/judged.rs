@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::compare::{checks, policy_of, Found};
 use super::scope::{
-    arch_of, checks_at, closed_everywhere, closed_for_under, not_named_in, placement,
+    arch_of, checks_at, closed_everywhere, closed_for_under, macho_of, not_named_in, placement,
     placements_of, root_at, root_of, same_model_filter, scope_of, CODE, CONTAINER, IDENTITY,
     INVENTORY,
 };
@@ -42,7 +42,8 @@ fn model_checks(rule: &str) -> &'static [&'static str] {
 }
 
 /// What a subject is about, as keys that survive a new run. A slice found at several places
-/// gives one key per placement.
+/// gives one key per placement; at each, its architecture and Mach-O CPU tell it apart from the
+/// other slices of its file.
 fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
     let other = || vec![SubjectKey::Other(subject.clone())];
     match subject {
@@ -59,21 +60,32 @@ fn subject_keys(s: &Session, subject: &Ref) -> Vec<SubjectKey> {
             .find(|l| l.id == *id)
             .map_or_else(other, |l| vec![SubjectKey::Port(l.port)]),
         Ref::Component { slice, component } => match arch_of(s, slice) {
-            Some(arch) => placements_of(s, &slice.artifact())
-                .into_iter()
-                .map(|placement| SubjectKey::Component {
-                    placement,
-                    arch,
-                    component: component.clone(),
-                })
-                .collect(),
+            Some(arch) => {
+                let macho = macho_of(s, slice);
+                placements_of(s, &slice.artifact())
+                    .into_iter()
+                    .map(|placement| SubjectKey::Component {
+                        placement,
+                        arch,
+                        macho,
+                        component: component.clone(),
+                    })
+                    .collect()
+            }
             None => other(),
         },
         Ref::Slice(slice) => match arch_of(s, slice) {
-            Some(arch) => placements_of(s, &slice.artifact())
-                .into_iter()
-                .map(|placement| SubjectKey::Slice { placement, arch })
-                .collect(),
+            Some(arch) => {
+                let macho = macho_of(s, slice);
+                placements_of(s, &slice.artifact())
+                    .into_iter()
+                    .map(|placement| SubjectKey::Slice {
+                        placement,
+                        arch,
+                        macho,
+                    })
+                    .collect()
+            }
             None => other(),
         },
         _ => other(),

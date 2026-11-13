@@ -981,6 +981,18 @@ pub fn diff_cases() -> Vec<DiffCase> {
     ]
 }
 
+/// The Mach-O CPU of an x86_64h slice: CPU type x86_64, subtype 8.
+pub const X86_64H: MachOCpu = MachOCpu {
+    cpu_type: 0x0100_0007,
+    cpu_subtype: 8,
+};
+
+/// The Mach-O CPU of an arm64e slice: CPU type arm64, subtype 2.
+pub const ARM64E: MachOCpu = MachOCpu {
+    cpu_type: 0x0100_000c,
+    cpu_subtype: 2,
+};
+
 /// One change of every kind, for the schema's samples and the Markdown's sections.
 pub fn every_change() -> Vec<Change> {
     let model: ModelId = id(MODEL_M);
@@ -1071,6 +1083,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Component {
                 placement: path.clone(),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
             current: vec![Ref::Component {
@@ -1084,6 +1097,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Slice {
                 placement: content,
                 arch: Arch::Aarch64,
+                macho: Some(ARM64E),
             },
             baseline: vec![Ref::Slice(slice.clone())],
         },
@@ -1092,6 +1106,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Component {
                 placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
             baseline: vec![decision(Action::Fail, "policy:components.deny.ggml-base")],
@@ -1110,6 +1125,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Slice {
                 placement: path.clone(),
                 arch: Arch::X86_64,
+                macho: None,
             },
             at: "capability:posix.process_spawn@".to_string(),
             current: vec![id(&format!("capability:posix.process_spawn@{slice}"))],
@@ -1120,6 +1136,7 @@ pub fn every_change() -> Vec<Change> {
             subject: SubjectKey::Slice {
                 placement: inst.clone(),
                 arch: Arch::X86_64,
+                macho: None,
             },
             at: "capability:posix.network@".to_string(),
             baseline: vec![id(&format!("capability:posix.network@{slice}"))],
@@ -1194,15 +1211,28 @@ pub fn every_change() -> Vec<Change> {
             }),
         },
         Change::ComponentChanged {
-            placement: inst,
+            placement: inst.clone(),
             arch: Arch::X86_64,
+            macho: None,
             component: id("ggml"),
             baseline: Some(ComponentState {
-                slice,
+                slice: slice.clone(),
                 status: IdentityStatus::NameOnly,
                 versions: vec![t("0.13.1")],
             }),
             current: None,
+        },
+        Change::ComponentChanged {
+            placement: inst,
+            arch: Arch::X86_64,
+            macho: Some(X86_64H),
+            component: id("ggml"),
+            baseline: None,
+            current: Some(ComponentState {
+                slice,
+                status: IdentityStatus::NameOnly,
+                versions: vec![t("0.13.1")],
+            }),
         },
         Change::ListenerAdded {
             port: 8080,
@@ -1274,11 +1304,23 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
             Item::Component {
                 placement: place.clone(),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml"),
             },
             Cause::Coverage,
             &["artifacts.identity"],
             Side::Current,
+        ),
+        item(
+            Item::Component {
+                placement: place.clone(),
+                arch: Arch::X86_64,
+                macho: Some(X86_64H),
+                component: id("ggml"),
+            },
+            Cause::Coverage,
+            &["artifacts.identity"],
+            Side::Baseline,
         ),
         item(
             Item::Port { port: 11434 },
@@ -1311,6 +1353,7 @@ pub fn every_not_comparable() -> Vec<NotComparable> {
                 subject: SubjectKey::Slice {
                     placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                     arch: Arch::X86_64,
+                    macho: None,
                 },
                 at: "capability:posix.process_spawn@".to_string(),
             },

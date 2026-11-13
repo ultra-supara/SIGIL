@@ -611,6 +611,7 @@ fn a_claim_that_turns_conflicting_is_a_component_change() {
     let Change::ComponentChanged {
         placement,
         arch,
+        macho,
         component,
         baseline,
         current,
@@ -620,6 +621,8 @@ fn a_claim_that_turns_conflicting_is_a_component_change() {
     };
     assert_eq!(placement, &ggml_at("lib/ollama/libggml-base.so.0.13.1"));
     assert_eq!((*arch, component.as_str()), (Arch::X86_64, "ggml-base"));
+    // An ELF slice has no Mach-O CPU.
+    assert_eq!(*macho, None);
     let (baseline, current) = (baseline.as_ref().unwrap(), current.as_ref().unwrap());
     assert_eq!(baseline.status, IdentityStatus::ReferenceMatched);
     assert_eq!(current.status, IdentityStatus::Conflicting);
@@ -638,6 +641,7 @@ fn a_claim_gone_where_identity_was_not_closed_is_not_comparable() {
             item: Item::Component {
                 placement: ggml_at("lib/ollama/libggml.so.0.13.1"),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml"),
             },
             cause: Cause::Coverage,
@@ -957,6 +961,7 @@ fn claims_and_violations_of_a_binary_input_named_on_one_side_are_a_request_diffe
         request(Item::Component {
             placement: placement.clone(),
             arch: Arch::X86_64,
+            macho: None,
             component: id("ggml-base"),
         }),
         request(Item::Violation {
@@ -964,6 +969,7 @@ fn claims_and_violations_of_a_binary_input_named_on_one_side_are_a_request_diffe
             subject: SubjectKey::Component {
                 placement: placement.clone(),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
         }),
@@ -1029,6 +1035,7 @@ fn a_violation_is_new_or_resolved_on_its_placement() {
     let subject = SubjectKey::Component {
         placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
         arch: Arch::X86_64,
+        macho: None,
         component: id("ggml-base"),
     };
     let slice = binary_inspect().components[0].subject.clone();
@@ -1068,6 +1075,7 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
                 subject: SubjectKey::Component {
                     placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                     arch: Arch::X86_64,
+                    macho: None,
                     component: id("ggml-base"),
                 },
             },
@@ -1097,6 +1105,7 @@ fn a_violation_s_absence_is_judged_by_the_check_of_its_placement() {
                 subject: SubjectKey::Slice {
                     placement: Placement::Path(t("/home/user/src/suspicious_kernel-gcc-O2.o")),
                     arch: Arch::X86_64,
+                    macho: None,
                 },
             },
             cause: Cause::Coverage,
@@ -1179,6 +1188,7 @@ fn a_deny_rule_removed_from_the_policy_is_not_a_resolved_violation() {
                 subject: SubjectKey::Component {
                     placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                     arch: Arch::X86_64,
+                    macho: None,
                     component: id("ggml-base"),
                 },
             },
@@ -1213,6 +1223,7 @@ fn sessions_that_record_no_policy_did_not_apply_the_same_one() {
             subject: SubjectKey::Component {
                 placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
                 arch: Arch::X86_64,
+                macho: None,
                 component: id("ggml-base"),
             },
         },
@@ -1238,6 +1249,7 @@ fn an_action_changed_by_the_policy_is_a_violation_decision_change() {
     let subject = SubjectKey::Component {
         placement: Placement::Path(t("/home/user/Downloads/libggml-base.so")),
         arch: Arch::X86_64,
+        macho: None,
         component: id("ggml-base"),
     };
     let diff = diff_of(&binary_denied(), &warned);

@@ -46,6 +46,7 @@
           "Instance": "inst:lib/ollama/libggml-base.so.0.13.1"
         },
         "arch": "x86_64",
+        "macho": null,
         "component": "ggml-base",
         "baseline": {
           "slice": "sha256:1111111111111111111111111111111111111111111111111111111111111111#x86_64@0",

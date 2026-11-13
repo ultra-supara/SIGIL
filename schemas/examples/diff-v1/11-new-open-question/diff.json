@@ -48,7 +48,8 @@
             "placement": {
               "Path": "/home/user/src/suspicious_kernel-gcc-O2.o"
             },
-            "arch": "x86_64"
+            "arch": "x86_64",
+            "macho": null
           }
         },
         "at": "capability:posix.process_spawn@",

@@ -3,9 +3,10 @@
 //! the items not comparable and how each counts. Every value is escaped
 //! ([`UntrustedText::markdown_inline`]), and the same `Diff` gives the same text.
 
+use crate::artifact::Arch;
 use crate::diff::{
     Cause, Change, CheckState, ComponentState, Diff, DiffCompleteness, DiffSide, Evaluation, Item,
-    LicenseState, NotComparable, Placement, ReleaseState, Side, SubjectKey,
+    LicenseState, MachOCpu, NotComparable, Placement, ReleaseState, Side, SubjectKey,
 };
 use crate::evidence::Ref;
 use crate::finding::{Action, OpenQuestionDecision, OqTreatment, PolicyDecision};
@@ -600,13 +601,17 @@ fn row(change: &Change) -> (usize, Vec<String>) {
         Change::ComponentChanged {
             placement,
             arch,
+            macho,
             component,
             baseline,
             current,
         } => (
             6,
             vec![
-                esc(&format!("component {component} ({})", arch.name())),
+                esc(&format!(
+                    "component {component} ({})",
+                    claimed_on(*arch, macho.as_ref())
+                )),
                 place(placement).markdown(),
                 component_state(baseline.as_ref()).markdown(),
                 component_state(current.as_ref()).markdown(),
@@ -724,13 +729,38 @@ fn subject_key(key: &SubjectKey) -> Shown {
         SubjectKey::Component {
             placement,
             arch,
+            macho,
             component,
-        } => Shown::own(format!("{component} ({}) at ", arch.name())).and_shown(place(placement)),
-        SubjectKey::Slice { placement, arch } => {
-            Shown::own(format!("{} slice at ", arch.name())).and_shown(place(placement))
+        } => claim(placement, *arch, macho.as_ref(), component.as_str()),
+        SubjectKey::Slice {
+            placement,
+            arch,
+            macho,
+        } => {
+            let cpu = macho.map_or_else(String::new, |m| format!(" ({})", cpu(&m)));
+            Shown::own(format!("{} slice{cpu} at ", arch.name())).and_shown(place(placement))
         }
         SubjectKey::Other(r) => Shown::own(subject(r)),
     }
+}
+
+/// A Mach-O slice's CPU, which tells apart two slices of one fat file with one architecture.
+fn cpu(m: &MachOCpu) -> String {
+    format!("Mach-O CPU {}, subtype {}", m.cpu_type, m.cpu_subtype)
+}
+
+/// Which slice a component claim is on, at its placement: its architecture, and its Mach-O CPU
+/// when it has one.
+fn claimed_on(arch: Arch, macho: Option<&MachOCpu>) -> String {
+    match macho {
+        Some(m) => format!("{}, {}", arch.name(), cpu(m)),
+        None => arch.name().to_string(),
+    }
+}
+
+/// A component claim's key: `<component> (<slice>) at <placement>`.
+fn claim(placement: &Placement, arch: Arch, macho: Option<&MachOCpu>, component: &str) -> Shown {
+    Shown::own(format!("{component} ({}) at ", claimed_on(arch, macho))).and_shown(place(placement))
 }
 
 fn place(p: &Placement) -> Shown {
@@ -828,8 +858,9 @@ fn item(i: &Item) -> Shown {
         Item::Component {
             placement,
             arch,
+            macho,
             component,
-        } => Shown::own(format!("{component} ({}) at ", arch.name())).and_shown(place(placement)),
+        } => claim(placement, *arch, macho.as_ref(), component.as_str()),
         Item::Port { port } => Shown::own(format!("port {port}")),
         Item::Finding {
             rule,
