@@ -1836,9 +1836,9 @@ fn load_session_with_identity(path: &Path) -> Result<(ValidatedSession, (u64, u6
 
 // --- output -----------------------------------------------------------------------------------
 
-/// Writes `document` to `out`, a target pinned by [`check_out`] or [`check_out_not_inputs`], or to stdout.
-/// An existing file there is replaced, never written through, and a file whose `dev:ino` is in
-/// `protected` is not replaced ([`out::Target::write`]).
+/// Writes `document` to `out`, a target pinned by [`check_out`] or [`check_out_not_inputs`], or to
+/// stdout. An existing file there is replaced, never written through, and a file whose `dev:ino`
+/// is in `protected` is not replaced ([`out::Target::write`]).
 fn emit(
     document: &str,
     out: Option<&out::Target>,
