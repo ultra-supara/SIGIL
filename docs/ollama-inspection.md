@@ -18,7 +18,7 @@ Static and observe perform no network I/O. The active probe is off by default. T
 - `--format session` (the default): the session, as canonical JSON. It is the evidence; keep it.
 - `--format md`: the session as Markdown, for a review ticket. Every input-derived string is escaped.
 - `--format aibom`: the AI-BOM v2, a compact projection that names its session by SHA-256 ([AI-BOM](ai-bom-and-comparison.md)).
-- `--out <FILE>` writes the document there instead of stdout, creating its directories. It must lie outside the models directory, the install directory, and the unit's directory. A short summary goes to stderr. With `--install-dir` it has a `release:` line:
+- `--out <FILE>` writes the document there instead of stdout, creating its directories. It must lie outside the models directory, the install directory, and the unit's directory, and must not be the `--policy` file, a symlink to it, or a hard link of it. The policy file is never replaced, even one moved to `--out` after it was read. A short summary goes to stderr. With `--install-dir` it has a `release:` line:
 
   ```
   release: ollama v0.30.6 (34/34 files, 17/17 symlinks, 3/3 directories reference-matched; nothing absent)
@@ -68,7 +68,7 @@ cargo run -p sigil-cli -- rules
 |---|---|
 | 0 | Normal |
 | 1 | Execution error (for example, an unreadable policy, or a `--service-unit` that cannot be inspected) |
-| 2 | Usage error (for example, an unknown flag, or `--out` inside the models, install, or unit directory) |
+| 2 | Usage error (for example, an unknown flag, `--out` inside the models, install, or unit directory, or `--out` naming the `--policy` file) |
 | 3 | The verdict reached `--fail-on` |
 | 4 | The result is incomplete and `--fail-on-incomplete` was given (3 takes precedence) |
 

@@ -668,20 +668,21 @@ Budgets are set with `--budget KEY=VALUE` (repeatable); the session records them
 
 ## `--out`
 
-- **Not an input.** `--out` may not be an input, or a hard link of one (exit 2). This is checked
-  before the inputs are read, and again against the inputs as they were read. Next to an input
-  is fine.
+- **Not an input.** `--out` may not be an input or the `--policy` file, or a hard link of one
+  (exit 2). This is checked before anything is read, and again against the inputs as they were
+  read. Next to one is fine.
 - **Symlinks.** An existing symlink at `--out` is resolved when `--out` is checked. The file it
   leads to is what is replaced.
 - **Replaced, never written through.** SIGIL writes a new file next to that path, readable by
   its owner only, and exchanges it with the existing file. An existing file there is replaced,
-  never written through, and its mode and owner are not kept. An input displaced by the
-  exchange is put back, and the run fails. An existing directory at `--out` is refused (exit 2).
+  never written through, and its mode and owner are not kept. An input or the policy file
+  displaced by the exchange is put back, and the run fails. An existing directory at `--out` is
+  refused (exit 2).
 - **Killed after the exchange.** The exchange and the put-back are two system calls. A run
-  killed between them leaves the input in the output's directory, at
+  killed between them leaves the input or the policy file in the output's directory, at
   `.<name>.sigil-<pid>-<k>.tmp` (`<name>`: the output's file name, at most its first 200 bytes),
-  with its contents intact: rename it back over the document. An input is at `--out` then only
-  if another process moved or linked it there after `--out` was checked.
+  with its contents intact: rename it back over the document. Either is at `--out` then only if
+  another process moved or linked it there after `--out` was checked.
 - **File systems without the exchange.** On a file system that cannot exchange files
   (`RENAME_EXCHANGE`), `--out` must name a file that does not exist yet.
 
