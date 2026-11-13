@@ -4082,7 +4082,7 @@ fn the_fixture_diffs_are_judged_under_the_built_in_policy() {
         );
         n += 1;
     }
-    assert_eq!(n, 10);
+    assert_eq!(n, 11);
 }
 
 #[test]

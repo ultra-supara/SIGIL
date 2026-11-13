@@ -1,0 +1,233 @@
+{
+  "schema": "sigil-diff/1",
+  "tool": {
+    "name": "sigil",
+    "version": "0.0.0-example",
+    "git_rev": null
+  },
+  "baseline": {
+    "sha256": "dc32909f93bd8a3a9cbfcd99ddd54a086ea87ddf3c9a076ce2f5ef2aa43344ef",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "deny-capabilities",
+      "version": "1",
+      "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+    },
+    "completeness": "Complete"
+  },
+  "current": {
+    "sha256": "3884712fc15215733043622e16cb33d23e1370829ac1b4e923a3a3b20f5e388b",
+    "tool": {
+      "name": "sigil",
+      "version": "0.0.0-example",
+      "git_rev": null
+    },
+    "mode": "Static",
+    "started_at": "2026-10-07T07:00:00Z",
+    "policy": {
+      "kind": "Policy",
+      "id": "deny-capabilities",
+      "version": "1",
+      "sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+    },
+    "completeness": "Complete"
+  },
+  "changes": [
+    {
+      "OpenQuestionNew": {
+        "rule": "binary.capability_call",
+        "subject": {
+          "Slice": {
+            "placement": {
+              "Path": "/home/user/src/suspicious_kernel-gcc-O2.o"
+            },
+            "arch": "x86_64"
+          }
+        },
+        "at": "capability:posix.process_spawn@",
+        "current": [
+          "capability:posix.process_spawn@sha256:aa3b172e12f6a1e4a0661c2a286bb1eb86901d830bb6d26fa7b1630aef2e0f4a#x86_64@0"
+        ],
+        "decisions": [
+          {
+            "treatment": "Fail",
+            "source": "policy:open_questions.default",
+            "reason": null
+          }
+        ]
+      }
+    }
+  ],
+  "not_comparable": [],
+  "evaluation": {
+    "policy": {
+      "kind": "Policy",
+      "id": "default",
+      "version": "sigil-policy/1",
+      "sha256": "61e8b696227d8ba53d1f6b3208b1fde088806ee4be0f497eccceede5d5a42123"
+    },
+    "changes": {
+      "PolicyChanged": {
+        "action": "Warn",
+        "source": "default:compare.PolicyChanged",
+        "reason": null
+      },
+      "VerdictChanged": {
+        "action": "Decided",
+        "source": "default:compare.VerdictChanged",
+        "reason": null
+      },
+      "CompletenessChanged": {
+        "action": "Ignore",
+        "source": "default:compare.CompletenessChanged",
+        "reason": null
+      },
+      "CheckOpened": {
+        "action": "Warn",
+        "source": "default:compare.CheckOpened",
+        "reason": null
+      },
+      "CheckClosed": {
+        "action": "Ignore",
+        "source": "default:compare.CheckClosed",
+        "reason": null
+      },
+      "FindingNew": {
+        "action": "Decided",
+        "source": "default:compare.FindingNew",
+        "reason": null
+      },
+      "FindingResolved": {
+        "action": "Ignore",
+        "source": "default:compare.FindingResolved",
+        "reason": null
+      },
+      "FindingDecisionChanged": {
+        "action": "Decided",
+        "source": "default:compare.FindingDecisionChanged",
+        "reason": null
+      },
+      "ViolationNew": {
+        "action": "Decided",
+        "source": "default:compare.ViolationNew",
+        "reason": null
+      },
+      "ViolationResolved": {
+        "action": "Ignore",
+        "source": "default:compare.ViolationResolved",
+        "reason": null
+      },
+      "ViolationDecisionChanged": {
+        "action": "Decided",
+        "source": "default:compare.ViolationDecisionChanged",
+        "reason": null
+      },
+      "OpenQuestionNew": {
+        "action": "Decided",
+        "source": "default:compare.OpenQuestionNew",
+        "reason": null
+      },
+      "OpenQuestionResolved": {
+        "action": "Ignore",
+        "source": "default:compare.OpenQuestionResolved",
+        "reason": null
+      },
+      "OpenQuestionTreatmentChanged": {
+        "action": "Decided",
+        "source": "default:compare.OpenQuestionTreatmentChanged",
+        "reason": null
+      },
+      "ModelAdded": {
+        "action": "Warn",
+        "source": "default:compare.ModelAdded",
+        "reason": null
+      },
+      "ModelRemoved": {
+        "action": "Warn",
+        "source": "default:compare.ModelRemoved",
+        "reason": null
+      },
+      "LayerChanged": {
+        "action": "Fail",
+        "source": "default:compare.LayerChanged",
+        "reason": null
+      },
+      "LicenseChanged": {
+        "action": "Warn",
+        "source": "default:compare.LicenseChanged",
+        "reason": null
+      },
+      "FileAdded": {
+        "action": "Warn",
+        "source": "default:compare.FileAdded",
+        "reason": null
+      },
+      "FileRemoved": {
+        "action": "Warn",
+        "source": "default:compare.FileRemoved",
+        "reason": null
+      },
+      "FileContentChanged": {
+        "action": "Fail",
+        "source": "default:compare.FileContentChanged",
+        "reason": null
+      },
+      "ReleaseChanged": {
+        "action": "Warn",
+        "source": "default:compare.ReleaseChanged",
+        "reason": null
+      },
+      "ComponentChanged": {
+        "action": "Warn",
+        "source": "default:compare.ComponentChanged",
+        "reason": null
+      },
+      "ListenerAdded": {
+        "action": "Warn",
+        "source": "default:compare.ListenerAdded",
+        "reason": null
+      },
+      "ListenerRemoved": {
+        "action": "Ignore",
+        "source": "default:compare.ListenerRemoved",
+        "reason": null
+      },
+      "BindWidened": {
+        "action": "Fail",
+        "source": "default:compare.BindWidened",
+        "reason": null
+      },
+      "BindNarrowed": {
+        "action": "Ignore",
+        "source": "default:compare.BindNarrowed",
+        "reason": null
+      }
+    },
+    "not_comparable": {
+      "Coverage": {
+        "treatment": "CountAsGap",
+        "source": "default:compare.not_comparable.Coverage",
+        "reason": null
+      },
+      "Request": {
+        "treatment": "CountAsGap",
+        "source": "default:compare.not_comparable.Request",
+        "reason": null
+      },
+      "Policy": {
+        "treatment": "CountAsGap",
+        "source": "default:compare.not_comparable.Policy",
+        "reason": null
+      }
+    },
+    "verdict": "Fail",
+    "completeness": "Complete"
+  }
+}

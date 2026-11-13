@@ -72,7 +72,7 @@ fn every_fixture_diff_validates_against_the_schema() {
     let schema = schema();
     let validator = validator_for(&schema, "Diff");
     let all = examples();
-    assert_eq!(all.len(), 10);
+    assert_eq!(all.len(), 11);
     for (name, value) in all {
         assert_valid_against(&validator, &value, &name);
     }
