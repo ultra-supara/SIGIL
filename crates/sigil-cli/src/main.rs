@@ -1726,6 +1726,41 @@ fn rules() -> Result<(), Failure> {
 /// verdict reaches `--fail-on`, else 4 when it is incomplete and `--fail-on-incomplete` was
 /// given, else 0.
 fn compare_sessions(args: &CompareArgs) -> Result<u8, Failure> {
+    let (output, diff) = compare_output(args)?;
+    output.write()?;
+    let evaluation = &diff.evaluation;
+    let incomplete = matches!(
+        evaluation.completeness(),
+        DiffCompleteness::Incomplete { .. }
+    );
+    eprintln!(
+        "compare: {} {}, {} not comparable: {} + {} under {} (sha256:{}) (baseline sha256:{}, \
+         current sha256:{})",
+        diff.changes.len(),
+        if diff.changes.len() == 1 {
+            "change"
+        } else {
+            "changes"
+        },
+        diff.not_comparable.len(),
+        verdict(evaluation.verdict()),
+        if incomplete { "INCOMPLETE" } else { "COMPLETE" },
+        shown(&evaluation.policy().id),
+        evaluation.policy().sha256,
+        diff.baseline.sha256,
+        diff.current.sha256
+    );
+    Ok(exit_code(
+        evaluation.verdict(),
+        incomplete,
+        args.fail_on,
+        args.fail_on_incomplete,
+    ))
+}
+
+/// `compare` up to the write (#142): the diff, its document, and the inodes of the inputs as
+/// they were read (the two sessions and the policy file), which the write must not replace.
+fn compare_output(args: &CompareArgs) -> Result<(Output, sigil_model::diff::Diff), Failure> {
     let mut inputs = vec![args.baseline.clone(), args.current.clone()];
     inputs.extend(args.policy.clone());
     let target = match &args.out {
@@ -1765,34 +1800,13 @@ fn compare_sessions(args: &CompareArgs) -> Result<u8, Failure> {
     // `--out` after it was read is still protected (PR #136 review P2-1).
     let mut protected = vec![baseline_read, current_read];
     protected.extend(policy_read);
-    emit(&document, target.as_ref(), &protected)?;
-    let evaluation = &diff.evaluation;
-    let incomplete = matches!(
-        evaluation.completeness(),
-        DiffCompleteness::Incomplete { .. }
-    );
-    eprintln!(
-        "compare: {} {}, {} not comparable: {} + {} under {} (sha256:{}) (baseline sha256:{}, \
-         current sha256:{})",
-        diff.changes.len(),
-        if diff.changes.len() == 1 {
-            "change"
-        } else {
-            "changes"
+    Ok((
+        Output {
+            document,
+            target,
+            protected,
         },
-        diff.not_comparable.len(),
-        verdict(evaluation.verdict()),
-        if incomplete { "INCOMPLETE" } else { "COMPLETE" },
-        shown(&evaluation.policy().id),
-        evaluation.policy().sha256,
-        diff.baseline.sha256,
-        diff.current.sha256
-    );
-    Ok(exit_code(
-        evaluation.verdict(),
-        incomplete,
-        args.fail_on,
-        args.fail_on_incomplete,
+        diff,
     ))
 }
 
@@ -2182,6 +2196,52 @@ mod tests {
         let built = ok(super::explain_output(&args));
         assert_eq!(built.protected, [inode(&session)]);
         put_back_when_moved_onto_out(&built, &session, &out);
+    }
+
+    /// #142: `compare` protects each input as it read it (the two sessions and the policy file):
+    /// one moved onto `--out` after the read is put back, not replaced.
+    #[test]
+    fn compare_protects_its_inputs_as_it_read_them() {
+        for moved in ["baseline", "current", "policy"] {
+            let d = tempfile::TempDir::new().unwrap();
+            let p = std::fs::canonicalize(d.path()).unwrap();
+            let (baseline, current) = (saved(&p, "baseline"), saved(&p, "current"));
+            let policy = p.join("policy.toml");
+            std::fs::copy(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../sigil-engine/policies/default.toml"
+                ),
+                &policy,
+            )
+            .unwrap();
+            let out = p.join("diff.json");
+            let super::Command::Compare(args) = command(&[
+                "compare",
+                "--baseline",
+                arg(&baseline),
+                "--current",
+                arg(&current),
+                "--policy",
+                arg(&policy),
+                "--out",
+                arg(&out),
+            ]) else {
+                panic!("not `compare`");
+            };
+            let (built, _) = ok(super::compare_output(&args));
+            assert_eq!(
+                built.protected,
+                [inode(&baseline), inode(&current), inode(&policy)],
+                "{moved}"
+            );
+            let input = match moved {
+                "baseline" => &baseline,
+                "current" => &current,
+                _ => &policy,
+            };
+            put_back_when_moved_onto_out(&built, input, &out);
+        }
     }
 
     #[test]
