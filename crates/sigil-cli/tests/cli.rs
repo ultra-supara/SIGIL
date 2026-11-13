@@ -597,6 +597,112 @@ fn a_session_that_fails_validation_is_refused() {
     }
 }
 
+/// #139: `session render` and `explain` never write the session they read. `--out` naming it, a
+/// symlink to it, or a hard link of it is refused (exit 2) before anything is read, and the
+/// session keeps its bytes.
+#[test]
+fn render_and_explain_refuse_an_out_that_is_the_session() {
+    use std::os::unix::fs::symlink;
+    let (dir, path) = saved_warn();
+    let before = fs::read(&path).unwrap();
+    let link = dir.path().join("symlink.json");
+    symlink(&path, &link).unwrap();
+    let hard = dir.path().join("hard.json");
+    fs::hard_link(&path, &hard).unwrap();
+    for command in [&["session", "render"][..], &["explain", "--verdict"][..]] {
+        for out in [&path, &link, &hard] {
+            let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = command
+                .iter()
+                .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+                .collect();
+            args.push(&path);
+            args.push(&"--out");
+            args.push(out);
+            let r = run(&args);
+            assert_eq!(
+                r.code,
+                2,
+                "{command:?} --out {}: {}",
+                out.display(),
+                r.stderr
+            );
+            assert!(
+                r.stderr.contains("SIGIL never writes a session it reads"),
+                "{command:?} --out {}: {}",
+                out.display(),
+                r.stderr
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                before,
+                "{command:?} --out {}",
+                out.display()
+            );
+            assert!(r.stdout.is_empty());
+        }
+    }
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+}
+
+/// #139: the check runs before the read: a session that is not even JSON, named by `--out`, is
+/// refused as an `--out` (exit 2), not as an unreadable session (exit 1), and keeps its bytes.
+#[test]
+fn render_and_explain_refuse_an_out_that_is_an_unreadable_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad = write(dir.path(), "bad.json", "{not json");
+    for command in [&["session", "render"][..], &["explain", "--verdict"][..]] {
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = command
+            .iter()
+            .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+            .collect();
+        args.push(&bad);
+        args.push(&"--out");
+        args.push(&bad);
+        let r = run(&args);
+        assert_eq!(r.code, 2, "{command:?}: {}", r.stderr);
+        assert!(
+            r.stderr.contains("SIGIL never writes a session it reads"),
+            "{command:?}: {}",
+            r.stderr
+        );
+        assert_eq!(
+            fs::read_to_string(&bad).unwrap(),
+            "{not json",
+            "{command:?}"
+        );
+    }
+}
+
+/// #139: an `--out` that is not the session is written, with what the command prints without it.
+#[test]
+fn render_and_explain_write_an_out_that_is_not_the_session() {
+    let (dir, path) = saved_warn();
+    let before = fs::read(&path).unwrap();
+    for (i, command) in [&["session", "render"][..], &["explain", "--verdict"][..]]
+        .into_iter()
+        .enumerate()
+    {
+        let out = dir.path().join(format!("out-{i}.md"));
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = command
+            .iter()
+            .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+            .collect();
+        args.push(&path);
+        let printed = run(&args);
+        assert_eq!(printed.code, 0, "{command:?}: {}", printed.stderr);
+        args.push(&"--out");
+        args.push(&out);
+        let r = run(&args);
+        assert_eq!(r.code, 0, "{command:?}: {}", r.stderr);
+        assert_eq!(
+            fs::read_to_string(&out).unwrap(),
+            printed.stdout,
+            "{command:?}"
+        );
+    }
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
 #[test]
 fn explain_a_known_finding() {
     // #21: the finding, its evidence, the rule that fired, and the remediation.

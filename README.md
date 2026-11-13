@@ -63,7 +63,7 @@ cargo run --locked -q -p sigil-cli -- session render out/session.json --out out/
 
 The store defaults to `$OLLAMA_MODELS`, then `~/.ollama/models`. Use `--models-dir /path/to/models` to select another store, including one owned by a system service. Static inspection needs only the files; Ollama does not need to be running.
 
-The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store, installation, and service unit's directory, and separate from binary inputs.
+The document goes to `--out` (or stdout when omitted), and the outcome summary goes to stderr. SIGIL creates missing output directories. Keep output paths outside the inspected model store, installation, and service unit's directory, and separate from binary inputs. `session render`, `explain` and `compare` never write a session (or policy) they read; an `--out` naming one is refused.
 
 ### Include the installation or runtime
 

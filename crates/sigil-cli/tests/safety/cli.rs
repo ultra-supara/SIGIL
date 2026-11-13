@@ -1231,11 +1231,13 @@ fn explain_the_verdict() {
     }
     let fx = fixture();
     let session = saved_session(&fx);
-    let args = os(&[&"explain", &session, &"--verdict"]);
+    let md = fx.out.join("explain/verdict.md");
+    let args = os(&[&"explain", &session, &"--verdict", &"--out", &md]);
     let r = run("explain-verdict", &fx, &refs(&args));
     assert!(r.status.unwrap().success(), "{}", r.stderr);
+    assert!(md.is_file());
     assert_read_under(&r, &session);
-    assert_clean(&r, &policy(&fx, &[], &["runtime"]));
+    assert_clean(&r, &policy(&fx, &[&md], &["runtime"]));
 }
 
 /// #16: `compare` reads its two sessions and writes only its `--out`. The model store the
