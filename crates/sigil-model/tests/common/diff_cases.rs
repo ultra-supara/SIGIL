@@ -910,9 +910,9 @@ fn with(mut s: Session, edit: impl FnOnce(&mut Session)) -> Session {
 
 /// The fixture pairs (spec "Tests"): each case's own kind occurs exactly once in its diff.
 ///
-/// Case 11 is example 18 before and after its file imported `execve` (#138): both FAIL by the
-/// network violation, the current one with a `fail` question too, so only `OpenQuestionNew` can
-/// fail the diff.
+/// Case 11 is the capability-policy session of example 18 before and after its file imported
+/// `execve` (#138): both FAIL by the network violation, the current one with a `fail` question
+/// too, so only `OpenQuestionNew` can fail the diff.
 pub fn diff_cases() -> Vec<DiffCase> {
     vec![
         case("01-identical", None, compare_store(), compare_store()),

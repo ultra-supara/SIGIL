@@ -106,6 +106,7 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 | Outcome | `PolicyChanged`, `VerdictChanged`, `CompletenessChanged` (`Complete` against `Incomplete`) |
 | Coverage | `CheckOpened`, `CheckClosed` |
 | Findings and policy violations | `FindingNew`, `FindingResolved`, `ViolationNew`, `ViolationResolved`, by rule and subject; `FindingDecisionChanged`, `ViolationDecisionChanged` when the same item has other policy decisions (an action, a reason, an expiry, or an override that expired), with each side's finding IDs or violation subjects |
+| Open questions | `OpenQuestionNew`, `OpenQuestionResolved`, by rule and subject; `OpenQuestionTreatmentChanged` when the same question has another treatment, with each side's question IDs (#138) |
 | Models | `ModelAdded`, `ModelRemoved`, `LayerChanged`, `LicenseChanged` |
 | Installation | `FileAdded`, `FileRemoved`, `FileContentChanged`, `ReleaseChanged`, `ComponentChanged` |
 | Listeners | `ListenerAdded`, `ListenerRemoved`, `BindWidened`, `BindNarrowed`, by port |
@@ -119,7 +120,7 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 
   Listener inodes, `binary-<n>` numbers and slice IDs are pointers, not keys. A restart, files
   given in another order are not changes. An upgraded file is one `FileContentChanged`; its claims keep
-  their key (placement, arch, component), so a new slice ID alone is no claim change.
+  their key (placement, arch, component), so a new slice ID alone is no claim change. Its open questions keep their key too: a capability question (`capability:<feature>@<slice>`) keys as `capability:<feature>@` on the placement and arch of its slice.
 - **Comparability.** Saying that something is absent on one side needs the check that would
   have recorded it to be closed on that side. Otherwise the item is *not comparable*, never
   removed or resolved. The diff's `not_comparable` lists it with a `cause`, the checks, and the
@@ -130,29 +131,31 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   - `Request`: the two runs asked for different things. They used different `--model` filters, or
     one named a binary input or a service unit that the other did not. The claims and violations
     about such an input are included.
-  - `Policy`: the sessions applied different policies, so a violation on one side only is not
-    judged (the rule may be absent from the other policy). `PolicyChanged` reports the two. A
+  - `Policy`: the sessions applied different policies, so a violation, or a capability open question, on one side only is
+    not judged (the rule may be absent from the other policy). `PolicyChanged` reports the two. A
     session that records no policy did not apply the same policy as any other, even one that
     records none either.
 - **Model findings.** A finding of the model store is judged by the check of its rule (integrity,
   license or inventory). The findings of a model that is gone are judged by the inventory check of
   its manifest.
+- **Open questions** (#138). A capability question (`binary.capability_call`) on one side only
+  is judged under the same policy, by the container check of its file's placement
+  (`artifacts.container` or `binary.container`) on the other side: the imports are read there.
+  A question of another rule needs the other side complete.
 - **Limits.**
   - Only open/closed transitions of checks are reported. A check open on both sides whose
     states or gaps changed is not.
   - The layers of a manifest that is unstable on either side are not compared.
   - Text that came from the inspected system (model names, paths, rule subjects) stays untrusted
     in both documents, and the Markdown escapes it.
-- **Not compared yet:** hints and code facts, open questions, AI-BOM input. An open question
-  that the policy treats as `warn` or `fail` can show in the verdict: when it changes the
-  verdict, `VerdictChanged` carries it, and by default a verdict that got worse weighs what it
-  now is (below). A new `fail` question in a session that already fails gives no change.
+- **Not compared yet:** hints and code facts, AI-BOM input.
 
 ### Judging the differences
 
 Every diff is judged under a policy's `[compare]` section (#16): `--policy FILE`, or the
 built-in policy. Each change kind has an action (`fail`, `warn`, `ignore`, or for a new or
-changed finding or violation `decided`: what its decisions in the current session say; a changed
+changed finding, violation or open question `decided`: what its decisions in the current session say (a
+question's treatment: `fail` and `warn` weigh as those actions, a gap or `ignore` nothing); a changed
 decision weighs that only when it got heavier than the baseline's, and `warn` otherwise; a
 changed verdict, also `decided` by default, weighs the current verdict when it got worse, and
 nothing otherwise), and each cause of an item not comparable a treatment. The diff's
@@ -184,6 +187,8 @@ sigil compare --baseline baseline/session.json --current out/session.json \
 between #136 and that change have no `evaluation`, no `completeness` per side, and no `decisions`
 on `FindingNew` and `ViolationNew`: they neither validate against `diff-v1.schema.json` nor load.
 Compare the two sessions again for a current diff.
+It was revised again for open questions (#138): diffs that main wrote between PR-16b and that
+change (an `evaluation` of 24 change kinds) neither validate nor load either.
 
 ## Runtime Comparison
 
