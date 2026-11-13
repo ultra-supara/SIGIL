@@ -9,14 +9,6 @@ use common::*;
 use sigil_model::diff::*;
 use sigil_model::*;
 
-/// A change's externally tagged variant name.
-fn tag(change: &Change) -> String {
-    match serde_json::to_value(change).unwrap() {
-        serde_json::Value::Object(m) => m.keys().next().unwrap().clone(),
-        other => panic!("a change is a struct variant: {other}"),
-    }
-}
-
 #[test]
 fn every_change_kind_is_named_as_its_variant_and_in_declared_order() {
     let mut seen: Vec<ChangeKind> = vec![];
@@ -735,11 +727,6 @@ fn each_side_records_its_completeness_and_the_diff_counts_it() {
             not_comparable: 0
         }
     );
-}
-
-/// `text` as `render::md::esc` writes it.
-fn esc_md(text: &str) -> String {
-    t(text).markdown_inline()
 }
 
 #[test]

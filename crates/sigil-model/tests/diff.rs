@@ -1577,11 +1577,6 @@ fn every_change_renders_with_its_key_text() {
     }
 }
 
-/// `text` as `render::md::esc` writes it, for the characters these tests use.
-fn esc_md(text: &str) -> String {
-    t(text).markdown_inline()
-}
-
 #[test]
 fn every_cause_renders_its_reason() {
     let mut diff = diff_of(&compare_store(), &compare_store());

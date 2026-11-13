@@ -64,15 +64,22 @@ pub fn diff_under(baseline: &Session, current: &Session, rules: &CompareRules) -
     )
 }
 
+/// A change's externally tagged variant name.
+pub fn tag(change: &Change) -> String {
+    match serde_json::to_value(change).unwrap() {
+        serde_json::Value::Object(m) => m.keys().next().unwrap().clone(),
+        other => panic!("a change is a struct variant: {other}"),
+    }
+}
+
 /// The kind (variant name) of each change, in order.
 pub fn kinds(d: &Diff) -> Vec<String> {
-    d.changes
-        .iter()
-        .map(|c| match serde_json::to_value(c).unwrap() {
-            serde_json::Value::Object(m) => m.keys().next().unwrap().clone(),
-            other => panic!("a change is a struct variant: {other}"),
-        })
-        .collect()
+    d.changes.iter().map(tag).collect()
+}
+
+/// `text` as `render::md::esc` writes it, for the characters these tests use.
+pub fn esc_md(text: &str) -> String {
+    t(text).markdown_inline()
 }
 
 /// Whether `d` has a change of `kind`.
