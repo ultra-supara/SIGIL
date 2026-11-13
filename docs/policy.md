@@ -409,9 +409,12 @@ session records its policy) and holds the action of every change kind and the tr
 every cause, each with its source (`default:compare.<Kind>`, `policy:compare.changes.<Kind>`,
 `default:compare.not_comparable.<Cause>`, or `policy:compare.not_comparable.<Cause>`) and the
 policy's reason. Each change's action can be read from it. The Markdown names each side's
-completeness, the result, and each line's action. A reader judges a diff again: one whose table
-misses a kind or a cause, or whose recorded verdict or completeness is not what a fresh
-judgment gives, does not load.
+completeness, the result, and each line's action. A reader checks a diff against itself: one
+whose table misses a kind or a cause, holds an entry SIGIL would not write (a default's source
+with another action or a reason, the source of another kind or cause, or a policy's `ignore`
+without a reason), or whose recorded verdict or completeness is not what a fresh judgment gives,
+does not load. That does not prove which policy file made the diff: comparing the two sessions
+again with `--policy` and that file does.
 
 **`[compare]` and sessions.** Inspection, evaluation, and `session verify` ignore the content of
 `[compare]`. It is part of the file, though, and so of the SHA-256 a session records. Editing

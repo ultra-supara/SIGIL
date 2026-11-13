@@ -2193,7 +2193,7 @@
       }
     },
     "ChangeTreatment": {
-      "description": "The action of one change kind, its source (default:compare.<Kind>, or policy:compare.changes.<Kind>), and the policy's reason (a policy file must give one for Ignore).",
+      "description": "The action of one change kind, its source, and the policy's reason. The source is default:compare.<Kind> (the default action, and no reason) or policy:compare.changes.<Kind>; the policy's Ignore needs a reason that is not blank (the schema checks for a character other than a space, a tab or a line break; a reader checks the rest, and the source).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2218,10 +2218,28 @@
             }
           ]
         }
+      },
+      "if": {
+        "properties": {
+          "action": {
+            "const": "Ignore"
+          },
+          "source": {
+            "pattern": "^policy:"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "pattern": "[^ \\t\\n\\r]"
+          }
+        }
       }
     },
     "NotComparableTreatment": {
-      "description": "The treatment of the items not comparable for one cause: CountAsGap makes the diff Incomplete, Warn and Fail count toward the verdict, Ignore toward neither. source is default:compare.not_comparable.<Cause>, or policy:compare.not_comparable.<Cause>.",
+      "description": "The treatment of the items not comparable for one cause: CountAsGap makes the diff Incomplete, Warn and Fail count toward the verdict, Ignore toward neither. The source is default:compare.not_comparable.<Cause> (the default treatment, and no reason) or policy:compare.not_comparable.<Cause>; the policy's Ignore needs a reason that is not blank (the schema checks for a character other than a space, a tab or a line break; a reader checks the rest, and the source).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2245,6 +2263,24 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "if": {
+        "properties": {
+          "treatment": {
+            "const": "Ignore"
+          },
+          "source": {
+            "pattern": "^policy:"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "pattern": "[^ \\t\\n\\r]"
+          }
         }
       }
     },

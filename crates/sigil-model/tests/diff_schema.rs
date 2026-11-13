@@ -331,6 +331,77 @@ fn a_recorded_result_that_its_evaluation_does_not_give_is_refused() {
     assert!(err.contains("not what its evaluation gives"), "{err}");
 }
 
+/// Review P3 of PR #137: serde refuses a table that SIGIL would not write; the schema sees only
+/// a policy's `Ignore` without a reason. The recorded result is what each table gives, so only
+/// the table is wrong.
+#[test]
+fn a_table_that_sigil_would_not_write_is_refused() {
+    let base = example("03-blob-digest-changed");
+    assert_eq!(base["evaluation"]["verdict"], json!("Fail"));
+    let validator = validator_for(&schema(), "Diff");
+    let refused = |v: Value, shown: &str| {
+        let err = serde_json::from_value::<Diff>(v).unwrap_err().to_string();
+        assert!(err.contains(shown), "{err}");
+    };
+
+    // LayerChanged ignored under its default source, without a reason.
+    let mut v = base.clone();
+    v["evaluation"]["changes"]["LayerChanged"]["action"] = json!("Ignore");
+    v["evaluation"]["verdict"] = json!("Pass");
+    assert!(validator.is_valid(&v), "the schema cannot see the default");
+    refused(
+        v.clone(),
+        "LayerChanged has the default's source but not its action",
+    );
+    // Under the policy's source, without a reason.
+    v["evaluation"]["changes"]["LayerChanged"]["source"] =
+        json!("policy:compare.changes.LayerChanged");
+    assert!(
+        !validator.is_valid(&v),
+        "the schema accepted a policy's Ignore without a reason"
+    );
+    refused(v.clone(), "LayerChanged is ignored without a reason");
+    // As a policy writes it, it loads.
+    v["evaluation"]["changes"]["LayerChanged"]["reason"] = json!("The model is retrained nightly");
+    assert!(validator.is_valid(&v));
+    let diff: Diff = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(diff.evaluation.verdict(), sigil_model::Verdict::Pass);
+    // A blank reason is none.
+    v["evaluation"]["changes"]["LayerChanged"]["reason"] = json!("  ");
+    assert!(!validator.is_valid(&v));
+    refused(v, "LayerChanged is ignored without a reason");
+
+    // The default's source with another action.
+    let mut v = base.clone();
+    v["evaluation"]["changes"]["LayerChanged"]["action"] = json!("Warn");
+    v["evaluation"]["verdict"] = json!("Warn");
+    assert!(validator.is_valid(&v), "the schema cannot see sources");
+    refused(
+        v,
+        "LayerChanged has the default's source but not its action",
+    );
+
+    // A policy's source that names another kind.
+    let mut v = base.clone();
+    v["evaluation"]["changes"]["LayerChanged"]["source"] =
+        json!("policy:compare.changes.ModelAdded");
+    assert!(validator.is_valid(&v));
+    refused(v, "the source of LayerChanged is neither");
+
+    // An ignored cause without a reason.
+    let mut v = base;
+    v["evaluation"]["not_comparable"]["Coverage"] = json!({
+        "treatment": "Ignore",
+        "source": "policy:compare.not_comparable.Coverage",
+        "reason": null
+    });
+    assert!(
+        !validator.is_valid(&v),
+        "the schema accepted an Ignore without a reason"
+    );
+    refused(v, "Coverage is ignored without a reason");
+}
+
 /// Review P2a: `sigil-diff/1` was revised before its first release. A diff that main wrote
 /// between #136 and PR-16b (no `evaluation`, no `completeness` per side, `FindingNew` without
 /// `decisions`) neither validates nor loads.

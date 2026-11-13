@@ -278,8 +278,9 @@ pub enum PolicyError {
     /// `decided` for a change kind whose changes carry no decisions and no verdict (any but a
     /// changed verdict, and a new or changed finding or violation).
     DecidedNotAllowed(String),
-    /// The resolved compare table is invalid (a SIGIL bug: the defaults cover every entry, and
-    /// `decided` is refused above where it does not apply).
+    /// The resolved compare table is invalid (a SIGIL bug: the defaults cover every entry, each
+    /// entry of the file gets its own source, `decided` is refused above where it does not
+    /// apply, and `ignore` without a reason too).
     CompareTable(String),
 }
 

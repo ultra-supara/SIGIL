@@ -112,15 +112,31 @@ fn not_comparable(cause: Cause) -> NotComparable {
     }
 }
 
+/// `r` with a policy's entry for `kind`, as a policy writes it: its source, and a reason.
 fn with_action(r: &CompareRules, kind: ChangeKind, action: CompareAction) -> CompareRules {
     let mut changes = r.changes().clone();
-    changes.get_mut(&kind).unwrap().action = action;
+    changes.insert(
+        kind,
+        ChangeTreatment {
+            action,
+            source: id(&format!("policy:compare.changes.{}", kind.name())),
+            reason: Some("a test's reason".to_string()),
+        },
+    );
     CompareRules::new(r.policy().clone(), changes, r.not_comparable().clone()).unwrap()
 }
 
+/// `r` with a policy's entry for `cause`, as a policy writes it: its source, and a reason.
 fn with_treatment(r: &CompareRules, cause: Cause, treatment: OqTreatment) -> CompareRules {
     let mut causes = r.not_comparable().clone();
-    causes.get_mut(&cause).unwrap().treatment = treatment;
+    causes.insert(
+        cause,
+        NotComparableTreatment {
+            treatment,
+            source: id(&format!("policy:compare.not_comparable.{}", cause.name())),
+            reason: Some("a test's reason".to_string()),
+        },
+    );
     CompareRules::new(r.policy().clone(), r.changes().clone(), causes).unwrap()
 }
 
@@ -263,6 +279,136 @@ fn a_table_needs_every_kind_and_cause_and_decided_only_where_it_applies() {
         RulesError::Decided(ChangeKind::LayerChanged).to_string(),
         "LayerChanged carries no decisions and no verdict, so it cannot be decided"
     );
+}
+
+#[test]
+fn a_table_holds_sources_and_reasons_as_sigil_writes_them() {
+    // Review P3 of PR #137: an entry is the default, as `defaults` writes it, or a policy's, as
+    // the loader writes it, whose `Ignore` has a reason.
+    let r = builtin_rules();
+    let (changes, causes) = (r.changes().clone(), r.not_comparable().clone());
+    let kinds = |edit: &dyn Fn(&mut ChangeTreatment)| {
+        let mut table = changes.clone();
+        edit(table.get_mut(&ChangeKind::LayerChanged).unwrap());
+        CompareRules::new(builtin_policy(), table, causes.clone())
+    };
+    let layer = ChangeKind::LayerChanged;
+    // Ignored under its default source, without a reason: not the default.
+    assert_eq!(
+        kinds(&|t| t.action = CompareAction::Ignore),
+        Err(RulesError::NotDefault(layer))
+    );
+    // A policy's `Ignore` without a reason, or with a blank one.
+    for reason in [None, Some(" \t")] {
+        assert_eq!(
+            kinds(&|t| {
+                t.action = CompareAction::Ignore;
+                t.source = id("policy:compare.changes.LayerChanged");
+                t.reason = reason.map(str::to_string);
+            }),
+            Err(RulesError::IgnoredWithoutReason(layer)),
+            "{reason:?}"
+        );
+    }
+    // The default's source with another action, or with a reason.
+    assert_eq!(
+        kinds(&|t| t.action = CompareAction::Warn),
+        Err(RulesError::NotDefault(layer))
+    );
+    assert_eq!(
+        kinds(&|t| t.reason = Some("why".to_string())),
+        Err(RulesError::NotDefault(layer))
+    );
+    // A source of another kind, or of another form.
+    for source in [
+        "policy:compare.changes.ModelAdded",
+        "default:compare.ModelAdded",
+        "policy:compare.not_comparable.Coverage",
+        "policy:rules.model.blob_digest_mismatch",
+    ] {
+        assert_eq!(
+            kinds(&|t| t.source = id(source)),
+            Err(RulesError::Source(layer)),
+            "{source}"
+        );
+    }
+    // What a policy writes: its source, any action, a reason (required for `Ignore`).
+    for (action, reason) in [
+        (
+            CompareAction::Ignore,
+            Some("The model is retrained nightly"),
+        ),
+        (CompareAction::Warn, Some("Upgrades are reviewed")),
+        (CompareAction::Fail, None),
+    ] {
+        let table = kinds(&|t| {
+            t.action = action;
+            t.source = id("policy:compare.changes.LayerChanged");
+            t.reason = reason.map(str::to_string);
+        });
+        assert!(table.is_ok(), "{action:?} {reason:?}: {table:?}");
+    }
+
+    let causes_with = |cause: Cause, edit: &dyn Fn(&mut NotComparableTreatment)| {
+        let mut table = causes.clone();
+        edit(table.get_mut(&cause).unwrap());
+        CompareRules::new(builtin_policy(), changes.clone(), table)
+    };
+    assert_eq!(
+        causes_with(Cause::Request, &|t| {
+            t.treatment = OqTreatment::Ignore;
+            t.source = id("policy:compare.not_comparable.Request");
+        }),
+        Err(RulesError::CauseIgnoredWithoutReason(Cause::Request))
+    );
+    assert_eq!(
+        causes_with(Cause::Coverage, &|t| t.treatment = OqTreatment::Warn),
+        Err(RulesError::CauseNotDefault(Cause::Coverage))
+    );
+    assert_eq!(
+        causes_with(Cause::Policy, &|t| {
+            t.source = id("policy:compare.not_comparable.Coverage");
+        }),
+        Err(RulesError::CauseSource(Cause::Policy))
+    );
+    assert!(causes_with(Cause::Request, &|t| {
+        t.treatment = OqTreatment::Ignore;
+        t.source = id("policy:compare.not_comparable.Request");
+        t.reason = Some("Filters differ by design".to_string());
+    })
+    .is_ok());
+
+    for (error, shown) in [
+        (
+            RulesError::IgnoredWithoutReason(layer),
+            "LayerChanged is ignored without a reason",
+        ),
+        (
+            RulesError::CauseIgnoredWithoutReason(Cause::Request),
+            "Request is ignored without a reason",
+        ),
+        (
+            RulesError::NotDefault(layer),
+            "LayerChanged has the default's source but not its action (Fail, without a reason)",
+        ),
+        (
+            RulesError::CauseNotDefault(Cause::Coverage),
+            "Coverage has the default's source but not its treatment (CountAsGap, without a \
+             reason)",
+        ),
+        (
+            RulesError::Source(layer),
+            "the source of LayerChanged is neither default:compare.LayerChanged nor \
+             policy:compare.changes.LayerChanged",
+        ),
+        (
+            RulesError::CauseSource(Cause::Policy),
+            "the source of Policy is neither default:compare.not_comparable.Policy nor \
+             policy:compare.not_comparable.Policy",
+        ),
+    ] {
+        assert_eq!(error.to_string(), shown);
+    }
 }
 
 const COMPLETE: Completeness = Completeness::Complete;

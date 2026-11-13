@@ -870,6 +870,42 @@ fn a_verdict_change_may_be_decided() {
 }
 
 #[test]
+fn a_reason_on_an_entry_that_is_not_ignore_is_kept() {
+    // Review P3 of PR #137: a stored table must hold entries as the loader writes them, and the
+    // loader keeps a reason that `ignore` does not need, and an entry that restates a default.
+    let text = format!(
+        "{HEAD}\n[compare.changes.LayerChanged]\naction = \"warn\"\n\
+         reason = \"Upgrades are reviewed\"\n\n\
+         [compare.changes.FileContentChanged]\naction = \"fail\"\n\n\
+         [compare.not_comparable.Policy]\ntreatment = \"fail\"\nreason = \"One policy for all\"\n"
+    );
+    let policy = Policy::load(&text).unwrap();
+    let c = &policy.compare;
+    let layer = &c.changes()[&ChangeKind::LayerChanged];
+    assert_eq!(layer.action, CompareAction::Warn);
+    assert_eq!(layer.reason.as_deref(), Some("Upgrades are reviewed"));
+    let file = &c.changes()[&ChangeKind::FileContentChanged];
+    assert_eq!(file.action, CompareAction::Fail);
+    assert_eq!(
+        file.source.as_str(),
+        "policy:compare.changes.FileContentChanged"
+    );
+    let other = &c.not_comparable()[&Cause::Policy];
+    assert_eq!(other.treatment, OqTreatment::Fail);
+    assert_eq!(other.reason.as_deref(), Some("One policy for all"));
+    // The table reads back as it was built.
+    assert_eq!(
+        CompareRules::new(
+            c.policy().clone(),
+            c.changes().clone(),
+            c.not_comparable().clone()
+        )
+        .as_ref(),
+        Ok(c)
+    );
+}
+
+#[test]
 fn compare_changes_nothing_but_the_policy_s_hash() {
     let plain = Policy::load(PLAN_EXAMPLE).unwrap();
     let with = Policy::load(&format!(

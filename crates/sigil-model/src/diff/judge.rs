@@ -70,9 +70,9 @@ pub enum DiffCompleteness {
 
 /// How a diff was judged: the policy's complete table, and the result. Built by
 /// [`CompareRules::judge`]. Read back through [`CompareRules::new`]: a document whose table
-/// misses a kind or a cause, or gives `Decided` to a kind that cannot be decided, does not load.
-/// The JSON form is flat: `policy`, `changes` and `not_comparable` (the table), then `verdict`
-/// and `completeness`.
+/// misses a kind or a cause, gives `Decided` to a kind that cannot be decided, or holds a source
+/// or a reason that SIGIL would not write, does not load. The JSON form is flat: `policy`,
+/// `changes` and `not_comparable` (the table), then `verdict` and `completeness`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "EvaluationRecord", into = "EvaluationRecord")]
 pub struct Evaluation {
@@ -117,7 +117,11 @@ impl From<Evaluation> for EvaluationRecord {
 }
 
 /// A complete compare table, built by [`CompareRules::new`] or [`CompareRules::defaults`]:
-/// every kind and every cause has an entry, and `Decided` is given only where it applies.
+/// every kind and every cause has an entry, as SIGIL writes it. `Decided` is given only where it
+/// applies; each entry is the default (its source `default:compare.<Kind>` or
+/// `default:compare.not_comparable.<Cause>`, the default action or treatment, no reason) or the
+/// policy's (`policy:compare.changes.<Kind>` or `policy:compare.not_comparable.<Cause>`), whose
+/// `Ignore` has a reason that is not blank.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompareRules {
     policy: KnowledgeRef,
@@ -125,13 +129,25 @@ pub struct CompareRules {
     not_comparable: BTreeMap<Cause, NotComparableTreatment>,
 }
 
-/// Why a table is not a complete compare table.
+/// Why a table is not a complete compare table as SIGIL writes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RulesError {
     MissingKind(ChangeKind),
     MissingCause(Cause),
     /// `Decided` for a kind whose changes carry no decisions and no verdict.
     Decided(ChangeKind),
+    /// A policy's `Ignore` for a kind without a reason, or with a blank one.
+    IgnoredWithoutReason(ChangeKind),
+    /// A policy's `Ignore` for a cause without a reason, or with a blank one.
+    CauseIgnoredWithoutReason(Cause),
+    /// A kind's source is neither its default's nor the policy's entry for it.
+    Source(ChangeKind),
+    /// A cause's source is neither its default's nor the policy's entry for it.
+    CauseSource(Cause),
+    /// A kind's entry has the default's source, but another action, or a reason.
+    NotDefault(ChangeKind),
+    /// A cause's entry has the default's source, but another treatment, or a reason.
+    CauseNotDefault(Cause),
 }
 
 impl fmt::Display for RulesError {
@@ -143,6 +159,34 @@ impl fmt::Display for RulesError {
                 f,
                 "{} carries no decisions and no verdict, so it cannot be decided",
                 k.name()
+            ),
+            RulesError::IgnoredWithoutReason(k) => {
+                write!(f, "{} is ignored without a reason", k.name())
+            }
+            RulesError::CauseIgnoredWithoutReason(c) => {
+                write!(f, "{} is ignored without a reason", c.name())
+            }
+            RulesError::Source(k) => write!(
+                f,
+                "the source of {k} is neither {DEFAULT_KIND}{k} nor {POLICY_KIND}{k}",
+                k = k.name()
+            ),
+            RulesError::CauseSource(c) => write!(
+                f,
+                "the source of {c} is neither {DEFAULT_CAUSE}{c} nor {POLICY_CAUSE}{c}",
+                c = c.name()
+            ),
+            RulesError::NotDefault(k) => write!(
+                f,
+                "{} has the default's source but not its action ({:?}, without a reason)",
+                k.name(),
+                k.default_action()
+            ),
+            RulesError::CauseNotDefault(c) => write!(
+                f,
+                "{} has the default's source but not its treatment ({:?}, without a reason)",
+                c.name(),
+                c.default_treatment()
             ),
         }
     }
@@ -208,24 +252,57 @@ impl Cause {
     }
 }
 
+/// The source of a kind's default action, before the kind's name.
+const DEFAULT_KIND: &str = "default:compare.";
+/// The source of a policy's action for a kind, before the kind's name.
+const POLICY_KIND: &str = "policy:compare.changes.";
+/// The source of a cause's default treatment, before the cause's name.
+const DEFAULT_CAUSE: &str = "default:compare.not_comparable.";
+/// The source of a policy's treatment of a cause, before the cause's name.
+const POLICY_CAUSE: &str = "policy:compare.not_comparable.";
+
 impl CompareRules {
-    /// A table, if it is complete: every kind and every cause, `Decided` only where it applies.
+    /// A table, if it is complete and as SIGIL writes it: every kind and every cause; `Decided`
+    /// only where it applies; each entry the default (its source, the default action or
+    /// treatment, no reason) or the policy's (its source, and for `Ignore` a reason that is not
+    /// blank). It says nothing of which policy file made the table: only loading that file again
+    /// does.
     pub fn new(
         policy: KnowledgeRef,
         changes: BTreeMap<ChangeKind, ChangeTreatment>,
         not_comparable: BTreeMap<Cause, NotComparableTreatment>,
     ) -> Result<CompareRules, RulesError> {
         for kind in ChangeKind::ALL {
-            let Some(treatment) = changes.get(&kind) else {
+            let Some(t) = changes.get(&kind) else {
                 return Err(RulesError::MissingKind(kind));
             };
-            if treatment.action == CompareAction::Decided && !kind.takes_decided() {
+            if t.action == CompareAction::Decided && !kind.takes_decided() {
                 return Err(RulesError::Decided(kind));
+            }
+            let source = t.source.as_str();
+            if named(source, DEFAULT_KIND, kind.name()) {
+                if t.action != kind.default_action() || t.reason.is_some() {
+                    return Err(RulesError::NotDefault(kind));
+                }
+            } else if !named(source, POLICY_KIND, kind.name()) {
+                return Err(RulesError::Source(kind));
+            } else if t.action == CompareAction::Ignore && !given(t.reason.as_deref()) {
+                return Err(RulesError::IgnoredWithoutReason(kind));
             }
         }
         for cause in Cause::ALL {
-            if !not_comparable.contains_key(&cause) {
+            let Some(t) = not_comparable.get(&cause) else {
                 return Err(RulesError::MissingCause(cause));
+            };
+            let source = t.source.as_str();
+            if named(source, DEFAULT_CAUSE, cause.name()) {
+                if t.treatment != cause.default_treatment() || t.reason.is_some() {
+                    return Err(RulesError::CauseNotDefault(cause));
+                }
+            } else if !named(source, POLICY_CAUSE, cause.name()) {
+                return Err(RulesError::CauseSource(cause));
+            } else if t.treatment == OqTreatment::Ignore && !given(t.reason.as_deref()) {
+                return Err(RulesError::CauseIgnoredWithoutReason(cause));
             }
         }
         Ok(CompareRules {
@@ -242,7 +319,7 @@ impl CompareRules {
             .map(|kind| {
                 let treatment = ChangeTreatment {
                     action: kind.default_action(),
-                    source: PolicyRuleRef::from_static("default:compare.", kind.name()),
+                    source: PolicyRuleRef::from_static(DEFAULT_KIND, kind.name()),
                     reason: None,
                 };
                 (kind, treatment)
@@ -253,10 +330,7 @@ impl CompareRules {
             .map(|cause| {
                 let treatment = NotComparableTreatment {
                     treatment: cause.default_treatment(),
-                    source: PolicyRuleRef::from_static(
-                        "default:compare.not_comparable.",
-                        cause.name(),
-                    ),
+                    source: PolicyRuleRef::from_static(DEFAULT_CAUSE, cause.name()),
                     reason: None,
                 };
                 (cause, treatment)
@@ -400,6 +474,16 @@ impl Evaluation {
     pub fn treatment(&self, item: &NotComparable) -> OqTreatment {
         self.rules.treatment(item.cause)
     }
+}
+
+/// Whether `reason` is given and not blank (as a session's `Ignore` needs one).
+fn given(reason: Option<&str>) -> bool {
+    reason.is_some_and(|r| !r.trim().is_empty())
+}
+
+/// Whether `source` is `prefix` followed by `name`.
+fn named(source: &str, prefix: &str, name: &str) -> bool {
+    source.strip_prefix(prefix) == Some(name)
 }
 
 fn is_incomplete(c: &Completeness) -> bool {

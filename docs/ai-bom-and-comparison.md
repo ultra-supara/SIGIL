@@ -158,9 +158,11 @@ nothing otherwise), and each cause of an item not comparable a treatment. The di
 `evaluation` records the policy, the whole table, and two results, as a session has: a verdict
 (`PASS`, `WARN`, `FAIL`) and a completeness (`INCOMPLETE` when either session is incomplete
 itself, or when an item not comparable counts as a gap, the default). Each side of the diff
-records its session's own completeness. A diff reads back only if its recorded verdict and
-completeness equal a fresh judgment of its changes under its recorded table. The defaults and
-the format: [policy](policy.md#comparing-sessions-compare).
+records its session's own completeness. A diff reads back only if it is consistent with itself:
+its table complete, with sources and reasons as SIGIL writes them, and its recorded verdict and
+completeness equal to a fresh judgment of its changes under that table. That does not prove
+which policy file made it: running `sigil compare --policy` with that file again does. The
+defaults and the format: [policy](policy.md#comparing-sessions-compare).
 
 | Code | Meaning |
 |---|---|
