@@ -241,7 +241,7 @@ Changes to the model or browser bindings also require rebuilding `site/viewer/pk
 
 ## What's next
 
-The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. GGUF parsing and advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
+The next steps build on the existing container, identity, and direct-call analysis: backend loading and stronger dependency/binding analysis, branch conditions and guard checks, cross-module analysis, and code analysis for more architectures and formats. GGUF parsing, advisory matching, and runtime-specific collectors beyond Ollama are planned. See the [binary support matrix](docs/support-matrix.md) for the current boundaries.
 
 The legacy `lift` and `assess` commands and their IR/emulator were removed. See [ADR-006](docs/adr/ADR-006-remove-ir-safeisa.md) for the transition and the [roadmap](docs/sigil-overview.md#roadmap) for milestones.
 

@@ -153,12 +153,13 @@ or violation `decided`: what its own decisions say), and each cause of an item n
 treatment. The diff's `evaluation` records the policy, the whole table, and two results, as a
 session has: a verdict (`PASS`, `WARN`, `FAIL`) and a completeness (`INCOMPLETE` when either
 session is incomplete itself, or when an item not comparable counts as a gap, the default). Each
-side of the diff records its session's own completeness. The defaults and the format:
+side of the diff records its session's own completeness. A diff reads back only if its recorded
+verdict and completeness equal a fresh judgment of its changes under its recorded table. The defaults and the format:
 [policy](policy.md#comparing-sessions-compare).
 
 | Code | Meaning |
 |---|---|
-| 0 | Compared, whether or not anything changed, and neither 3 nor 4 applies |
+| 0 | Compared, and neither 3 nor 4 applies, for example whether or not anything changed |
 | 1 | Execution error: an input that is not a valid session, or a policy that does not load |
 | 2 | Usage error, for example `--out` naming an input |
 | 3 | The diff's verdict reached `--fail-on` |
@@ -170,9 +171,6 @@ A CI step that fails on drift against a trusted baseline, and keeps the report:
 sigil compare --baseline baseline/session.json --current out/session.json \
   --policy org-policy.toml --fail-on fail --fail-on-incomplete --format md --out out/compare.md
 ```
-
-A diff reads back only if its recorded verdict and completeness equal a fresh judgment of its
-evaluation.
 
 **`sigil-diff/1` was revised before its first release** (#16, PR-16b). Diffs that main wrote
 between #136 and that change have no `evaluation`, no `completeness` per side, and no `decisions`

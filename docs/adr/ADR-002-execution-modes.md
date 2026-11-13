@@ -24,7 +24,7 @@ This ADR turns the promises into named contracts and states **exactly how each i
 
 | Mode | Purpose | CLI paths |
 |---|---|---|
-| **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `session verify`, `compare`, `explain`, and `rules`, which read only a saved session (`compare`: two session files) and a policy file (`session verify`, `compare --policy`) or nothing |
+| **static** (default) | Read files only: binaries, model store, configuration | `inspect ollama` (`--mode static`); `session render`, `session verify`, `compare`, `explain`, and `rules`, which read only a saved session (`compare`: two session files) and a policy file (`session verify --policy`, `compare --policy`) or nothing |
 | **observe** | static, plus reads of the documented `/proc` entries: sockets and fd tables, `/proc/<pid>/stat` of every process, and for the runtime and its descendants `/proc/<pid>/maps`, `/proc/<pid>/ns/mnt`, and `stat` through `/proc/<pid>/exe` (never opened); selected processes also supply cwd by readlink only and effective Uid/Gid by bounded status open/read. Initial environ open/read requires explicit `--observe-env` | `inspect ollama --mode observe` |
 | **active** | Explicitly requested features that contact something | `inspect ollama --active api-probe`, with `--mode static` or `--mode observe`. Off by default |
 

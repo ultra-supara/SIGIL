@@ -385,7 +385,8 @@ fails: against a trusted baseline, an intended update is approved by taking a ne
 session say: the maximum of their actions. A new finding of a rule the policy ignores is
 ignored; a new `fail` violation fails. Those decisions are the current session's, made by the
 policy it was inspected with. Only `FindingNew` and `ViolationNew` carry decisions, so only they
-take `decided`; a policy may give them `fail`, `warn`, or `ignore` instead.
+take `decided`; a policy may give them `fail`, `warn`, or `ignore` instead. `decided` for any
+other kind does not load.
 
 **What the diff records.** The diff's `evaluation` names the policy (its name and SHA-256, as a
 session records its policy) and holds the action of every change kind and the treatment of
@@ -396,8 +397,10 @@ completeness, the result, and each line's action. A reader judges a diff again: 
 misses a kind or a cause, or whose recorded verdict or completeness is not what a fresh
 judgment gives, does not load.
 
-**`[compare]` and sessions.** Inspection, evaluation, and `session verify` ignore `[compare]`.
-It is part of the file, though, and so of the SHA-256 a session records. A session inspected
+**`[compare]` and sessions.** Inspection, evaluation, and `session verify` ignore the content of
+`[compare]`. It is part of the file, though, and so of the SHA-256 a session records. Editing
+`[compare]` changes that digest: a session inspected before the edit no longer verifies against
+the edited file (`session verify` names the other digest). A session inspected
 after `[compare]` was edited records the new digest. Against a baseline inspected before, the
 diff then reports `PolicyChanged` (`warn` by default), and a violation on one side only is not
 comparable (cause `Policy`, a gap by default). Taking a new baseline clears both.
@@ -438,6 +441,7 @@ A typo never silently weakens a policy.
 - counts open questions as gaps;
 - accepts no assumption;
 - has no overrides;
+- has no `[compare]` section: every change kind and cause takes its default;
 - denies no component or capability.
 
 **Sessions from before PR-4d-3.** The expanded scope catalog adds `artifacts.dependencies`,

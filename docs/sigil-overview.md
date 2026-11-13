@@ -16,7 +16,7 @@ SIGIL keeps verdicts deterministic. It records what it observed as evidence, and
 - Policy (`sigil-policy/1`, TOML): audit scopes, required checks, rule actions with reasons and expiry, open-question treatment, denied components and capabilities, and the actions on a comparison's changes.
 - The session (`sigil-session/1`): the one record of a run, with its JSON Schema, validation, and canonical form.
 - AI-BOM v2 (`sigil-aibom/2`): a compact projection of the session that names it by SHA-256.
-- Comparison (`sigil compare`, `sigil-diff/1`): what changed between two sessions, each change pointing at its evidence, and what could not be judged, judged under the policy's `[compare]` section with exit codes for CI.
+- Comparison (`sigil compare`, `sigil-diff/1`): what changed between two sessions, each change pointing at its evidence, and what could not be compared; the changes are judged under the policy's `[compare]` section with exit codes for CI.
 - The browser viewer (`sigil-wasm`), which renders sessions and AI-BOM v2 with the CLI's own renderers.
 - The CLI: `inspect ollama`, `binary inspect`, `session render`, `session verify`, `compare`, `explain`, and `rules`.
 - Syscall safety tests of contracts C-1 to C-6 over every CLI path.
