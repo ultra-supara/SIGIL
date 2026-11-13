@@ -85,8 +85,8 @@ fn cfg(words: &[u32], run: &mut Run) -> Cfg {
 #[test]
 fn entry_and_register_31_depends_on_operand() {
     let s = A64State::entry(CodeAbi::DarwinArm64).unwrap();
-    for n in 0..8 {
-        assert_eq!(s.regs[n], Value::Param(n as u8));
+    for (n, reg) in s.regs.iter().enumerate().take(8) {
+        assert_eq!(*reg, Value::Param(n as u8));
     }
     assert_eq!(s.regs[18], Value::Unknown(Why::NotModeled));
     assert_eq!(s.sp, Value::Unknown(Why::NotModeled));
@@ -780,11 +780,11 @@ fn indirect_and_direct_calls_preserve_only_untouched_callee_saved_values() {
         )
         .unwrap();
         assert_eq!(s.regs[0], Value::Return(0x1000));
-        for n in 1..18 {
-            assert_eq!(s.regs[n], Value::Unknown(Why::ClobberedByCall));
+        for reg in &s.regs[1..18] {
+            assert_eq!(*reg, Value::Unknown(Why::ClobberedByCall));
         }
-        for n in 19..30 {
-            assert_eq!(s.regs[n], c(100 + n as u64));
+        for (n, reg) in s.regs.iter().enumerate().take(30).skip(19) {
+            assert_eq!(*reg, c(100 + n as u64));
         }
         assert_eq!(s.regs[18], Value::Unknown(Why::NotModeled));
         assert_eq!(s.regs[30], Value::Unknown(Why::ClobberedByCall));
@@ -875,11 +875,11 @@ fn unapplied_transfer_clears_all_writes_without_reading_raw_memory() {
         s.sp = c(8);
         let ins = decode_a64(word, 0x1000).unwrap();
         relocated_step(&mut s, 0x1000, &ins, &image, true, &mut reader, &mut run).unwrap();
-        for n in 0..31 {
+        for (n, reg) in s.regs.iter().enumerate() {
             if writes.contains(&n) {
-                assert!(matches!(s.regs[n], Value::Unknown(_)), "{word:x} x{n}");
+                assert!(matches!(reg, Value::Unknown(_)), "{word:x} x{n}");
             } else {
-                assert_eq!(s.regs[n], c(8));
+                assert_eq!(*reg, c(8));
             }
         }
         assert_eq!(matches!(s.sp, Value::Unknown(_)), sp_write);
