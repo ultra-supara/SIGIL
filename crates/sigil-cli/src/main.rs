@@ -284,7 +284,7 @@ struct RenderArgs {
     session: PathBuf,
     #[arg(long, value_enum, default_value = "md")]
     format: RenderFormat,
-    /// Write here instead of stdout.
+    /// Write here instead of stdout (not the session; an existing file is replaced).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 }
@@ -341,7 +341,7 @@ struct ExplainArgs {
     /// text for a terminal, md for a review ticket.
     #[arg(long, value_enum, default_value = "text")]
     format: TextFormat,
-    /// Write here instead of stdout.
+    /// Write here instead of stdout (not the session; an existing file is replaced).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 }
@@ -1064,15 +1064,6 @@ fn check_out(out: &Path, roots: &[(&Path, &str)]) -> Result<out::Target, Failure
     pin(out, &target, ids)
 }
 
-/// Where `--out` leads ([`resolved`]), resolved and pinned once, before anything is read. An
-/// existing symlink at `--out` is resolved here, and the file it leads to is what is replaced
-/// (spec §3.1).
-fn out_target(out: &Path) -> Result<out::Target, Failure> {
-    let target =
-        resolved(out).map_err(|e| Failure::Usage(format!("--out {}: {e}", shown_path(out))))?;
-    pin(out, &target, vec![])
-}
-
 fn pin(out: &Path, target: &Path, roots: Vec<(u64, u64)>) -> Result<out::Target, Failure> {
     out::Target::pin(target, roots)
         .map_err(|e| Failure::Usage(format!("--out {}: {}", shown_path(out), shown(&e))))
@@ -1604,21 +1595,36 @@ fn first_five(errors: &[String]) -> String {
     }
 }
 
+/// `--out` of a command that reads one saved session (`session render`, `explain`; #139): never
+/// that session, by path, symlink or hard link (`dev:ino`), checked before it is read.
+fn session_out(out: Option<&Path>, session: &Path) -> Result<Option<out::Target>, Failure> {
+    out.map(|out| {
+        check_out_not_inputs(
+            out,
+            &[session.to_path_buf()],
+            "SIGIL never writes a session it reads",
+        )
+    })
+    .transpose()
+}
+
 fn render(args: &RenderArgs) -> Result<(), Failure> {
-    let target = args.out.as_deref().map(out_target).transpose()?;
-    let checked = load_session(&args.session)?;
+    let target = session_out(args.out.as_deref(), &args.session)?;
+    let (checked, read) = load_session_with_identity(&args.session)?;
     let session = checked.as_session();
     reverify(session, &args.session)?;
     let document = match args.format {
         RenderFormat::Md => render_session(session),
         RenderFormat::Aibom => aibom_json(session)?.0,
     };
-    emit(&document, target.as_ref(), &[])
+    // The session as it was read, never a later lookup of its path: a session moved to `--out`
+    // after the read is put back, not replaced (#139).
+    emit(&document, target.as_ref(), &[read])
 }
 
 fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
-    let target = args.out.as_deref().map(out_target).transpose()?;
-    let checked = load_session(&args.session)?;
+    let target = session_out(args.out.as_deref(), &args.session)?;
+    let (checked, read) = load_session_with_identity(&args.session)?;
     let session = checked.as_session();
     reverify(session, &args.session)?;
     let format = match args.format {
@@ -1634,7 +1640,8 @@ fn explain_session(args: &ExplainArgs) -> Result<(), Failure> {
         explain::coverage(session, format)
     };
     text.push('\n');
-    emit(&text, target.as_ref(), &[])
+    // As in `render`: the session's inode as read is protected (#139).
+    emit(&text, target.as_ref(), &[read])
 }
 
 fn rules() -> Result<(), Failure> {
@@ -1829,7 +1836,7 @@ fn load_session_with_identity(path: &Path) -> Result<(ValidatedSession, (u64, u6
 
 // --- output -----------------------------------------------------------------------------------
 
-/// Writes `document` to `out`, a target pinned by [`check_out`] or [`out_target`], or to stdout.
+/// Writes `document` to `out`, a target pinned by [`check_out`] or [`check_out_not_inputs`], or to stdout.
 /// An existing file there is replaced, never written through, and a file whose `dev:ino` is in
 /// `protected` is not replaced ([`out::Target::write`]).
 fn emit(
