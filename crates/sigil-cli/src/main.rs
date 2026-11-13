@@ -150,8 +150,9 @@ struct BinaryArgs {
     /// The document written.
     #[arg(long, value_enum, default_value = "session")]
     format: BinaryFormat,
-    /// Write the document here instead of stdout (not an input, which is never replaced; any
-    /// other existing file is).
+    /// Write the document here instead of stdout (none of the inputs, the --policy file
+    /// included, which are never replaced; another existing file is replaced, or refused on a
+    /// file system that cannot exchange files).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Exit with 3 when the verdict reaches this level.
@@ -210,7 +211,8 @@ struct OllamaArgs {
     /// The document written.
     #[arg(long, value_enum, default_value = "session")]
     format: DocFormat,
-    /// Write the document here instead of stdout (outside the models and install directories).
+    /// Write the document here instead of stdout (outside the models and install directories,
+    /// and not the --policy file, which is never replaced).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Exit with 3 when the verdict reaches this level.
@@ -285,8 +287,8 @@ struct RenderArgs {
     session: PathBuf,
     #[arg(long, value_enum, default_value = "md")]
     format: RenderFormat,
-    /// Write here instead of stdout (not the session, which is never replaced; any other
-    /// existing file is).
+    /// Write here instead of stdout (not the session, which is never replaced; another existing
+    /// file is replaced, or refused on a file system that cannot exchange files).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 }
@@ -314,8 +316,8 @@ struct CompareArgs {
     /// The document written.
     #[arg(long, value_enum, default_value = "json")]
     format: CompareFormat,
-    /// Write here instead of stdout (none of the inputs, which are never replaced; any other
-    /// existing file is).
+    /// Write here instead of stdout (none of the inputs, which are never replaced; another
+    /// existing file is replaced, or refused on a file system that cannot exchange files).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Exit with 3 when the diff's verdict reaches this level.
@@ -344,8 +346,8 @@ struct ExplainArgs {
     /// text for a terminal, md for a review ticket.
     #[arg(long, value_enum, default_value = "text")]
     format: TextFormat,
-    /// Write here instead of stdout (not the session, which is never replaced; any other
-    /// existing file is).
+    /// Write here instead of stdout (not the session, which is never replaced; another existing
+    /// file is replaced, or refused on a file system that cannot exchange files).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 }
