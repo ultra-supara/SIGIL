@@ -106,7 +106,7 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 | Outcome | `PolicyChanged`, `VerdictChanged`, `CompletenessChanged` (`Complete` against `Incomplete`) |
 | Coverage | `CheckOpened`, `CheckClosed` |
 | Findings and policy violations | `FindingNew`, `FindingResolved`, `ViolationNew`, `ViolationResolved`, by rule and subject; `FindingDecisionChanged`, `ViolationDecisionChanged` when the same item has other policy decisions (an action, a reason, an expiry, or an override that expired), with each side's finding IDs or violation subjects |
-| Open questions | `OpenQuestionNew`, `OpenQuestionResolved`, by rule and subject; `OpenQuestionTreatmentChanged` when the same question has another treatment, with each side's question IDs (#138) |
+| Open questions | `OpenQuestionNew`, `OpenQuestionResolved`, by rule and subject; `OpenQuestionTreatmentChanged` when the same question has other decisions (a treatment, a source or a reason), with each side's question IDs (#138) |
 | Models | `ModelAdded`, `ModelRemoved`, `LayerChanged`, `LicenseChanged` |
 | Installation | `FileAdded`, `FileRemoved`, `FileContentChanged`, `ReleaseChanged`, `ComponentChanged` |
 | Listeners | `ListenerAdded`, `ListenerRemoved`, `BindWidened`, `BindNarrowed`, by port |
@@ -119,8 +119,11 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   - rules, with their subjects normalized the same way.
 
   Listener inodes, `binary-<n>` numbers and slice IDs are pointers, not keys. A restart, files
-  given in another order are not changes. An upgraded file is one `FileContentChanged`; its claims keep
-  their key (placement, arch, component), so a new slice ID alone is no claim change. Its open questions keep their key too: a capability question (`capability:<feature>@<slice>`) keys as `capability:<feature>@` on the placement and arch of its slice.
+  given in another order are not changes. An upgraded file is one `FileContentChanged`; its
+  claims keep their key (placement, arch, component), so a new slice ID alone is no claim change.
+  Its open questions keep their key too: a capability question
+  (`capability:<feature>@<slice>`) keys as `capability:<feature>@` on the placement and arch of
+  its slice.
 - **Comparability.** Saying that something is absent on one side needs the check that would
   have recorded it to be closed on that side. Otherwise the item is *not comparable*, never
   removed or resolved. The diff's `not_comparable` lists it with a `cause`, the checks, and the
@@ -129,10 +132,11 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
   since its conditions establish it.
   - `Coverage`: a check is open on that side.
   - `Request`: the two runs asked for different things. They used different `--model` filters, or
-    one named a binary input or a service unit that the other did not. The claims and violations
-    about such an input are included.
-  - `Policy`: the sessions applied different policies, so a violation, or a capability open question, on one side only is
-    not judged (the rule may be absent from the other policy). `PolicyChanged` reports the two. A
+    one named a binary input or a service unit that the other did not. The claims, violations
+    and open questions about such an input are included.
+  - `Policy`: the sessions applied different policies, so a violation, or a capability open
+    question, on one side only is not judged (the rule may be absent from the other policy).
+    `PolicyChanged` reports the two. A
     session that records no policy did not apply the same policy as any other, even one that
     records none either.
 - **Model findings.** A finding of the model store is judged by the check of its rule (integrity,
@@ -154,9 +158,10 @@ Markdown, are in [`schemas/examples/diff-v1/`](../schemas/examples/diff-v1/).
 
 Every diff is judged under a policy's `[compare]` section (#16): `--policy FILE`, or the
 built-in policy. Each change kind has an action (`fail`, `warn`, `ignore`, or for a new or
-changed finding, violation or open question `decided`: what its decisions in the current session say (a
-question's treatment: `fail` and `warn` weigh as those actions, a gap or `ignore` nothing); a changed
-decision weighs that only when it got heavier than the baseline's, and `warn` otherwise; a
+changed finding, violation or open question `decided`: what its decisions in the current
+session say (a question's treatment: `fail` and `warn` weigh as those actions, a gap or `ignore`
+nothing); a changed decision weighs that only when it got heavier than the baseline's, and `warn`
+otherwise; a
 changed verdict, also `decided` by default, weighs the current verdict when it got worse, and
 nothing otherwise), and each cause of an item not comparable a treatment. The diff's
 `evaluation` records the policy, the whole table, and two results, as a session has: a verdict

@@ -177,7 +177,8 @@ pub enum Placement {
     Content(ArtifactId),
 }
 
-/// What a finding or policy violation is about, with its run-dependent IDs replaced by keys.
+/// What a finding, policy violation or open question is about, with its run-dependent IDs
+/// replaced by keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum SubjectKey {

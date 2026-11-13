@@ -400,7 +400,10 @@ counted as a gap makes the current session, and so the diff, `INCOMPLETE`). A ne
 (`OpenQuestionNew`) weighs the heaviest treatment of its decisions in the current session; a
 question whose treatment changed (`OpenQuestionTreatmentChanged`) follows the rule of a changed
 decision above. Under `[open_questions] default = "fail"`, a new question therefore fails the
-diff even when the baseline already fails.
+diff even when the baseline already fails, provided both sessions applied the same policy and the
+container check of the question's placement (`artifacts.container` or `binary.container`) is
+closed on the baseline. Otherwise the item is not comparable and counts as a gap (exit 4 under
+`--fail-on-incomplete`).
 
 A verdict that changed (`VerdictChanged`) weighs the current session's verdict when it is worse
 than the baseline's: `PASS` to `FAIL` and `WARN` to `FAIL` fail, `PASS` to `WARN` warns. A
