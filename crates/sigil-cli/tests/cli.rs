@@ -703,6 +703,45 @@ fn render_and_explain_write_an_out_that_is_not_the_session() {
     assert_eq!(fs::read(&path).unwrap(), before);
 }
 
+/// #142: `--out`'s help says that an input is never replaced, and any other existing file is.
+#[test]
+fn out_help_says_an_input_is_never_replaced() {
+    for (command, text) in [
+        (
+            &["binary", "inspect"][..],
+            "(not an input, which is never replaced; any other existing file is)",
+        ),
+        (
+            &["session", "render"][..],
+            "(not the session, which is never replaced; any other existing file is)",
+        ),
+        (
+            &["explain"][..],
+            "(not the session, which is never replaced; any other existing file is)",
+        ),
+        (
+            &["compare"][..],
+            "(none of the inputs, which are never replaced; any other existing file is)",
+        ),
+    ] {
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = command
+            .iter()
+            .map(|a| a as &dyn AsRef<std::ffi::OsStr>)
+            .collect();
+        args.push(&"--help");
+        let r = run(&args);
+        assert_eq!(r.code, 0, "{command:?}: {}", r.stderr);
+        // Whatever the help's line breaks, the words come in order.
+        let help = r.stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains(text), "{command:?}:\n{}", r.stdout);
+        assert!(
+            !help.contains("an existing file is replaced"),
+            "{command:?}:\n{}",
+            r.stdout
+        );
+    }
+}
+
 #[test]
 fn explain_a_known_finding() {
     // #21: the finding, its evidence, the rule that fired, and the remediation.

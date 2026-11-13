@@ -150,7 +150,8 @@ struct BinaryArgs {
     /// The document written.
     #[arg(long, value_enum, default_value = "session")]
     format: BinaryFormat,
-    /// Write the document here instead of stdout (not an input; an existing file is replaced).
+    /// Write the document here instead of stdout (not an input, which is never replaced; any
+    /// other existing file is).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Exit with 3 when the verdict reaches this level.
@@ -284,7 +285,8 @@ struct RenderArgs {
     session: PathBuf,
     #[arg(long, value_enum, default_value = "md")]
     format: RenderFormat,
-    /// Write here instead of stdout (not the session; an existing file is replaced).
+    /// Write here instead of stdout (not the session, which is never replaced; any other
+    /// existing file is).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 }
@@ -312,7 +314,8 @@ struct CompareArgs {
     /// The document written.
     #[arg(long, value_enum, default_value = "json")]
     format: CompareFormat,
-    /// Write here instead of stdout (none of the inputs; an existing file is replaced).
+    /// Write here instead of stdout (none of the inputs, which are never replaced; any other
+    /// existing file is).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Exit with 3 when the diff's verdict reaches this level.
@@ -341,7 +344,8 @@ struct ExplainArgs {
     /// text for a terminal, md for a review ticket.
     #[arg(long, value_enum, default_value = "text")]
     format: TextFormat,
-    /// Write here instead of stdout (not the session; an existing file is replaced).
+    /// Write here instead of stdout (not the session, which is never replaced; any other
+    /// existing file is).
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 }
