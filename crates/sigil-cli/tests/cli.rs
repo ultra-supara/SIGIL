@@ -826,9 +826,12 @@ fn rules_lists_the_catalog() {
         ("FindingNew", "decided"),
         ("FindingDecisionChanged", "decided"),
         ("ViolationDecisionChanged", "decided"),
+        ("OpenQuestionNew", "decided"),
+        ("OpenQuestionResolved", "ignore"),
+        ("OpenQuestionTreatmentChanged", "decided"),
         ("BindNarrowed", "ignore"),
     ] {
-        let line = format!("  {kind:<25} {action}\n");
+        let line = format!("  {kind:<28} {action}\n");
         assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
     }
     assert!(
@@ -840,7 +843,7 @@ fn rules_lists_the_catalog() {
         r.stdout
     );
     for cause in ["Coverage", "Request", "Policy"] {
-        let line = format!("  {cause:<25} count_as_gap\n");
+        let line = format!("  {cause:<28} count_as_gap\n");
         assert!(r.stdout.contains(&line), "{line:?}:\n{}", r.stdout);
     }
 }
@@ -4438,6 +4441,88 @@ fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
     assert_eq!(
         diff.evaluation.weigh(&diff.changes[1]),
         (sigil_model::Action::Fail, true)
+    );
+}
+
+#[test]
+fn compare_fails_on_a_new_open_question_in_a_session_that_already_fails() {
+    // #138: one policy denies `posix.network` and `posix.process_spawn` and treats open questions
+    // as `fail`; without `--code`, each denied import is an open question. The file at one path
+    // imports `connect` in the baseline (net-plt-gcc.so), `connect` and `execve` in the current
+    // one (spawn.so). The baseline already fails by its network question, so the verdict does
+    // not change: only the new process_spawn question can fail the comparison. Before #138 the
+    // diff held a `FileContentChanged` alone (`warn` under this policy) and exited 0.
+    let dir = TempDir::new().unwrap();
+    let policy = write(
+        dir.path(),
+        "ci.toml",
+        "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[scope]\nbinary_audit = []\n\n\
+         [open_questions]\ndefault = \"fail\"\n\n\
+         [[capabilities.deny]]\nfeature = \"posix.network\"\naction = \"fail\"\n\
+         reason = \"no connections\"\n\n\
+         [[capabilities.deny]]\nfeature = \"posix.process_spawn\"\naction = \"fail\"\n\
+         reason = \"no processes\"\n\n\
+         [compare.changes.FileContentChanged]\naction = \"warn\"\n\
+         reason = \"the file is replaced on purpose here\"\n",
+    );
+    let lib = dir.path().join("lib.so");
+    fs::copy(code_fixture("net-plt-gcc.so"), &lib).unwrap();
+    let a = binary(&[&lib, &"--policy", &policy]);
+    fs::copy(code_fixture("spawn.so"), &lib).unwrap();
+    let b = binary(&[&lib, &"--policy", &policy]);
+    assert_eq!((a.code, b.code), (0, 0), "{}\n{}", a.stderr, b.stderr);
+    let (sa, sb) = (session_of(&a), session_of(&b));
+    assert_eq!((sa.open_questions.len(), sb.open_questions.len()), (1, 2));
+    assert_eq!(
+        (sa.outcome.verdict, sb.outcome.verdict),
+        (Verdict::Fail, Verdict::Fail)
+    );
+    assert_eq!(sa.outcome.completeness, Completeness::Complete);
+    assert_eq!(sb.outcome.completeness, Completeness::Complete);
+    let pa = write(dir.path(), "a.json", &a.stdout);
+    let pb = write(dir.path(), "b.json", &b.stdout);
+    let r = run(&[
+        &"compare",
+        &"--baseline",
+        &pa,
+        &"--current",
+        &pb,
+        &"--policy",
+        &policy,
+        &"--fail-on",
+        &"fail",
+        &"--fail-on-incomplete",
+    ]);
+    assert_eq!(r.code, 3, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("FAIL + COMPLETE under ci (sha256:"),
+        "{}",
+        r.stderr
+    );
+    let diff: Diff = serde_json::from_str(&r.stdout).unwrap();
+    let kinds: Vec<ChangeKind> = diff.changes.iter().map(Change::kind).collect();
+    // The network question keys alike in both files although its slice ID changed.
+    assert_eq!(
+        kinds,
+        [ChangeKind::OpenQuestionNew, ChangeKind::FileContentChanged]
+    );
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+    let Change::OpenQuestionNew {
+        rule, at, current, ..
+    } = &diff.changes[0]
+    else {
+        panic!("{:?}", diff.changes[0]);
+    };
+    assert_eq!(rule.as_str(), "binary.capability_call");
+    assert_eq!(at, "capability:posix.process_spawn@");
+    assert_eq!(current.len(), 1);
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[0]),
+        (sigil_model::Action::Fail, true)
+    );
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (sigil_model::Action::Warn, false)
     );
 }
 
