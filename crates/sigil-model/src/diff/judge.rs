@@ -247,8 +247,10 @@ impl ChangeKind {
     }
 
     /// Whether `Decided` applies to the kind: its changes carry the current session's decisions
-    /// ([`Change::decisions`]: a new finding, violation or open question, a changed decision or
-    /// treatment), or the verdict they gave (`VerdictChanged`).
+    /// (a new finding, violation or open question, a changed decision or treatment), or the
+    /// verdict they gave (`VerdictChanged`). Findings and violations carry `PolicyDecision`s,
+    /// through [`Change::decisions`]; `OpenQuestionNew` and `OpenQuestionTreatmentChanged` carry
+    /// their own `OpenQuestionDecision`s.
     pub fn takes_decided(self) -> bool {
         matches!(
             self,

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use assert_cmd::Command;
 use sha2::{Digest, Sha256};
 use sigil_model::diff::{
-    Change, ChangeKind, CompareAction, Diff, DiffCompleteness, LicenseState, Side,
+    Cause, Change, ChangeKind, CompareAction, Diff, DiffCompleteness, Item, LicenseState, Side,
 };
 use sigil_model::render::code::{no_capability_imports_kept, NOT_ANALYZED, NO_CAPABILITY_IMPORTS};
 use sigil_model::render::markdown::{render_session, CODE_CAVEAT, NOT_SCANNED, NO_SIGNATURES};
@@ -4371,12 +4371,11 @@ fn compare_fails_when_an_expired_override_lets_a_finding_fail() {
 
 #[test]
 fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
-    // Review P1 of PR #137: open questions are not compared, so a new one that the policy treats
-    // as `fail` shows only in the verdict. Both sessions read the same file, which imports
-    // `execve`; the current one's policy denies `posix.process_spawn`, and without `--code` that
-    // import is an open question, treated `fail`. The diff holds `PolicyChanged` (warn) and
-    // `VerdictChanged`, and fails as the current session does. Both require no binary check, so
-    // both are complete: before the fix the diff was WARN + COMPLETE, and exited 0.
+    // Review P1 of PR #137, then #138. Both sessions read the same file, which imports `execve`;
+    // the current one's policy denies `posix.process_spawn`, and without `--code` that import is
+    // an open question, treated `fail`. Open questions are compared now, but under two policies
+    // the question on one side only is not comparable (cause `Policy`): a gap. The worse verdict
+    // (`VerdictChanged`, decided) still fails the diff, which is incomplete too.
     let dir = TempDir::new().unwrap();
     let head = "schema = \"sigil-policy/1\"\nname = \"ci\"\n\n[scope]\nbinary_audit = []\n\n\
                 [open_questions]\ndefault = \"fail\"\n";
@@ -4419,7 +4418,7 @@ fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
     ]);
     assert_eq!(r.code, 3, "{}", r.stderr);
     assert!(
-        r.stderr.contains("FAIL + COMPLETE under ci (sha256:"),
+        r.stderr.contains("FAIL + INCOMPLETE under ci (sha256:"),
         "{}",
         r.stderr
     );
@@ -4429,7 +4428,13 @@ fn compare_fails_when_only_an_open_question_makes_the_current_session_fail() {
         kinds,
         [ChangeKind::PolicyChanged, ChangeKind::VerdictChanged]
     );
-    assert!(diff.not_comparable.is_empty());
+    assert_eq!(diff.not_comparable.len(), 1, "{:?}", diff.not_comparable);
+    let n = &diff.not_comparable[0];
+    assert!(
+        matches!(&n.item, Item::OpenQuestion { at, .. } if at == "capability:posix.process_spawn@"),
+        "{n:?}"
+    );
+    assert_eq!((n.cause, n.open_in), (Cause::Policy, Side::Both));
     assert_eq!(
         diff.evaluation.weigh(&diff.changes[1]),
         (sigil_model::Action::Fail, true)

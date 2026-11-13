@@ -748,9 +748,10 @@ fn decided_weighs_a_worse_verdict_as_what_it_now_is() {
 
 #[test]
 fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
-    // Review P1 of PR #137: example 7 without its open question, then with it treated `fail`.
-    // The sessions differ only in the question and the verdict it gives. The question is not
-    // compared, so the diff holds the verdict's change alone, and it fails as the session does.
+    // Review P1 of PR #137, then #138: example 7 without its open question, then with it treated
+    // `fail`. The sessions differ only in the question and the verdict it gives. The question is
+    // the analysis's and the baseline is complete, so it is compared (#138): the diff holds the
+    // verdict's change and the new question, both decided, and fails as the session does.
     let mut current = open_question();
     for q in &mut current.open_questions {
         q.decision.treatment = OqTreatment::Fail;
@@ -761,14 +762,19 @@ fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
     settle(&mut baseline);
     assert_eq!(current.outcome.completeness, Completeness::Complete);
     let diff = diff_of(&baseline, &current);
+    assert_eq!(kinds(&diff), ["VerdictChanged", "OpenQuestionNew"]);
     assert_eq!(
-        diff.changes,
-        [Change::VerdictChanged {
+        diff.changes[0],
+        Change::VerdictChanged {
             baseline: Verdict::Pass,
             current: Verdict::Fail
-        }]
+        }
     );
     assert!(diff.not_comparable.is_empty());
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[1]),
+        (Action::Fail, true)
+    );
     assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
     assert_eq!(diff.evaluation.completeness(), &DiffCompleteness::Complete);
     let md = markdown(&diff);
@@ -776,12 +782,16 @@ fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
         md.contains(&format!("\n| {} | ", esc_md("FAIL (as decided)"))),
         "{md}"
     );
-    // Under an explicit `ignore`, it passes.
+    // Under an explicit `ignore` of the verdict's change, the question still fails it; with the
+    // new question ignored too, it passes.
     let lenient = with_action(
         &builtin_rules(),
         ChangeKind::VerdictChanged,
         CompareAction::Ignore,
     );
+    let diff = diff_under(&baseline, &current, &lenient);
+    assert_eq!(diff.evaluation.verdict(), Verdict::Fail);
+    let lenient = with_action(&lenient, ChangeKind::OpenQuestionNew, CompareAction::Ignore);
     let diff = diff_under(&baseline, &current, &lenient);
     assert_eq!(diff.evaluation.verdict(), Verdict::Pass);
 }

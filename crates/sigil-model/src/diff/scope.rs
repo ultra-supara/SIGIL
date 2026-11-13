@@ -1,7 +1,7 @@
 //! Comparability and placement keys (spec "Comparability", "Placement keys").
 
 use crate::artifact::{Arch, FileInstance, InstanceContent};
-use crate::binary::{ARTIFACTS_CODE, ARTIFACTS_IDENTITY};
+use crate::binary::{ARTIFACTS_CODE, ARTIFACTS_CONTAINER, ARTIFACTS_IDENTITY};
 use crate::binary_input::{is_binary_root, BINARY_CODE, BINARY_CONTAINER, BINARY_IDENTITY};
 use crate::diff::Placement;
 use crate::evidence::Ref;
@@ -22,6 +22,9 @@ pub(crate) const INVENTORY: &str = "model_store.inventory";
 pub(crate) static IDENTITY: [&str; 2] = [ARTIFACTS_IDENTITY, BINARY_IDENTITY];
 /// The code check of an installation, and of a binary input ([`checks_at`]).
 pub(crate) static CODE: [&str; 2] = [ARTIFACTS_CODE, BINARY_CODE];
+/// The container check of an installation, and of a binary input ([`checks_at`]): where a file's
+/// imports are read (#138).
+pub(crate) static CONTAINER: [&str; 2] = [ARTIFACTS_CONTAINER, BINARY_CONTAINER];
 
 /// Of a check kept as an installation's and a binary input's (`pair`, in that order), the ones
 /// that record what is at `p`: the installation's for an instance under a fixed root, the binary

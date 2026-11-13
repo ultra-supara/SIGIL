@@ -755,6 +755,46 @@ pub fn question_decision(treatment: OqTreatment) -> OpenQuestionDecision {
     }
 }
 
+/// Every open question is treated `treatment` now, as under a policy whose `[open_questions]`
+/// default says so; the outcome follows.
+pub fn treat_questions(s: &mut Session, treatment: OqTreatment) {
+    for q in &mut s.open_questions {
+        q.decision = question_decision(treatment);
+    }
+    settle(s);
+}
+
+/// Example 18 before its file imported `execve`: no `posix.process_spawn` import, hint or open
+/// question. Its `posix.network` violation remains: FAIL + COMPLETE. Synthetic, as example 18 is:
+/// the facts are edited, not the file's bytes.
+pub fn spawn_unimported(s: &mut Session) {
+    if let ContainerFacts::Elf(elf) = &mut s.binaries[0].container {
+        elf.imports.retain(|i| i.name != t("execve"));
+    }
+    s.hints
+        .retain(|h| h.feature.as_str() != "posix.process_spawn");
+    s.open_questions.clear();
+    settle(s);
+}
+
+/// `s` with the kernel input rebuilt: every occurrence of its SHA-256 replaced by `byte×32`, so
+/// its artifact and slice IDs change and its placement does not.
+pub fn rehashed_kernel(s: &Session, byte: u8) -> Session {
+    let text = serde_json::to_string(s)
+        .unwrap()
+        .replace(KERNEL_HEX, &hex(byte));
+    serde_json::from_str(&text).unwrap()
+}
+
+/// `s` with the kernel input read from `path` (same file name, another directory), as a binary
+/// inspection of another file: its placement changes, its instance ID does not.
+pub fn moved_kernel(s: &Session, path: &str) -> Session {
+    let text = serde_json::to_string(s)
+        .unwrap()
+        .replace("/home/user/src/suspicious_kernel-gcc-O2.o", path);
+    serde_json::from_str(&text).unwrap()
+}
+
 /// `s` with its inputs `binary-1` and `binary-2` numbered the other way round, as when the files
 /// are given in the other order.
 pub fn relabel_binary_inputs(s: &Session) -> Session {
