@@ -191,6 +191,45 @@ fn an_open_container_check_leaves_a_question_not_comparable() {
 }
 
 #[test]
+fn an_installed_file_s_question_needs_artifacts_container_closed() {
+    // An installation placement: its container check is `artifacts.container`, not
+    // `binary.container`. Closed on the baseline, the new question is judged.
+    let after = installed_spawn();
+    let mut before = after.clone();
+    spawn_unimported(&mut before);
+    let diff = diff_of(&before, &after);
+    assert!(has(&diff, "OpenQuestionNew"), "{:?}", kinds(&diff));
+    assert!(diff.not_comparable.is_empty(), "{:?}", diff.not_comparable);
+    // Open there, it is not comparable, naming that check.
+    cut_short(
+        &mut before,
+        "artifacts.container",
+        &Ref::Root(id(INSTALL_ROOT)),
+        "a test's gap",
+    );
+    let diff = diff_of(&before, &after);
+    assert!(!has(&diff, "OpenQuestionNew"), "{:?}", kinds(&diff));
+    let (rule, _, at) = spawn_key();
+    let item = Item::OpenQuestion {
+        rule,
+        subject: SubjectKey::Slice {
+            placement: Placement::Instance(id(INSTALLED_EXE)),
+            arch: Arch::X86_64,
+        },
+        at,
+    };
+    assert_eq!(
+        diff.not_comparable,
+        [NotComparable {
+            item,
+            cause: Cause::Coverage,
+            checks: ids(&["artifacts.container"]),
+            open_in: Side::Baseline,
+        }]
+    );
+}
+
+#[test]
 fn a_question_about_an_input_named_on_one_side_only_is_a_difference_of_request() {
     let before = moved_kernel(&unimported(), "/home/user/other/suspicious_kernel-gcc-O2.o");
     let diff = diff_of(&before, &failing());
@@ -210,14 +249,23 @@ fn a_question_about_an_input_named_on_one_side_only_is_a_difference_of_request()
 #[test]
 fn an_open_question_of_another_rule_is_judged_by_the_absent_side_s_completeness() {
     // Example 7's loader question is the analysis's, not a policy's: the policies do not matter,
-    // and a complete baseline without it would have recorded it.
+    // and a complete baseline without it would have recorded it. The baseline applied another
+    // policy: were the policy asked before the rule, the question would be not comparable
+    // (`Policy`) instead.
     let after = open_question();
     let mut before = after.clone();
     before.open_questions.clear();
     settle(&mut before);
+    policy_edited(&mut before, 0xa5);
     assert_eq!(before.outcome.completeness, Completeness::Complete);
     let diff = diff_of(&before, &after);
+    assert!(has(&diff, "PolicyChanged"), "{:?}", kinds(&diff));
     assert!(has(&diff, "OpenQuestionNew"), "{:?}", kinds(&diff));
+    assert!(
+        diff.not_comparable.iter().all(|n| n.cause != Cause::Policy),
+        "{:?}",
+        diff.not_comparable
+    );
     // An incomplete baseline leaves it not comparable, naming the checks it left open.
     let mut partial = before.clone();
     let scope = partial

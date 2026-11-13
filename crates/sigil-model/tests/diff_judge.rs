@@ -704,9 +704,10 @@ fn decided_weighs_a_changed_decision_only_when_it_got_heavier() {
 
 #[test]
 fn decided_weighs_a_worse_verdict_as_what_it_now_is() {
-    // Review P1 of PR #137 (user decision, 2026-11-13): open questions are not compared, so a new
-    // one that the policy treats as `fail` shows only in the verdict. A verdict that got worse
-    // weighs what it now is; one that stayed or got better is ignored.
+    // Review P1 of PR #137 (user decision, 2026-11-13): a new open question that the policy treats
+    // as `fail` makes the verdict worse. Since #138 the question is compared too, but it is not
+    // always judged (another policy, a check left open); the verdict's change catches it then. A
+    // verdict that got worse weighs what it now is; one that stayed or got better is ignored.
     use Verdict::{Fail, Pass, Warn};
     let r = builtin_rules();
     let cases = [
@@ -771,6 +772,12 @@ fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
         }
     );
     assert!(diff.not_comparable.is_empty());
+    // Both weigh FAIL as decided: the verdict's change, whose row the Markdown reads so, and the
+    // question.
+    assert_eq!(
+        diff.evaluation.weigh(&diff.changes[0]),
+        (Action::Fail, true)
+    );
     assert_eq!(
         diff.evaluation.weigh(&diff.changes[1]),
         (Action::Fail, true)
@@ -779,7 +786,11 @@ fn a_session_that_fails_only_by_an_open_question_fails_the_diff() {
     assert_eq!(diff.evaluation.completeness(), &DiffCompleteness::Complete);
     let md = markdown(&diff);
     assert!(
-        md.contains(&format!("\n| {} | ", esc_md("FAIL (as decided)"))),
+        md.contains(&format!(
+            "\n| {} | {} | ",
+            esc_md("FAIL (as decided)"),
+            esc_md("verdict")
+        )),
         "{md}"
     );
     // Under an explicit `ignore` of the verdict's change, the question still fails it; with the

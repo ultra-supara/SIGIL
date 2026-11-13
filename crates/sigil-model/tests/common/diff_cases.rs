@@ -795,6 +795,80 @@ pub fn moved_kernel(s: &Session, path: &str) -> Session {
     serde_json::from_str(&text).unwrap()
 }
 
+/// The installed `bin/ollama` of [`installed_spawn`], as [`add_binary`] names it.
+pub const INSTALLED_EXE: &str = "inst:bin/ollama";
+
+/// An installation whose `bin/ollama` imports `execve` (a `posix.process_spawn` hint), under a
+/// policy that denies `posix.process_spawn` and treats open questions as `fail`, without code
+/// analysis: an open question at the fixed-root placement [`INSTALLED_EXE`]. Discovery and
+/// `artifacts.container` are complete: FAIL + COMPLETE. Synthetic.
+pub fn installed_spawn() -> Session {
+    let mut s = base(&["artifacts.discovery", "artifacts.container"]);
+    add_capability_table(&mut s);
+    let exe = add_binary(&mut s, &hex(0x3c), "bin/ollama", Arch::X86_64, 1020);
+    s.binaries.push(BinaryFacts {
+        slice: exe.slice.clone(),
+        container: ContainerFacts::Elf(ElfFacts {
+            abi: None,
+            interp: None,
+            soname: None,
+            needed: vec![],
+            rpath: vec![],
+            runpath: vec![],
+            build_id: None,
+            comment: vec![],
+            stripped: Some(false),
+            exports: 0,
+            imports: vec![ElfImport {
+                name: t("execve"),
+                version: None,
+                weak: false,
+            }],
+            data: vec![],
+            returns: vec![],
+        }),
+        go: None,
+        gaps: vec![],
+    });
+    s.hints.push(FeatureHint {
+        subject: exe.slice.clone(),
+        feature: id("posix.process_spawn"),
+        signal: Signal::Import,
+        value: t("execve"),
+        at: Loc::Symbol(t("execve")),
+    });
+    s.open_questions.push(OpenQuestion {
+        id: id(&format!("capability:posix.process_spawn@{}", exe.slice)),
+        rule: id(CAPABILITY_RULE),
+        subject: Ref::Slice(exe.slice.clone()),
+        conditions: vec![Condition {
+            id: id("calls:posix.process_spawn"),
+            state: CondState::Unknown {
+                reason: UnknownReason::NotModeled {
+                    what: "calls of imports: code analysis was not run".into(),
+                },
+                evidence: None,
+            },
+            unresolved: vec![],
+        }],
+        evidence: vec![EvidenceRef::Code {
+            slice: exe.slice,
+            loc: Loc::Symbol(t("execve")),
+        }],
+        decision: question_decision(OqTreatment::Fail),
+    });
+    s.coverage.extend([
+        complete("artifacts.discovery"),
+        coverage(
+            "artifacts.container",
+            Ref::Root(id(INSTALL_ROOT)),
+            CoverageState::Complete,
+        ),
+    ]);
+    settle(&mut s);
+    s
+}
+
 /// `s` with its inputs `binary-1` and `binary-2` numbered the other way round, as when the files
 /// are given in the other order.
 pub fn relabel_binary_inputs(s: &Session) -> Session {
