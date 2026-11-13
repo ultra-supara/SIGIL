@@ -53,7 +53,11 @@ jobs:
       - name: Build-time bans (crates)
         run: cargo deny check bans
       - name: Syscall safety tests and negative controls
-        run: cargo test -p sigil-cli --test safety
+        # The cached target/ may hold trace directories of an earlier run, which the count below
+        # would take for this run's.
+        run: |
+          rm -rf target/tmp/safety-traces
+          cargo test -p sigil-cli --test safety
       - name: Check that the negative controls and CLI cases produced traces
         run: |
           n=$(ls -d target/tmp/safety-traces/control-* | wc -l)
