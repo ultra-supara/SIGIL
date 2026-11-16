@@ -12,7 +12,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use object::elf;
-use object::read::elf::{FileHeader, SectionHeader, SectionTable, Sym as _, SymbolTable};
+use object::read::elf::{FileHeader, SectionHeader, Sym as _};
 use object::read::{ReadCacheOps, SymbolIndex};
 use object::Endianness;
 use sigil_model::ImportVia;
@@ -20,6 +20,7 @@ use sigil_model::ImportVia;
 use super::data::Signatures;
 use super::reader::Reader;
 use super::{Run, STRING_BYTES};
+use crate::binary::elf::tables::{SectionTable, SymbolTable};
 use crate::binary::elf::{Elf, MAX_IMPORT_NAME};
 use crate::binary::read::Bounded;
 

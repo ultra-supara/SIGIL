@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 
 use object::elf;
-use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, SectionTable, Sym};
+use object::read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym};
 use object::read::{ReadCacheOps, SectionIndex};
 use object::Endianness;
 use sigil_model::{
@@ -18,6 +18,7 @@ use sigil_model::{
     SCAN_NO_GOPCLNTAB, SCAN_NO_SECTIONS, SCAN_READ_FAILED,
 };
 
+use super::elf::tables::SectionTable;
 use super::elf::{is_export, Dynamic, Elf, Sections, MAX_IMPORT_NAME};
 use super::needles::{Needle, NeedleKind, Needles};
 use super::read::Bounded;

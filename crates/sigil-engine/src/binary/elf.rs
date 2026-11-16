@@ -9,9 +9,7 @@ use std::ops::ControlFlow;
 
 use object::elf;
 use object::endian::{U32, U64};
-use object::read::elf::{
-    Dyn, FileHeader, ProgramHeader, Rel, Rela as _, SectionHeader, SectionTable, Sym, SymbolTable,
-};
+use object::read::elf::{Dyn, FileHeader, ProgramHeader, Rel, Rela as _, SectionHeader, Sym};
 use object::read::{ReadCacheOps, ReadRef, SectionIndex, SymbolIndex};
 use object::{Endian, Endianness, FileKind, Pod};
 use sigil_model::{
@@ -25,6 +23,9 @@ use super::scan::{self, ScanOutcome, Sought};
 use super::vaddr::{Load, Loads, Place};
 use super::{data, goinfo, BinaryBudgets, Parsed};
 use crate::code::{self, CodeOutcome};
+use tables::{SectionTable, SymbolTable};
+
+pub(crate) mod tables;
 
 /// Bounded ELF adapter on the collector's original artifact reader and slice window.
 pub(crate) fn aarch64_image(
@@ -777,7 +778,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
                 Err(e) => self.gap(format!("build-id: malformed note: {e}")),
             }
         }
-        let Ok(sections) = self.header.sections(endian, data) else {
+        let Ok(sections) = SectionTable::parse(self.header, endian, data) else {
             return None;
         };
         for s in sections.iter() {
@@ -925,7 +926,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
             dynamic_symbols_agree: false,
             go_section: None,
         };
-        let table = match self.header.sections(endian, data) {
+        let table = match SectionTable::parse(self.header, endian, data) {
             Ok(t) if t.is_empty() => {
                 self.gap("sections: no section header table");
                 if dynamic.symtab.is_some() {
@@ -984,7 +985,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         } else {
             elf::SHT_DYNSYM
         };
-        let symbols = match table.symbols(endian, data, kind) {
+        let symbols = match table.symbols(kind) {
             Ok(s) => s,
             Err(e) => {
                 self.gap(format!("malformed: symbols: {e}"));
@@ -1012,7 +1013,7 @@ impl<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>> Elf<'d, R, H> {
         let versions = if relocatable {
             None
         } else {
-            match table.versions(endian, data) {
+            match table.versions() {
                 Ok(v) => v,
                 Err(e) => {
                     self.gap(format!("malformed: versions: {e}"));

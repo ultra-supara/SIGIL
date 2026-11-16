@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iced_x86::{FlowControl, Mnemonic, OpKind, Register};
 use object::elf;
-use object::read::elf::{FileHeader, SectionTable, Sym as _, SymbolTable};
+use object::read::elf::{FileHeader, Sym as _};
 use object::read::ReadCacheOps;
 use object::Endianness;
 use sigil_model::{
@@ -24,6 +24,7 @@ use super::image::{name_of, symbol_offset, Callee, Image, Kind, Meaning, Name, R
 use super::reader::Reader;
 use super::value::{gpr, Kept, SymRef, Val, Values, Via, Why, ARGS};
 use super::Run;
+use crate::binary::elf::tables::{SectionTable, SymbolTable};
 use crate::binary::elf::{Elf, Sections, MAX_IMPORT_NAME};
 use crate::binary::read::Bounded;
 
@@ -697,7 +698,7 @@ impl Recorder {
         let symtab = if found.relocatable {
             None
         } else {
-            table.symbols(e.endian, e.data, elf::SHT_SYMTAB).ok()
+            table.symbols(elf::SHT_SYMTAB).ok()
         };
         let exporting = if found.relocatable {
             sections.symbols.as_ref()

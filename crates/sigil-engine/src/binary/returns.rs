@@ -8,12 +8,13 @@ use std::ops::ControlFlow;
 
 use iced_x86::Mnemonic;
 use object::elf;
-use object::read::elf::{FileHeader, ProgramHeader, SymbolTable};
+use object::read::elf::{FileHeader, ProgramHeader};
 use object::read::ReadCacheOps;
 use object::{Endian, Endianness};
 use sigil_model::{DataValue, FunctionReturn, Loc, UntrustedText};
 
 use super::data::{symbol_type, MAX_STRING};
+use super::elf::tables::SymbolTable;
 use super::elf::{Dynamic, Elf};
 use super::read::Bounded;
 use crate::code::decode::decode;
