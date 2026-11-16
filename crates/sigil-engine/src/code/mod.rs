@@ -280,6 +280,10 @@ thread_local! {
 pub(crate) mod synth;
 
 #[cfg(test)]
+#[path = "../../tests/common/sections.rs"]
+pub(crate) mod sections;
+
+#[cfg(test)]
 pub(crate) mod testing {
     use std::fs::File;
     use std::path::Path;

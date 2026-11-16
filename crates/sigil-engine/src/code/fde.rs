@@ -267,7 +267,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         );
         let bytes = std::fs::read(path).unwrap();
-        let file = object::File::parse(&*bytes).unwrap();
+        let file = crate::code::sections::object_file(&bytes);
         let s = file.section_by_name(".eh_frame").unwrap();
         (s.data().unwrap().to_vec(), s.address())
     }

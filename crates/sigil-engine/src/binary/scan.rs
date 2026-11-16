@@ -1439,8 +1439,8 @@ mod tests {
         // Every `.dynsym` entry's `st_name` past its string table.
         let (offset, size) = {
             use object::{Object, ObjectSection};
-            let elf = object::read::elf::ElfFile64::<Endianness>::parse(&b[..]).unwrap();
-            elf.section_by_name(".dynsym")
+            crate::code::sections::object_file(&b)
+                .section_by_name(".dynsym")
                 .unwrap()
                 .file_range()
                 .unwrap()

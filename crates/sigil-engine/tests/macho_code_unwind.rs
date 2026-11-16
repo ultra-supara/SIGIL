@@ -1,5 +1,6 @@
 //! The private production metadata adapters and actual shared Run/Reader, with LLVM 21.1.8
 //! fixture boundaries. Decoder dispatch stays gated until Tasks 14–15.
+mod common;
 #[allow(dead_code)]
 #[path = "../src/code/fde.rs"]
 pub(crate) mod fde;
@@ -19,6 +20,7 @@ use reader::{Reader, SliceWindow};
 use run::{Run, Work};
 use sigil_engine::code::{CodeBudgets, CodeOutcome};
 mod code {
+    pub(crate) use crate::common::sections;
     pub(crate) use crate::{fde, reader, CodeBudgets, Run, Work};
 }
 use sigil_model::{Arch, ArtifactId, BoundsSource, SliceId};

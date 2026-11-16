@@ -1,5 +1,7 @@
 //! Task 10 dispatches ELF AArch64 through the bounded image/Reader/Run. Private
 //! regressions are code::image::aarch64::tests (including independent oracle.tsv comparisons).
+mod common;
+
 use object::{Object, ObjectSection};
 use sigil_engine::{
     binary::{parse_artifact, BinaryBudgets},
@@ -61,7 +63,7 @@ fn retained_oracle_rows_have_executable_bytes_and_independent_dump_evidence() {
             continue;
         }
         let bytes = std::fs::read(dir.join(col[0])).unwrap();
-        let object = object::File::parse(bytes.as_slice()).unwrap();
+        let object = common::sections::object_file(&bytes);
         let start = u64::from_str_radix(&col[3][2..], 16).unwrap();
         let end = u64::from_str_radix(&col[4][2..], 16).unwrap();
         let is_object = object.kind() == object::ObjectKind::Relocatable;

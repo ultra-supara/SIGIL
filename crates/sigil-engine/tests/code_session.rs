@@ -417,8 +417,7 @@ fn unreadable_dynamic_symbols_make_both_checks_partial() {
     // to SHT_PROGBITS.
     use object::{Object, ObjectSection};
     let mut bytes = std::fs::read(fixture("net-plt-gcc.so")).unwrap();
-    let index = object::File::parse(&*bytes)
-        .unwrap()
+    let index = common::sections::object_file(&bytes)
         .section_by_name(".dynsym")
         .unwrap()
         .index()
