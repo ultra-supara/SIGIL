@@ -17,6 +17,9 @@
 # build leaves the committed files as they were.
 set -eu
 cd "$(dirname "$0")"
+# llvm-otool prints the LC_LOAD_DYLIB timestamps in local time; UTC0 keeps the output the same
+# in every time zone.
+export TZ=UTC0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
