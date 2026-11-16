@@ -1601,8 +1601,10 @@ fn long_import_names_are_read_in_full_up_to_the_limit() {
     }
 }
 
-/// `bytes` with the 8-byte field at `field` (24: `sh_offset`, 32: `sh_size`) of the section header
-/// named `name` set to `value`.
+/// Offsets in an ELF64 section header.
+const SH_OFFSET: usize = 24;
+const SH_SIZE: usize = 32;
+
 fn with_section_field(bytes: &[u8], name: &str, field: usize, value: u64) -> Vec<u8> {
     let (_, _, header, ..) = sections64(bytes).into_iter().find(|s| s.0 == name).unwrap();
     let mut out = bytes.to_vec();
@@ -1617,11 +1619,9 @@ fn import_names(f: &ElfFacts) -> Vec<String> {
 
 #[test]
 fn a_section_name_table_outside_the_file_costs_only_the_section_names() {
-    // The loader never reads `.shstrtab`: with it moved past the end of the file, the symbols are
-    // still read, and only the section names are a gap (#145).
     let good = fixture("code/net-plt-gcc.so");
     let (whole, _) = facts_of(&good, BinaryBudgets::default());
-    let moved = with_section_field(&good, ".shstrtab", 24, good.len() as u64 + 0x1000);
+    let moved = with_section_field(&good, ".shstrtab", SH_OFFSET, good.len() as u64 + 0x1000);
     let (f, p) = facts_of(&moved, BinaryBudgets::default());
     assert_eq!(f.imports, whole.imports);
     assert_eq!(f.exports, whole.exports);
@@ -1633,10 +1633,9 @@ fn a_section_name_table_outside_the_file_costs_only_the_section_names() {
 
 #[test]
 fn a_symbol_string_table_running_past_the_file_still_names_the_symbols() {
-    // `.dynstr` declared 1 MiB long in a 15 KiB file: each name is read where it is (#145).
     let good = fixture("code/net-plt-gcc.so");
     let (whole, _) = facts_of(&good, BinaryBudgets::default());
-    let long = with_section_field(&good, ".dynstr", 32, 1 << 20);
+    let long = with_section_field(&good, ".dynstr", SH_SIZE, 1 << 20);
     let (f, p) = facts_of(&long, BinaryBudgets::default());
     assert_eq!(import_names(&f), import_names(&whole));
     assert_eq!(f.exports, whole.exports);
@@ -1651,8 +1650,6 @@ fn a_symbol_string_table_running_past_the_file_still_names_the_symbols() {
 
 #[test]
 fn a_symbol_string_table_over_the_parse_budget_still_counts_the_symbols() {
-    // cxx-capabilities' `.dynstr` does not fit in 16 KiB with the rest of the parse: the names
-    // it cannot read are gaps, and the symbols are still counted (#145).
     let bytes = fixture("cxx-capabilities/cxx-capabilities");
     let (whole, _) = facts_of(&bytes, BinaryBudgets::default());
     let budgets = BinaryBudgets {

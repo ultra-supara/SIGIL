@@ -2,10 +2,6 @@
 //!
 //! object 0.41 reads a whole string table (`.dynstr`, `.strtab`, `.shstrtab`) when it builds
 //! these tables, and loses the table when that read fails or `binary_parse_bytes` refuses it.
-//! SIGIL reads a name itself when object cannot, so a string table it cannot read must cost only
-//! the names in it. Each function here makes the reads its object 0.40 original made, in the same
-//! order, and fails with the same message. [`Bounded`](crate::binary::read::Bounded) then charges,
-//! refuses and caches as it did, and every session stays byte-identical.
 
 use std::fmt;
 use std::slice;
@@ -15,15 +11,12 @@ use object::endian::U32;
 use object::read::elf::{FileHeader, SectionHeader, Sym, VersionTable};
 use object::read::{ReadRef, SectionIndex, StringTable, SymbolIndex};
 
-/// Why a table cannot be read. Its `Display` is object 0.40's message, which gaps quote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Error(Source);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Source {
-    /// From object's own parsers, which 0.41 left as they were.
     Object(object::read::Error),
-    /// From the code here, with 0.40's message for the same condition.
     Ported(&'static str),
 }
 
@@ -42,7 +35,6 @@ impl From<object::read::Error> for Error {
     }
 }
 
-/// object's private `ReadError`, so each body reads line for line as its 0.40 original.
 trait ReadError<T> {
     fn read_error(self, message: &'static str) -> Result<T, Error>;
 }
@@ -59,8 +51,6 @@ impl<T> ReadError<T> for object::read::Result<T> {
     }
 }
 
-/// The section headers of one ELF, with the reader and byte order they came from. The symbol and
-/// version tables are built from it through the same reader.
 #[derive(Clone, Copy)]
 pub(crate) struct SectionTable<'d, H: FileHeader, R: ReadRef<'d>> {
     sections: &'d [H::SectionHeader],
@@ -69,7 +59,7 @@ pub(crate) struct SectionTable<'d, H: FileHeader, R: ReadRef<'d>> {
 }
 
 impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
-    /// object 0.40's `FileHeader::sections`. An ELF without section headers is an empty table.
+    /// object 0.40's `FileHeader::sections`.
     pub(crate) fn parse(header: &H, endian: H::Endian, data: R) -> Result<Self, Error> {
         let sections = header.section_headers(endian, data)?;
         // 0.40's `section_strings`, less the table it built. These checks failed the whole table.
@@ -90,7 +80,6 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
         })
     }
 
-    /// The section headers, the null section at index 0 included.
     pub(crate) fn iter(&self) -> slice::Iter<'d, H::SectionHeader> {
         self.sections.iter()
     }
@@ -99,7 +88,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
         self.sections.is_empty()
     }
 
-    /// object 0.40's `SectionTable::section`, an error for the null section at index 0.
+    /// object 0.40's `SectionTable::section`.
     pub(crate) fn section(&self, index: SectionIndex) -> Result<&'d H::SectionHeader, Error> {
         if index == SectionIndex(0) {
             return Err(Error(Source::Ported("Invalid ELF section index")));
@@ -109,8 +98,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
             .read_error("Invalid ELF section index")
     }
 
-    /// object 0.40's `SectionTable::symbols`. The first symbol table of `sh_type`, or an empty
-    /// table.
+    /// object 0.40's `SectionTable::symbols`.
     pub(crate) fn symbols(
         &self,
         sh_type: elf::SectionType,
@@ -127,7 +115,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
         SymbolTable::parse(self, SectionIndex(index), section)
     }
 
-    /// object 0.40's `SectionTable::versions`, `None` without `SHT_GNU_VERSYM`.
+    /// object 0.40's `SectionTable::versions`.
     pub(crate) fn versions(&self) -> Result<Option<VersionTable<'d, H>>, Error> {
         let (endian, data) = (self.endian, self.data);
         let Some((versyms, link)) = self.first(|s| s.gnu_versym(endian, data))? else {
@@ -157,8 +145,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
         SymbolTable::parse(self, index, section)
     }
 
-    /// object 0.40's `SectionTable::strings`, with `SectionHeader::strings` inlined. An empty
-    /// table for index 0.
+    /// object 0.40's `SectionTable::strings`, with `SectionHeader::strings` inlined.
     fn strings(&self, index: SectionIndex) -> Result<StringTable<'d, R>, Error> {
         if index == SectionIndex(0) {
             return Ok(StringTable::default());
@@ -175,8 +162,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
         Ok(StringTable::lazy(self.data, start, end))
     }
 
-    /// The first `Some` of `f` over the headers, stopping at the first error, as 0.40's
-    /// `SectionTable::{gnu_versym, gnu_verdef, gnu_verneed}` do.
+    /// object 0.40's `SectionTable::{gnu_versym, gnu_verdef, gnu_verneed}`.
     fn first<T>(
         &self,
         f: impl Fn(&'d H::SectionHeader) -> object::read::Result<Option<T>>,
@@ -190,7 +176,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SectionTable<'d, H, R> {
     }
 }
 
-/// One symbol table and its string table, as object 0.40's `SymbolTable` held them.
+/// object 0.40's `SymbolTable`.
 #[derive(Clone, Copy)]
 pub(crate) struct SymbolTable<'d, H: FileHeader, R: ReadRef<'d>> {
     section: SectionIndex,
@@ -242,27 +228,22 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SymbolTable<'d, H, R> {
         })
     }
 
-    /// The section index of this symbol table.
     pub(crate) fn section(&self) -> SectionIndex {
         self.section
     }
 
-    /// The section index of its string table.
     pub(crate) fn string_section(&self) -> SectionIndex {
         self.string_section
     }
 
-    /// Its string table, for object's `Sym::name`, which reads each name on demand.
     pub(crate) fn strings(&self) -> StringTable<'d, R> {
         self.strings
     }
 
-    /// The symbols, the null symbol at index 0 included.
     pub(crate) fn symbols(&self) -> &'d [H::Sym] {
         self.symbols
     }
 
-    /// The symbols with their indices, the null symbol included.
     pub(crate) fn enumerate(&self) -> impl Iterator<Item = (SymbolIndex, &'d H::Sym)> {
         self.symbols
             .iter()
@@ -278,7 +259,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SymbolTable<'d, H, R> {
         self.symbols.len()
     }
 
-    /// object 0.40's `SymbolTable::symbol`, an error for the null symbol at index 0.
+    /// object 0.40's `SymbolTable::symbol`.
     pub(crate) fn symbol(&self, index: SymbolIndex) -> Result<&'d H::Sym, Error> {
         if index == SymbolIndex(0) {
             return Err(Error(Source::Ported("Invalid ELF symbol index")));
@@ -288,8 +269,7 @@ impl<'d, H: FileHeader, R: ReadRef<'d>> SymbolTable<'d, H, R> {
             .read_error("Invalid ELF symbol index")
     }
 
-    /// object 0.40's `SymbolTable::symbol_section`. It reads `SHT_SYMTAB_SHNDX` for `SHN_XINDEX`,
-    /// and gives `None` for a reserved index or an extended index of 0.
+    /// object 0.40's `SymbolTable::symbol_section`.
     pub(crate) fn symbol_section(
         &self,
         endian: H::Endian,
@@ -326,8 +306,6 @@ mod tests {
     use super::SectionTable;
     use crate::code::synth::{fixture, sections64};
 
-    /// The first error met reading `bytes` in the order the sections step asks: the table,
-    /// `.dynsym` then `.symtab` with each symbol's section, then the versions.
     fn first_error(bytes: &[u8]) -> Option<String> {
         let header = FileHeader64::<Endianness>::parse(bytes).unwrap();
         let endian = header.endian().unwrap();
