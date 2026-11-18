@@ -1600,3 +1600,68 @@ fn long_import_names_are_read_in_full_up_to_the_limit() {
         assert_eq!(f.imports.len(), usize::from(gap.is_none()), "{case}");
     }
 }
+
+/// Offsets in an ELF64 section header.
+const SH_OFFSET: usize = 24;
+const SH_SIZE: usize = 32;
+
+fn with_section_field(bytes: &[u8], name: &str, field: usize, value: u64) -> Vec<u8> {
+    let (_, _, header, ..) = sections64(bytes).into_iter().find(|s| s.0 == name).unwrap();
+    let mut out = bytes.to_vec();
+    out[header + field..header + field + 8].copy_from_slice(&value.to_le_bytes());
+    out
+}
+
+fn import_names(f: &ElfFacts) -> Vec<String> {
+    let names: Vec<_> = f.imports.iter().map(|i| i.name.clone()).collect();
+    texts(&names)
+}
+
+#[test]
+fn a_section_name_table_outside_the_file_costs_only_the_section_names() {
+    let good = fixture("code/net-plt-gcc.so");
+    let (whole, _) = facts_of(&good, BinaryBudgets::default());
+    let moved = with_section_field(&good, ".shstrtab", SH_OFFSET, good.len() as u64 + 0x1000);
+    let (f, p) = facts_of(&moved, BinaryBudgets::default());
+    assert_eq!(f.imports, whole.imports);
+    assert_eq!(f.exports, whole.exports);
+    assert_eq!(
+        p.gaps,
+        ["malformed: section names: a name outside the file or over the parse budget"]
+    );
+}
+
+#[test]
+fn a_symbol_string_table_running_past_the_file_still_names_the_symbols() {
+    let good = fixture("code/net-plt-gcc.so");
+    let (whole, _) = facts_of(&good, BinaryBudgets::default());
+    let long = with_section_field(&good, ".dynstr", SH_SIZE, 1 << 20);
+    let (f, p) = facts_of(&long, BinaryBudgets::default());
+    assert_eq!(import_names(&f), import_names(&whole));
+    assert_eq!(f.exports, whole.exports);
+    assert_eq!(
+        p.gaps,
+        [
+            "malformed: versions: Invalid ELF vna_name",
+            "symbols: .dynsym's string table is not the bytes mapped at DT_STRTAB",
+        ]
+    );
+}
+
+#[test]
+fn a_symbol_string_table_over_the_parse_budget_still_counts_the_symbols() {
+    let bytes = fixture("cxx-capabilities/cxx-capabilities");
+    let (whole, _) = facts_of(&bytes, BinaryBudgets::default());
+    let budgets = BinaryBudgets {
+        parse_bytes: 16 << 10,
+        ..BinaryBudgets::default()
+    };
+    let (f, p) = facts_of(&bytes, budgets);
+    assert_eq!(f.exports, whole.exports);
+    assert!(
+        p.gaps
+            .contains(&"binary_parse_bytes: 16384 exceeded".to_string()),
+        "{:?}",
+        p.gaps
+    );
+}

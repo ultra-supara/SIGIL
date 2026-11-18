@@ -7,7 +7,7 @@
 //! - `read_bytes_at`: the range must be inside the file; a request not served before is charged
 //!   its size plus [`ENTRY_OVERHEAD`], or refused without reaching the cache. A failed read caches
 //!   nothing and stays charged, so repeated failures exhaust the budget;
-//! - `read_bytes_at_until`: ReadCache 0.40.0 searches at most [`STRING_LIMIT`] bytes in 256-byte
+//! - `read_bytes_at_until`: ReadCache 0.41.0 searches at most [`STRING_LIMIT`] bytes in 256-byte
 //!   steps and keeps exactly the string. A new request needs `STRING_LIMIT + ENTRY_OVERHEAD`
 //!   left, and is charged the string's length plus `ENTRY_OVERHEAD`. A failed search is charged
 //!   `STRING_LIMIT + ENTRY_OVERHEAD`, so repeated failures exhaust the budget instead of
@@ -26,7 +26,7 @@ use object::read::{ReadCache, ReadCacheOps, ReadRef};
 /// Bookkeeping charged per cache entry: ReadCache's map entry, the checkpoint's own key, and the
 /// allocator's rounding of a small buffer.
 pub const ENTRY_OVERHEAD: u64 = 128;
-/// The longest string ReadCache (0.40.0) searches for its delimiter.
+/// The longest string ReadCache (0.41.0) searches for its delimiter.
 pub const STRING_LIMIT: u64 = 4096;
 
 /// `object::ReadCacheOps` over `pread` on an open file.

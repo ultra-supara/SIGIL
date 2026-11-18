@@ -1,6 +1,8 @@
 //! Code facts of the fixtures through the parse (PR-5a spec §8.1). The expectations follow the
 //! **Shape** column of `tests/fixtures/code/README.md` where the compilers differ from the spec.
 
+mod common;
+
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
@@ -546,8 +548,7 @@ fn patched_section(
 ) -> (tempfile::TempDir, PathBuf) {
     use object::{Object, ObjectSection};
     let mut bytes = std::fs::read(fixture(name)).unwrap();
-    let index = object::File::parse(&*bytes)
-        .unwrap()
+    let index = common::sections::object_file(&bytes)
         .section_by_name(section)
         .unwrap()
         .index()
@@ -857,8 +858,7 @@ fn a_relocation_type_not_modeled_against_a_target_is_named() {
     // names the type, whatever the field.
     use object::{Object, ObjectSection};
     let mut bytes = std::fs::read(fixture("suspicious_kernel-gcc-O2.o")).unwrap();
-    let (at, size) = object::File::parse(&*bytes)
-        .unwrap()
+    let (at, size) = common::sections::object_file(&bytes)
         .section_by_name(".rela.text")
         .unwrap()
         .file_range()

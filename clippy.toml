@@ -10,6 +10,9 @@
 # Product code needs an ADR before adding an `allow`. The one exception (C-4) is the active API
 # probe: `exchange` in `sigil-probe`, run only with `--active api-probe` (ADR-002 active mode).
 
+# The #145 entries are a parsing contract, not an ADR-002 safety ban. object 0.41 reads a whole ELF
+# string table through them, and binary::elf::tables reads one name at a time.
+
 disallowed-types = [
     { path = "std::process::Command", reason = "C-1: static/observe never execute another program (ADR-002)" },
     { path = "std::net::TcpStream", reason = "C-4: static/observe perform no network I/O (ADR-002)" },
@@ -18,9 +21,26 @@ disallowed-types = [
     { path = "std::os::unix::net::UnixStream", reason = "C-4: no socket I/O of any family (ADR-002)" },
     { path = "std::os::unix::net::UnixListener", reason = "C-4: no socket I/O of any family (ADR-002)" },
     { path = "std::os::unix::net::UnixDatagram", reason = "C-4: no socket I/O of any family (ADR-002)" },
+    { path = "object::read::elf::SectionTable", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable" },
+    { path = "object::read::elf::SymbolTable", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SymbolTable" },
 ]
 
 disallowed-methods = [
     { path = "std::process::Command::new", reason = "C-1: static/observe never execute another program (ADR-002)" },
     { path = "std::os::unix::process::CommandExt::exec", reason = "C-1: static/observe never execute another program (ADR-002)" },
+    { path = "object::read::elf::FileHeader::sections", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::parse" },
+    { path = "object::read::elf::FileHeader::section_strings", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::parse; SIGIL reads each section name itself" },
+    { path = "object::read::elf::SectionHeader::strings", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables, which reads each name on demand" },
+    { path = "object::read::elf::SectionHeader::symbols", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::symbols" },
+    { path = "object::read::elf::SectionHeader::dynamic_table", reason = "#145: object 0.41 reads the whole string table; SIGIL reads PT_DYNAMIC itself (binary::elf::Dynamic)" },
+    { path = "object::read::elf::SectionTable::new", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::parse" },
+    { path = "object::read::elf::SectionTable::strings", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SymbolTable::strings" },
+    { path = "object::read::elf::SectionTable::symbols", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::symbols" },
+    { path = "object::read::elf::SectionTable::symbol_table_by_index", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::symbols" },
+    { path = "object::read::elf::SectionTable::versions", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::versions" },
+    { path = "object::read::elf::SectionTable::dynamic_table", reason = "#145: object 0.41 reads the whole string table; SIGIL reads PT_DYNAMIC itself (binary::elf::Dynamic)" },
+    { path = "object::read::elf::SymbolTable::parse", reason = "#145: object 0.41 reads the whole string table; use binary::elf::tables::SectionTable::symbols" },
+    { path = "object::read::StringTable::new", reason = "#145: object 0.41 reads the whole string table; use StringTable::lazy, which reads each string on demand" },
+    { path = "object::read::elf::ElfFile::parse", reason = "#145: object 0.41 reads the whole string table; use binary::elf::parse; tests use object_file in tests/common/sections.rs" },
+    { path = "object::read::File::parse", reason = "#145: object 0.41 reads the whole string table; use binary::parse_artifact; tests use object_file in tests/common/sections.rs" },
 ]

@@ -52,7 +52,7 @@ fn normal(bytes: &[u8]) -> (A64ElfImage, Run) {
     (i.unwrap_or_else(|| panic!("{g:?}")), r)
 }
 fn section(bytes: &[u8], name: &str) -> (usize, u64, u64) {
-    let o = object::File::parse(bytes).unwrap();
+    let o = crate::code::sections::object_file(bytes);
     let s = o.section_by_name(name).unwrap();
     (s.index().0, s.file_range().unwrap().0, s.size())
 }

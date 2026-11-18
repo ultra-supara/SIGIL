@@ -7,9 +7,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use object::elf;
-use object::read::elf::{
-    FileHeader, Rela as _, SectionHeader, SectionTable, Sym as _, SymbolTable,
-};
+use object::read::elf::{FileHeader, Rela as _, SectionHeader, Sym as _};
 use object::read::{ReadCacheOps, SectionIndex, SymbolIndex};
 use object::Endianness;
 
@@ -17,6 +15,7 @@ use super::{
     rtype, target_names, Callee, FieldReloc, Image, Kind, Meaning, Name, Names, Region, RelSym,
     Reloc, RelocWhy, Use,
 };
+use crate::binary::elf::tables::{self, SectionTable, SymbolTable};
 use crate::binary::elf::{Elf, Sections};
 use crate::binary::read::Bounded;
 use crate::code::data::Signatures;
@@ -421,7 +420,7 @@ pub(crate) fn symbol_offset<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianne
     endian: Endianness,
     sym: &H::Sym,
     index: SymbolIndex,
-) -> object::read::Result<Option<u64>> {
+) -> Result<Option<u64>, tables::Error> {
     let value: u64 = sym.st_value(endian).into();
     Ok(symtab
         .symbol_section(endian, sym, index)?

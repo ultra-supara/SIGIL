@@ -4,11 +4,12 @@
 use std::collections::BTreeSet;
 
 use object::elf;
-use object::read::elf::{FileHeader, SectionHeader, Sym, SymbolTable};
+use object::read::elf::{FileHeader, SectionHeader, Sym};
 use object::read::{ReadCacheOps, ReadRef};
 use object::Endianness;
 use sigil_model::{DataSymbol, DataValue, Loc, UntrustedText};
 
+use super::elf::tables::{SectionTable, SymbolTable};
 use super::elf::{Dynamic, Elf, Reloc};
 use super::read::Bounded;
 use super::vaddr::Place;
@@ -43,9 +44,7 @@ pub(crate) fn read<'d, R: ReadCacheOps, H: FileHeader<Endian = Endianness>>(
     let mut twice: BTreeSet<&str> = BTreeSet::new();
     let mut unnamed = None;
     // The symbols' string table, read for names no longer than the longest known one.
-    let strings = e
-        .header
-        .sections(endian, e.data)
+    let strings = SectionTable::parse(e.header, endian, e.data)
         .ok()
         .and_then(|t| t.section(symbols.string_section()).ok())
         .and_then(|s| s.file_range(endian));

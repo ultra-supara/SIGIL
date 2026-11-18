@@ -677,6 +677,7 @@ mod tests {
 
     #[test]
     fn an_import_name_that_cannot_be_read_is_a_gap() {
+        use crate::binary::elf::tables::SectionTable;
         use object::read::elf::{FileHeader as _, Sym as _};
         use std::io::Write;
 
@@ -690,8 +691,8 @@ mod tests {
         let data = bytes.as_slice();
         let header = elf::FileHeader64::<Endianness>::parse(data).unwrap();
         let endian = header.endian().unwrap();
-        let table = header.sections(endian, data).unwrap();
-        let dynsym = table.symbols(endian, data, elf::SHT_DYNSYM).unwrap();
+        let table = SectionTable::parse(header, endian, data).unwrap();
+        let dynsym = table.symbols(elf::SHT_DYNSYM).unwrap();
         let index = dynsym
             .symbols()
             .iter()

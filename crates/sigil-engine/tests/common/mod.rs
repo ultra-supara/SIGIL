@@ -4,6 +4,7 @@
 pub mod elf;
 pub mod macho;
 pub mod proc;
+pub mod sections;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

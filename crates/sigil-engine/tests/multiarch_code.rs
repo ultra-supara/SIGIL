@@ -395,7 +395,7 @@ fn incomplete_imports_produce_partial_code_session() {
 fn authenticated_got_branch_is_incomplete() {
     use object::{Object, ObjectSection};
     let original = std::fs::read(a64_fixture("elf-clang-got.so")).unwrap();
-    let file = object::File::parse(original.as_slice()).unwrap();
+    let file = common::sections::object_file(&original);
     let section = file.section_by_name(".text").unwrap();
     let off = section.file_range().unwrap().0 + (0x10370 - section.address());
     for word in [
@@ -663,8 +663,7 @@ fn marker_follows_recognition_and_code_flag() {
 
 fn section_at(bytes: &[u8], name: &str) -> usize {
     use object::{Object, ObjectSection};
-    object::File::parse(bytes)
-        .unwrap()
+    common::sections::object_file(bytes)
         .section_by_name(name)
         .unwrap()
         .file_range()
